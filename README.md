@@ -7,6 +7,23 @@ iPhone で会話を録音し、端末内で日本語に文字起こしして、G
 - 保存: Google Docs API で `HH:mm:ss  発言` の形で追記。追記に成功したら音声を消す。
 - Mac なしで開発する: GitHub Actions の macOS でビルドし、TestFlight に配る。
 
+## 無料で入れる（Apple Developer Program なし）
+
+Windows の [Sideloadly](https://sideloadly.io/) を使い、無料の Apple ID で署名して iPhone に入れる。
+
+1. GitHub の Actions →「TestFlight」の最新の実行 → Artifacts から `LifeLog-unsigned-ipa` をダウンロードして展開する。
+2. Windows に Sideloadly と iTunes（Apple 公式サイト版）を入れ、iPhone を USB でつなぐ。
+3. Sideloadly に IPA をドラッグし、Apple ID を入力して Start を押す（捨てアカウントの Apple ID がおすすめ）。
+4. iPhone の「設定」→「プライバシーとセキュリティ」→「デベロッパモード」をオンにし、「一般」→「VPN とデバイス管理」で自分の Apple ID を信頼する。
+
+制限:
+- **7日で起動しなくなる。** 週1回、同じ手順で入れ直す（データは残る）。Sideloadly の自動更新を使うと、PC と iPhone が同じ Wi-Fi にあれば自動で入れ直せる。
+- 無料の Apple ID で入れられるアプリは同時に3つまで。
+- Apple Watch アプリは、無料の署名でうまく入らないことがある（未確認）。
+- バンドル ID が `com.off53jub.lifelog` から変わった場合は、Google の OAuth クライアントもその ID で作り直す。
+
+この方法では、Google の準備（下の2）と、GitHub の Secrets の `GOOGLE_CLIENT_ID` と `GOOGLE_REVERSED_CLIENT_ID` だけが必要。
+
 ## 最初の準備（一度だけ）
 
 ### 1. Apple
