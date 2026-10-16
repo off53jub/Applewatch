@@ -1,0 +1,45 @@
+name: LifeLog
+options:
+  bundleIdPrefix: com.off53jub
+  deploymentTarget:
+    iOS: "26.0"
+packages:
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: 8.0.0
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    # CI から渡す（.github/workflows/testflight.yml）
+    DEVELOPMENT_TEAM: ""
+    GOOGLE_CLIENT_ID: ""
+    GOOGLE_REVERSED_CLIENT_ID: ""
+targets:
+  LifeLog:
+    type: application
+    platform: iOS
+    sources: [LifeLog]
+    dependencies:
+      - package: GoogleSignIn
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: LifeLog/Info.plist
+      properties:
+        CFBundleDisplayName: LifeLog
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+        NSMicrophoneUsageDescription: 会話を録音して文字起こしするためにマイクを使います。
+        NSSpeechRecognitionUsageDescription: 録音した音声を端末内で文字起こしします。
+        ITSAppUsesNonExemptEncryption: false
+        GIDClientID: $(GOOGLE_CLIENT_ID)
+        CFBundleURLTypes:
+          - CFBundleURLSchemes: [$(GOOGLE_REVERSED_CLIENT_ID)]
