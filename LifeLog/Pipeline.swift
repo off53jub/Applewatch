@@ -14,6 +14,7 @@ final class Pipeline {
 
     private let recorder = Recorder()
     private let docs = GoogleDocs()
+    private let receiver = PhoneReceiver()
     private var processing = false
 
     private let timeFormatter: DateFormatter = {
@@ -35,6 +36,11 @@ final class Pipeline {
             self?.message = reason
         }
         pendingCount = Storage.pendingChunks().count
+        receiver.onFile = { [weak self] in
+            self?.pendingCount = Storage.pendingChunks().count
+            self?.processQueue()
+        }
+        receiver.activate()
     }
 
     func restoreSignIn() async {
