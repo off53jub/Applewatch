@@ -16,6 +16,8 @@ Windows の [Sideloadly](https://sideloadly.io/) を使い、無料の Apple ID 
 3. Sideloadly に IPA をドラッグし、Apple ID を入力して Start を押す（捨てアカウントの Apple ID がおすすめ）。
 4. iPhone の「設定」→「プライバシーとセキュリティ」→「デベロッパモード」をオンにし、「一般」→「VPN とデバイス管理」で自分の Apple ID を信頼する。
 
+Actions のビルドに「Google の ID が未設定」という警告が出ていたら、Secrets がまだ読めていない。Secrets は入れる前に始まったビルドには反映されないので、入れたあとのビルドで確かめる。
+
 制限:
 - **7日で起動しなくなる。** 週1回、同じ手順で入れ直す（データは残る）。Sideloadly の自動更新を使うと、PC と iPhone が同じ Wi-Fi にあれば自動で入れ直せる。
 - 無料の Apple ID で入れられるアプリは同時に3つまで。
