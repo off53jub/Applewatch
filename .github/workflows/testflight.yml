@@ -1,15 +1,21 @@
 name: TestFlight
 
-# main に push するか、Actions 画面から手動で実行すると、ビルドして TestFlight に上げる。
+# main に push するか、Actions 画面から手動で実行するとビルドする。
+# 毎回、署名なしの IPA を成果物（Artifacts）に残す。Windows の Sideloadly などで、無料の Apple ID で署名して入れられる。
+# Apple Developer Program の Secrets が揃っているときだけ、TestFlight にも上げる。
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: macos-26
     timeout-minutes: 40
+    env:
+      HAS_ASC: ${{ secrets.ASC_KEY_ID != '' }}
+      HAS_GOOGLE: ${{ secrets.GOOGLE_CLIENT_ID != '' && secrets.GOOGLE_REVERSED_CLIENT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -18,12 +24,17 @@ jobs:
           sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
           xcodebuild -version
 
+      - name: Google の ID が未設定（ログインできないビルドになる）
+        if: env.HAS_GOOGLE != 'true'
+        run: echo "::warning::GOOGLE_CLIENT_ID / GOOGLE_REVERSED_CLIENT_ID が Secrets にありません"
+
       - name: プロジェクトを生成
         run: |
           brew install xcodegen
           xcodegen generate
 
       - name: App Store Connect の API キーを置く
+        if: env.HAS_ASC == 'true'
         env:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
         run: |
@@ -46,7 +57,20 @@ jobs:
             GOOGLE_REVERSED_CLIENT_ID="$GOOGLE_REVERSED_CLIENT_ID" \
             CODE_SIGNING_ALLOWED=NO
 
+      - name: 署名なしの IPA を作る
+        run: |
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$RUNNER_TEMP/LifeLog.xcarchive/Products/Applications/LifeLog.app" "$RUNNER_TEMP/ipa/Payload/"
+          (cd "$RUNNER_TEMP/ipa" && zip -qry LifeLog-unsigned.ipa Payload)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LifeLog-unsigned-ipa
+          path: ${{ runner.temp }}/ipa/LifeLog-unsigned.ipa
+          retention-days: 30
+
       - name: 署名して TestFlight にアップロード
+        if: env.HAS_ASC == 'true'
         env:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
