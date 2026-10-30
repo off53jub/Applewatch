@@ -4,6 +4,7 @@ struct ContentView: View {
     @Environment(Pipeline.self) private var pipeline
 
     var body: some View {
+        @Bindable var settings = pipeline.settings
         NavigationStack {
             List {
                 Section("Google ドライブ") {
@@ -20,6 +21,26 @@ struct ContentView: View {
                 }
 
                 Section {
+                    Toggle("高精度で文字起こし", isOn: $settings.useCloud)
+                        .disabled(!settings.hasAPIKey)
+                    NavigationLink("サービスと API キーの設定") {
+                        TranscriptionSettingsView(settings: settings)
+                    }
+                } header: {
+                    Text("文字起こし")
+                } footer: {
+                    if !settings.hasAPIKey {
+                        Text("API キーを登録すると、クラウドの高精度モデルで文字起こしできます（Groq なら1日16時間まで無料）。オフのときは iPhone の中だけで無料で文字起こしします。")
+                    } else if settings.useCloud && !settings.isUnderLimit {
+                        Text("今月の上限に達したので、端末内の文字起こしに戻っています。")
+                    } else if settings.provider.dollarsPerMinute > 0 {
+                        Text("\(settings.provider.name)・今月 \(settings.usedMinutesThisMonth) 分 / 上限 \(settings.monthlyLimitMinutes) 分")
+                    } else {
+                        Text(settings.provider.name)
+                    }
+                }
+
+                Section {
                     Button {
                         Task { await pipeline.toggleRecording() }
                     } label: {
@@ -29,6 +50,9 @@ struct ContentView: View {
                     }
                     .tint(pipeline.isRecording ? .red : .accentColor)
                     LabeledContent("文字起こし待ち", value: "\(pipeline.pendingCount) 件")
+                    if !pipeline.lastEngine.isEmpty {
+                        LabeledContent("直近の文字起こし", value: pipeline.lastEngine)
+                    }
                     if !pipeline.message.isEmpty {
                         Text(pipeline.message).foregroundStyle(.secondary)
                     }
