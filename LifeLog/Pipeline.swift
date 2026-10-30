@@ -116,12 +116,18 @@ final class Pipeline {
         }
         if settings.shouldUseCloud, let key = settings.apiKey {
             do {
-                let sentences = try await CloudTranscriber.transcribe(url, apiKey: key, keywords: settings.keywords)
+                let cloud = try await CloudTranscriber.transcribe(
+                    url, provider: settings.provider, apiKey: key, keywords: settings.keywords)
                 settings.addUsage(seconds: Self.duration(of: url))
-                // 高精度モデルは文ごとの時刻を返さないので、チャンクの開始時刻だけを先頭に付ける
-                if let first = sentences.first {
-                    lines = ["\(timeFormatter.string(from: start))  \(first)"] + sentences.dropFirst()
+                if !cloud.isEmpty {
+                    lines = cloud.map { line in
+                        guard let offset = line.offset else { return line.text }
+                        return "\(timeFormatter.string(from: start.addingTimeInterval(offset)))  \(line.text)"
+                    }
                 }
+            } catch CloudTranscriber.Failure.limited(let reason) {
+                // 無料枠を使い切ったら、この区切りは端末内の結果で済ませる（高精度はオンのまま）
+                message = reason + "。しばらく端末内の文字起こしを使います。"
             } catch CloudTranscriber.Failure.rejected(let reason) {
                 // キーや残高の問題は待っても直らないので、高精度をオフにして端末内の結果を使う
                 settings.useCloud = false
