@@ -1,4 +1,4 @@
-import Foundation
+import AVFoundation
 import Observation
 
 /// 録音 → 文字起こし → Google ドキュメントへの追記、をつなぐ。
@@ -12,6 +12,7 @@ final class Pipeline {
     private(set) var message = ""
     private(set) var email: String?
     private(set) var watchStatus = "接続を準備中"
+    let settings = TranscriptionSettings()
 
     private let recorder = Recorder()
     private let docs = GoogleDocs()
@@ -107,13 +108,34 @@ final class Pipeline {
 
     private func process(_ url: URL) async throws {
         let start = Storage.startDate(of: url) ?? .now
-        let lines = try await Transcriber.transcribe(url)
-        guard !lines.isEmpty else { return }
-        let text = lines.map { line in
-            "\(timeFormatter.string(from: start.addingTimeInterval(line.offset)))  \(line.text)\n"
-        }.joined()
+        // まず端末内で文字起こしする（無料）。何も聞き取れなければ、お金をかけずにここで終わる。
+        let local = try await Transcriber.transcribe(url)
+        guard !local.isEmpty else { return }
+        var lines = local.map { line in
+            "\(timeFormatter.string(from: start.addingTimeInterval(line.offset)))  \(line.text)"
+        }
+        if settings.shouldUseCloud, let key = settings.apiKey {
+            do {
+                let sentences = try await CloudTranscriber.transcribe(url, apiKey: key, keywords: settings.keywords)
+                settings.addUsage(seconds: Self.duration(of: url))
+                // 高精度モデルは文ごとの時刻を返さないので、チャンクの開始時刻だけを先頭に付ける
+                if let first = sentences.first {
+                    lines = ["\(timeFormatter.string(from: start))  \(first)"] + sentences.dropFirst()
+                }
+            } catch CloudTranscriber.Failure.rejected(let reason) {
+                // キーや残高の問題は待っても直らないので、高精度をオフにして端末内の結果を使う
+                settings.useCloud = false
+                message = reason + "（高精度をオフにして、端末内の文字起こしで続けます）"
+            }
+        }
+        let text = lines.map { $0 + "\n" }.joined()
         try await docs.append(text, day: dayFormatter.string(from: start))
-        lastLines = Array((lastLines + text.split(separator: "\n").map(String.init)).suffix(20))
+        lastLines = Array((lastLines + lines).suffix(20))
+    }
+
+    private static func duration(of url: URL) -> Double {
+        guard let file = try? AVAudioFile(forReading: url) else { return 0 }
+        return Double(file.length) / file.processingFormat.sampleRate
     }
 
     /// 録音中の最新ファイルはまだ書き込み中なので飛ばす。

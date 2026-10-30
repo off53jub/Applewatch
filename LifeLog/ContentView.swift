@@ -4,6 +4,7 @@ struct ContentView: View {
     @Environment(Pipeline.self) private var pipeline
 
     var body: some View {
+        @Bindable var settings = pipeline.settings
         NavigationStack {
             List {
                 Section("Google ドライブ") {
@@ -17,6 +18,24 @@ struct ContentView: View {
 
                 Section("Apple Watch") {
                     Text(pipeline.watchStatus)
+                }
+
+                Section {
+                    Toggle("高精度（OpenAI）で文字起こし", isOn: $settings.useCloud)
+                        .disabled(!settings.hasAPIKey)
+                    NavigationLink("API キーと上限の設定") {
+                        TranscriptionSettingsView(settings: settings)
+                    }
+                } header: {
+                    Text("文字起こし")
+                } footer: {
+                    if !settings.hasAPIKey {
+                        Text("API キーを登録すると、高精度モデル（gpt-transcribe）で文字起こしできます。オフのときは iPhone の中だけで無料で文字起こしします。")
+                    } else if settings.useCloud && !settings.isUnderLimit {
+                        Text("今月の上限に達したので、端末内の文字起こしに戻っています。")
+                    } else {
+                        Text("今月 \(settings.usedMinutesThisMonth) 分 / 上限 \(settings.monthlyLimitMinutes) 分")
+                    }
                 }
 
                 Section {
