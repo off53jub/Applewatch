@@ -24,6 +24,26 @@ enum Storage {
         nameFormatter.date(from: url.deletingPathExtension().lastPathComponent)
     }
 
+    /// 開けない（壊れた）音声。待ちの列からは外し、念のため7日間だけ残す。
+    static let brokenDir: URL = {
+        let dir = URL.documentsDirectory.appendingPathComponent("broken", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    static func setAside(_ url: URL) {
+        let dest = brokenDir.appendingPathComponent(url.lastPathComponent)
+        try? FileManager.default.removeItem(at: dest)
+        try? FileManager.default.moveItem(at: url, to: dest)
+        let old = Date.now.addingTimeInterval(-7 * 24 * 3600)
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: brokenDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        for file in files {
+            let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let date, date < old { try? FileManager.default.removeItem(at: file) }
+        }
+    }
+
     static func pendingChunks() -> [URL] {
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: pendingDir, includingPropertiesForKeys: nil)) ?? []

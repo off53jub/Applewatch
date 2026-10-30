@@ -149,9 +149,17 @@ final class Pipeline {
                 pendingCount = Storage.pendingChunks().count
             }
             for url in Storage.pendingChunks() where !isActiveChunk(url) {
+                // 書いている途中で録音が終わった区切りは開けない。何度やっても同じなので脇によけて先へ進む
+                guard (try? AVAudioFile(forReading: url)) != nil else {
+                    Storage.setAside(url)
+                    continue
+                }
                 do {
                     try await process(url)
                     try? FileManager.default.removeItem(at: url)
+                } catch where Self.isBrokenAudio(error) {
+                    // 開けても中身が途中で切れている区切り
+                    Storage.setAside(url)
                 } catch {
                     message = "処理に失敗しました（あとで再試行します）: \(error.localizedDescription)"
                     return
@@ -226,6 +234,13 @@ final class Pipeline {
 
     private func overlap(_ s: SpeakerLabeler.Segment, _ from: TimeInterval, _ to: TimeInterval) -> TimeInterval {
         max(0, min(s.end, to) - max(s.start, from))
+    }
+
+    /// 音声ファイルそのものが壊れているときのエラー（'dta?' 'typ?' 'fmt?' 'pck?'）
+    private static func isBrokenAudio(_ error: Error) -> Bool {
+        let e = error as NSError
+        let codes: Set<Int> = [1685348671, 1954115647, 1718449215, 1885563711]
+        return e.domain == "com.apple.coreaudio.avfaudio" && codes.contains(e.code)
     }
 
     private static func duration(of url: URL) -> Double {

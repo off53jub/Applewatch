@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import WatchConnectivity
 
@@ -16,17 +17,31 @@ final class WatchSender: NSObject, WCSessionDelegate {
         WCSession.default.activate()
     }
 
+    private let lock = NSLock()
+    private var writing: URL?
+
+    /// 書き込み中の区切り。書き終わるまでは送らない。
+    var recording: URL? {
+        get { lock.withLock { writing } }
+        set { lock.withLock { writing = newValue } }
+    }
+
     func send(_ url: URL) {
         guard WCSession.default.activationState == .activated else { return }
         let queued = WCSession.default.outstandingFileTransfers.contains { $0.file.fileURL == url }
         if !queued { WCSession.default.transferFile(url, metadata: nil) }
     }
 
-    /// 前回送れなかった区切りを送り直す。`except` は録音中のファイル。
-    func resendPending(except current: URL?) {
+    /// 前回送れなかった区切りを送り直す。書き込み中のファイルは送らない。
+    func resendPending() {
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: Self.pendingDir, includingPropertiesForKeys: nil)) ?? []
-        for url in urls where url.pathExtension == "m4a" && url != current {
+        for url in urls where url.pathExtension == "m4a" && url != recording {
+            // 書いている途中でアプリが終わった区切りは開けない（iPhone でも読めない）ので消す
+            guard (try? AVAudioFile(forReading: url)) != nil else {
+                try? FileManager.default.removeItem(at: url)
+                continue
+            }
             send(url)
         }
     }
@@ -34,7 +49,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
     // MARK: - WCSessionDelegate
 
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
-        if state == .activated { resendPending(except: nil) }
+        if state == .activated { resendPending() }
     }
 
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {

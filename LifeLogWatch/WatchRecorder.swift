@@ -68,7 +68,7 @@ final class WatchRecorder: NSObject {
             isRecording = true
             UserDefaults.standard.set(true, forKey: Self.wasRecordingKey)
             message = ""
-            sender.resendPending(except: nil)
+            sender.resendPending()
             chunkTimer = Timer.scheduledTimer(withTimeInterval: Self.chunkSeconds, repeats: true) { _ in
                 Task { @MainActor in self.rotate() }
             }
@@ -115,8 +115,9 @@ final class WatchRecorder: NSObject {
     }
 
     private func openChunk(format: AVAudioFormat) throws {
-        let name = nameFormatter.string(from: .now) + ".m4a"
-        try writer.open(WatchSender.pendingDir.appendingPathComponent(name), format: format)
+        let url = WatchSender.pendingDir.appendingPathComponent(nameFormatter.string(from: .now) + ".m4a")
+        sender.recording = url
+        try writer.open(url, format: format)
         armWatchdog()
     }
 
@@ -134,6 +135,7 @@ final class WatchRecorder: NSObject {
 
     private func finishChunk() {
         guard let chunk = writer.close() else { return }
+        sender.recording = nil
         if chunk.peakDB < -50 {
             try? FileManager.default.removeItem(at: chunk.url)
         } else {
