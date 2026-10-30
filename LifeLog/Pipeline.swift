@@ -1,5 +1,7 @@
 import AVFoundation
+import BackgroundTasks
 import Observation
+import UIKit
 
 /// 録音 → 文字起こし → Google ドキュメントへの追記、をつなぐ。
 /// 音声は追記に成功してから消すので、圏外や失敗があっても次の機会にやり直せる。
@@ -37,7 +39,8 @@ final class Pipeline {
     private let docs: GoogleDocs
     private let conversations: ConversationLog
     private let receiver = PhoneReceiver()
-    private var processing = false
+    /// 処理中の列。二重に走らせないよう、走っていればそれを待つ。
+    private var queueTask: Task<Void, Never>?
 
     private let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -141,14 +144,35 @@ final class Pipeline {
 
     /// 溜まっている音声を古い順に処理する。
     func processQueue() {
-        guard !processing, email != nil else { return }
-        processing = true
-        Task {
-            defer {
-                processing = false
-                pendingCount = Storage.pendingChunks().count
-            }
+        Task { await runQueue() }
+    }
+
+    /// processQueue と同じだが、終わるまで待つ（裏での処理用）。
+    func runQueue() async {
+        if let queueTask { return await queueTask.value }
+        // 時計から届いた音声や裏の処理でアプリが起こされたときは、画面が出ないのでログインの復元もここでする
+        if email == nil {
+            await docs.restore()
+            email = docs.signedInEmail
+        }
+        guard email != nil, queueTask == nil else { return }
+        // 裏にいても、iOS が許すあいだ（30秒ほど）は続けさせてもらう
+        let background = UIApplication.shared.beginBackgroundTask(withName: "transcribe")
+        let task = Task { await drainQueue() }
+        queueTask = task
+        // 裏で使える時間が終わったと言われたら、区切りの切れ目で止める
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        queueTask = nil
+        pendingCount = Storage.pendingChunks().count
+        if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
+        Self.scheduleBackgroundWork()
+    }
+
+    private func drainQueue() async {
+        do {
             for url in Storage.pendingChunks() where !isActiveChunk(url) {
+                // 裏で使える時間が終わったら、残りは次の機会に回す
+                if Task.isCancelled { return }
                 // 書いている途中で録音が終わった区切りは開けない。何度やっても同じなので脇によけて先へ進む
                 guard (try? AVAudioFile(forReading: url)) != nil else {
                     Storage.setAside(url)
@@ -166,12 +190,48 @@ final class Pipeline {
                 }
                 pendingCount = Storage.pendingChunks().count
             }
+            if Task.isCancelled { return }
             // しばらく話していなければ会話を閉じて見出しを付け、前の日にはまとめを付ける。
             // 録音中の区切り（5分）に続きが入っているかもしれないので、その分は待つ。
             await conversations.closeIdle(now: .now, waiting: ConversationLog.gap + 300)
             await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
             await conversations.writePeopleNotes()
         }
+    }
+
+    // MARK: - 裏での処理
+
+    /// 充電中にまとめて処理する（長く動ける）
+    static let processingTaskID = "com.off53jub.lifelog.process"
+    /// ときどき少しだけ処理する（30秒ほど）
+    static let refreshTaskID = "com.off53jub.lifelog.refresh"
+
+    /// アプリの起動が終わる前に呼ぶ。iOS がアプリを裏で起こしたときに、溜まった音声を処理する。
+    func registerBackgroundWork() {
+        for id in [Self.processingTaskID, Self.refreshTaskID] {
+            BGTaskScheduler.shared.register(forTaskWithIdentifier: id, using: .main) { [weak self] task in
+                MainActor.assumeIsolated {
+                    let work = Task { await self?.runQueue() }
+                    task.expirationHandler = { work.cancel() }
+                    Task {
+                        await work.value
+                        task.setTaskCompleted(success: !work.isCancelled)
+                        Self.scheduleBackgroundWork()
+                    }
+                }
+            }
+        }
+    }
+
+    static func scheduleBackgroundWork() {
+        let processing = BGProcessingTaskRequest(identifier: processingTaskID)
+        processing.requiresExternalPower = true
+        processing.requiresNetworkConnectivity = true
+        try? BGTaskScheduler.shared.submit(processing)
+
+        let refresh = BGAppRefreshTaskRequest(identifier: refreshTaskID)
+        refresh.earliestBeginDate = .now.addingTimeInterval(15 * 60)
+        try? BGTaskScheduler.shared.submit(refresh)
     }
 
     private func process(_ url: URL) async throws {

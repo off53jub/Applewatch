@@ -42,7 +42,10 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
-        UIBackgroundModes: [audio]
+        UIBackgroundModes: [audio, fetch, processing]
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.off53jub.lifelog.process
+          - com.off53jub.lifelog.refresh
         NSMicrophoneUsageDescription: 会話を録音して文字起こしするためにマイクを使います。
         NSSpeechRecognitionUsageDescription: 録音した音声を端末内で文字起こしします。
         NSLocationWhenInUseUsageDescription: どこで話したかを、文字起こしの見出しに添えるために使います。
