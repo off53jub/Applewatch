@@ -41,6 +41,28 @@ struct ContentView: View {
                 }
 
                 Section {
+                    Toggle("話している人を聞き分ける", isOn: Binding(
+                        get: { pipeline.speakerLabelsOn },
+                        set: { pipeline.speakerLabelsOn = $0 }))
+                    if pipeline.speakerLabelsOn {
+                        NavigationLink {
+                            VoiceEnrollView()
+                        } label: {
+                            LabeledContent("自分の声", value: pipeline.hasSelfVoice ? "登録済み" : "未登録")
+                        }
+                        NavigationLink {
+                            PeopleView()
+                        } label: {
+                            LabeledContent("話した相手", value: "\(pipeline.people.count) 人")
+                        }
+                    }
+                } header: {
+                    Text("話者")
+                } footer: {
+                    Text("iPhone の中だけで声の特徴を比べ、文字起こしの行に「[自分]」「[人物1]」などを付けます（無料）。")
+                }
+
+                Section {
                     Button {
                         Task { await pipeline.toggleRecording() }
                     } label: {
