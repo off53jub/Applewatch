@@ -11,9 +11,11 @@ final class Pipeline {
     private(set) var lastLines: [String] = []
     private(set) var message = ""
     private(set) var email: String?
+    private(set) var watchStatus = "接続を準備中"
 
     private let recorder = Recorder()
     private let docs = GoogleDocs()
+    private let receiver = PhoneReceiver()
     private var processing = false
 
     private let timeFormatter: DateFormatter = {
@@ -35,6 +37,12 @@ final class Pipeline {
             self?.message = reason
         }
         pendingCount = Storage.pendingChunks().count
+        receiver.onFile = { [weak self] in
+            self?.pendingCount = Storage.pendingChunks().count
+            self?.processQueue()
+        }
+        receiver.onStateChange = { [weak self] in self?.watchStatus = $0 }
+        receiver.activate()
     }
 
     func restoreSignIn() async {

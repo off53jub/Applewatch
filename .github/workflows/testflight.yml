@@ -69,6 +69,32 @@ jobs:
           path: ${{ runner.temp }}/ipa/LifeLog-unsigned.ipa
           retention-days: 30
 
+      - name: Watch アプリの場所を調べる
+        id: watch
+        run: |
+          app="$RUNNER_TEMP/ipa/Payload/LifeLog.app"
+          if [ -d "$app/Watch/LifeLogWatch.app" ]; then echo "in_ipa=true" >> "$GITHUB_OUTPUT"; else echo "in_ipa=false" >> "$GITHUB_OUTPUT"; fi
+          if find "$RUNNER_TEMP/LifeLog.xcarchive" -name LifeLogWatch.app -type d | grep -q .; then echo "in_archive=true" >> "$GITHUB_OUTPUT"; else echo "in_archive=false" >> "$GITHUB_OUTPUT"; fi
+          find "$RUNNER_TEMP/LifeLog.xcarchive" -name "*.app" -type d
+          companion=$(/usr/libexec/PlistBuddy -c "Print :WKCompanionAppBundleIdentifier" "$app/Watch/LifeLogWatch.app/Info.plist" 2>/dev/null || true)
+          if [ "$companion" = "com.off53jub.lifelog" ]; then echo "companion_ok=true" >> "$GITHUB_OUTPUT"; else echo "companion_ok=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Watch アプリは IPA に入っている
+        if: steps.watch.outputs.in_ipa == 'true'
+        run: echo ok
+
+      - name: Watch アプリの相棒 ID は com.off53jub.lifelog
+        if: steps.watch.outputs.companion_ok == 'true'
+        run: echo ok
+
+      - name: Watch アプリは archive にはあるが IPA に入っていない
+        if: steps.watch.outputs.in_ipa != 'true' && steps.watch.outputs.in_archive == 'true'
+        run: exit 1
+
+      - name: Watch アプリがどこにも無い
+        if: steps.watch.outputs.in_ipa != 'true' && steps.watch.outputs.in_archive != 'true'
+        run: exit 1
+
       - name: 署名して TestFlight にアップロード
         if: env.HAS_ASC == 'true'
         env:
