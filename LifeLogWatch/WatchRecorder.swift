@@ -34,16 +34,28 @@ final class WatchRecorder: NSObject {
         return f
     }()
 
+    /// 録音中に時計がアプリを終わらせても気づけるよう、「録音中だった」ことを残しておく。
+    private static let wasRecordingKey = "wasRecording"
+    private static let watchdogID = "watchdog"
+
     override init() {
         super.init()
         sender.activate()
+        // 前回、止めるボタンを押さずに終わっていたら、開き直したときに録音を再開する
+        if UserDefaults.standard.bool(forKey: Self.wasRecordingKey) {
+            Task { @MainActor in
+                await self.start()
+                if self.isRecording { self.message = "途中で止まっていた録音を再開しました" }
+            }
+        }
     }
 
     func toggle() async {
-        if isRecording { stop() } else { await start() }
+        if isRecording { stopByUser() } else { await start() }
     }
 
     private func start() async {
+        guard !isRecording else { return }
         guard await AVAudioApplication.requestRecordPermission() else {
             message = "マイクが許可されていません"
             return
@@ -57,6 +69,7 @@ final class WatchRecorder: NSObject {
                 self, selector: #selector(interrupted(_:)),
                 name: AVAudioSession.interruptionNotification, object: session)
             isRecording = true
+            UserDefaults.standard.set(true, forKey: Self.wasRecordingKey)
             message = ""
             sender.resendPending(except: nil)
             try startChunk()
@@ -76,8 +89,15 @@ final class WatchRecorder: NSObject {
         }
     }
 
+    /// 止めるボタンで止めたときだけ「録音中だった」を消す（自動再開しない）。
+    func stopByUser() {
+        UserDefaults.standard.set(false, forKey: Self.wasRecordingKey)
+        stop()
+    }
+
     func stop() {
         isRecording = false
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.watchdogID])
         chunkTimer?.invalidate()
         meterTimer?.invalidate()
         chunkTimer = nil
@@ -95,6 +115,19 @@ final class WatchRecorder: NSObject {
         peakPower = -160
         guard r.record() else { throw NSError(domain: "WatchRecorder", code: 1) }
         recorder = r
+        armWatchdog()
+    }
+
+    /// 次の区切りの少しあとに鳴る通知を予約し、区切るたびに先へ延ばす。
+    /// 時計がアプリを終わらせたり止めたりして延ばせなくなると、この通知が鳴って気づける。
+    private func armWatchdog() {
+        let content = UNMutableNotificationContent()
+        content.title = "LifeLog の録音が止まっているかもしれません"
+        content.body = "LifeLog を開くと録音を再開します。"
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: Self.chunkSeconds + 120, repeats: false)
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: Self.watchdogID, content: content, trigger: trigger))
     }
 
     private func finishChunk() {
@@ -135,8 +168,18 @@ final class WatchRecorder: NSObject {
             switch type {
             case .began:
                 self.finishChunk()
+                // 「終わった」の知らせが来ないこともあるので、1分たっても止まったままなら自分で再開する
+                try? await Task.sleep(for: .seconds(60))
+                guard self.isRecording, self.recorder == nil else { return }
+                do {
+                    try await AVAudioSession.sharedInstance().activate()
+                    try self.startChunk()
+                } catch {
+                    self.stopWithAlert("電話や Siri で止まりました。アプリを開いて再開してください。")
+                }
             case .ended:
                 // 時計はバックグラウンドでは再開できないことがある。失敗したら知らせる。
+                guard self.recorder == nil else { return }
                 do {
                     try await AVAudioSession.sharedInstance().activate()
                     try self.startChunk()
