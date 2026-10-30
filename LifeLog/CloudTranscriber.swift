@@ -2,6 +2,7 @@ import Foundation
 
 /// クラウドの高精度モデルで文字起こしする。
 /// - Groq: Whisper large-v3。無料枠は1日 28,800 秒（8時間）まで。区間ごとの時刻も返る。
+///   使い切ったら、枠が別にある次点の large-v3-turbo に切り替える（こちらも8時間）。
 /// - OpenAI: gpt-transcribe。従量課金で、文ごとの時刻は返らない。
 enum CloudTranscriber {
     enum Provider: String, CaseIterable, Identifiable {
@@ -10,7 +11,7 @@ enum CloudTranscriber {
 
         var name: String {
             switch self {
-            case .groq: "Groq（無料・1日8時間まで）"
+            case .groq: "Groq（無料・1日16時間まで）"
             case .openai: "OpenAI（有料・最新モデル）"
             }
         }
@@ -33,12 +34,24 @@ enum CloudTranscriber {
             case .openai: 0.0045
             }
         }
+        /// 精度の高い順。上のモデルが上限に達したら次を使う。
+        fileprivate var models: [String] {
+            switch self {
+            case .groq: ["whisper-large-v3", "whisper-large-v3-turbo"]
+            case .openai: ["gpt-transcribe"]
+            }
+        }
         fileprivate var endpoint: URL {
             switch self {
             case .groq: URL(string: "https://api.groq.com/openai/v1/audio/transcriptions")!
             case .openai: URL(string: "https://api.openai.com/v1/audio/transcriptions")!
             }
         }
+    }
+
+    struct Transcript {
+        let model: String
+        let lines: [Line]
     }
 
     /// offset が nil の行は時刻が分からない（直前の行の続き）。
@@ -64,7 +77,29 @@ enum CloudTranscriber {
 
     static let prompt = "日本語の日常会話や仕事の打ち合わせを録音したものです。句読点を付けて書き起こしてください。"
 
-    static func transcribe(_ url: URL, provider: Provider, apiKey: String, keywords: [String]) async throws -> [Line] {
+    /// モデルごとの「この時刻までは上限で使えない」。
+    @MainActor private static var limitedUntil: [String: Date] = [:]
+
+    private struct RateLimited: Error {
+        let retryAfter: TimeInterval
+    }
+
+    /// 精度の高いモデルから順に試し、上限に達したモデルはしばらく飛ばす。
+    @MainActor
+    static func transcribe(_ url: URL, provider: Provider, apiKey: String, keywords: [String]) async throws -> Transcript {
+        for model in provider.models where (limitedUntil[model] ?? .distantPast) < .now {
+            do {
+                let lines = try await send(url, provider: provider, model: model, apiKey: apiKey, keywords: keywords)
+                return Transcript(model: model, lines: lines)
+            } catch let limit as RateLimited {
+                limitedUntil[model] = .now.addingTimeInterval(limit.retryAfter)
+            }
+        }
+        throw Failure.limited("無料枠の上限に達しました")
+    }
+
+    private static func send(_ url: URL, provider: Provider, model: String, apiKey: String,
+                             keywords: [String]) async throws -> [Line] {
         let boundary = "LifeLog-\(UUID().uuidString)"
         var body = Data()
         func field(_ name: String, _ value: String) {
@@ -72,7 +107,7 @@ enum CloudTranscriber {
         }
         switch provider {
         case .groq:
-            field("model", "whisper-large-v3")
+            field("model", model)
             field("language", "ja")
             field("response_format", "verbose_json")
             field("temperature", "0")
@@ -81,7 +116,7 @@ enum CloudTranscriber {
             let words = keywords.prefix(30).joined(separator: "、")
             field("prompt", "こんにちは。今日もよろしくお願いします。" + (words.isEmpty ? "" : words + "。"))
         case .openai:
-            field("model", "gpt-transcribe")
+            field("model", model)
             field("languages[]", "ja")
             field("prompt", prompt)
             for word in keywords {
@@ -115,7 +150,9 @@ enum CloudTranscriber {
             case (429, "insufficient_quota"):
                 throw Failure.rejected("残高が足りません: \(detail)")
             case (429, _):
-                throw Failure.limited("無料枠などの上限に達しました")
+                // retry-after が無ければ1時間待つ（1時間あたりの枠もあるため）
+                let header = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "retry-after")
+                throw RateLimited(retryAfter: header.flatMap(TimeInterval.init) ?? 3600)
             case (400, _), (403, _), (404, _), (413, _):
                 throw Failure.rejected("断られました: \(detail)")
             default:

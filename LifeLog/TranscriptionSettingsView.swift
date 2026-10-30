@@ -18,7 +18,7 @@ struct TranscriptionSettingsView: View {
             } footer: {
                 switch settings.provider {
                 case .groq:
-                    Text("Whisper large-v3 で文字起こしします。無料枠は1日8時間分までで、超えた分はその日のうちは端末内の文字起こしに戻ります。")
+                    Text("Whisper large-v3 で文字起こしします。無料枠（1日8時間分）を使い切ったら次点の large-v3-turbo（こちらも8時間分）に、それも使い切ったら端末内の文字起こしに切り替わります。")
                 case .openai:
                     Text("gpt-transcribe で文字起こしします。ChatGPT の有料プランとは別に、使った分だけ請求されます。")
                 }

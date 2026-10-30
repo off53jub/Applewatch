@@ -30,7 +30,7 @@ struct ContentView: View {
                     Text("文字起こし")
                 } footer: {
                     if !settings.hasAPIKey {
-                        Text("API キーを登録すると、クラウドの高精度モデルで文字起こしできます（Groq なら1日8時間まで無料）。オフのときは iPhone の中だけで無料で文字起こしします。")
+                        Text("API キーを登録すると、クラウドの高精度モデルで文字起こしできます（Groq なら1日16時間まで無料）。オフのときは iPhone の中だけで無料で文字起こしします。")
                     } else if settings.useCloud && !settings.isUnderLimit {
                         Text("今月の上限に達したので、端末内の文字起こしに戻っています。")
                     } else if settings.provider.dollarsPerMinute > 0 {
@@ -50,6 +50,9 @@ struct ContentView: View {
                     }
                     .tint(pipeline.isRecording ? .red : .accentColor)
                     LabeledContent("文字起こし待ち", value: "\(pipeline.pendingCount) 件")
+                    if !pipeline.lastEngine.isEmpty {
+                        LabeledContent("直近の文字起こし", value: pipeline.lastEngine)
+                    }
                     if !pipeline.message.isEmpty {
                         Text(pipeline.message).foregroundStyle(.secondary)
                     }

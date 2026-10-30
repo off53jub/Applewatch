@@ -12,6 +12,8 @@ final class Pipeline {
     private(set) var message = ""
     private(set) var email: String?
     private(set) var watchStatus = "接続を準備中"
+    /// 直近の区切りをどのモデルで文字起こししたか
+    private(set) var lastEngine = ""
     let settings = TranscriptionSettings()
 
     private let recorder = Recorder()
@@ -114,20 +116,22 @@ final class Pipeline {
         var lines = local.map { line in
             "\(timeFormatter.string(from: start.addingTimeInterval(line.offset)))  \(line.text)"
         }
+        lastEngine = "端末内"
         if settings.shouldUseCloud, let key = settings.apiKey {
             do {
                 let cloud = try await CloudTranscriber.transcribe(
                     url, provider: settings.provider, apiKey: key, keywords: settings.keywords)
                 settings.addUsage(seconds: Self.duration(of: url))
-                if !cloud.isEmpty {
-                    lines = cloud.map { line in
+                lastEngine = cloud.model
+                if !cloud.lines.isEmpty {
+                    lines = cloud.lines.map { line in
                         guard let offset = line.offset else { return line.text }
                         return "\(timeFormatter.string(from: start.addingTimeInterval(offset)))  \(line.text)"
                     }
                 }
-            } catch CloudTranscriber.Failure.limited(let reason) {
+            } catch CloudTranscriber.Failure.limited {
                 // 無料枠を使い切ったら、この区切りは端末内の結果で済ませる（高精度はオンのまま）
-                message = reason + "。しばらく端末内の文字起こしを使います。"
+                lastEngine = "端末内（無料枠の上限のため）"
             } catch CloudTranscriber.Failure.rejected(let reason) {
                 // キーや残高の問題は待っても直らないので、高精度をオフにして端末内の結果を使う
                 settings.useCloud = false
