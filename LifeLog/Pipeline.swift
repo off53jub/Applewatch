@@ -11,6 +11,7 @@ final class Pipeline {
     private(set) var lastLines: [String] = []
     private(set) var message = ""
     private(set) var email: String?
+    private(set) var watchStatus = "接続を準備中"
 
     private let recorder = Recorder()
     private let docs = GoogleDocs()
@@ -40,6 +41,7 @@ final class Pipeline {
             self?.pendingCount = Storage.pendingChunks().count
             self?.processQueue()
         }
+        receiver.onStateChange = { [weak self] in self?.watchStatus = $0 }
         receiver.activate()
     }
 

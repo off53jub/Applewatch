@@ -15,6 +15,10 @@ struct ContentView: View {
                     }
                 }
 
+                Section("Apple Watch") {
+                    Text(pipeline.watchStatus)
+                }
+
                 Section {
                     Button {
                         Task { await pipeline.toggleRecording() }
