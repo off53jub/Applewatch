@@ -94,7 +94,8 @@ final class GoogleDocs {
     }
 
     private func findOrCreate(name: String, mimeType: String, parent: String?) async throws -> String {
-        var q = "name = '\(name)' and mimeType = '\(mimeType)' and trashed = false"
+        let quoted = name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+        var q = "name = '\(quoted)' and mimeType = '\(mimeType)' and trashed = false"
         if let parent { q += " and '\(parent)' in parents" }
         var comps = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
         comps.queryItems = [URLQueryItem(name: "q", value: q), URLQueryItem(name: "fields", value: "files(id)")]

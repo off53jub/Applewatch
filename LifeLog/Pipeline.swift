@@ -170,6 +170,7 @@ final class Pipeline {
             // 録音中の区切り（5分）に続きが入っているかもしれないので、その分は待つ。
             await conversations.closeIdle(now: .now, waiting: ConversationLog.gap + 300)
             await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
+            await conversations.writePeopleNotes()
         }
     }
 

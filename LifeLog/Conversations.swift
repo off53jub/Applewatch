@@ -20,6 +20,8 @@ final class ConversationLog {
         var title: String?
         var points: [String] = []
         var place: String?
+        /// 人物ノートに書き足したか（この項目が無かったころの記録は nil）
+        var notesWritten: Bool?
         var closed = false
 
         var people: [String] {
@@ -130,6 +132,65 @@ final class ConversationLog {
         } catch {
             return nil
         }
+    }
+
+    // MARK: - 人物ノート
+
+    /// 名前を付けた相手ごとに「人物ノート - 名前」というドキュメントを作り、
+    /// 閉じた会話を新しい順に書き足す。「人物3」のように名前の無い人は書かない。
+    func writePeopleNotes() async {
+        for day in days() {
+            var log = load(day)
+            for i in log.conversations.indices {
+                let c = log.conversations[i]
+                guard c.closed, c.notesWritten != true else { continue }
+                let total = c.lines.reduce(0) { $0 + $1.text.count }
+                for name in c.people where !name.hasPrefix("人物") && total >= Self.minimumCharacters {
+                    let note = Self.note(for: name, in: c, day: day)
+                    do {
+                        try await docs.insert(heading: note.heading, body: note.body, at: 1,
+                                              style: "HEADING_3", day: Self.notePrefix + name)
+                    } catch {
+                        // 通信できないときは次の機会にやり直す
+                        return
+                    }
+                }
+                log.conversations[i].notesWritten = true
+                save(log, day: day)
+            }
+        }
+    }
+
+    static let notePrefix = "人物ノート - "
+
+    private static let noteDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = "M/d(E) HH:mm"
+        return f
+    }()
+
+    private static let noteTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    private static func note(for name: String, in c: Conversation, day: String) -> (heading: String, body: String) {
+        var heading = noteDateFormatter.string(from: c.start) + "〜" + noteTimeFormatter.string(from: c.end)
+        if let place = c.place { heading += "　" + place }
+        if let title = c.title, !title.isEmpty { heading += "　" + title }
+        var body = ""
+        let others = c.people.filter { $0 != name }
+        if !others.isEmpty { body += "一緒にいた人: " + others.joined(separator: "、") + "\n" }
+        if !c.points.isEmpty {
+            body += c.points.map { "・" + $0 + "\n" }.joined()
+        } else {
+            // 要約が無いときは、その人の発言を少しだけ載せる
+            body += c.lines.filter { $0.speaker == name }.prefix(3).map { "「" + $0.text + "」\n" }.joined()
+        }
+        body += "（\(day) のドキュメント）\n\n"
+        return (heading, body)
     }
 
     // MARK: - 1日のまとめ
