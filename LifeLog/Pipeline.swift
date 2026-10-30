@@ -15,6 +15,16 @@ final class Pipeline {
     /// 直近の区切りをどのモデルで文字起こししたか
     private(set) var lastEngine = ""
     let settings = TranscriptionSettings()
+    /// 話者の聞き分け（自分の声・話し相手）
+    let speakers = SpeakerLabeler()
+    private(set) var people: [SpeakerLabeler.Person] = []
+    private(set) var hasSelfVoice = false
+    var speakerLabelsOn = UserDefaults.standard.bool(forKey: "speakerLabels") {
+        didSet {
+            UserDefaults.standard.set(speakerLabelsOn, forKey: "speakerLabels")
+            if speakerLabelsOn { Task { await loadSpeakers() } }
+        }
+    }
 
     private let recorder = Recorder()
     private let docs = GoogleDocs()
@@ -48,10 +58,37 @@ final class Pipeline {
         receiver.activate()
     }
 
+    /// 聞き分けのモデルを用意し、覚えている声を読み込む。
+    func loadSpeakers() async {
+        do {
+            try await speakers.prepare()
+            hasSelfVoice = await speakers.hasSelfVoice
+            people = await speakers.people()
+        } catch {
+            message = "話者の聞き分けを準備できませんでした: \(error.localizedDescription)"
+        }
+    }
+
+    func enrollSelf(from url: URL) async throws {
+        try await speakers.enrollSelf(from: url)
+        hasSelfVoice = await speakers.hasSelfVoice
+    }
+
+    func renamePerson(_ id: String, to name: String) async {
+        await speakers.rename(id, to: name)
+        people = await speakers.people()
+    }
+
+    func removePerson(_ id: String) async {
+        await speakers.remove(id)
+        people = await speakers.people()
+    }
+
     func restoreSignIn() async {
         await docs.restore()
         email = docs.signedInEmail
         processQueue()
+        if speakerLabelsOn { await loadSpeakers() }
     }
 
     func signIn() async {
@@ -113,9 +150,7 @@ final class Pipeline {
         // まず端末内で文字起こしする（無料）。何も聞き取れなければ、お金をかけずにここで終わる。
         let local = try await Transcriber.transcribe(url)
         guard !local.isEmpty else { return }
-        var lines = local.map { line in
-            "\(timeFormatter.string(from: start.addingTimeInterval(line.offset)))  \(line.text)"
-        }
+        var entries: [(offset: TimeInterval?, text: String)] = local.map { ($0.offset, $0.text) }
         lastEngine = "端末内"
         if settings.shouldUseCloud, let key = settings.apiKey {
             do {
@@ -124,10 +159,7 @@ final class Pipeline {
                 settings.addUsage(seconds: Self.duration(of: url))
                 lastEngine = cloud.model
                 if !cloud.lines.isEmpty {
-                    lines = cloud.lines.map { line in
-                        guard let offset = line.offset else { return line.text }
-                        return "\(timeFormatter.string(from: start.addingTimeInterval(offset)))  \(line.text)"
-                    }
+                    entries = cloud.lines.map { ($0.offset, $0.text) }
                 }
             } catch CloudTranscriber.Failure.limited {
                 // 無料枠を使い切ったら、この区切りは端末内の結果で済ませる（高精度はオンのまま）
@@ -138,9 +170,36 @@ final class Pipeline {
                 message = reason + "（高精度をオフにして、端末内の文字起こしで続けます）"
             }
         }
+        let names = await speakerNames(for: entries, in: url)
+        let lines = entries.enumerated().map { i, entry in
+            let who = names[i].map { "[\($0)] " } ?? ""
+            guard let offset = entry.offset else { return who + entry.text }
+            return "\(timeFormatter.string(from: start.addingTimeInterval(offset)))  \(who)\(entry.text)"
+        }
         let text = lines.map { $0 + "\n" }.joined()
         try await docs.append(text, day: dayFormatter.string(from: start))
         lastLines = Array((lastLines + lines).suffix(20))
+        if speakerLabelsOn { people = await speakers.people() }
+    }
+
+    /// 各行を、その時間にいちばん長く話していた人に結びつける。聞き分けがオフ・失敗したときは nil。
+    private func speakerNames(for entries: [(offset: TimeInterval?, text: String)], in url: URL) async -> [String?] {
+        let none = [String?](repeating: nil, count: entries.count)
+        guard speakerLabelsOn, let segments = try? await speakers.label(url), !segments.isEmpty else { return none }
+        let chunkEnd = Self.duration(of: url)
+        return entries.indices.map { i in
+            guard let from = entries[i].offset else { return nil }
+            let to = entries[(i + 1)...].lazy.compactMap { $0.offset }.first ?? chunkEnd
+            let best = segments.max { a, b in
+                overlap(a, from, to) < overlap(b, from, to)
+            }
+            guard let best, overlap(best, from, to) > 0 else { return nil }
+            return best.name
+        }
+    }
+
+    private func overlap(_ s: SpeakerLabeler.Segment, _ from: TimeInterval, _ to: TimeInterval) -> TimeInterval {
+        max(0, min(s.end, to) - max(s.start, from))
     }
 
     private static func duration(of url: URL) -> Double {

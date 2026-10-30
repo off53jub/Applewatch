@@ -7,6 +7,10 @@ packages:
   GoogleSignIn:
     url: https://github.com/google/GoogleSignIn-iOS
     from: 8.0.0
+  # 話者の聞き分け（端末内）。2026-10-07 の版に固定する
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    exactVersion: 0.17.7
 settings:
   base:
     MARKETING_VERSION: "0.1.0"
@@ -24,6 +28,7 @@ targets:
     sources: [LifeLog]
     dependencies:
       - package: GoogleSignIn
+      - package: FluidAudio
       - target: LifeLogWatch
     settings:
       base:
