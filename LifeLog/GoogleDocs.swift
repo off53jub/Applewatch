@@ -41,6 +41,41 @@ final class GoogleDocs {
         _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate", json: body)
     }
 
+    /// 次に追記する文字が入る位置（ドキュメントは必ず空の段落で終わるので、その手前）。
+    func endIndex(day: String) async throws -> Int {
+        let docId = try await documentId(for: day)
+        let doc = try await request("GET", "https://docs.googleapis.com/v1/documents/\(docId)?fields=body.content(endIndex)")
+        let content = (doc["body"] as? [String: Any])?["content"] as? [[String: Any]] ?? []
+        let last = content.last?["endIndex"] as? Int ?? 2
+        return max(1, last - 1)
+    }
+
+    /// 段落の頭（index）に、見出し1行と本文を差し込む。index は UTF-16 で数えた位置。
+    func insert(heading: String, body: String, at index: Int, style: String, day: String) async throws {
+        let docId = try await documentId(for: day)
+        // 手で編集されて短くなっていても、ドキュメントの外には書かない
+        let at = min(index, try await endIndex(day: day))
+        let headingLength = (heading + "\n").utf16.count
+        var requests: [[String: Any]] = [
+            ["insertText": ["location": ["index": at], "text": heading + "\n" + body]],
+            ["updateParagraphStyle": [
+                "range": ["startIndex": at, "endIndex": at + headingLength],
+                "paragraphStyle": ["namedStyleType": style],
+                "fields": "namedStyleType",
+            ]],
+        ]
+        if !body.isEmpty {
+            // 差し込んだ先が見出しだと本文も見出しになるので、本文は普通の文字に戻す
+            requests.append(["updateParagraphStyle": [
+                "range": ["startIndex": at + headingLength, "endIndex": at + headingLength + body.utf16.count],
+                "paragraphStyle": ["namedStyleType": "NORMAL_TEXT"],
+                "fields": "namedStyleType",
+            ]])
+        }
+        _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
+                              json: ["requests": requests])
+    }
+
     // MARK: - Drive
 
     private func documentId(for day: String) async throws -> String {

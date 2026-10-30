@@ -45,6 +45,8 @@ targets:
         UIBackgroundModes: [audio]
         NSMicrophoneUsageDescription: 会話を録音して文字起こしするためにマイクを使います。
         NSSpeechRecognitionUsageDescription: 録音した音声を端末内で文字起こしします。
+        NSLocationWhenInUseUsageDescription: どこで話したかを、文字起こしの見出しに添えるために使います。
+        NSLocationAlwaysAndWhenInUseUsageDescription: 画面を閉じて録音しているあいだも、どこで話したかを見出しに添えるために使います。大きく移動したときだけ記録します。
         ITSAppUsesNonExemptEncryption: false
         GIDClientID: $(GOOGLE_CLIENT_ID)
         CFBundleURLTypes:

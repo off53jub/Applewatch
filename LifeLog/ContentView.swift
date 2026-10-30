@@ -63,6 +63,31 @@ struct ContentView: View {
                 }
 
                 Section {
+                    Toggle("会話ごとの見出しと1日のまとめ", isOn: Binding(
+                        get: { pipeline.summariesOn },
+                        set: { pipeline.summariesOn = $0 }))
+                        .disabled(settings.groqKey == nil)
+                    Toggle("場所を記録する", isOn: Binding(
+                        get: { pipeline.places.isOn },
+                        set: { pipeline.places.isOn = $0 }))
+                    if pipeline.places.isOn {
+                        NavigationLink {
+                            PlacesView()
+                        } label: {
+                            LabeledContent("登録した場所", value: "\(pipeline.places.places.count) か所")
+                        }
+                    }
+                } header: {
+                    Text("会話のまとめ")
+                } footer: {
+                    if settings.groqKey == nil {
+                        Text("話が3分途切れるごとに、ドキュメントに「時刻・場所・相手」の見出しを付けます。Groq の API キーを登録すると、見出しに内容の要約が付き、翌日には前の日の先頭に「1日のまとめ」が入ります（無料）。")
+                    } else {
+                        Text("話が3分途切れるごとに、ドキュメントに「時刻・場所・相手・内容」の見出しと要点を付けます。日が変わると、前の日の先頭に「1日のまとめ」が入ります。Groq の無料枠を使います。")
+                    }
+                }
+
+                Section {
                     Button {
                         Task { await pipeline.toggleRecording() }
                     } label: {

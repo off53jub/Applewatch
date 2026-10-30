@@ -26,8 +26,16 @@ final class Pipeline {
         }
     }
 
+    /// 会話ごとの見出しと要約、1日のまとめ（Groq の無料枠）
+    var summariesOn = UserDefaults.standard.object(forKey: "summaries") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(summariesOn, forKey: "summaries") }
+    }
+    /// どこで話したか
+    let places = PlaceLog()
+
     private let recorder = Recorder()
-    private let docs = GoogleDocs()
+    private let docs: GoogleDocs
+    private let conversations: ConversationLog
     private let receiver = PhoneReceiver()
     private var processing = false
 
@@ -44,6 +52,14 @@ final class Pipeline {
     }()
 
     init() {
+        let docs = GoogleDocs()
+        self.docs = docs
+        conversations = ConversationLog(docs: docs)
+        conversations.apiKey = { [weak self] in
+            guard let self, summariesOn else { return nil }
+            return settings.groqKey
+        }
+        conversations.placeName = { [weak self] time in await self?.places.name(at: time) }
         recorder.onChunk = { [weak self] _ in self?.processQueue() }
         recorder.onStop = { [weak self] reason in
             self?.isRecording = false
@@ -142,6 +158,10 @@ final class Pipeline {
                 }
                 pendingCount = Storage.pendingChunks().count
             }
+            // しばらく話していなければ会話を閉じて見出しを付け、前の日にはまとめを付ける。
+            // 録音中の区切り（5分）に続きが入っているかもしれないので、その分は待つ。
+            await conversations.closeIdle(now: .now, waiting: ConversationLog.gap + 300)
+            await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
         }
     }
 
@@ -176,8 +196,14 @@ final class Pipeline {
             guard let offset = entry.offset else { return who + entry.text }
             return "\(timeFormatter.string(from: start.addingTimeInterval(offset)))  \(who)\(entry.text)"
         }
+        // 時刻の分からない行は、直前の行と同じ時刻とみなす
+        var time = start
+        let logged = entries.enumerated().map { i, entry in
+            if let offset = entry.offset { time = start.addingTimeInterval(offset) }
+            return ConversationLog.Line(time: time, speaker: names[i], text: entry.text)
+        }
         let text = lines.map { $0 + "\n" }.joined()
-        try await docs.append(text, day: dayFormatter.string(from: start))
+        try await conversations.append(logged, text: text, day: dayFormatter.string(from: start))
         lastLines = Array((lastLines + lines).suffix(20))
         if speakerLabelsOn { people = await speakers.people() }
     }

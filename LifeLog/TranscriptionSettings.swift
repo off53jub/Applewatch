@@ -38,6 +38,8 @@ final class TranscriptionSettings {
     }
 
     var apiKey: String? { Keychain.read(provider) }
+    /// 会話の要約は、文字起こしのサービスにかかわらず Groq の無料枠で作る
+    var groqKey: String? { Keychain.read(.groq) }
 
     func setAPIKey(_ key: String) {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
