@@ -15,9 +15,16 @@ enum TranscriptCheck {
     /// 端末内と合う行だけを残す。
     static func agreeing(_ cloud: [CloudTranscriber.Line], with local: [Transcriber.Line],
                          duration: TimeInterval) -> [CloudTranscriber.Line] {
+        let ok = agrees(cloud, with: local, duration: duration)
+        return cloud.indices.filter { ok[$0] }.map { cloud[$0] }
+    }
+
+    /// 行ごとに、端末内と合うか。
+    static func agrees(_ cloud: [CloudTranscriber.Line], with local: [Transcriber.Line],
+                       duration: TimeInterval) -> [Bool] {
         let localReadings = local.map { (offset: $0.offset, grams: trigrams(reading($0.text))) }
         let all = localReadings.reduce(into: Set<String>()) { $0.formUnion($1.grams) }
-        return cloud.enumerated().filter { i, line in
+        return cloud.enumerated().map { i, line in
             let grams = trigrams(reading(line.text))
             // 読みが短すぎる行（「はい」など）は比べようがないので、端末内で何か聞こえていれば残す
             guard grams.count >= 3 else { return !local.isEmpty }
@@ -30,7 +37,7 @@ enum TranscriptCheck {
             }
             let shared = grams.filter(nearby.contains).count
             return Double(shared) / Double(grams.count) >= minimumAgreement
-        }.map(\.element)
+        }
     }
 
     /// 日本語の文を、ローマ字の読み（小文字の英字だけ）にする。

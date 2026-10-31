@@ -4,7 +4,7 @@ import Foundation
 /// 消した行は30日間とっておき、間違えたら戻せる。
 enum Junk {
     enum Kind: String, CaseIterable, Codable, Identifiable {
-        case filler, streak, broken, custom
+        case filler, streak, broken, custom, unheard
         var id: String { rawValue }
 
         var label: String {
@@ -13,6 +13,7 @@ enum Junk {
             case .streak: "同じ文の連打"
             case .broken: "壊れた行"
             case .custom: "自分で足した言葉"
+            case .unheard: "聞こえていない文"
             }
         }
 
@@ -22,6 +23,7 @@ enum Junk {
             case .streak: "同じ短い文が3回以上続いたところ（区切りをまたいでも数えます）"
             case .broken: "「3行目の直した文」など、誤変換直しの不具合で残った行"
             case .custom: "下の「消したい言葉」だけの行"
+            case .unheard: "残っている音声を iPhone の中で聞き直しても、似た音が聞こえなかった行（雑音や外国語の動画に作られた文）"
             }
         }
     }

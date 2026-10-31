@@ -323,7 +323,7 @@ final class ConversationLog {
     }
 
     /// 消す候補を探す。only を渡すとその日だけ。
-    func findJunk(custom: [String], only: [String]? = nil) -> [Junk.Candidate] {
+    func findJunk(custom: [String], flagged: Set<String> = [], only: [String]? = nil) -> [Junk.Candidate] {
         let customKeys = Set(custom.map(Junk.normalized).filter { !$0.isEmpty })
         var result: [Junk.Candidate] = []
         for day in only ?? days() {
@@ -331,10 +331,24 @@ final class ConversationLog {
             let streak = Junk.streaks(lines)
             for (i, line) in lines.enumerated() {
                 guard let kind = Junk.kind(of: line.text, custom: customKeys) ?? (streak.contains(i) ? .streak : nil)
+                        ?? (flagged.contains(Junk.key(line)) ? .unheard : nil)
                 else { continue }
                 result.append(Junk.Candidate(day: day, line: line, kind: kind,
                                              before: i > 0 ? lines[i - 1].text : nil,
                                              after: i + 1 < lines.count ? lines[i + 1].text : nil))
+            }
+        }
+        return result
+    }
+
+    /// 音声ファイルごとの行（照らし直し用。古い日から）
+    func linesByAudio() -> [(day: String, audio: String, lines: [Line])] {
+        var result: [(day: String, audio: String, lines: [Line])] = []
+        for day in days() {
+            let lines = load(day).conversations.flatMap(\.lines).filter { $0.audio != nil && $0.offset != nil }
+            let groups = Dictionary(grouping: lines) { $0.audio ?? "" }
+            for (audio, group) in groups.sorted(by: { $0.key < $1.key }) {
+                result.append((day, audio, group.sorted { $0.time < $1.time }))
             }
         }
         return result

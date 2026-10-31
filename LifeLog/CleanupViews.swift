@@ -45,6 +45,24 @@ struct CleanupView: View {
             }
 
             Section {
+                if let progress = pipeline.recheckProgress {
+                    ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1))) {
+                        Text("照らし直しています… \(progress.done) / \(progress.total) 区切り")
+                    }
+                    Button("やめる", role: .cancel) { pipeline.cancelRecheck() }
+                } else {
+                    Button("音声で照らし直す") { pipeline.startRecheck() }
+                }
+                if !pipeline.recheckResult.isEmpty {
+                    Text(pipeline.recheckResult).foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("言っていない文を探す")
+            } footer: {
+                Text("これまでの行を、残っている音声を iPhone の中でもう一度聞き取って照らし合わせ、似た音が聞こえない行を「聞こえていない文」として上の候補に出します。手元に無い音声はドライブから取ってくるので、Wi-Fi のときに。時間がかかりますが、ほかの画面に移っても続き、一度照らした音声は次から飛ばします。終わったら「もう一度調べる」を押してください。")
+            }
+
+            Section {
                 ForEach(pipeline.junkPhrases, id: \.self) { Text($0) }
                     .onDelete { pipeline.junkPhrases.remove(atOffsets: $0) }
                 HStack {

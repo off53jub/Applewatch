@@ -545,7 +545,60 @@ final class Pipeline {
 
     /// 全期間から消す候補を探す。
     func findJunk() -> [Junk.Candidate] {
-        conversations.findJunk(custom: junkPhrases).filter { !keptLines.contains(Junk.key($0.line)) }
+        conversations.findJunk(custom: junkPhrases, flagged: unheardLines).filter { !keptLines.contains(Junk.key($0.line)) }
+    }
+
+    /// 照らし直しで「聞こえていない」と分かった行
+    @ObservationIgnored private var unheardLines = Set(UserDefaults.standard.stringArray(forKey: "unheardLines") ?? []) {
+        didSet { UserDefaults.standard.set(Array(unheardLines), forKey: "unheardLines") }
+    }
+    /// 照らし直しを済ませた音声
+    @ObservationIgnored private var recheckedAudio = Set(UserDefaults.standard.stringArray(forKey: "recheckedAudio") ?? []) {
+        didSet { UserDefaults.standard.set(Array(recheckedAudio), forKey: "recheckedAudio") }
+    }
+    /// 照らし直しの進み具合（済んだ区切り・全部の区切り）。動いていなければ nil。
+    private(set) var recheckProgress: (done: Int, total: Int)?
+    @ObservationIgnored private var recheckTask: Task<Void, Never>?
+    private(set) var recheckResult = ""
+
+    /// 残っている音声を iPhone の中でもう一度文字起こしし、記録の行と読みが合わない行を「聞こえていない文」にする。
+    /// 手元に無い音声はドライブから取ってくる。済んだ音声は次からは飛ばす。
+    func startRecheck() {
+        guard recheckTask == nil else { return }
+        let targets = conversations.linesByAudio().filter { !recheckedAudio.contains($0.audio) }
+        recheckProgress = (0, targets.count)
+        recheckResult = ""
+        recheckTask = Task {
+            var found = 0
+            var missing = 0
+            for (n, target) in targets.enumerated() {
+                if Task.isCancelled { break }
+                recheckProgress = (n, targets.count)
+                guard let url = await archive.playableURL(for: target.audio) else {
+                    missing += 1
+                    continue
+                }
+                let start = target.lines.first?.time ?? .now
+                guard let local = try? await Transcriber.transcribe(
+                    url, words: keywords(for: vocabularyContext(at: start))) else { continue }
+                let duration = Self.duration(of: url)
+                let lines = target.lines.map { CloudTranscriber.Line(offset: $0.offset, text: $0.original ?? $0.text) }
+                let ok = TranscriptCheck.agrees(lines, with: local, duration: duration)
+                for (line, fine) in zip(target.lines, ok) where !fine {
+                    unheardLines.insert(Junk.key(line))
+                    found += 1
+                }
+                recheckedAudio.insert(target.audio)
+            }
+            recheckResult = "聞こえていない文が \(found) 行見つかりました。"
+                + (missing > 0 ? "音声が残っていない区切りが \(missing) 個ありました（音声をドライブに保存する前の分など）。" : "")
+            recheckProgress = nil
+            recheckTask = nil
+        }
+    }
+
+    func cancelRecheck() {
+        recheckTask?.cancel()
     }
 
     /// 選んだ行を消し、選ばなかった行は今後も残す。結果を文で返す。
