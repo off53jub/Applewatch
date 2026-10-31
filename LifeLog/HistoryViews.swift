@@ -93,6 +93,13 @@ struct DayView: View {
             }
         }
         .navigationTitle(day)
+        .toolbar {
+            NavigationLink {
+                UnnamedVoicesView(day: day)
+            } label: {
+                Image(systemName: "person.crop.circle.badge.questionmark")
+            }
+        }
         .onAppear { conversations = pipeline.conversations(on: day) }
         .refreshable { conversations = pipeline.conversations(on: day) }
         .onDisappear { player.stop() }

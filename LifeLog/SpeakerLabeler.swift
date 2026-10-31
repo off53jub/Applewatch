@@ -349,6 +349,19 @@ actor SpeakerLabeler {
         save()
     }
 
+    /// その声にいちばん近い、名前のある人（自分を含む）と、その距離。
+    func closestNamed(to id: String) -> (id: String, distance: Float)? {
+        guard let source = person(id) else { return nil }
+        let voices = source.voices.filter { $0.model == Self.model }
+        guard !voices.isEmpty else { return nil }
+        var best: (id: String, distance: Float)?
+        for p in store.people where p.isNamed && p.id != id {
+            let d = voices.map { distance($0.embedding, to: p) }.min() ?? 1
+            if d < (best?.distance ?? 1) { best = (p.id, d) }
+        }
+        return best
+    }
+
     /// テレビや動画の声だった、名前の無い声を忘れる（登録・手直しした声は残す）。
     func forgetUnnamed(_ ids: Set<String>) {
         store.people.removeAll { ids.contains($0.id) && !$0.isNamed && $0.pinnedCount == 0 }

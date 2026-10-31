@@ -26,10 +26,39 @@ final class Vocabulary {
         var group: Group
     }
 
+    /// 話題ごとの言葉。合図の言葉（または話題の言葉そのもの）が聞こえたら、しばらくその話題の言葉も使う。
+    struct Topic: Codable, Hashable, Identifiable {
+        var id = UUID()
+        var name: String
+        /// 話題に入ったと分かる言葉
+        var triggers: [String] = []
+        /// その話題で使う専門用語など
+        var words: [String] = []
+
+        func isMentioned(in text: String) -> Bool {
+            (triggers + words).contains { !$0.isEmpty && text.localizedCaseInsensitiveContains($0) }
+        }
+    }
+
     private struct Store: Codable {
         var words: [Group: [String]] = [:]
         var fixes: [Fix] = []
+        var topics: [Topic] = []
+
+        init(words: [Group: [String]] = [:]) { self.words = words }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            words = try c.decodeIfPresent([Group: [String]].self, forKey: .words) ?? [:]
+            fixes = try c.decodeIfPresent([Fix].self, forKey: .fixes) ?? []
+            topics = try c.decodeIfPresent([Topic].self, forKey: .topics) ?? []
+        }
     }
+
+    /// 話題が出てから、これだけのあいだはその話題の言葉を使う
+    static let topicSpan: TimeInterval = 30 * 60
+    /// 最後にその話題が聞こえた時刻
+    private var topicHeard: [UUID: Date] = [:]
 
     private var store: Store {
         didSet {
@@ -85,6 +114,46 @@ final class Vocabulary {
         let corrected = fixes(for: context).map(\.right)
         var seen = Set<String>()
         return (specific + words(in: .always) + corrected + names).filter { seen.insert($0).inserted }
+    }
+
+    // MARK: - 話題
+
+    var topics: [Topic] { store.topics }
+
+    func addTopic(_ name: String) -> UUID? {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        let topic = Topic(name: name)
+        store.topics.append(topic)
+        return topic.id
+    }
+
+    func updateTopic(_ topic: Topic) {
+        guard let i = store.topics.firstIndex(where: { $0.id == topic.id }) else { return }
+        let clean = { (list: [String]) -> [String] in
+            var seen = Set<String>()
+            return list.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && !$0.contains("<") && !$0.contains(">") && seen.insert($0).inserted }
+        }
+        var topic = topic
+        topic.triggers = clean(topic.triggers)
+        topic.words = clean(topic.words)
+        store.topics[i] = topic
+    }
+
+    func removeTopics(_ ids: Set<UUID>) {
+        store.topics.removeAll { ids.contains($0.id) }
+    }
+
+    /// 聞こえた文から話題を見つけ、いま続いている話題（直近30分に出たもの）を返す。
+    func activeTopics(hearing text: String, at time: Date) -> [Topic] {
+        for topic in store.topics where topic.isMentioned(in: text) {
+            topicHeard[topic.id] = max(topicHeard[topic.id] ?? .distantPast, time)
+        }
+        return store.topics.filter { topic in
+            guard let heard = topicHeard[topic.id] else { return false }
+            return abs(time.timeIntervalSince(heard)) <= Self.topicSpan
+        }
     }
 
     func fixes(for context: SpeakerLabeler.Context) -> [Fix] {

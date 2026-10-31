@@ -277,6 +277,22 @@ final class Pipeline {
         await relabel(to: target, renaming: old) { $0.speakerID == source }
     }
 
+    /// 名前の無い声に近い、名前のある人。
+    func voiceSuggestion(for id: String) async -> (id: String, name: String, distance: Float)? {
+        guard let best = await speakers.closestNamed(to: id),
+              let name = await speakers.name(of: best.id) else { return nil }
+        return (best.id, name, best.distance)
+    }
+
+    /// 名前の無い声を、名前のある人（自分を含む）にまとめる。
+    func assign(_ id: String, to target: String) async {
+        if target == SpeakerLabeler.selfID {
+            await mergeIntoSelf([id])
+        } else {
+            await mergePerson(id, into: target)
+        }
+    }
+
     /// 自分の声だった人たちを、自分にまとめる（声も覚え、記録とドキュメントの名前も「自分」に直す）。
     func mergeIntoSelf(_ ids: [String]) async {
         await speakers.ensureSelf()
@@ -748,13 +764,18 @@ final class Pipeline {
         let duration = Self.duration(of: url)
         // まず端末内で文字起こしする（無料）。何も聞き取れなければ、お金をかけずにここで終わる。
         let context = vocabularyContext(at: start)
-        let keywords = keywords(for: context)
-        let local = try await Transcriber.transcribe(url, words: keywords).filter { !CloudTranscriber.isFiller($0.text) }
+        let placeWords = keywords(for: context)
+        let local = try await Transcriber.transcribe(url, words: placeWords).filter { !CloudTranscriber.isFiller($0.text) }
         guard !local.isEmpty else { return [] }
         var entries: [(offset: TimeInterval?, text: String, score: Double?)] = local.map { ($0.offset, $0.text, nil) }
         lastEngine = "端末内"
         // 同じ機器の直前の区切りから続いているなら、その終わりの文を文脈として渡す
         let previous = lastTranscript[fromWatch].flatMap { start.timeIntervalSince($0.end) < 90 ? $0.text : nil }
+        // 聞こえた文から話題を見つけ、その話題の言葉も聞き取りと直しのヒントにする
+        let topics = vocabulary.activeTopics(hearing: local.map(\.text).joined() + (previous ?? ""), at: start)
+        // 話題の言葉は場所の言葉より具体的なので先に置く（Whisper のヒントは先頭の30語まで）
+        var seenWords = Set<String>()
+        let keywords = (topics.flatMap(\.words) + placeWords).filter { seenWords.insert($0).inserted }
         var usedHaas = false
         if homePC.shouldTry {
             // 家の PC の Haas-ja（無料）。PC が切れているときや届かないときは、この区切りはほかの方法で
@@ -795,6 +816,9 @@ final class Pipeline {
                 message = reason + "（高精度をオフにして、端末内の文字起こしで続けます）"
             }
         }
+        // 精度の高い文で見つかった話題の言葉も、直しに使う
+        let heardTopics = vocabulary.activeTopics(hearing: entries.map { $0.text }.joined(), at: start)
+        let correctionWords = heardTopics.flatMap(\.words).filter { seenWords.insert($0).inserted } + keywords
         // 同音の誤変換などを言語モデルで直す。直せなかったら（混雑・上限など）そのまま使う。
         var originals = [String?](repeating: nil, count: entries.count)
         // 登録した「間違えやすい書き方」は、そのまま正しい書き方に置き換える
@@ -805,7 +829,7 @@ final class Pipeline {
             }
         }
         if correctionOn, let key = settings.groqKey,
-           let fixed = try? await Summarizer.correct(entries.map { $0.text }, keywords: keywords,
+           let fixed = try? await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
                                                      previous: previous, apiKey: key) {
             for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
                 if originals[i] == nil { originals[i] = entries[i].text }
@@ -813,6 +837,7 @@ final class Pipeline {
             }
             lastEngine += "＋補正"
         }
+        if !heardTopics.isEmpty { lastEngine += "・話題: " + heardTopics.map(\.name).joined(separator: "、") }
         if fromWatch { lastEngine += "（時計）" }
         lastTranscript[fromWatch] = (start.addingTimeInterval(duration),
                                      String(entries.map { $0.text }.joined().suffix(200)))

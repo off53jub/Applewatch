@@ -7,6 +7,7 @@ struct VocabularyView: View {
     @State private var newWord = ""
     @State private var wrong = ""
     @State private var right = ""
+    @State private var newTopic = ""
 
     var body: some View {
         let vocabulary = pipeline.vocabulary
@@ -53,8 +54,37 @@ struct VocabularyView: View {
             } footer: {
                 Text("文字起こしにこの書き方が出てきたら、正しい書き方に置き換えます（直す前の文も残ります）。")
             }
+
+            Section {
+                ForEach(vocabulary.topics) { topic in
+                    NavigationLink {
+                        TopicView(id: topic.id)
+                    } label: {
+                        LabeledContent(topic.name, value: "\(topic.words.count) 語")
+                    }
+                }
+                .onDelete { offsets in
+                    let topics = vocabulary.topics
+                    vocabulary.removeTopics(Set(offsets.map { topics[$0].id }))
+                }
+                HStack {
+                    TextField("話題の名前（例: 決算、システム移行）", text: $newTopic)
+                        .onSubmit(addTopic)
+                    Button("追加", action: addTopic)
+                        .disabled(newTopic.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            } header: {
+                Text("話題ごとの言葉")
+            } footer: {
+                Text("話題に合図の言葉か専門用語が聞こえたら、そこから30分はその話題の専門用語も聞き取りと誤変換直しのヒントにします（場所の組とは別に、いつでも効きます）。")
+            }
         }
         .navigationTitle("言葉の登録")
+    }
+
+    private func addTopic() {
+        _ = pipeline.vocabulary.addTopic(newTopic)
+        newTopic = ""
     }
 
     private var footer: String {
@@ -109,5 +139,74 @@ struct AddWordView: View {
                 group = pipeline.vocabularyContext(at: line.time) == .work ? .work : .other
             }
         }
+    }
+}
+
+/// 1つの話題：名前・合図の言葉・専門用語。
+struct TopicView: View {
+    @Environment(Pipeline.self) private var pipeline
+    let id: UUID
+    @State private var newTrigger = ""
+    @State private var newWord = ""
+
+    private var topic: Vocabulary.Topic? { pipeline.vocabulary.topics.first { $0.id == id } }
+
+    var body: some View {
+        Form {
+            if let topic {
+                Section("名前") {
+                    TextField("話題の名前", text: Binding(
+                        get: { topic.name },
+                        set: { value in update { $0.name = value } }))
+                }
+                Section {
+                    ForEach(topic.words, id: \.self) { Text($0) }
+                        .onDelete { offsets in update { $0.words.remove(atOffsets: offsets) } }
+                    HStack {
+                        TextField("例: 信用取引、約定、IPO", text: $newWord)
+                            .onSubmit(addWord)
+                        Button("追加", action: addWord)
+                            .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                } header: {
+                    Text("専門用語")
+                } footer: {
+                    Text("この話題のときに、この書き方で聞き取ってほしい言葉。どれかが聞こえただけでも、この話題とみなします。")
+                }
+                Section {
+                    ForEach(topic.triggers, id: \.self) { Text($0) }
+                        .onDelete { offsets in update { $0.triggers.remove(atOffsets: offsets) } }
+                    HStack {
+                        TextField("例: 決算、株価", text: $newTrigger)
+                            .onSubmit(addTrigger)
+                        Button("追加", action: addTrigger)
+                            .disabled(newTrigger.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                } header: {
+                    Text("合図の言葉（なくてもよい）")
+                } footer: {
+                    Text("聞き取りやすい普通の言葉で、この話題が始まったと分かるもの。専門用語そのものは聞き間違えられやすいので、こちらにも入れておくと見つけやすくなります。")
+                }
+            }
+        }
+        .navigationTitle(topic?.name ?? "")
+    }
+
+    private func update(_ change: (inout Vocabulary.Topic) -> Void) {
+        guard var topic else { return }
+        change(&topic)
+        pipeline.vocabulary.updateTopic(topic)
+    }
+
+    private func addWord() {
+        let word = newWord
+        update { $0.words.append(word) }
+        newWord = ""
+    }
+
+    private func addTrigger() {
+        let word = newTrigger
+        update { $0.triggers.append(word) }
+        newTrigger = ""
     }
 }

@@ -86,6 +86,15 @@ private struct TodayView: View {
                                 }
                             }
                         }
+                        let unnamedIDs = Set(talks.flatMap(\.lines).compactMap(\.speakerID))
+                        let unnamed = pipeline.people.filter { !$0.isNamed && unnamedIDs.contains($0.id) }.count
+                        if unnamed > 0 {
+                            NavigationLink {
+                                UnnamedVoicesView(day: today)
+                            } label: {
+                                Label("人物Nを整理（\(unnamed) 人）", systemImage: "person.crop.circle.badge.questionmark")
+                            }
+                        }
                     }
                 }
 

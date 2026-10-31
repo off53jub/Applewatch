@@ -549,3 +549,119 @@ struct SelfMergeView: View {
         .onDisappear { player.stop() }
     }
 }
+
+/// その日の記録に出てくる「人物N」を、名前のある人にまとめたり、名前を付けたりする。
+struct UnnamedVoicesView: View {
+    @Environment(Pipeline.self) private var pipeline
+    let day: String
+    @State private var player = ClipPlayer()
+    @State private var suggestions: [String: (id: String, name: String, distance: Float)] = [:]
+    @State private var picking: Pick?
+    @State private var naming: Pick?
+    @State private var newName = ""
+    @State private var working: String?
+
+    struct Pick: Identifiable { let id: String }
+
+    struct Item: Identifiable {
+        let person: SpeakerLabeler.Person
+        let lines: [ConversationLog.Line]
+        var id: String { person.id }
+    }
+
+    /// その日の行に出てくる、名前の無い声と、その行（多い順）
+    private var unnamed: [Item] {
+        let lines = pipeline.conversations(on: day).flatMap(\.lines)
+        return pipeline.people.filter { !$0.isNamed }.compactMap { person in
+            let mine = lines.filter { $0.speakerID == person.id }
+            return mine.isEmpty ? nil : Item(person: person, lines: mine)
+        }
+        .sorted { $0.lines.count > $1.lines.count }
+    }
+
+    var body: some View {
+        let list = unnamed
+        List {
+            ForEach(list) { item in
+                Section {
+                    HStack {
+                        if let sample = item.person.samples.last {
+                            SampleButton(player: player, sample: sample, key: item.person.id)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.lines.last?.text ?? "").lineLimit(2)
+                            Text("この日 \(item.lines.count) 行").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if working == item.person.id {
+                        HStack { ProgressView(); Text("直しています…") }
+                    } else {
+                        if let s = suggestions[item.person.id], s.distance <= Self.showLimit {
+                            Button("「\(s.name)」にまとめる（\(s.distance <= Self.closeLimit ? "声がよく似ています" : "少し似ています")）") {
+                                apply(item.person.id) { await pipeline.assign(item.person.id, to: s.id) }
+                            }
+                        }
+                        Button("ほかの人を選ぶ") { picking = Pick(id: item.person.id) }
+                        Button("新しく名前を付ける") {
+                            newName = ""
+                            naming = Pick(id: item.person.id)
+                        }
+                    }
+                } header: {
+                    Text(item.person.displayName)
+                }
+            }
+        }
+        .overlay {
+            if list.isEmpty {
+                ContentUnavailableView("名前の無い声はありません", systemImage: "person.crop.circle.badge.checkmark")
+            }
+        }
+        .navigationTitle("人物Nを整理")
+        .task(id: list.map(\.id)) {
+            for item in list where suggestions[item.person.id] == nil {
+                if let s = await pipeline.voiceSuggestion(for: item.person.id) {
+                    suggestions[item.person.id] = s
+                }
+            }
+        }
+        .onDisappear { player.stop() }
+        .sheet(item: $picking) { pick in
+            NavigationStack {
+                PersonPicker(exclude: pick.id, includeSelf: true,
+                             context: pipeline.places.context(at: .now)) { target in
+                    picking = nil
+                    apply(pick.id) { await pipeline.assign(pick.id, to: target) }
+                }
+                .navigationTitle("だれの声ですか")
+                .toolbar { Button("キャンセル") { picking = nil } }
+            }
+        }
+        .alert("名前を付ける", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
+            TextField("名前", text: $newName)
+            Button("付ける") {
+                let name = newName.trimmingCharacters(in: .whitespaces)
+                if let id = naming?.id, !name.isEmpty {
+                    apply(id) { await pipeline.renamePerson(id, to: name) }
+                }
+                naming = nil
+            }
+            Button("キャンセル", role: .cancel) { naming = nil }
+        } message: {
+            Text("これまでの記録とドキュメントの名前も変わります。")
+        }
+    }
+
+    /// 似ていると出す距離と、よく似ているとする距離
+    private static let showLimit: Float = 0.55
+    private static let closeLimit: Float = 0.40
+
+    private func apply(_ id: String, _ action: @escaping () async -> Void) {
+        working = id
+        Task {
+            await action()
+            suggestions[id] = nil
+            working = nil
+        }
+    }
+}
