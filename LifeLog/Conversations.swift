@@ -9,6 +9,9 @@ final class ConversationLog {
         let time: Date
         let speaker: String?
         let text: String
+        /// 聞き直し用の音声ファイル名と、その中での位置（秒）。古い記録には無い。
+        var audio: String? = nil
+        var offset: TimeInterval? = nil
     }
 
     struct Conversation: Codable {
@@ -235,6 +238,12 @@ final class ConversationLog {
             }
         }
     }
+
+    // MARK: - アプリで見る
+
+    func recordedDays() -> [String] { days().reversed() }
+
+    func conversations(on day: String) -> [Conversation] { load(day).conversations }
 
     // MARK: - 保存
 

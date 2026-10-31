@@ -197,7 +197,8 @@ final class Pipeline {
                 }
                 do {
                     try await process(url)
-                    try? FileManager.default.removeItem(at: url)
+                    // 文字起こしした音声は、アプリで聞き直せるよう1日だけ残す
+                    Storage.keep(url)
                 } catch where Self.isBrokenAudio(error) {
                     // 開けても中身が途中で切れている区切り
                     Storage.setAside(url)
@@ -215,6 +216,11 @@ final class Pipeline {
             await conversations.writePeopleNotes()
         }
     }
+
+    /// 記録のある日（新しい順）
+    func recordedDays() -> [String] { conversations.recordedDays() }
+
+    func conversations(on day: String) -> [ConversationLog.Conversation] { conversations.conversations(on: day) }
 
     // MARK: - 裏での処理
 
@@ -286,7 +292,8 @@ final class Pipeline {
         var time = start
         let logged = entries.enumerated().map { i, entry in
             if let offset = entry.offset { time = start.addingTimeInterval(offset) }
-            return ConversationLog.Line(time: time, speaker: names[i], text: entry.text)
+            return ConversationLog.Line(time: time, speaker: names[i], text: entry.text,
+                                        audio: url.lastPathComponent, offset: time.timeIntervalSince(start))
         }
         let text = lines.map { $0 + "\n" }.joined()
         try await conversations.append(logged, text: text, day: dayFormatter.string(from: start))

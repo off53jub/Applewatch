@@ -44,6 +44,34 @@ enum Storage {
         }
     }
 
+    /// 文字起こしが終わった音声。アプリで聞き直せるよう、1日（少し余裕を見て26時間）だけ残す。
+    static let audioDir: URL = {
+        let dir = URL.documentsDirectory.appendingPathComponent("audio", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    static let keepAudioFor: TimeInterval = 26 * 3600
+
+    static func keep(_ url: URL) {
+        let dest = audioDir.appendingPathComponent(url.lastPathComponent)
+        try? FileManager.default.removeItem(at: dest)
+        if (try? FileManager.default.moveItem(at: url, to: dest)) == nil {
+            try? FileManager.default.removeItem(at: url)
+        }
+        let old = Date.now.addingTimeInterval(-keepAudioFor)
+        let files = (try? FileManager.default.contentsOfDirectory(at: audioDir, includingPropertiesForKeys: nil)) ?? []
+        for file in files where (startDate(of: file) ?? .distantPast) < old {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
+    /// 残っていれば、その音声の場所
+    static func keptAudio(named name: String) -> URL? {
+        let url = audioDir.appendingPathComponent(name)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     static func pendingChunks() -> [URL] {
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: pendingDir, includingPropertiesForKeys: nil)) ?? []

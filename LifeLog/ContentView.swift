@@ -116,6 +116,12 @@ struct ContentView: View {
                     Text("5分ごとに区切って文字起こしし、ドライブの「LifeLog」フォルダの日付のドキュメントに追記します。")
                 }
 
+                Section {
+                    NavigationLink("これまでの記録") { HistoryView() }
+                } footer: {
+                    Text("文字起こしを日ごと・会話ごとに見られます。直近1日ぶんは、行を押すとその場面の音声が流れます。")
+                }
+
                 if !pipeline.lastLines.isEmpty {
                     Section("最近の発言") {
                         ForEach(Array(pipeline.lastLines.enumerated()), id: \.offset) { _, line in
