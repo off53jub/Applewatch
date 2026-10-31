@@ -31,7 +31,7 @@ enum Summarizer {
 
     /// selfShare は [自分] の発言の割合（0〜1）。テレビや動画を見ているときは低くなる。
     static func conversation(_ transcript: String, timeRange: String, selfShare: Double,
-                             apiKey: String) async throws -> Conversation {
+                             event: String? = nil, apiKey: String) async throws -> Conversation {
         var material = transcript
         if transcript.count > pieceLength {
             // 長い会話は、区切りごとに要点メモにしてからまとめる
@@ -50,6 +50,7 @@ enum Summarizer {
         let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
             次は \(timeRange) の録音の文字起こしです。[自分] は記録している本人、[人物N] や名前は話し相手です。
             [自分] の発言は全体の \(Int(selfShare * 100))% です。
+            \(event.map { "この時間のカレンダーの予定: \($0)（会話の中身と合うときだけ見出しの参考にしてください）\n" } ?? "")\
             文字起こしの誤変換は文脈から補ってかまいません。
 
             まず、これが本人のまわりの実際の会話か、本人がテレビ番組・YouTube などの動画・ラジオや音楽を流していた音かを見分けてください。

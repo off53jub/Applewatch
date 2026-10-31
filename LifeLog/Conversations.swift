@@ -58,6 +58,10 @@ final class ConversationLog {
         var media: String?
         /// 番組名・動画の題名
         var program: String?
+        /// その時間のカレンダーの予定
+        var event: String?
+        /// 移動の様子（「歩きながら」など）
+        var movement: String?
 
         /// 話した相手。テレビや動画の声は相手に数えない。
         var people: [String] {
@@ -87,6 +91,10 @@ final class ConversationLog {
     var apiKey: () -> String? = { nil }
     /// その時刻にいた場所の名前（場所の記録がオフなら nil）
     var placeName: (Date) async -> String? = { _ in nil }
+    /// その時間のカレンダーの予定（名前と、要約に渡す説明）
+    var eventInfo: (Date, Date) async -> (name: String, detail: String)? = { _, _ in nil }
+    /// その時間の移動の様子
+    var movementName: (Date, Date) async -> String? = { _, _ in nil }
     /// テレビや動画だった会話で、名前の無い声として覚えてしまった番号（忘れてもらう）
     var forgetVoices: @MainActor (Set<String>) async -> Void = { _ in }
 
@@ -150,6 +158,9 @@ final class ConversationLog {
         var result = conversation
         result.closed = true
         result.place = await placeName(conversation.start)
+        let event = await eventInfo(conversation.start, conversation.end)
+        result.event = event?.name
+        result.movement = await movementName(conversation.start, conversation.end)
         let transcript = conversation.lines.map { line in
             (line.speaker.map { "[\($0)] " } ?? "") + line.text
         }.joined(separator: "\n")
@@ -161,7 +172,8 @@ final class ConversationLog {
             let mine = conversation.lines.filter { $0.speakerID == SpeakerLabeler.selfID || $0.speaker == SpeakerLabeler.selfName }
                 .reduce(0) { $0 + $1.text.count }
             if let summary = try? await Summarizer.conversation(transcript, timeRange: range,
-                                                                selfShare: Double(mine) / Double(total), apiKey: key) {
+                                                                selfShare: Double(mine) / Double(total),
+                                                                event: event?.detail, apiKey: key) {
                 result.title = summary.title
                 result.points = summary.points
                 result.media = summary.media
@@ -279,6 +291,8 @@ final class ConversationLog {
     static func headingText(_ c: Conversation) -> String {
         var heading = "\(minuteFormatter.string(from: c.start))〜\(minuteFormatter.string(from: c.end))"
         if let place = c.place { heading += "　" + place }
+        if let movement = c.movement { heading += "（\(movement)）" }
+        if let event = c.event, !event.isEmpty { heading += "　〔\(event)〕" }
         if let media = c.media {
             heading += "　［\(media)］" + (c.program.map { "「\($0)」" } ?? "")
         } else if !c.people.isEmpty {
@@ -311,6 +325,12 @@ final class ConversationLog {
     private static let trashKeep: TimeInterval = 30 * 24 * 3600
 
     /// 消した行（新しい順。30日より前のものは捨てる）
+    /// 書かなかった行を「消した行」に入れておく（あとで戻せる）。
+    func addToTrash(_ items: [Junk.TrashItem]) {
+        guard !items.isEmpty else { return }
+        saveTrash(items + trash())
+    }
+
     func trash() -> [Junk.TrashItem] {
         guard let data = try? Data(contentsOf: Self.trashURL),
               let items = try? JSONDecoder().decode([Junk.TrashItem].self, from: data) else { return [] }

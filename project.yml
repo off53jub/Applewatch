@@ -56,6 +56,8 @@ targets:
         NSLocationWhenInUseUsageDescription: どこで話したかを、文字起こしの見出しに添えるために使います。
         NSLocationAlwaysAndWhenInUseUsageDescription: 画面を閉じて録音しているあいだも、どこで話したかを見出しに添えるために使います。大きく移動したときだけ記録します。
         ITSAppUsesNonExemptEncryption: false
+        NSCalendarsFullAccessUsageDescription: 会話の時間の予定を、見出しと聞き取りのヒントに使います。
+        NSMotionUsageDescription: 歩いている・乗り物に乗っている・寝ている、を見分けて、会話の見出しと文字起こしに使います。
         NSLocalNetworkUsageDescription: 家の PC（LifeLog PC）に録音を送って文字にしてもらうために使います。
         # 家の PC へは http で送る（宛先は家の中の住所か Tailscale の住所。Tailscale は通り道が暗号化されている）
         NSAppTransportSecurity:

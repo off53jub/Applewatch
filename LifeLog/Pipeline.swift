@@ -90,6 +90,10 @@ final class Pipeline {
     /// iPhone の中で動く日本語の音声認識（Haas-ja）
     let haas = HaasEngine()
     let homePC = HomePC()
+    let calendar = CalendarLink()
+    let motion = MotionLink()
+    let sleep = SleepGuess()
+    let officeFilter = OfficeFilter()
     /// ほかのアプリ（AUDAY など）の音声の取り込み
     let importer = AudioImporter()
     /// 待機モード：アプリを裏で起こしておき、時計から届いた区切りをすぐ処理する
@@ -137,6 +141,14 @@ final class Pipeline {
             return settings.groqKey
         }
         conversations.placeName = { [weak self] time in await self?.places.name(at: time) }
+        conversations.eventInfo = { [weak self] start, end in
+            guard let event = self?.calendar.events(from: start, to: end).first, !event.title.isEmpty else { return nil }
+            let detail = event.title + (event.attendees.isEmpty ? "" : "（参加者: " + event.attendees.prefix(8).joined(separator: "、") + "）")
+            return (event.title, detail)
+        }
+        conversations.movementName = { [weak self] start, end in
+            await self?.motion.movement(from: start, to: end)?.label
+        }
         conversations.forgetVoices = { [weak self] ids in
             guard let self else { return }
             await speakers.forgetUnnamed(ids)
@@ -841,11 +853,17 @@ final class Pipeline {
         let previous = lastTranscript[fromWatch].flatMap { start.timeIntervalSince($0.end) < 90 ? $0.text : nil }
         // 聞こえた文から話題を見つけ、その話題の言葉も聞き取りと直しのヒントにする
         let topics = vocabulary.activeTopics(hearing: local.map(\.text).joined() + (previous ?? ""), at: start)
+        // その時間の予定の名前と参加者も、聞き取りのヒントにする
+        let event = calendar.events(from: start, to: start.addingTimeInterval(duration)).first
+        let eventWords = event.map { [$0.title] + $0.attendees }?.filter { !$0.isEmpty } ?? []
         // 話題の言葉は場所の言葉より具体的なので先に置く（Whisper のヒントは先頭の30語まで）
         var seenWords = Set<String>()
-        let keywords = (topics.flatMap(\.words) + placeWords).filter { seenWords.insert($0).inserted }
-        var usedHaas = false
-        if homePC.shouldTry {
+        let keywords = (topics.flatMap(\.words) + eventWords + placeWords).filter { seenWords.insert($0).inserted }
+        // 寝ているあいだは、端末内の文字起こしだけで済ませる（電池を使わず、寝息に作られた文も出にくい）
+        let asleep = await sleep.isAsleep(from: start, to: start.addingTimeInterval(duration), motion: motion)
+        if asleep { lastEngine = "端末内（睡眠中）" }
+        var usedHaas = asleep
+        if !asleep, homePC.shouldTry {
             // 家の PC の Haas-ja（無料）。PC が切れているときや届かないときは、この区切りはほかの方法で
             if let lines = try? await homePC.transcribe(url, local: local) {
                 entries = lines.map { ($0.offset, $0.text, nil) }
@@ -864,7 +882,7 @@ final class Pipeline {
                 lastEngine = "端末内（Haas-ja が動かなかったため）"
             }
         }
-        if !usedHaas, settings.shouldUseCloud, let key = settings.apiKey {
+        if !usedHaas, !asleep, settings.shouldUseCloud, let key = settings.apiKey {
             do {
                 let cloud = try await CloudTranscriber.transcribe(
                     url, provider: settings.provider, apiKey: key, keywords: keywords, previous: previous)
@@ -896,7 +914,7 @@ final class Pipeline {
                 entries[i].text = entries[i].text.replacingOccurrences(of: fix.wrong, with: fix.right)
             }
         }
-        if correctionOn, let key = settings.groqKey,
+        if correctionOn, !asleep, let key = settings.groqKey,
            let fixed = try? await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
                                                      previous: previous, apiKey: key) {
             for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
@@ -911,21 +929,43 @@ final class Pipeline {
                                      String(entries.map { $0.text }.joined().suffix(200)))
         let offsets = Self.fillOffsets(entries.map { ($0.offset, $0.text) }, duration: duration)
         let names = await speakerNames(for: offsets, in: url, context: places.context(at: start))
-        return entries.indices.map { i in
-            let end = i + 1 < offsets.count ? offsets[i + 1] : max(duration, offsets[i])
+        // 周りの人の声や、寝ているあいだの短い文・小さな声を外す（外した行は「消した行」に残す）
+        let ends = entries.indices.map { i in i + 1 < offsets.count ? offsets[i + 1] : max(duration, offsets[i]) }
+        let spans = entries.indices.map { (start: offsets[$0], end: ends[$0]) }
+        let levels = await Task.detached(priority: .utility) { OfficeFilter.levels(url, spans: spans) }.value
+        let namedIDs = Set(people.filter(\.isNamed).map(\.id))
+        let items = entries.indices.map { i in
+            OfficeFilter.Item(time: start.addingTimeInterval(offsets[i]), text: entries[i].text,
+                              personID: names[i]?.personID,
+                              isNamed: names[i].map { namedIDs.contains($0.personID) } ?? false, level: levels[i])
+        }
+        let keep = officeFilter.keep(items, fromWatch: fromWatch, active: officeFilter.applies(to: context), asleep: asleep)
+        var removed: [Junk.TrashItem] = []
+        let lines = entries.indices.compactMap { i -> Merger.Heard? in
+            let end = ends[i]
             let line = ConversationLog.Line(time: start.addingTimeInterval(offsets[i]), speaker: names[i]?.name,
                                             text: entries[i].text, audio: url.lastPathComponent,
                                             offset: offsets[i], original: originals[i], speakerID: names[i]?.personID)
+            guard keep[i] else {
+                removed.append(Junk.TrashItem(day: dayFormatter.string(from: line.time), line: line,
+                                              kind: asleep ? .asleep : .background, removed: .now))
+                return nil
+            }
             // 確からしさが分からない行（端末内・OpenAI）は中くらいとみなす
             let confidence = entries[i].score.map { exp($0) } ?? 0.6
             return Merger.Heard(line: line, end: start.addingTimeInterval(end), fromWatch: fromWatch,
                                 weight: Double(entries[i].text.count) * confidence)
         }
+        if !removed.isEmpty {
+            conversations.addToTrash(removed)
+            lastEngine += "・\(asleep ? "寝ているあいだの" : "周りの声") \(removed.count) 行を外した"
+        }
+        return lines
     }
 
     /// その時刻に使う言葉の組。登録した場所にいればその場所で、分からなければ時刻（平日8〜19時は職場）で決める。
     func vocabularyContext(at time: Date) -> SpeakerLabeler.Context {
-        places.registeredContext(at: time) ?? Vocabulary.context(byTime: time)
+        places.registeredContext(at: time) ?? calendar.context(at: time) ?? Vocabulary.context(byTime: time)
     }
 
     /// その場で聞き取ってほしい言葉（名前を付けた人の名前も入れる）

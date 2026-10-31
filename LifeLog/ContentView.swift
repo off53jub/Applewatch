@@ -405,6 +405,8 @@ private struct SettingsView: View {
                     }
                     NavigationLink("ほかのアプリの音声を取り込む") { ImportView() }
                     NavigationLink("記録の掃除") { CleanupView() }
+                    NavigationLink("周りの声と雑音") { NoiseSettingsView() }
+                    NavigationLink("カレンダー・移動・睡眠") { IntegrationsView() }
                 } header: {
                     Text("音声と記録")
                 } footer: {

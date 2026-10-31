@@ -188,6 +188,8 @@ final class ClipPlayer: NSObject, AVAudioPlayerDelegate {
     /// ドライブから取ってきている行
     private(set) var loading: String?
     @ObservationIgnored private var player: AVAudioPlayer?
+    /// 雑音を減らした一時ファイル
+    @ObservationIgnored private var cleaned: URL?
 
     /// until を渡すと、その位置（秒）で止める。
     func toggle(_ key: String, at offset: TimeInterval, until end: TimeInterval? = nil,
@@ -203,6 +205,18 @@ final class ClipPlayer: NSObject, AVAudioPlayerDelegate {
             if loading == key { loading = nil }
             return
         }
+        // 雑音を減らして聞くときは、その場面だけを切り出して減らしてから鳴らす
+        var cleaned: URL?
+        if Self.denoise {
+            let from = max(0, offset - 1), to = (end ?? offset + 60) + 0.5
+            cleaned = try? await Task.detached(priority: .userInitiated) {
+                try Denoiser.clip(url, from: from, to: to)
+            }.value
+            guard loading == key else {
+                if let cleaned { try? FileManager.default.removeItem(at: cleaned) }
+                return
+            }
+        }
         loading = nil
         let session = AVAudioSession.sharedInstance()
         // iPhone で録音中は、録音の設定を崩さないようそのまま鳴らす
@@ -210,13 +224,15 @@ final class ClipPlayer: NSObject, AVAudioPlayerDelegate {
             try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try? session.setActive(true)
         }
-        guard let player = try? AVAudioPlayer(contentsOf: url) else { return }
+        guard let player = try? AVAudioPlayer(contentsOf: cleaned ?? url) else { return }
         player.delegate = self
-        player.currentTime = max(0, offset - 1)
+        // 切り出したものは頭から全部鳴らす
+        player.currentTime = cleaned == nil ? max(0, offset - 1) : 0
         player.play()
         self.player = player
+        self.cleaned = cleaned
         playing = key
-        if let end {
+        if let end, cleaned == nil {
             let length = max(1, end - player.currentTime) + 0.5
             Task {
                 try? await Task.sleep(for: .seconds(length))
@@ -225,9 +241,14 @@ final class ClipPlayer: NSObject, AVAudioPlayerDelegate {
         }
     }
 
+    /// 聞き直すときに雑音を減らす（設定で切り替え）
+    static var denoise: Bool { UserDefaults.standard.object(forKey: "denoisePlayback") as? Bool ?? true }
+
     func stop() {
         player?.stop()
         player = nil
+        if let cleaned { try? FileManager.default.removeItem(at: cleaned) }
+        cleaned = nil
         playing = nil
         loading = nil
     }
