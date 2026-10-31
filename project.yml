@@ -11,6 +11,9 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
     exactVersion: 0.17.7
+  # 日本語の音声認識 Haas-ja の Core ML 版。CI が Hugging Face から取ってきて Vendor/HaasCore に置く
+  HaasCoreML:
+    path: Vendor/HaasCore
 settings:
   base:
     MARKETING_VERSION: "0.1.0"
@@ -29,6 +32,8 @@ targets:
     dependencies:
       - package: GoogleSignIn
       - package: FluidAudio
+      - package: HaasCoreML
+        product: HaasCore
       - target: LifeLogWatch
     settings:
       base:

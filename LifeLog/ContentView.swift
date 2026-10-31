@@ -323,6 +323,11 @@ private struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        HaasView()
+                    } label: {
+                        LabeledContent("iPhone 内の Haas-ja", value: pipeline.haas.isUsable ? "使用中" : "オフ")
+                    }
                     Toggle("高精度で文字起こし", isOn: $settings.useCloud)
                         .disabled(!settings.hasAPIKey)
                     Toggle("誤変換を言語モデルで直す", isOn: Binding(

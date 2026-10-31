@@ -28,22 +28,33 @@ jobs:
         if: env.HAS_GOOGLE != 'true'
         run: echo "::warning::GOOGLE_CLIENT_ID / GOOGLE_REVERSED_CLIENT_ID が Secrets にありません"
 
+      # 日本語の音声認識 Haas-ja-v1.0 の Core ML 版（Apache-2.0、非公式の変換）。版を固定して取ってくる。
+      # モデル本体（約620MB）はアプリが初回にダウンロードする。
       - name: Haas-ja の Swift 部品を取ってくる
         run: |
-          base=https://huggingface.co/Sanami/haas-ja-coreml/resolve/main/swift
-          mkdir -p Vendor/HaasCore/Sources/HaasCore Vendor/HaasCore/Resources
-          for f in Package.swift README.md Sources/HaasCore/Audio.swift Sources/HaasCore/Frontend.swift Sources/HaasCore/HaasASR.swift Sources/HaasCore/Tokenizer.swift Resources/frontend.bin Resources/vocab.json; do
-            code=$(curl -sSL -w '%{http_code}' "$base/$f" -o "Vendor/HaasCore/$f" || echo fail)
-            echo "$f $code"
+          set -e
+          rev=62f542657b454afa7873424e3dfb6d7a1d9c270d
+          base=https://huggingface.co/Sanami/haas-ja-coreml/resolve/$rev
+          mkdir -p Vendor/HaasCore/Sources/HaasCore LifeLog/Haas
+          for f in Audio Frontend HaasASR Tokenizer; do
+            curl -fsSL "$base/swift/Sources/HaasCore/$f.swift" -o "Vendor/HaasCore/Sources/HaasCore/$f.swift"
           done
-          python3 - <<'PY'
-          import glob
-          for f in ["Vendor/HaasCore/Sources/HaasCore/HaasASR.swift", "Vendor/HaasCore/Sources/HaasCore/Frontend.swift"]:
-              text = open(f).read()
-              for i in range(0, len(text), 3000):
-                  part = text[i:i + 3000].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-                  print(f"::notice title={f.split('/')[-1]} {i // 3000}::{part}")
-          PY
+          curl -fsSL "$base/LICENSE" -o Vendor/HaasCore/LICENSE
+          curl -fsSL "$base/NOTICE" -o Vendor/HaasCore/NOTICE
+          curl -fsSL "$base/swift/Resources/frontend.bin" -o LifeLog/Haas/frontend.bin
+          curl -fsSL "$base/swift/Resources/vocab.json" -o LifeLog/Haas/vocab.json
+          # 確かめ用のコマンドラインツールは使わないので、ライブラリだけの Package.swift にする
+          cat > Vendor/HaasCore/Package.swift <<'SWIFT'
+          // swift-tools-version:5.9
+          import PackageDescription
+
+          let package = Package(
+              name: "HaasCoreML",
+              platforms: [.macOS(.v14), .iOS(.v17)],
+              products: [.library(name: "HaasCore", targets: ["HaasCore"])],
+              targets: [.target(name: "HaasCore", path: "Sources/HaasCore")]
+          )
+          SWIFT
 
       - name: プロジェクトを生成
         run: |

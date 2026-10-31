@@ -228,6 +228,12 @@ Groq の無料枠は1日16時間分なので、たくさん取り込むと、そ
 
 Whisper は日本語と決めて渡すと、小さな雑音・寝息・外国語の動画などにも、もっともらしい日本語の文を作ってしまう。そこでクラウドの行を、同じ時間（前後5秒）の端末内の文字起こしと読み（ローマ字）で比べ、読みの3文字の並びが25%以上重ならない行は捨てる。端末内で何も聞こえていない区切りは、そもそもクラウドに送らない。
 
+## iPhone 内の Haas-ja
+
+[Haas-ja-v1.0](https://huggingface.co/third-intelligence/Haas-ja-v1.0)（Third Intelligence、Apache-2.0）の Core ML 版 [Sanami/haas-ja-coreml](https://huggingface.co/Sanami/haas-ja-coreml)（非公式の変換、Apache-2.0）を使う。Swift の部品（HaasCore）と frontend.bin・vocab.json は CI が版を固定して取ってくる（Vendor/HaasCore、LifeLog/Haas）。モデル本体（約620MB）は「設定」→「iPhone 内の Haas-ja」から初回にダウンロードし、iPhone 上で変換して Application Support/haas に置く（バックアップ対象外）。
+
+オンのあいだは、端末内の文字起こし（SpeechAnalyzer）が声を聞き取った区間を、間が1秒未満なら14秒まで1つにまとめ、その区間ごとに Haas-ja で文字にする（1区間＝1行）。動かせなかった区切りは、いつもの方法（Groq など）で文字にする。
+
 ## これから
 - 会議だけ話者分離（OpenAI gpt-4o-transcribe-diarize）
 - Limitless の過去データの取り込み

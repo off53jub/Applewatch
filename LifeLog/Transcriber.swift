@@ -5,6 +5,7 @@ import Speech
 enum Transcriber {
     struct Line {
         let offset: TimeInterval   // チャンク先頭からの秒数
+        var end: TimeInterval = 0  // 言い終わり（チャンク先頭からの秒数）
         let text: String
     }
 
@@ -32,7 +33,7 @@ enum Transcriber {
             for try await result in transcriber.results {
                 let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { continue }
-                lines.append(Line(offset: result.range.start.seconds, text: text))
+                lines.append(Line(offset: result.range.start.seconds, end: result.range.end.seconds, text: text))
             }
             return lines
         }

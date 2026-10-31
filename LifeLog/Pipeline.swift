@@ -87,6 +87,8 @@ final class Pipeline {
     let places = PlaceLog()
     /// 聞き取ってほしい言葉（いつも・職場だけ・職場以外だけ）
     let vocabulary = Vocabulary()
+    /// iPhone の中で動く日本語の音声認識（Haas-ja）
+    let haas = HaasEngine()
     /// ほかのアプリ（AUDAY など）の音声の取り込み
     let importer = AudioImporter()
     /// 待機モード：アプリを裏で起こしておき、時計から届いた区切りをすぐ処理する
@@ -744,7 +746,19 @@ final class Pipeline {
         lastEngine = "端末内"
         // 同じ機器の直前の区切りから続いているなら、その終わりの文を文脈として渡す
         let previous = lastTranscript[fromWatch].flatMap { start.timeIntervalSince($0.end) < 90 ? $0.text : nil }
-        if settings.shouldUseCloud, let key = settings.apiKey {
+        var usedHaas = false
+        if haas.isUsable {
+            // iPhone の中の Haas-ja（無料）。動かせなかったら（裏で Neural Engine が使えないなど）、この区切りはほかの方法で
+            do {
+                let lines = try await haas.transcribe(url, local: local)
+                entries = lines.map { ($0.offset, $0.text, nil) }
+                lastEngine = "Haas-ja（iPhone 内）"
+                usedHaas = true
+            } catch {
+                lastEngine = "端末内（Haas-ja が動かなかったため）"
+            }
+        }
+        if !usedHaas, settings.shouldUseCloud, let key = settings.apiKey {
             do {
                 let cloud = try await CloudTranscriber.transcribe(
                     url, provider: settings.provider, apiKey: key, keywords: keywords, previous: previous)
