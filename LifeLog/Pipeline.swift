@@ -154,6 +154,12 @@ final class Pipeline {
             }
         }
         live.apiKey = { [weak self] in self?.settings.groqKey }
+        // ライブは iPhone 内の Haas-ja を使う（モデルを入れていなければ Groq）
+        live.useHaas = { [weak self] in self?.haas.state == .ready }
+        live.fixes = { [weak self] in
+            guard let self else { return [] }
+            return vocabulary.fixes(for: vocabularyContext(at: .now)).map { ($0.wrong, $0.right) }
+        }
         live.keywords = { [weak self] in
             guard let self else { return [] }
             return keywords(for: vocabularyContext(at: .now))

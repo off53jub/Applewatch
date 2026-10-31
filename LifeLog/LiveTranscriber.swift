@@ -1,7 +1,8 @@
 import AVFoundation
 import Observation
 
-/// ライブ文字起こし。話の切れ目ごとに数秒の音を Groq（large-v3-turbo）に送り、返ってきた文を流す。
+/// ライブ文字起こし。話の切れ目ごとに数秒の音を iPhone 内の Haas-ja で文字にして流す
+/// （Haas-ja のモデルを入れていなければ Groq の large-v3-turbo に送る）。速さを優先して、言語モデルの補正はかけない。
 /// 画面に出すだけで、記録には書かない（記録はいつもの5分ごとの文字起こしで書く）。
 @MainActor
 @Observable
@@ -21,6 +22,10 @@ final class LiveTranscriber {
 
     var apiKey: () -> String? = { nil }
     var keywords: () -> [String] = { [] }
+    /// iPhone 内の Haas-ja を使えるか
+    var useHaas: () -> Bool = { false }
+    /// 登録した「間違えやすい書き方 → 正しい書き方」
+    var fixes: () -> [(wrong: String, right: String)] = { [] }
 
     @ObservationIgnored private let segmenter = Segmenter()
     @ObservationIgnored private var queue: [(start: Date, samples: [Float])] = []
@@ -33,7 +38,7 @@ final class LiveTranscriber {
     }
 
     func start() {
-        status = apiKey() == nil ? "Groq の API キーを「設定」→「サービスと API キーの設定」で入れてください。" : ""
+        status = useHaas() || apiKey() != nil ? "" : "設定 → iPhone 内の Haas-ja でモデルを入れてください。"
         segmenter.reset { [weak self] start, samples in
             Task { @MainActor in self?.enqueue(start, samples) }
         } onVoice: { [weak self] voice in
@@ -67,6 +72,20 @@ final class LiveTranscriber {
         while !queue.isEmpty {
             let (start, samples) = queue.removeFirst()
             waiting = queue.count + 1
+            if useHaas() {
+                do {
+                    var text = try await HaasRunner.shared.transcribe(samples: samples)
+                    for fix in fixes() { text = text.replacingOccurrences(of: fix.wrong, with: fix.right) }
+                    if !text.isEmpty, !CloudTranscriber.isFiller(text) {
+                        lines.append(Line(time: start, text: text))
+                        if lines.count > 300 { lines.removeFirst(lines.count - 300) }
+                    }
+                    status = ""
+                } catch {
+                    status = "文字にできませんでした: \(error.localizedDescription)"
+                }
+                continue
+            }
             guard let key = apiKey() else {
                 status = "Groq の API キーを「設定」→「サービスと API キーの設定」で入れてください。"
                 queue.removeAll()

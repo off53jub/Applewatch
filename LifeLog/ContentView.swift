@@ -150,7 +150,7 @@ private struct LiveView: View {
                         if live.lines.isEmpty {
                             ContentUnavailableView(
                                 "ライブ文字起こし", systemImage: "captions.bubble",
-                                description: Text("オンにしている間だけ、iPhone のマイクの声を数秒ごとにクラウド（Groq）で文字にして、ここに流します。記録にはいつも通り5分ごとの文字起こしが書かれます。アプリを閉じて10分たつと自動でオフになります。"))
+                                description: Text("オンにしている間だけ、iPhone のマイクの声を話の切れ目ごとに iPhone 内の Haas-ja で文字にして、ここに流します（モデルを入れていなければ Groq）。記録にはいつも通り5分ごとの文字起こしが書かれます。アプリを閉じて10分たつと自動でオフになります。"))
                         }
                     }
                     .onChange(of: live.lines.count) {
@@ -355,7 +355,7 @@ private struct SettingsView: View {
                     Text("文字起こし")
                 } footer: {
                     if !settings.hasAPIKey {
-                        Text("API キーを登録すると、クラウドの高精度モデルで文字起こしできます（Groq なら無料）。ライブ文字起こしにも Groq のキーを使います。")
+                        Text("API キーを登録すると、クラウドの高精度モデルで文字起こしできます（Groq なら無料）。")
                     } else if settings.useCloud && !settings.isUnderLimit {
                         Text("今月の上限に達したので、端末内の文字起こしに戻っています。")
                     } else if settings.provider.dollarsPerMinute > 0 {

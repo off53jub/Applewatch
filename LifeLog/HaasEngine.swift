@@ -182,6 +182,23 @@ actor HaasRunner {
 
     func unload() { asr = nil }
 
+    /// 16kHz の音（ライブの切れ目）をそのまま文字にする。長いときは14秒ずつ。
+    func transcribe(samples: [Float]) throws -> String {
+        try load()
+        guard let asr else { return "" }
+        let window = 14 * 16_000
+        var text = ""
+        var from = 0
+        while from < samples.count {
+            let to = min(samples.count, from + window)
+            if to - from > Int(0.3 * 16_000) {
+                text += try asr.transcribe(Array(samples[from..<to])).text
+            }
+            from = to
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func transcribe(_ url: URL, segments: [(start: TimeInterval, end: TimeInterval)]) throws -> [CloudTranscriber.Line] {
         try load()
         guard let asr else { return [] }
