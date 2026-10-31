@@ -30,7 +30,8 @@ from urllib.parse import parse_qs, urlparse
 import numpy as np
 
 VERSION = 1
-PORT = 8765
+# 待ち受ける番号。8765 はほかのソフトとよくぶつかるので、使われにくい番号にする
+PORT = 47615
 RATE = 16000
 REPO = "oboroge0/Haas-ja-v1.0-onnx"
 # モデルの版を固定する（CI で確かめた版）
@@ -293,12 +294,25 @@ def addresses() -> list[str]:
     return sorted(found, key=order)
 
 
-def serve(threads: int, provider: str) -> None:
+class Server(ThreadingHTTPServer):
+    # Windows では、同じ番号をほかのソフトと分け合ってしまわないよう、先に使われていたら始めない
+    allow_reuse_address = False
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def serve(threads: int, provider: str, port: int) -> None:
     key = passphrase()
-    engine = Engine(threads, provider)
-    Handler.engine = engine
+    # モデルを読み込む前に、番号が使えるか確かめる
+    try:
+        server = Server(("0.0.0.0", port), Handler)
+    except OSError as error:
+        raise RuntimeError(f"番号 {port} はほかのソフトが使っています。--port で別の番号を指定してください（{error}）") from error
+    Handler.engine = Engine(threads, provider)
     Handler.key = key
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print()
     print("=" * 60)
     print(" LifeLog PC を始めました。この画面は閉じずに置いておいてください。")
@@ -306,7 +320,7 @@ def serve(threads: int, provider: str) -> None:
     print(" iPhone の LifeLog → 設定 → 家の PC に、次の2つを入れます。")
     for ip in addresses():
         tag = "（Tailscale・外からも使える）" if ip.startswith("100.") else "（家の Wi-Fi の中だけ）"
-        print(f"   宛先: {ip}  {tag}")
+        print(f"   宛先: {ip}:{port}  {tag}")
     print(f"   合言葉: {key}")
     print("=" * 60)
     print(flush=True)
@@ -363,6 +377,7 @@ def main() -> None:
     parser.add_argument("--startup", action="store_true", help="Windows の起動時に自動で始める")
     parser.add_argument("--no-startup", action="store_true", help="起動時に始めるのをやめる")
     parser.add_argument("--threads", type=int, default=max(1, min(8, (os.cpu_count() or 4) // 2)))
+    parser.add_argument("--port", type=int, default=PORT, help=f"待ち受ける番号（既定 {PORT}）")
     parser.add_argument("--provider", default="cpu", help="cpu（既定）または cuda")
     args = parser.parse_args()
 
@@ -376,7 +391,7 @@ def main() -> None:
         test(args.test, args.threads, args.provider, args.segments)
         return
     try:
-        serve(args.threads, args.provider)
+        serve(args.threads, args.provider, args.port)
     except Exception as error:  # noqa: BLE001
         log(f"始められませんでした: {error!r}")
         if getattr(sys, "frozen", False):

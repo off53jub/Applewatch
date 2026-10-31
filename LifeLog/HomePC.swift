@@ -10,7 +10,7 @@ import Security
 @MainActor
 @Observable
 final class HomePC {
-    static let port = 8765
+    static let port = 47615
 
     var enabled = UserDefaults.standard.bool(forKey: "homePCOn") {
         didSet { UserDefaults.standard.set(enabled, forKey: "homePCOn") }

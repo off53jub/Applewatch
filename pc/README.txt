@@ -19,6 +19,14 @@ LifeLog PC — 家の PC で Haas-ja を動かして、iPhone の録音を文字
 ※ 職場の Wi-Fi につないだ iPhone から Tailscale を使うと、職場のルールに触れることがあります。
   職場ではモバイル通信を使うか、職場のルールを確かめてください。
 
+■ つながらないとき
+・Windows のファイアウォールが止めていることがあります。スタートボタンを右クリック →「ターミナル（管理者）」で次の1行を実行します
+  （通すのは Tailscale と家の中の機器からだけです）。
+    New-NetFirewallRule -DisplayName "LifeLog PC" -Direction Inbound -Protocol TCP -LocalPort 47615 -RemoteAddress 100.64.0.0/10,LocalSubnet -Action Allow
+・iPhone の Safari で http://宛先/hello を開くと「合言葉が違います」と出れば、PC までは届いています。
+・番号 47615 をほかのソフトが使っているときは、LifeLogPC.exe --port 47616 のように別の番号で起動し、
+  iPhone の宛先も「100.xx.xx.xx:47616」のように番号付きで入れます。
+
 ■ Windows の起動時に自動で始める
 コマンドプロンプトでこのフォルダに移り、次を実行します。
     LifeLogPC.exe --startup
