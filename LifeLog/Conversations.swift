@@ -139,6 +139,56 @@ final class ConversationLog {
         }
     }
 
+    // MARK: - 不具合の後始末
+
+    /// 誤変換を直す処理が「1行目の直した文」のような見本の文を返し、本文が置き換わってしまった行を、
+    /// 残しておいた元の文に戻す。名前の無い声が「Speaker 4」と出ていたのも「人物4」に戻す。
+    /// アプリの記録とドキュメントの両方を直し、最後に「人物ノート - Speaker …」を片付ける。一度だけ動く。
+    func repairBrokenLines() async {
+        let doneKey = "repair-placeholder-lines"
+        guard !UserDefaults.standard.bool(forKey: doneKey) else { return }
+        let clock = DateFormatter()
+        clock.dateFormat = "HH:mm:ss"
+        for day in days() {
+            var log = load(day)
+            var fixes: [(find: String, replace: String)] = []
+            var renamed: [String: String] = [:]
+            for c in log.conversations.indices {
+                for l in log.conversations[c].lines.indices {
+                    let line = log.conversations[c].lines[l]
+                    let broken = line.original != nil
+                        && line.text.range(of: #"^\d+\s*行目の直した文"#, options: .regularExpression) != nil
+                    var speaker = line.speaker
+                    if let name = speaker, name.hasPrefix("Speaker ") {
+                        speaker = "人物" + name.dropFirst("Speaker ".count)
+                        renamed[name] = speaker
+                    }
+                    guard broken || speaker != line.speaker else { continue }
+                    let text = broken ? line.original ?? line.text : line.text
+                    if broken {
+                        let head = clock.string(from: line.time) + "  " + (line.speaker.map { "[\($0)] " } ?? "")
+                        fixes.append((find: head + line.text, replace: head + text))
+                    }
+                    log.conversations[c].lines[l] = Line(
+                        time: line.time, speaker: speaker, text: text, audio: line.audio,
+                        offset: line.offset, original: broken ? nil : line.original)
+                }
+            }
+            guard !fixes.isEmpty || !renamed.isEmpty else { continue }
+            // 見出しの「Speaker 4と」も直すので、括弧なしで置き換える（「Speaker 41」も「人物41」になる）
+            fixes += renamed.map { (find: $0.key, replace: $0.value) }
+            do {
+                try await docs.replaceAll(fixes, day: day)
+            } catch {
+                // 通信できないときは次の機会にやり直す
+                return
+            }
+            save(log, day: day)
+        }
+        guard (try? await docs.trashFiles(namedWithPrefix: Self.notePrefix + "Speaker ")) != nil else { return }
+        UserDefaults.standard.set(true, forKey: doneKey)
+    }
+
     // MARK: - 人物ノート
 
     /// 名前を付けた相手ごとに「人物ノート - 名前」というドキュメントを作り、
@@ -150,7 +200,8 @@ final class ConversationLog {
                 let c = log.conversations[i]
                 guard c.closed, c.notesWritten != true else { continue }
                 let total = c.lines.reduce(0) { $0 + $1.text.count }
-                for name in c.people where !name.hasPrefix("人物") && total >= Self.minimumCharacters {
+                for name in c.people where !name.hasPrefix("人物") && !name.hasPrefix("Speaker ")
+                    && total >= Self.minimumCharacters {
                     let note = Self.note(for: name, in: c, day: day)
                     do {
                         try await docs.insert(heading: note.heading, body: note.body, at: 1,

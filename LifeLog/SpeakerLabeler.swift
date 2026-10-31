@@ -122,7 +122,8 @@ actor SpeakerLabeler {
 
     private func displayName(for id: String) -> String {
         guard let speaker = diarizer?.speakerManager.getSpeaker(for: id) else { return "人物\(id)" }
-        return speaker.name == speaker.id ? "人物\(id)" : speaker.name
+        // 名前を付けていない声は、FluidAudio が「Speaker 4」などと名付けている
+        return speaker.name == speaker.id || speaker.name == "Speaker \(id)" ? "人物\(id)" : speaker.name
     }
 
     private func save() {

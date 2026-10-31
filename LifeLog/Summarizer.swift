@@ -68,24 +68,41 @@ enum Summarizer {
     /// 処理の流れを止めないよう、混んでいるときは待たずにあきらめる。
     static func correct(_ lines: [String], keywords: [String], previous: String?, apiKey: String) async throws -> [String]? {
         guard !lines.isEmpty else { return lines }
-        let numbered = lines.enumerated().map { "\($0.offset + 1): \($0.element)" }.joined(separator: "\n")
+        let input = String(decoding: try JSONSerialization.data(withJSONObject: ["lines": lines]), as: UTF8.self)
         let json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 20, prompt: """
-            次は日本語の会話を音声認識で書き起こしたものです。同音異義語の誤変換（例: 機会→機械）、
-            固有名詞の書き間違い、明らかな聞き間違いだけを、前後の文脈から直してください。
+            次の JSON の "lines" は、日本語の会話を音声認識で書き起こした文の配列です（\(lines.count) 個）。
+            同音異義語の誤変換（例: 機会→機械）、固有名詞の書き間違い、明らかな聞き間違いだけを、前後の文脈から直してください。
             言い回しや話し言葉はそのまま残し、要約・言い換え・行の結合や分割はしないでください。
-            分からないところは元のままにしてください。
+            直すところが無い文や、分からない文は、元の文をそのまま入れてください。
             \(keywords.isEmpty ? "" : "よく出る言葉（この表記に寄せる）: " + keywords.joined(separator: "、") + "\n")\
-            \(previous.map { "直前の会話: " + $0 + "\n" } ?? "")\
-            {"lines": ["1行目の直した文", ...]} の形で、\(lines.count) 行すべてを同じ順で返してください。
+            \(previous.map { "直前の会話（直さない）: " + $0 + "\n" } ?? "")\
+            同じ形の JSON（"lines" に \(lines.count) 個の文）で返してください。
 
-            \(numbered)
+            \(input)
             """)
         guard let fixed = json["lines"] as? [String], fixed.count == lines.count else { return nil }
-        // 番号を付けたまま返ってきたら外す
-        return fixed.map { line in
-            guard let range = line.range(of: #"^\d+:\s*"#, options: .regularExpression) else { return line }
-            return String(line[range.upperBound...])
+        // 直しすぎ（言い換え・要約・見本の文を返すなど）の行は使わない
+        return zip(lines, fixed).map { original, fixed in
+            isSmallFix(original, fixed) ? fixed : original
         }
+    }
+
+    /// 誤変換の直しとみなせるくらい、元の文に近いか（文字の違いが3割以下）
+    static func isSmallFix(_ original: String, _ fixed: String) -> Bool {
+        let a = Array(original), b = Array(fixed)
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        // 編集距離（1文字の挿入・削除・置き換えを1と数える）
+        var row = Array(0...b.count)
+        for i in 1...a.count {
+            var diagonal = row[0]
+            row[0] = i
+            for j in 1...b.count {
+                let above = row[j]
+                row[j] = min(above + 1, row[j - 1] + 1, diagonal + (a[i - 1] == b[j - 1] ? 0 : 1))
+                diagonal = above
+            }
+        }
+        return row[b.count] <= max(2, a.count * 3 / 10)
     }
 
     private static func pieces(of text: String) -> [String] {

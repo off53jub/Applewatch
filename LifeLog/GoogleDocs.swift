@@ -76,6 +76,30 @@ final class GoogleDocs {
                               json: ["requests": requests])
     }
 
+    /// ドキュメントの中の文字を置き換える（見つかったところすべて）。
+    func replaceAll(_ pairs: [(find: String, replace: String)], day: String) async throws {
+        guard !pairs.isEmpty else { return }
+        let docId = try await documentId(for: day)
+        let requests: [[String: Any]] = pairs.map { pair in
+            ["replaceAllText": ["containsText": ["text": pair.find, "matchCase": true], "replaceText": pair.replace]]
+        }
+        _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
+                              json: ["requests": requests])
+    }
+
+    /// このアプリが作ったファイルのうち、名前が prefix で始まるものをゴミ箱に入れる。
+    func trashFiles(namedWithPrefix prefix: String) async throws {
+        let quoted = prefix.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+        var comps = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
+        comps.queryItems = [URLQueryItem(name: "q", value: "name contains '\(quoted)' and trashed = false"),
+                            URLQueryItem(name: "fields", value: "files(id,name)")]
+        let found = try await request("GET", comps.url!.absoluteString)
+        for file in found["files"] as? [[String: Any]] ?? [] {
+            guard let id = file["id"] as? String, (file["name"] as? String)?.hasPrefix(prefix) == true else { continue }
+            _ = try await request("PATCH", "https://www.googleapis.com/drive/v3/files/\(id)", json: ["trashed": true])
+        }
+    }
+
     // MARK: - 音声
 
     /// 音声を「LifeLog/音声/日付」フォルダに上げて、ドライブ上の id を返す。

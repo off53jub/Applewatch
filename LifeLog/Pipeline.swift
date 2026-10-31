@@ -206,6 +206,7 @@ final class Pipeline {
 
     /// 溜まっている区切りを処理する。失敗や中断で途中でやめたら false。
     private func drainQueue() async -> Bool {
+        await conversations.repairBrokenLines()
         for url in Storage.pendingChunks() where !isActiveChunk(url) {
             // 裏で使える時間が終わったら、残りは次の機会に回す
             if Task.isCancelled { return false }
