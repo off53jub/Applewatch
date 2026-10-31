@@ -5,6 +5,8 @@ import WatchConnectivity
 final class PhoneReceiver: NSObject, WCSessionDelegate {
     var onFile: (@MainActor () -> Void)?
     var onStateChange: (@MainActor (String) -> Void)?
+    /// 時計が録音中かどうか（時計のアプリが知らせてくる）
+    var onWatchRecording: (@MainActor (Bool) -> Void)?
 
     /// 時計との接続状態を、画面に出せる一文にする。
     static func describe(_ session: WCSession) -> String {
@@ -28,15 +30,28 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
 
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
         report(session)
+        // 前回知らせてきた状態は、つながる前から読める
+        readContext(session.receivedApplicationContext)
     }
     func sessionDidBecomeInactive(_ session: WCSession) {}
     func sessionDidDeactivate(_ session: WCSession) { session.activate() }
     func sessionWatchStateDidChange(_ session: WCSession) { report(session) }
     func sessionReachabilityDidChange(_ session: WCSession) { report(session) }
 
+    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+        readContext(applicationContext)
+    }
+
+    private func readContext(_ context: [String: Any]) {
+        guard let recording = context["recording"] as? Bool else { return }
+        Task { @MainActor in self.onWatchRecording?(recording) }
+    }
+
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
         // この関数を抜けると一時ファイルが消えるので、その場で移す。
-        let dest = Storage.pendingDir.appendingPathComponent(file.fileURL.lastPathComponent)
+        // iPhone で録った区切りと見分けられるよう、名前に「-w」を付ける。
+        let name = Storage.watchChunkName(from: file.fileURL.lastPathComponent)
+        let dest = Storage.pendingDir.appendingPathComponent(name)
         try? FileManager.default.removeItem(at: dest)
         do { try FileManager.default.moveItem(at: file.fileURL, to: dest) } catch { return }
         Task { @MainActor in self.onFile?() }

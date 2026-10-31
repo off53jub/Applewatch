@@ -26,6 +26,24 @@ final class WatchSender: NSObject, WCSessionDelegate {
         set { lock.withLock { writing = newValue } }
     }
 
+    private var recordingNow = false
+
+    /// 録音しているかを iPhone に知らせる。iPhone は、時計の区切りが届くのを待ってから
+    /// 同じ時間帯の iPhone の録音と聞き比べる。
+    var isRecording: Bool {
+        get { lock.withLock { recordingNow } }
+        set {
+            lock.withLock { recordingNow = newValue }
+            publish()
+        }
+    }
+
+    private func publish() {
+        guard WCSession.default.activationState == .activated else { return }
+        try? WCSession.default.updateApplicationContext(
+            ["recording": isRecording, "at": Date.now.timeIntervalSince1970])
+    }
+
     func send(_ url: URL) {
         guard WCSession.default.activationState == .activated else { return }
         let queued = WCSession.default.outstandingFileTransfers.contains { $0.file.fileURL == url }
@@ -49,7 +67,10 @@ final class WatchSender: NSObject, WCSessionDelegate {
     // MARK: - WCSessionDelegate
 
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
-        if state == .activated { resendPending() }
+        if state == .activated {
+            resendPending()
+            publish()
+        }
     }
 
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {

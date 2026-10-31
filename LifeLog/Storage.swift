@@ -20,8 +20,20 @@ enum Storage {
         nameFormatter.string(from: date) + ".m4a"
     }
 
+    /// 名前の頭15文字が録音開始時刻。時計で録った区切りは後ろに「-w」が付く。
     static func startDate(of url: URL) -> Date? {
-        nameFormatter.date(from: url.deletingPathExtension().lastPathComponent)
+        nameFormatter.date(from: String(url.deletingPathExtension().lastPathComponent.prefix(15)))
+    }
+
+    /// 時計で録った区切りか
+    static func isFromWatch(_ url: URL) -> Bool {
+        url.deletingPathExtension().lastPathComponent.hasSuffix("-w")
+    }
+
+    /// 時計から届いた区切りの名前（例: 20261016-103200-w.m4a）
+    static func watchChunkName(from name: String) -> String {
+        let stem = (name as NSString).deletingPathExtension
+        return (stem.hasSuffix("-w") ? stem : stem + "-w") + ".m4a"
     }
 
     /// 開けない（壊れた）音声。待ちの列からは外し、念のため7日間だけ残す。

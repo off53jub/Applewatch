@@ -66,6 +66,7 @@ final class WatchRecorder: NSObject {
                 name: .AVAudioEngineConfigurationChange, object: engine)
             try startEngine()
             isRecording = true
+            sender.isRecording = true
             UserDefaults.standard.set(true, forKey: Self.wasRecordingKey)
             message = ""
             sender.resendPending()
@@ -90,6 +91,8 @@ final class WatchRecorder: NSObject {
         chunkTimer?.invalidate()
         chunkTimer = nil
         stopEngine()
+        // 最後の区切りを送ってから知らせる
+        sender.isRecording = false
         NotificationCenter.default.removeObserver(self)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }

@@ -36,8 +36,20 @@ final class Pipeline {
     var correctionOn = UserDefaults.standard.object(forKey: "correct") as? Bool ?? true {
         didSet { UserDefaults.standard.set(correctionOn, forKey: "correct") }
     }
-    /// 直前の区切りの終わり。次の区切りの頭の文脈として使う。
-    @ObservationIgnored private var lastTranscript: (end: Date, text: String)?
+    /// 直前の区切りの終わり（iPhone・時計それぞれ）。次の区切りの頭の文脈として使う。
+    @ObservationIgnored private var lastTranscript: [Bool: (end: Date, text: String)] = [:]
+    /// 両方で録っていたら、聞き取りの良いほうを選ぶ
+    @ObservationIgnored private let merger = Merger()
+    /// 時計が録音中か（時計が知らせてくる）
+    @ObservationIgnored private var watchRecording = false
+    /// 時計の区切りが、どの時刻の分まで届いているか
+    @ObservationIgnored private var lastWatchEnd = Date(
+        timeIntervalSince1970: UserDefaults.standard.double(forKey: "lastWatchEnd")) {
+        didSet { UserDefaults.standard.set(lastWatchEnd.timeIntervalSince1970, forKey: "lastWatchEnd") }
+    }
+    /// 時計の区切りがこれ以上遅れたら、待たずに iPhone の分だけで書く
+    private static let watchWait: TimeInterval = 12 * 60
+    @ObservationIgnored private var retry: Task<Void, Never>?
     /// 音声をドライブにも保存する（Wi-Fi のときだけ上げる）
     var audioBackupOn = UserDefaults.standard.object(forKey: "audioBackup") as? Bool ?? true {
         didSet { UserDefaults.standard.set(audioBackupOn, forKey: "audioBackup") }
@@ -99,6 +111,12 @@ final class Pipeline {
             self?.processQueue()
         }
         receiver.onStateChange = { [weak self] in self?.watchStatus = $0 }
+        receiver.onWatchRecording = { [weak self] recording in
+            guard let self, watchRecording != recording else { return }
+            watchRecording = recording
+            // 時計が止まったら、待っていた iPhone の分を書ける
+            processQueue()
+        }
         receiver.activate()
     }
 
@@ -202,6 +220,14 @@ final class Pipeline {
         pendingCount = Storage.pendingChunks().count
         if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
         Self.scheduleBackgroundWork()
+        // 時計の区切りを待っている行があれば、少ししてから見直す
+        if merger.hasHeld, retry == nil {
+            retry = Task {
+                try? await Task.sleep(for: .seconds(60))
+                retry = nil
+                processQueue()
+            }
+        }
     }
 
     /// 溜まっている区切りを処理する。失敗や中断で途中でやめたら false。
@@ -211,12 +237,16 @@ final class Pipeline {
             // 裏で使える時間が終わったら、残りは次の機会に回す
             if Task.isCancelled { return false }
             // 書いている途中で録音が終わった区切りは開けない。何度やっても同じなので脇によけて先へ進む
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
             guard (try? AVAudioFile(forReading: url)) != nil else {
                 Storage.setAside(url)
                 continue
             }
             do {
-                try await process(url)
+                merger.add(try await transcribe(url))
+                if Storage.isFromWatch(url), let start = Storage.startDate(of: url) {
+                    lastWatchEnd = max(lastWatchEnd, start.addingTimeInterval(Self.duration(of: url)))
+                }
                 // 文字起こしした音声は、アプリで聞き直せるよう1日だけ残す
                 Storage.keep(url)
             } catch where Self.isBrokenAudio(error) {
@@ -229,9 +259,13 @@ final class Pipeline {
             pendingCount = Storage.pendingChunks().count
         }
         if Task.isCancelled { return false }
+        // 両方の区切りがそろった時間帯まで、良いほうを選んで書く
+        let settled = settledUntil()
+        merger.release(before: settled)
+        guard await writeMerged() else { return false }
         // しばらく話していなければ会話を閉じて見出しを付け、前の日にはまとめを付ける。
-        // 録音中の区切り（5分）に続きが入っているかもしれないので、その分は待つ。
-        await conversations.closeIdle(now: .now, waiting: ConversationLog.gap + 300)
+        // まだ書いていない時間帯（録音中の区切りや、届いていない時計の区切り）に続きがあるかもしれないので、その手前で見る。
+        await conversations.closeIdle(now: settled, waiting: ConversationLog.gap)
         await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
         await conversations.writePeopleNotes()
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
@@ -280,23 +314,66 @@ final class Pipeline {
         try? BGTaskScheduler.shared.submit(refresh)
     }
 
-    private func process(_ url: URL) async throws {
+    /// この時刻より前は、iPhone・時計とも区切りがそろっている（これ以上届かない）とみなす。
+    private func settledUntil() -> Date {
+        var frontier = Date.now
+        // まだ文字起こししていない区切り（録音中の区切りや、失敗してやり直す区切り）の始まり
+        for url in Storage.pendingChunks() {
+            if let start = Storage.startDate(of: url) { frontier = min(frontier, start) }
+        }
+        // 時計が録音中なら、時計の区切りが届いたところまで。届くのが遅すぎるときは待たない。
+        if watchRecording {
+            frontier = min(frontier, max(lastWatchEnd, .now.addingTimeInterval(-Self.watchWait)))
+        }
+        return frontier
+    }
+
+    /// 選び終わった行を、会話の切れ目と日付ごとにドキュメントへ書く。失敗したら false（次の機会に続きから書く）。
+    private func writeMerged() async -> Bool {
+        while let first = merger.outbox.first {
+            let day = dayFormatter.string(from: first.time)
+            var batch = [first]
+            for line in merger.outbox.dropFirst() {
+                guard dayFormatter.string(from: line.time) == day,
+                      line.time.timeIntervalSince(batch[batch.count - 1].time) <= ConversationLog.gap else { break }
+                batch.append(line)
+            }
+            let lines = batch.map { line in
+                "\(timeFormatter.string(from: line.time))  \(line.speaker.map { "[\($0)] " } ?? "")\(line.text)"
+            }
+            do {
+                try await conversations.append(batch, text: lines.map { $0 + "\n" }.joined(), day: day)
+            } catch {
+                message = "ドキュメントに書けませんでした（あとで再試行します）: \(error.localizedDescription)"
+                return false
+            }
+            merger.sent(batch.count)
+            lastLines = Array((lastLines + lines).suffix(20))
+        }
+        if speakerLabelsOn { people = await speakers.people() }
+        return true
+    }
+
+    /// 1つの区切りを文字起こしする。書くのは Merger で選んだあと。
+    private func transcribe(_ url: URL) async throws -> [Merger.Heard] {
         let start = Storage.startDate(of: url) ?? .now
+        let fromWatch = Storage.isFromWatch(url)
+        let duration = Self.duration(of: url)
         // まず端末内で文字起こしする（無料）。何も聞き取れなければ、お金をかけずにここで終わる。
         let local = try await Transcriber.transcribe(url)
-        guard !local.isEmpty else { return }
-        var entries: [(offset: TimeInterval?, text: String)] = local.map { ($0.offset, $0.text) }
+        guard !local.isEmpty else { return [] }
+        var entries: [(offset: TimeInterval?, text: String, score: Double?)] = local.map { ($0.offset, $0.text, nil) }
         lastEngine = "端末内"
-        // 直前の区切りから続いているなら、その終わりの文を文脈として渡す
-        let previous = lastTranscript.flatMap { start.timeIntervalSince($0.end) < 90 ? $0.text : nil }
+        // 同じ機器の直前の区切りから続いているなら、その終わりの文を文脈として渡す
+        let previous = lastTranscript[fromWatch].flatMap { start.timeIntervalSince($0.end) < 90 ? $0.text : nil }
         if settings.shouldUseCloud, let key = settings.apiKey {
             do {
                 let cloud = try await CloudTranscriber.transcribe(
                     url, provider: settings.provider, apiKey: key, keywords: settings.keywords, previous: previous)
-                settings.addUsage(seconds: Self.duration(of: url))
+                settings.addUsage(seconds: duration)
                 lastEngine = cloud.model
                 if !cloud.lines.isEmpty {
-                    entries = cloud.lines.map { ($0.offset, $0.text) }
+                    entries = cloud.lines.map { ($0.offset, $0.text, $0.score) }
                 }
             } catch CloudTranscriber.Failure.limited {
                 // 無料枠を使い切ったら、この区切りは端末内の結果で済ませる（高精度はオンのまま）
@@ -318,36 +395,56 @@ final class Pipeline {
             }
             lastEngine += "＋補正"
         }
-        lastTranscript = (start.addingTimeInterval(Self.duration(of: url)),
-                          String(entries.map { $0.text }.joined().suffix(200)))
-        let names = await speakerNames(for: entries, in: url)
-        let lines = entries.enumerated().map { i, entry in
-            let who = names[i].map { "[\($0)] " } ?? ""
-            guard let offset = entry.offset else { return who + entry.text }
-            return "\(timeFormatter.string(from: start.addingTimeInterval(offset)))  \(who)\(entry.text)"
+        if fromWatch { lastEngine += "（時計）" }
+        lastTranscript[fromWatch] = (start.addingTimeInterval(duration),
+                                     String(entries.map { $0.text }.joined().suffix(200)))
+        let offsets = Self.fillOffsets(entries.map { ($0.offset, $0.text) }, duration: duration)
+        let names = await speakerNames(for: offsets, in: url)
+        return entries.indices.map { i in
+            let end = i + 1 < offsets.count ? offsets[i + 1] : max(duration, offsets[i])
+            let line = ConversationLog.Line(time: start.addingTimeInterval(offsets[i]), speaker: names[i],
+                                            text: entries[i].text, audio: url.lastPathComponent,
+                                            offset: offsets[i], original: originals[i])
+            // 確からしさが分からない行（端末内・OpenAI）は中くらいとみなす
+            let confidence = entries[i].score.map { exp($0) } ?? 0.6
+            return Merger.Heard(line: line, end: start.addingTimeInterval(end), fromWatch: fromWatch,
+                                weight: Double(entries[i].text.count) * confidence)
         }
-        // 時刻の分からない行は、直前の行と同じ時刻とみなす
-        var time = start
-        let logged = entries.enumerated().map { i, entry in
-            if let offset = entry.offset { time = start.addingTimeInterval(offset) }
-            return ConversationLog.Line(time: time, speaker: names[i], text: entry.text,
-                                        audio: url.lastPathComponent, offset: time.timeIntervalSince(start),
-                                        original: originals[i])
+    }
+
+    /// 時刻の分からない行に、前後の分かっている時刻のあいだを文字数で割り振った時刻を付ける。
+    private static func fillOffsets(_ entries: [(offset: TimeInterval?, text: String)],
+                                    duration: TimeInterval) -> [TimeInterval] {
+        var offsets = entries.map { $0.offset }
+        guard !offsets.isEmpty else { return [] }
+        if offsets[0] == nil { offsets[0] = 0 }
+        var i = 1
+        while i < offsets.count {
+            guard offsets[i] == nil else { i += 1; continue }
+            let anchor = i - 1
+            var next = i
+            while next < offsets.count, offsets[next] == nil { next += 1 }
+            let from = offsets[anchor] ?? 0
+            let to = max(from, next < offsets.count ? offsets[next] ?? duration : duration)
+            let total = Double(entries[anchor..<next].reduce(0) { $0 + max(1, $1.text.count) })
+            var done = Double(max(1, entries[anchor].text.count))
+            for k in i..<next {
+                offsets[k] = from + (to - from) * done / total
+                done += Double(max(1, entries[k].text.count))
+            }
+            i = next
         }
-        let text = lines.map { $0 + "\n" }.joined()
-        try await conversations.append(logged, text: text, day: dayFormatter.string(from: start))
-        lastLines = Array((lastLines + lines).suffix(20))
-        if speakerLabelsOn { people = await speakers.people() }
+        return offsets.map { $0 ?? 0 }
     }
 
     /// 各行を、その時間にいちばん長く話していた人に結びつける。聞き分けがオフ・失敗したときは nil。
-    private func speakerNames(for entries: [(offset: TimeInterval?, text: String)], in url: URL) async -> [String?] {
-        let none = [String?](repeating: nil, count: entries.count)
+    private func speakerNames(for offsets: [TimeInterval], in url: URL) async -> [String?] {
+        let none = [String?](repeating: nil, count: offsets.count)
         guard speakerLabelsOn, let segments = try? await speakers.label(url), !segments.isEmpty else { return none }
         let chunkEnd = Self.duration(of: url)
-        return entries.indices.map { i in
-            guard let from = entries[i].offset else { return nil }
-            let to = entries[(i + 1)...].lazy.compactMap { $0.offset }.first ?? chunkEnd
+        return offsets.indices.map { i in
+            let from = offsets[i]
+            let to = i + 1 < offsets.count ? offsets[i + 1] : chunkEnd
             let best = segments.max { a, b in
                 overlap(a, from, to) < overlap(b, from, to)
             }
@@ -372,8 +469,9 @@ final class Pipeline {
         return Double(file.length) / file.processingFormat.sampleRate
     }
 
-    /// 録音中の最新ファイルはまだ書き込み中なので飛ばす。
+    /// iPhone で録音中の最新ファイルはまだ書き込み中なので飛ばす（時計の区切りは書き終わってから届く）。
     private func isActiveChunk(_ url: URL) -> Bool {
-        isRecording && url == Storage.pendingChunks().last
+        isRecording && !Storage.isFromWatch(url)
+            && url == Storage.pendingChunks().last(where: { !Storage.isFromWatch($0) })
     }
 }

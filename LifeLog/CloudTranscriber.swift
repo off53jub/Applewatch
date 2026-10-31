@@ -55,9 +55,11 @@ enum CloudTranscriber {
     }
 
     /// offset が nil の行は時刻が分からない（直前の行の続き）。
+    /// score は聞き取りの確からしさ（Whisper の avg_logprob。0 に近いほど確か）。
     struct Line {
         let offset: TimeInterval?
         let text: String
+        var score: Double? = nil
     }
 
     enum Failure: LocalizedError {
@@ -170,7 +172,7 @@ enum CloudTranscriber {
             return segments.compactMap { segment in
                 guard let text = (segment["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !text.isEmpty, !isHallucination(segment, text: text) else { return nil }
-                return Line(offset: segment["start"] as? Double, text: text)
+                return Line(offset: segment["start"] as? Double, text: text, score: segment["avg_logprob"] as? Double)
             }
         }
         // 時刻が無いときは文ごとに区切り、チャンクの先頭の時刻だけを付ける

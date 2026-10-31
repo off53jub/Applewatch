@@ -73,9 +73,15 @@ struct DayView: View {
     private func row(_ line: ConversationLog.Line, key: String) -> some View {
         let audio = line.audio.flatMap { pipeline.archive.canPlay($0) ? $0 : nil }
         let label = HStack(alignment: .firstTextBaseline) {
-            Text(Self.lineTimeFormatter.string(from: line.time))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+            VStack(spacing: 2) {
+                Text(Self.lineTimeFormatter.string(from: line.time))
+                    .font(.caption.monospacedDigit())
+                // 時計で録った音から書いた行
+                if line.audio?.hasSuffix("-w.m4a") == true {
+                    Image(systemName: "applewatch").font(.caption2)
+                }
+            }
+            .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 if let speaker = line.speaker {
                     Text(speaker).font(.caption.bold())
