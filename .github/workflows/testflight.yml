@@ -95,6 +95,10 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -R "$RUNNER_TEMP/LifeLog.xcarchive/Products/Applications/LifeLog.app" "$RUNNER_TEMP/ipa/Payload/"
+          for f in frontend.bin vocab.json; do
+            if [ -f "$RUNNER_TEMP/ipa/Payload/LifeLog.app/$f" ]; then echo "::notice::Haas-ja の部品 $f がアプリに入っています"
+            else echo "::error::Haas-ja の部品 $f がアプリに入っていません"; exit 1; fi
+          done
           (cd "$RUNNER_TEMP/ipa" && zip -qry LifeLog-unsigned.ipa Payload)
 
       - uses: actions/upload-artifact@v4
