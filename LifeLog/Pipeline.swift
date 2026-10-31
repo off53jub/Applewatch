@@ -34,6 +34,14 @@ final class Pipeline {
     }
     /// どこで話したか
     let places = PlaceLog()
+    /// 待機モード：アプリを裏で起こしておき、時計から届いた区切りをすぐ処理する
+    private let standby = Standby()
+    var standbyOn = UserDefaults.standard.object(forKey: "standby") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(standbyOn, forKey: "standby")
+            if standbyOn { standby.start() } else { standby.stop() }
+        }
+    }
 
     private let recorder = Recorder()
     private let docs: GoogleDocs
@@ -67,7 +75,9 @@ final class Pipeline {
         recorder.onStop = { [weak self] reason in
             self?.isRecording = false
             self?.message = reason
+            self?.standby.resume()
         }
+        if standbyOn { standby.start() }
         pendingCount = Storage.pendingChunks().count
         receiver.onFile = { [weak self] in
             self?.pendingCount = Storage.pendingChunks().count
@@ -87,6 +97,10 @@ final class Pipeline {
             message = "話者の聞き分けを準備できませんでした: \(error.localizedDescription)"
         }
     }
+
+    /// 声の登録で iPhone のマイクを使うあいだ、待機モードの無音を止める
+    func suspendStandby() { standby.suspend() }
+    func resumeStandby() { standby.resume() }
 
     func enrollSelf(from url: URL) async throws {
         try await speakers.enrollSelf(from: url)
@@ -129,15 +143,18 @@ final class Pipeline {
         if isRecording {
             recorder.stop()
             isRecording = false
+            standby.resume()
             return
         }
         do {
             message = "日本語モデルを確認中…"
             try await Transcriber.prepare()
+            standby.suspend()
             try recorder.start()
             isRecording = true
             message = ""
         } catch {
+            standby.resume()
             message = "録音を始められませんでした: \(error.localizedDescription)"
         }
     }

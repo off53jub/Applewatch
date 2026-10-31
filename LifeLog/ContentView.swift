@@ -16,8 +16,17 @@ struct ContentView: View {
                     }
                 }
 
-                Section("Apple Watch") {
+                Section {
                     Text(pipeline.watchStatus)
+                    Toggle("待機モード", isOn: Binding(
+                        get: { pipeline.standbyOn },
+                        set: { pipeline.standbyOn = $0 }))
+                } header: {
+                    Text("Apple Watch")
+                } footer: {
+                    Text(pipeline.standbyOn
+                         ? "無音を流してアプリを起こしておき、時計の録音を5分ごとにすぐ文字起こしします。電池を少し多く使います。アプリを上にスワイプして終わらせたときや iPhone を再起動したときは、一度開くと戻ります。"
+                         : "時計の録音は、アプリを開いたときや充電中にまとめて文字起こしします。")
                 }
 
                 Section {

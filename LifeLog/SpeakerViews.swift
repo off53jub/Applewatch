@@ -41,6 +41,7 @@ struct VoiceEnrollView: View {
 
     private func start() {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("enroll.m4a")
+        pipeline.suspendStandby()
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default)
@@ -57,6 +58,7 @@ struct VoiceEnrollView: View {
             Task { await countDown(url) }
         } catch {
             status = "録音できませんでした: \(error.localizedDescription)"
+            pipeline.resumeStandby()
         }
     }
 
@@ -68,6 +70,7 @@ struct VoiceEnrollView: View {
         recorder?.stop()
         recorder = nil
         try? AVAudioSession.sharedInstance().setActive(false)
+        pipeline.resumeStandby()
         status = "声の特徴を調べています…（初回はモデルのダウンロードがあります）"
         do {
             try await pipeline.enrollSelf(from: url)
