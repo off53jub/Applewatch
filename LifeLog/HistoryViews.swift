@@ -153,7 +153,11 @@ struct DayView: View {
     private func heading(for c: ConversationLog.Conversation) -> String {
         var parts = ["\(Self.timeFormatter.string(from: c.start))〜\(Self.timeFormatter.string(from: c.end))"]
         if let place = c.place { parts.append(place) }
-        if !c.people.isEmpty { parts.append(c.people.joined(separator: "、") + "と") }
+        if let media = c.media {
+            parts.append("［\(media)］" + (c.program.map { "「\($0)」" } ?? ""))
+        } else if !c.people.isEmpty {
+            parts.append(c.people.joined(separator: "、") + "と")
+        }
         if let title = c.title, !title.isEmpty { parts.append(title) }
         return parts.joined(separator: "　")
     }

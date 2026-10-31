@@ -54,8 +54,14 @@ final class ConversationLog {
         /// 人物ノートに書き足したか（この項目が無かったころの記録は nil）
         var notesWritten: Bool?
         var closed = false
+        /// テレビ・動画・ラジオ・音楽を流していた（会話ではない）なら、その種類
+        var media: String?
+        /// 番組名・動画の題名
+        var program: String?
 
+        /// 話した相手。テレビや動画の声は相手に数えない。
         var people: [String] {
+            guard media == nil else { return [] }
             var seen: [String] = []
             for name in lines.compactMap(\.speaker) where name != SpeakerLabeler.selfName && !seen.contains(name) {
                 seen.append(name)
@@ -81,6 +87,8 @@ final class ConversationLog {
     var apiKey: () -> String? = { nil }
     /// その時刻にいた場所の名前（場所の記録がオフなら nil）
     var placeName: (Date) async -> String? = { _ in nil }
+    /// テレビや動画だった会話で、名前の無い声として覚えてしまった番号（忘れてもらう）
+    var forgetVoices: (Set<String>) async -> Void = { _ in }
 
     init(docs: GoogleDocs) {
         self.docs = docs
@@ -149,14 +157,40 @@ final class ConversationLog {
 
         let range = "\(timeFormatter.string(from: conversation.start))〜\(timeFormatter.string(from: conversation.end))"
         if let key = apiKey() {
-            if let summary = try? await Summarizer.conversation(transcript, timeRange: range, apiKey: key) {
+            let total = max(1, conversation.lines.reduce(0) { $0 + $1.text.count })
+            let mine = conversation.lines.filter { $0.speakerID == SpeakerLabeler.selfID || $0.speaker == SpeakerLabeler.selfName }
+                .reduce(0) { $0 + $1.text.count }
+            if let summary = try? await Summarizer.conversation(transcript, timeRange: range,
+                                                                selfShare: Double(mine) / Double(total), apiKey: key) {
                 result.title = summary.title
                 result.points = summary.points
+                result.media = summary.media
+                result.program = summary.program
             }
+        }
+        if let media = result.media {
+            // 番組や動画の声は話し相手ではないので、名前の無い声を「テレビ」などにし、覚えた声は忘れる
+            var fixes: [(find: String, replace: String)] = []
+            var forget: Set<String> = []
+            for i in result.lines.indices {
+                let line = result.lines[i]
+                guard let id = line.speakerID, id != SpeakerLabeler.selfID,
+                      line.speaker?.hasPrefix("人物") == true else { continue }
+                forget.insert(id)
+                result.lines[i].speaker = media
+                result.lines[i].speakerID = nil
+                fixes.append((find: Self.docLine(line), replace: Self.docLine(result.lines[i])))
+            }
+            if !fixes.isEmpty { try? await docs.replaceAll(fixes, day: day) }
+            if !forget.isEmpty { await forgetVoices(forget) }
         }
         var heading = range
         if let place = result.place { heading += "　" + place }
-        if !conversation.people.isEmpty { heading += "　" + conversation.people.joined(separator: "、") + "と" }
+        if let media = result.media {
+            heading += "　［\(media)］" + (result.program.map { "「\($0)」" } ?? "")
+        } else if !conversation.people.isEmpty {
+            heading += "　" + conversation.people.joined(separator: "、") + "と"
+        }
         if let title = result.title, !title.isEmpty { heading += "　" + title }
         let body = result.points.map { "・" + $0 + "\n" }.joined()
         do {
@@ -370,7 +404,8 @@ final class ConversationLog {
             let overview = log.conversations.map { c in
                 let place = c.place.map { "・" + $0 } ?? ""
                 let people = c.people.isEmpty ? "" : "（\(c.people.joined(separator: "、"))と）"
-                let head = "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))\(place)\(people) \(c.title ?? "（短い会話）")"
+                let media = c.media.map { "［\($0)\(c.program.map { "「\($0)」" } ?? "")を流していた］" } ?? ""
+                let head = "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))\(place)\(people)\(media) \(c.title ?? "（短い会話）")"
                 return ([head] + c.points.map { "  ・" + $0 }).joined(separator: "\n")
             }.joined(separator: "\n")
             guard let summary = try? await Summarizer.day(overview, apiKey: key) else { continue }

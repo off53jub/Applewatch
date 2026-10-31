@@ -85,6 +85,8 @@ final class Pipeline {
     let archive: AudioArchive
     /// どこで話したか
     let places = PlaceLog()
+    /// ほかのアプリ（AUDAY など）の音声の取り込み
+    let importer = AudioImporter()
     /// 待機モード：アプリを裏で起こしておき、時計から届いた区切りをすぐ処理する
     private let standby = Standby()
     var standbyOn = UserDefaults.standard.object(forKey: "standby") as? Bool ?? true {
@@ -124,6 +126,11 @@ final class Pipeline {
             return settings.groqKey
         }
         conversations.placeName = { [weak self] time in await self?.places.name(at: time) }
+        conversations.forgetVoices = { [weak self] ids in
+            guard let self else { return }
+            await speakers.forgetUnnamed(ids)
+            people = await speakers.people()
+        }
         recorder.onChunk = { [weak self] _ in self?.processQueue() }
         recorder.onStop = { [weak self] reason in
             self?.isRecording = false
@@ -155,6 +162,10 @@ final class Pipeline {
             processQueue()
         }
         receiver.onMark = { [weak self] time in self?.addMark(at: time) }
+        importer.onQueued = { [weak self] in
+            self?.pendingCount = Storage.pendingChunks().count
+            self?.processQueue()
+        }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         receiver.activate()
     }
@@ -400,9 +411,18 @@ final class Pipeline {
     /// 溜まっている区切りを処理する。失敗や中断で途中でやめたら false。
     private func drainQueue() async -> Bool {
         await conversations.repairBrokenLines()
-        for url in Storage.pendingChunks() where !isActiveChunk(url) {
+        // 取り込んだ昔の音声は、いま録っている分のあとに回す
+        let pending = Storage.pendingChunks()
+        let ordered = pending.filter { !Storage.isImported($0) } + pending.filter(Storage.isImported)
+        var importedDone = 0
+        for url in ordered where !isActiveChunk(url) {
             // 裏で使える時間が終わったら、残りは次の機会に回す
             if Task.isCancelled { return false }
+            // 取り込んだ音声は数個ずつ書き、そのあいだに届いたいまの録音を先に処理する
+            if Storage.isImported(url) {
+                if importedDone >= 3 { break }
+                importedDone += 1
+            }
             // 書いている途中で録音が終わった区切りは開けない。何度やっても同じなので脇によけて先へ進む
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             guard (try? AVAudioFile(forReading: url)) != nil else {
@@ -488,7 +508,8 @@ final class Pipeline {
     private func settledUntil() -> Date {
         var frontier = Date.now
         // まだ文字起こししていない区切り（録音中の区切りや、失敗してやり直す区切り）の始まり
-        for url in Storage.pendingChunks() {
+        // 取り込んだ昔の音声は、いま録っている分とは時間帯が別なので待たない
+        for url in Storage.pendingChunks() where !Storage.isImported(url) {
             if let start = Storage.startDate(of: url) { frontier = min(frontier, start) }
         }
         // 時計が録音中なら、時計の区切りが届いたところまで。届くのが遅すぎるときは待たない。

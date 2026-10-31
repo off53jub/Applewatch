@@ -7,7 +7,14 @@ enum Summarizer {
     struct Conversation {
         let title: String
         let points: [String]
+        /// テレビ・動画・ラジオなどを聞いていたなら、その種類（会話なら nil）
+        let media: String?
+        /// 番組名・動画の題名（分かれば）
+        let program: String?
     }
+
+    /// 会話でないと分かったときの種類
+    static let mediaKinds = ["テレビ", "動画", "ラジオ・音楽"]
 
     struct Day: Codable {
         /// 「9:00〜11:30　会社　企画会議（田中さん）」のような、時間の塊ごとの流れ
@@ -22,7 +29,9 @@ enum Summarizer {
     /// 1回に渡す文字数の上限（1分あたりのトークン上限に収まるように）
     private static let pieceLength = 4_000
 
-    static func conversation(_ transcript: String, timeRange: String, apiKey: String) async throws -> Conversation {
+    /// selfShare は [自分] の発言の割合（0〜1）。テレビや動画を見ているときは低くなる。
+    static func conversation(_ transcript: String, timeRange: String, selfShare: Double,
+                             apiKey: String) async throws -> Conversation {
         var material = transcript
         if transcript.count > pieceLength {
             // 長い会話は、区切りごとに要点メモにしてからまとめる
@@ -39,15 +48,31 @@ enum Summarizer {
             material = "（長い会話のため、区切りごとの要点メモ）\n" + notes.map { "・" + $0 }.joined(separator: "\n")
         }
         let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
-            次は \(timeRange) の会話の文字起こしです。[自分] は記録している本人、[人物N] や名前は話し相手です。
-            文字起こしの誤変換は文脈から補ってかまいません。次の JSON で返してください。
-            {"title": "何の話かが一目で分かる20文字以内の見出し", "points": ["要点（決まったこと・約束・大事な情報を優先）", ...最大3つ]}
+            次は \(timeRange) の録音の文字起こしです。[自分] は記録している本人、[人物N] や名前は話し相手です。
+            [自分] の発言は全体の \(Int(selfShare * 100))% です。
+            文字起こしの誤変換は文脈から補ってかまいません。
+
+            まず、これが本人のまわりの実際の会話か、本人がテレビ番組・YouTube などの動画・ラジオや音楽を流していた音かを見分けてください。
+            ナレーション、司会や出演者の掛け合い、CM、「チャンネル登録」「ご視聴ありがとう」、本人がほとんど話さない、などは番組や動画の手がかりです。
+            番組や動画を見ながら本人が家族と話しているなど、実際の会話が中心なら「会話」にしてください。
+
+            次の JSON で返してください。
+            {"kind": "会話・テレビ・動画・ラジオ・音楽 のどれか",
+             "program": "テレビ・動画なら番組名や動画の題名・チャンネル名（分からなければ空）",
+             "title": "何の話かが一目で分かる20文字以内の見出し（テレビ・動画なら内容）",
+             "points": ["要点（決まったこと・約束・大事な情報を優先）", ...最大3つ]}
 
             \(material)
             """)
         let title = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let points = (json["points"] as? [String]) ?? []
-        return Conversation(title: title, points: Array(points.prefix(3)))
+        let kind = (json["kind"] as? String) ?? "会話"
+        let media: String? = kind.contains("テレビ") ? "テレビ"
+            : kind.contains("動画") || kind.lowercased().contains("youtube") ? "動画"
+            : kind.contains("ラジオ") || kind.contains("音楽") ? "ラジオ・音楽" : nil
+        let program = (json["program"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Conversation(title: title, points: Array(points.prefix(3)), media: media,
+                            program: program?.isEmpty == false ? program : nil)
     }
 
     static func day(_ conversations: String, apiKey: String) async throws -> Day {

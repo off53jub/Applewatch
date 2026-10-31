@@ -145,6 +145,7 @@ struct ContentView: View {
                     NavigationLink("これまでの記録") { HistoryView() }
                     NavigationLink("記録を探す") { SearchView() }
                     NavigationLink("記録に質問する") { AskView() }
+                    NavigationLink("ほかのアプリの音声を取り込む") { ImportView() }
                     Toggle("音声をドライブにも保存", isOn: Binding(
                         get: { pipeline.audioBackupOn },
                         set: { pipeline.audioBackupOn = $0 }))

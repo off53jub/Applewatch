@@ -349,6 +349,12 @@ actor SpeakerLabeler {
         save()
     }
 
+    /// テレビや動画の声だった、名前の無い声を忘れる（登録・手直しした声は残す）。
+    func forgetUnnamed(_ ids: Set<String>) {
+        store.people.removeAll { ids.contains($0.id) && !$0.isNamed && $0.pinnedCount == 0 }
+        save()
+    }
+
     func remove(_ id: String) {
         store.people.removeAll { $0.id == id }
         save()

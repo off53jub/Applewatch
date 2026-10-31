@@ -30,6 +30,15 @@ enum Storage {
         url.deletingPathExtension().lastPathComponent.hasSuffix("-w")
     }
 
+    /// ほかのアプリの音声から取り込んだ区切りか（例: 20261016-103200-i.m4a）
+    static func isImported(_ url: URL) -> Bool {
+        url.deletingPathExtension().lastPathComponent.hasSuffix("-i")
+    }
+
+    static func importedChunkName(for date: Date) -> String {
+        nameFormatter.string(from: date) + "-i.m4a"
+    }
+
     /// 時計から届いた区切りの名前（例: 20261016-103200-w.m4a）
     static func watchChunkName(from name: String) -> String {
         let stem = (name as NSString).deletingPathExtension
