@@ -25,7 +25,7 @@ final class AudioImporter {
     private(set) var status = ""
     private(set) var working = false
     /// 区切りを文字起こし待ちに入れたら呼ぶ
-    var onQueued: () -> Void = {}
+    var onQueued: @MainActor () -> Void = {}
 
     /// 選んだフォルダやファイル（使い終わるまで読み取りの許可を保つ）
     @ObservationIgnored private var roots: [URL] = []

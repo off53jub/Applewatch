@@ -88,7 +88,7 @@ final class ConversationLog {
     /// その時刻にいた場所の名前（場所の記録がオフなら nil）
     var placeName: (Date) async -> String? = { _ in nil }
     /// テレビや動画だった会話で、名前の無い声として覚えてしまった番号（忘れてもらう）
-    var forgetVoices: (Set<String>) async -> Void = { _ in }
+    var forgetVoices: @MainActor (Set<String>) async -> Void = { _ in }
 
     init(docs: GoogleDocs) {
         self.docs = docs
