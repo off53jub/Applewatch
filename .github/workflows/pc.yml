@@ -4,6 +4,7 @@ name: PC
 # 成果物（Artifacts）の LifeLogPC を展開して LifeLogPC.exe を起動する。
 on:
   push:
+    branches: [main]
     paths: ['pc/**', '.github/workflows/pc.yml']
   pull_request:
     paths: ['pc/**', '.github/workflows/pc.yml']

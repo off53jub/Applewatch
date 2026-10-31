@@ -34,7 +34,7 @@ PORT = 8765
 RATE = 16000
 REPO = "oboroge0/Haas-ja-v1.0-onnx"
 # モデルの版を固定する（CI で確かめた版）
-REVISION = os.environ.get("LIFELOG_HAAS_REVISION", "main")
+REVISION = os.environ.get("LIFELOG_HAAS_REVISION", "2c2133a4279fca8ee408dd33b5701690a0bd4f3f")
 # 1つの区間の長さの上限（モデルの説明で試されているのは約29秒まで）
 MAX_SEGMENT = 20.0
 
