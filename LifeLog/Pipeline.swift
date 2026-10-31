@@ -698,7 +698,9 @@ final class Pipeline {
                 settings.addUsage(seconds: duration)
                 lastEngine = cloud.model
                 if !cloud.lines.isEmpty {
-                    entries = cloud.lines.map { ($0.offset, $0.text, $0.score) }
+                    // 端末内でも同じような音が聞き取れていない行は、実際には話されていない（雑音・外国語の動画など）とみなして捨てる
+                    let checked = TranscriptCheck.agreeing(cloud.lines, with: local, duration: duration)
+                    entries = checked.map { ($0.offset, $0.text, $0.score) }
                 }
             } catch CloudTranscriber.Failure.limited {
                 // 無料枠を使い切ったら、この区切りは端末内の結果で済ませる（高精度はオンのまま）
