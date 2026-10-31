@@ -2,6 +2,7 @@ import AVFoundation
 import BackgroundTasks
 import Observation
 import UIKit
+import UserNotifications
 
 /// 録音 → 文字起こし → Google ドキュメントへの追記、をつなぐ。
 /// 音声は追記に成功してから消すので、圏外や失敗があっても次の機会にやり直せる。
@@ -50,6 +51,25 @@ final class Pipeline {
     /// 時計の区切りがこれ以上遅れたら、待たずに iPhone の分だけで書く
     private static let watchWait: TimeInterval = 12 * 60
     @ObservationIgnored private var retry: Task<Void, Never>?
+
+    /// 時計やアプリで付けた印のうち、まだ記録に付けていないもの
+    @ObservationIgnored private var marks: [Date] = (UserDefaults.standard.array(forKey: "marks") as? [Double] ?? [])
+        .map { Date(timeIntervalSince1970: $0) } {
+        didSet { UserDefaults.standard.set(marks.map(\.timeIntervalSince1970), forKey: "marks") }
+    }
+    /// 最後に印を付けた時刻（画面に出す）
+    private(set) var lastMark: Date?
+
+    /// 録音が止まったら通知で知らせる
+    var stopAlertsOn = UserDefaults.standard.object(forKey: "stopAlerts") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(stopAlertsOn, forKey: "stopAlerts")
+            if !stopAlertsOn { Self.cancelWatchAlert() }
+        }
+    }
+    /// 時計からこれだけ知らせが無ければ、止まったとみなして通知する
+    private static let watchSilence: TimeInterval = 15 * 60
+    private static let watchAlertID = "watch-silent"
     /// 音声をドライブにも保存する（Wi-Fi のときだけ上げる）
     var audioBackupOn = UserDefaults.standard.object(forKey: "audioBackup") as? Bool ?? true {
         didSet { UserDefaults.standard.set(audioBackupOn, forKey: "audioBackup") }
@@ -103,6 +123,10 @@ final class Pipeline {
             self?.isRecording = false
             self?.message = reason
             self?.standby.resume()
+            if self?.stopAlertsOn == true, UIApplication.shared.applicationState != .active {
+                Self.notify(id: "phone-stopped", title: "iPhone の録音が止まりました",
+                            body: reason + " LifeLog を開いて再開してください。")
+            }
         }
         if standbyOn { standby.start() }
         pendingCount = Storage.pendingChunks().count
@@ -111,12 +135,21 @@ final class Pipeline {
             self?.processQueue()
         }
         receiver.onStateChange = { [weak self] in self?.watchStatus = $0 }
-        receiver.onWatchRecording = { [weak self] recording in
-            guard let self, watchRecording != recording else { return }
+        receiver.onWatchRecording = { [weak self] recording, at in
+            guard let self else { return }
+            // 時計は区切るたびに知らせてくる。しばらく知らせが無ければ通知する
+            if recording, stopAlertsOn {
+                Self.scheduleWatchAlert(after: (at ?? .now).addingTimeInterval(Self.watchSilence))
+            } else {
+                Self.cancelWatchAlert()
+            }
+            guard watchRecording != recording else { return }
             watchRecording = recording
             // 時計が止まったら、待っていた iPhone の分を書ける
             processQueue()
         }
+        receiver.onMark = { [weak self] time in self?.addMark(at: time) }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         receiver.activate()
     }
 
@@ -129,6 +162,37 @@ final class Pipeline {
         } catch {
             message = "話者の聞き分けを準備できませんでした: \(error.localizedDescription)"
         }
+    }
+
+    /// 「大事なところ」の印。前後1分の行に★を付け、1日のまとめにも出す。
+    func addMark(at time: Date = .now) {
+        marks.append(time)
+        lastMark = time
+        processQueue()
+    }
+
+    private static func scheduleWatchAlert(after date: Date) {
+        let wait = date.timeIntervalSinceNow
+        guard wait > 0 else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "時計の録音が届いていません"
+        content.body = "15分以上、時計の LifeLog から知らせがありません。時計の電池や LifeLog を確かめてください（iPhone から離れているだけなら、そのままで大丈夫です）。"
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(
+            identifier: watchAlertID, content: content,
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: wait, repeats: false)))
+    }
+
+    private static func cancelWatchAlert() {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [watchAlertID])
+    }
+
+    private static func notify(id: String, title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 
     /// 声の登録で iPhone のマイクを使うあいだ、待機モードの無音を止める
@@ -353,11 +417,14 @@ final class Pipeline {
         let settled = settledUntil()
         merger.release(before: settled)
         guard await writeMerged() else { return false }
+        // 印の前後1分の行に★を付ける
+        if !marks.isEmpty { marks = await conversations.applyMarks(marks, settled: settled) }
         // しばらく話していなければ会話を閉じて見出しを付け、前の日にはまとめを付ける。
         // まだ書いていない時間帯（録音中の区切りや、届いていない時計の区切り）に続きがあるかもしれないので、その手前で見る。
         await conversations.closeIdle(now: settled, waiting: ConversationLog.gap)
         await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
         await conversations.writePeopleNotes()
+        await conversations.writeWeeklySummary(today: dayFormatter.string(from: .now))
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
         backupPending = archive.pendingCount
@@ -428,9 +495,7 @@ final class Pipeline {
                       line.time.timeIntervalSince(batch[batch.count - 1].time) <= ConversationLog.gap else { break }
                 batch.append(line)
             }
-            let lines = batch.map { line in
-                "\(timeFormatter.string(from: line.time))  \(line.speaker.map { "[\($0)] " } ?? "")\(line.text)"
-            }
+            let lines = batch.map(ConversationLog.docLine)
             do {
                 try await conversations.append(batch, text: lines.map { $0 + "\n" }.joined(), day: day)
             } catch {

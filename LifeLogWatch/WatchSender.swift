@@ -44,6 +44,30 @@ final class WatchSender: NSObject, WCSessionDelegate {
             ["recording": isRecording, "at": Date.now.timeIntervalSince1970])
     }
 
+    /// 区切るたびに呼ぶ。iPhone は、しばらく知らせが無いと「止まっているかも」と通知する。
+    func heartbeat() { publish() }
+
+    /// 「印」を iPhone に送る。つながっていなければ、つながったときに送る。
+    func mark(_ time: Date) {
+        lock.withLock { marks.append(time.timeIntervalSince1970) }
+        flushMarks()
+    }
+
+    private var marks: [Double] = UserDefaults.standard.array(forKey: "marks") as? [Double] ?? []
+
+    private func flushMarks() {
+        guard WCSession.default.activationState == .activated else {
+            UserDefaults.standard.set(lock.withLock { marks }, forKey: "marks")
+            return
+        }
+        let list = lock.withLock {
+            defer { marks = [] }
+            return marks
+        }
+        for time in list { WCSession.default.transferUserInfo(["mark": time]) }
+        UserDefaults.standard.set([Double](), forKey: "marks")
+    }
+
     func send(_ url: URL) {
         guard WCSession.default.activationState == .activated else { return }
         let queued = WCSession.default.outstandingFileTransfers.contains { $0.file.fileURL == url }
@@ -70,6 +94,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if state == .activated {
             resendPending()
             publish()
+            flushMarks()
         }
     }
 

@@ -6,7 +6,10 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     var onFile: (@MainActor () -> Void)?
     var onStateChange: (@MainActor (String) -> Void)?
     /// 時計が録音中かどうか（時計のアプリが知らせてくる）
-    var onWatchRecording: (@MainActor (Bool) -> Void)?
+    /// 時計が録音中か（at は時計が知らせた時刻）
+    var onWatchRecording: (@MainActor (Bool, Date?) -> Void)?
+    /// 時計で「印」が押された
+    var onMark: (@MainActor (Date) -> Void)?
 
     /// 時計との接続状態を、画面に出せる一文にする。
     static func describe(_ session: WCSession) -> String {
@@ -44,7 +47,13 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
 
     private func readContext(_ context: [String: Any]) {
         guard let recording = context["recording"] as? Bool else { return }
-        Task { @MainActor in self.onWatchRecording?(recording) }
+        let at = (context["at"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        Task { @MainActor in self.onWatchRecording?(recording, at) }
+    }
+
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        guard let time = userInfo["mark"] as? Double else { return }
+        Task { @MainActor in self.onMark?(Date(timeIntervalSince1970: time)) }
     }
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {

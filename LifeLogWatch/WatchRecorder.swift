@@ -144,6 +144,15 @@ final class WatchRecorder: NSObject {
         } else {
             sender.send(chunk.url)
         }
+        // 無音で捨てた区切りでも、録音が続いていることは知らせる
+        if isRecording { sender.heartbeat() }
+    }
+
+    /// 大事なところに印を付ける（前後1分の行に★が付く）。
+    func mark() {
+        sender.mark(.now)
+        WKInterfaceDevice.current().play(.success)
+        message = "\(Date.now.formatted(date: .omitted, time: .shortened)) に印を付けました"
     }
 
     /// マイクは流したまま、書き込み先のファイルだけを切り替える。

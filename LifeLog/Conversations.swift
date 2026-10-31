@@ -16,7 +16,31 @@ final class ConversationLog {
         var original: String? = nil
         /// 話者の聞き分けでの、その人の番号（自分は "me"）。古い記録には無い。
         var speakerID: String? = nil
+        /// 時計やアプリで「印」を付けたところ
+        var marked: Bool? = nil
     }
+
+    private static let clock: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// ドキュメントに書く1行（改行なし）。例: 「14:05:12  ★ [田中] じゃあ来週の…」
+    static func docLine(_ line: Line) -> String {
+        clock.string(from: line.time) + "  " + (line.marked == true ? "★ " : "")
+            + (line.speaker.map { "[\($0)] " } ?? "") + line.text
+    }
+
+    /// 印の前後これだけの行に「★」を付ける
+    static let markSpan: TimeInterval = 60
 
     struct Conversation: Codable {
         var start: Date
@@ -43,6 +67,8 @@ final class ConversationLog {
     struct Day: Codable {
         var conversations: [Conversation] = []
         var summaryWritten = false
+        /// 1日のまとめの中身（週のまとめに使う）
+        var summary: Summarizer.Day?
     }
 
     /// これだけ話が途切れたら、別の会話とみなす
@@ -198,8 +224,6 @@ final class ConversationLog {
     @discardableResult
     func relabel(to id: String, name: String, renaming: String? = nil,
                  where match: (Line) -> Bool) async throws -> Int {
-        let clock = DateFormatter()
-        clock.dateFormat = "HH:mm:ss"
         var changed = 0
         for day in days() {
             var log = load(day)
@@ -209,13 +233,11 @@ final class ConversationLog {
                 for l in log.conversations[c].lines.indices {
                     let line = log.conversations[c].lines[l]
                     guard match(line), line.speakerID != id || line.speaker != name else { continue }
-                    if line.speaker != name {
-                        let head = clock.string(from: line.time) + "  "
-                        fixes.append((find: head + (line.speaker.map { "[\($0)] " } ?? "") + line.text,
-                                      replace: head + "[\(name)] " + line.text))
-                    }
                     log.conversations[c].lines[l].speaker = name
                     log.conversations[c].lines[l].speakerID = id
+                    if line.speaker != name {
+                        fixes.append((find: Self.docLine(line), replace: Self.docLine(log.conversations[c].lines[l])))
+                    }
                     changed += 1
                 }
             }
@@ -231,6 +253,43 @@ final class ConversationLog {
             save(log, day: day)
         }
         return changed
+    }
+
+    // MARK: - 印
+
+    /// 印の前後1分の行に「★」を付け、ドキュメントの同じ行も直す。
+    /// まだ書き終わっていない時間帯（settled より後）にかかる印は、そのまま返して次の機会に回す。
+    func applyMarks(_ marks: [Date], settled: Date) async -> [Date] {
+        var remaining: [Date] = []
+        var byDay: [String: [Date]] = [:]
+        for mark in marks {
+            if mark.addingTimeInterval(Self.markSpan) >= settled {
+                remaining.append(mark)
+            } else {
+                byDay[Self.dayFormatter.string(from: mark), default: []].append(mark)
+            }
+        }
+        for (day, list) in byDay {
+            var log = load(day)
+            var fixes: [(find: String, replace: String)] = []
+            for c in log.conversations.indices {
+                for l in log.conversations[c].lines.indices {
+                    let line = log.conversations[c].lines[l]
+                    guard line.marked != true,
+                          list.contains(where: { abs(line.time.timeIntervalSince($0)) <= Self.markSpan }) else { continue }
+                    log.conversations[c].lines[l].marked = true
+                    fixes.append((find: Self.docLine(line), replace: Self.docLine(log.conversations[c].lines[l])))
+                }
+            }
+            do {
+                if !fixes.isEmpty { try await docs.replaceAll(fixes, day: day) }
+                save(log, day: day)
+            } catch {
+                // 通信できないときは次の機会にやり直す
+                remaining += list
+            }
+        }
+        return remaining
     }
 
     // MARK: - 人物ノート
@@ -323,6 +382,20 @@ final class ConversationLog {
                 body += name + "\n" + items.map { "・" + $0 + "\n" }.joined()
             }
             section("1日の流れ", summary.flow)
+            // 時計やアプリで印を付けたところ（会話ごとに、続いた行は1つにまとめる）
+            var marked: [String] = []
+            for c in log.conversations {
+                var last: Date?
+                for line in c.lines where line.marked == true {
+                    defer { last = line.time }
+                    if let last, line.time.timeIntervalSince(last) <= Self.markSpan * 2, !marked.isEmpty {
+                        marked[marked.count - 1] += " " + line.text
+                        continue
+                    }
+                    marked.append(timeFormatter.string(from: line.time) + "　" + (line.speaker.map { "[\($0)] " } ?? "") + line.text)
+                }
+            }
+            section("★ 印を付けたところ", marked.map { $0.count > 120 ? String($0.prefix(120)) + "…" : $0 })
             body += "会った人: " + (people.isEmpty ? "なし" : people.joined(separator: "、")) + "\n"
             section("決まったこと", summary.decisions)
             section("やること", summary.todos)
@@ -331,10 +404,83 @@ final class ConversationLog {
             do {
                 try await docs.insert(heading: "1日のまとめ", body: body, at: 1, style: "HEADING_1", day: day)
                 log.summaryWritten = true
+                log.summary = summary
                 save(log, day: day)
             } catch {
                 continue
             }
+        }
+    }
+
+    // MARK: - 週のまとめ
+
+    /// 月曜になったら、先週（月〜日）のまとめを「週のまとめ 2026-10-26〜2026-11-01」というドキュメントに書く。
+    /// その週の1日のまとめがそろうまで待つ。
+    func writeWeeklySummary(today: String) async {
+        guard let key = apiKey(), let todayDate = Self.dayFormatter.date(from: today) else { return }
+        let calendar = Calendar(identifier: .gregorian)
+        // 日曜=1 … 土曜=7。今週の月曜から7日前が先週の月曜
+        let sinceMonday = (calendar.component(.weekday, from: todayDate) + 5) % 7
+        guard let lastMonday = calendar.date(byAdding: .day, value: -sinceMonday - 7, to: todayDate) else { return }
+        let week = (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: lastMonday) }
+        let keys = week.map { Self.dayFormatter.string(from: $0) }
+        let doneKey = "week-" + keys[0]
+        guard !UserDefaults.standard.bool(forKey: doneKey) else { return }
+        let recorded = Set(days())
+        let present = keys.filter(recorded.contains)
+        guard !present.isEmpty else { return }
+        let logs = present.map { load($0) }
+        guard logs.allSatisfy({ $0.summaryWritten || $0.conversations.isEmpty }) else { return }
+
+        let label = DateFormatter()
+        label.locale = Locale(identifier: "ja_JP")
+        label.dateFormat = "M/d(E)"
+        let budget = 7_000 / present.count
+        var material = ""
+        var marked: [String] = []
+        for (day, log) in zip(present, logs) {
+            guard let date = Self.dayFormatter.date(from: day) else { continue }
+            var part = "## " + label.string(from: date) + "\n"
+            if let summary = log.summary {
+                part += "流れ: " + summary.flow.joined(separator: "／") + "\n"
+                if !summary.decisions.isEmpty { part += "決まったこと: " + summary.decisions.joined(separator: "／") + "\n" }
+                if !summary.todos.isEmpty { part += "やること: " + summary.todos.joined(separator: "／") + "\n" }
+            } else {
+                for c in log.conversations where c.title != nil {
+                    let people = c.people.isEmpty ? "" : "（\(c.people.joined(separator: "、"))と）"
+                    part += timeFormatter.string(from: c.start) + " " + (c.place ?? "") + people + " " + (c.title ?? "") + "\n"
+                }
+            }
+            let people = Array(NSOrderedSet(array: log.conversations.flatMap(\.people))) as? [String] ?? []
+            if !people.isEmpty { part += "会った人: " + people.joined(separator: "、") + "\n" }
+            material += String(part.prefix(budget)) + "\n"
+            for c in log.conversations {
+                for line in c.lines where line.marked == true {
+                    marked.append(label.string(from: date) + " " + timeFormatter.string(from: line.time) + "　" + line.text)
+                }
+            }
+        }
+        guard let summary = try? await Summarizer.week(material, apiKey: key) else { return }
+
+        var body = ""
+        func section(_ name: String, _ items: [String]) {
+            guard !items.isEmpty else { return }
+            body += name + "\n" + items.map { "・" + $0 + "\n" }.joined()
+        }
+        section("1週間の流れ", summary.flow)
+        section("よく話した人", summary.people)
+        section("決まったこと", summary.decisions)
+        section("やること（残っていそうなもの）", summary.todos)
+        section("話題", summary.topics)
+        section("★ 印を付けたところ", marked.prefix(15).map { $0.count > 100 ? String($0.prefix(100)) + "…" : $0 })
+        body += "\n"
+        let title = "週のまとめ（\(label.string(from: week[0]))〜\(label.string(from: week[6]))）"
+        do {
+            try await docs.insert(heading: title, body: body, at: 1, style: "HEADING_1",
+                                  day: "週のまとめ " + keys[0] + "〜" + keys[6])
+            UserDefaults.standard.set(true, forKey: doneKey)
+        } catch {
+            // 通信できないときは次の機会にやり直す
         }
     }
 

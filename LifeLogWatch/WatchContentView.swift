@@ -15,6 +15,16 @@ struct WatchContentView: View {
             .buttonStyle(.plain)
             Text(recorder.isRecording ? "録音中" : "停止中")
                 .font(.headline)
+            if recorder.isRecording {
+                // 指のダブルタップでも押せる
+                Button {
+                    recorder.mark()
+                } label: {
+                    Label("印", systemImage: "star.fill")
+                }
+                .tint(.yellow)
+                .handGestureShortcut(.primaryAction)
+            }
             if !recorder.message.isEmpty {
                 Text(recorder.message)
                     .font(.footnote)

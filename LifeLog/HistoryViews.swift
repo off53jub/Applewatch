@@ -108,8 +108,16 @@ struct DayView: View {
             }
             .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
-                if let speaker = line.speaker {
-                    Text(speaker).font(.caption.bold())
+                if line.speaker != nil || line.marked == true {
+                    HStack(spacing: 4) {
+                        if line.marked == true {
+                            Image(systemName: "star.fill").foregroundStyle(.yellow)
+                        }
+                        if let speaker = line.speaker {
+                            Text(speaker)
+                        }
+                    }
+                    .font(.caption.bold())
                 }
                 Text(line.text)
                 if let original = line.original {

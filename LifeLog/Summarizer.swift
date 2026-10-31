@@ -9,7 +9,7 @@ enum Summarizer {
         let points: [String]
     }
 
-    struct Day {
+    struct Day: Codable {
         /// 「9:00〜11:30　会社　企画会議（田中さん）」のような、時間の塊ごとの流れ
         let flow: [String]
         let decisions: [String]
@@ -62,6 +62,76 @@ enum Summarizer {
             """)
         func list(_ key: String) -> [String] { (json[key] as? [String]) ?? [] }
         return Day(flow: list("flow"), decisions: list("decisions"), todos: list("todos"), topics: list("topics"))
+    }
+
+    struct Week {
+        let flow: [String]
+        let people: [String]
+        let decisions: [String]
+        let todos: [String]
+        let topics: [String]
+    }
+
+    static func week(_ days: String, apiKey: String) async throws -> Week {
+        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+            次は、ある人の1週間の記録です（日ごとの流れ・決まったこと・やること・会話の見出し）。1週間のまとめを次の JSON で返してください。
+            なければ空の配列にしてください。
+            {"flow": ["10/27(月)　会社で企画会議、夜は友人と食事", ...日ごとに1行],
+             "people": ["田中さん：提案資料の相談（月・水）", ...よく話した人と何の話か],
+             "decisions": ["決まったこと"],
+             "todos": ["本人がやること・約束で、まだ残っていそうなもの（期限があれば添える）"],
+             "topics": ["今週の主な話題や気になったこと"]}
+
+            \(days)
+            """)
+        func list(_ key: String) -> [String] { (json[key] as? [String]) ?? [] }
+        return Week(flow: list("flow"), people: list("people"), decisions: list("decisions"),
+                    todos: list("todos"), topics: list("topics"))
+    }
+
+    /// 質問から、記録を探す手がかりを取り出す。
+    struct Plan {
+        let keywords: [String]
+        let people: [String]
+        let from: String?
+        let to: String?
+    }
+
+    static func plan(_ question: String, today: String, people: [String], apiKey: String) async throws -> Plan {
+        let json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 30, prompt: """
+            今日は \(today) です。次の質問に答えるために、会話の記録を探します。
+            記録に出てくる人: \(people.isEmpty ? "（未登録）" : people.joined(separator: "、"))
+            探す手がかりを次の JSON で返してください。日付は yyyy-MM-dd。期間が分からなければ null。
+            keywords は記録の中に出てきそうな言葉（言い換えや表記ゆれも含めて最大8個）。
+            {"keywords": ["..."], "people": ["上の人の中で関係する人"], "from": "yyyy-MM-dd または null", "to": "yyyy-MM-dd または null"}
+
+            質問: \(question)
+            """)
+        return Plan(keywords: (json["keywords"] as? [String]) ?? [],
+                    people: (json["people"] as? [String]) ?? [],
+                    from: json["from"] as? String, to: json["to"] as? String)
+    }
+
+    /// 探した記録をもとに質問に答える。sources は根拠にした行の「yyyy-MM-dd HH:mm」。
+    static func answer(_ question: String, material: String, apiKey: String) async throws -> (text: String, sources: [String]) {
+        let prompt = """
+            次は、ある人（[自分]）の会話の記録の抜き出しです。これだけをもとに質問に答えてください。
+            記録に無いことは推測せず「記録に見つかりませんでした」と答えてください。文字起こしの誤変換は文脈から補ってかまいません。
+            次の JSON で返してください。
+            {"answer": "質問への答え（簡潔に。いつ・誰と・何を、が分かるように）", "sources": ["根拠にした記録の日時 yyyy-MM-dd HH:mm", ...最大5つ]}
+
+            質問: \(question)
+
+            \(material)
+            """
+        let json: [String: Any]
+        do {
+            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 30, prompt: prompt)
+        } catch CloudTranscriber.Failure.limited {
+            // 大きいモデルの枠が無ければ小さいモデルで答える
+            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 30, prompt: prompt)
+        }
+        return ((json["answer"] as? String) ?? "", (json["sources"] as? [String]) ?? [])
     }
 
     /// 文字起こしの誤変換を、前後の文脈とキーワードから直す。行の数が変わったら使わない（nil）。

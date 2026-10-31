@@ -21,12 +21,16 @@ struct ContentView: View {
                     Toggle("待機モード", isOn: Binding(
                         get: { pipeline.standbyOn },
                         set: { pipeline.standbyOn = $0 }))
+                    Toggle("録音が止まったら知らせる", isOn: Binding(
+                        get: { pipeline.stopAlertsOn },
+                        set: { pipeline.stopAlertsOn = $0 }))
                 } header: {
                     Text("Apple Watch")
                 } footer: {
-                    Text(pipeline.standbyOn
+                    Text((pipeline.standbyOn
                          ? "無音を流してアプリを起こしておき、時計の録音を5分ごとにすぐ文字起こしします。電池を少し多く使います。アプリを上にスワイプして終わらせたときや iPhone を再起動したときは、一度開くと戻ります。"
                          : "時計の録音は、アプリを開いたときや充電中にまとめて文字起こしします。")
+                         + "\n\n時計で録音中は「★ 印」ボタン（またはダブルタップ）で、大事なところの前後1分に印を付けられます。")
                 }
 
                 Section {
@@ -112,6 +116,15 @@ struct ContentView: View {
                             .font(.title2)
                     }
                     .tint(pipeline.isRecording ? .red : .accentColor)
+                    Button {
+                        pipeline.addMark()
+                    } label: {
+                        Label("今のところに印を付ける", systemImage: "star")
+                    }
+                    if let mark = pipeline.lastMark {
+                        Text("\(mark.formatted(date: .omitted, time: .shortened)) に印を付けました（前後1分の行に★）")
+                            .foregroundStyle(.secondary)
+                    }
                     LabeledContent("文字起こし待ち", value: "\(pipeline.pendingCount) 件")
                     if !pipeline.lastEngine.isEmpty {
                         LabeledContent("直近の文字起こし", value: pipeline.lastEngine)
@@ -125,6 +138,8 @@ struct ContentView: View {
 
                 Section {
                     NavigationLink("これまでの記録") { HistoryView() }
+                    NavigationLink("記録を探す") { SearchView() }
+                    NavigationLink("記録に質問する") { AskView() }
                     Toggle("音声をドライブにも保存", isOn: Binding(
                         get: { pipeline.audioBackupOn },
                         set: { pipeline.audioBackupOn = $0 }))

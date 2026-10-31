@@ -57,7 +57,7 @@ targets:
   LifeLogWatch:
     type: application
     platform: watchOS
-    deploymentTarget: "10.0"
+    deploymentTarget: "11.0"
     sources: [LifeLogWatch]
     settings:
       base:
