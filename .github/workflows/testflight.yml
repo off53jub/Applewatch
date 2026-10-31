@@ -83,7 +83,13 @@ jobs:
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
             GOOGLE_REVERSED_CLIENT_ID="$GOOGLE_REVERSED_CLIENT_ID" \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/build.log"
+          status=${PIPESTATUS[0]}
+          # コンパイルのエラーは、ログを開かなくても見えるよう注記にも出す
+          if [ "$status" -ne 0 ]; then
+            grep -E "error:" "$RUNNER_TEMP/build.log" | sort -u | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
+          fi
+          exit $status
 
       - name: 署名なしの IPA を作る
         run: |
