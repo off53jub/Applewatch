@@ -38,13 +38,11 @@ jobs:
           done
           python3 - <<'PY'
           import glob
-          for f in ["Vendor/HaasCore/Package.swift"] + sorted(glob.glob("Vendor/HaasCore/Sources/HaasCore/*.swift")):
-              try:
-                  text = open(f).read()
-              except Exception as e:
-                  text = str(e)
-              text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-              print(f"::notice title={f}::{text}")
+          for f in ["Vendor/HaasCore/Sources/HaasCore/HaasASR.swift", "Vendor/HaasCore/Sources/HaasCore/Frontend.swift"]:
+              text = open(f).read()
+              for i in range(0, len(text), 3000):
+                  part = text[i:i + 3000].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                  print(f"::notice title={f.split('/')[-1]} {i // 3000}::{part}")
           PY
 
       - name: プロジェクトを生成
