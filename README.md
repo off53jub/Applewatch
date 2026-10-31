@@ -234,6 +234,15 @@ Whisper は日本語と決めて渡すと、小さな雑音・寝息・外国語
 
 オンのあいだは、端末内の文字起こし（SpeechAnalyzer）が声を聞き取った区間を、間が1秒未満なら14秒まで1つにまとめ、その区間ごとに Haas-ja で文字にする（1区間＝1行）。動かせなかった区切りは、いつもの方法（Groq など）で文字にする。
 
+## 家の PC の Haas-ja
+
+家の Windows PC で `pc/lifelog_pc.py`（LifeLog PC）を動かし、iPhone から区切りを送って Haas-ja で文字にしてもらう。モデルは [Haas-ja-v1.0](https://huggingface.co/third-intelligence/Haas-ja-v1.0) の ONNX 版 [oboroge0/Haas-ja-v1.0-onnx](https://huggingface.co/oboroge0/Haas-ja-v1.0-onnx)（非公式の変換、Apache-2.0）を sherpa-onnx で CPU で動かす（初回に約2.4GB を取ってくる）。
+
+- PC 用の実行ファイルは CI（`.github/workflows/pc.yml`）が Windows で作り、成果物 `LifeLogPC` に置く。使い方は `pc/README.txt`。
+- 送るのは声のあった区切り（AAC、約1.2MB）と、端末内の文字起こしで声があった区間。合言葉（Bearer）が合わない相手には返さない。
+- 外からは Tailscale の住所（100.…）で届く。モバイル通信で送るかは設定で選べる。
+- 順番は 家の PC → iPhone 内の Haas-ja → クラウドの高精度 → 端末内。PC に届かなかったら2分間は試さない。
+
 ## これから
 - 会議だけ話者分離（OpenAI gpt-4o-transcribe-diarize）
 - Limitless の過去データの取り込み

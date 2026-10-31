@@ -55,3 +55,65 @@ struct HaasView: View {
         .navigationTitle("Haas-ja（iPhone 内）")
     }
 }
+
+/// 家の PC の Haas-ja（LifeLog PC）：宛先と合言葉、モバイル通信、つながるか試す。
+struct HomePCView: View {
+    @Environment(Pipeline.self) private var pipeline
+    @State private var key = ""
+    @State private var result = ""
+    @State private var working = false
+
+    var body: some View {
+        @Bindable var pc = pipeline.homePC
+        Form {
+            Section {
+                Toggle("家の PC で文字起こし", isOn: $pc.enabled)
+                TextField("宛先（例: 100.101.102.103）", text: $pc.address)
+                    .keyboardType(.numbersAndPunctuation)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                SecureField(pc.hasKey ? "合言葉（入力済み）" : "合言葉", text: $key)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .onSubmit { saveKey() }
+                if !key.isEmpty {
+                    Button("合言葉を保存", action: saveKey)
+                }
+                Toggle("モバイル通信でも送る", isOn: $pc.useCellular)
+            } footer: {
+                Text("PC で LifeLogPC.exe を起動すると、宛先と合言葉が表示されます。「100.」で始まる宛先（Tailscale）なら、外にいるときもモバイル通信で届きます。送るのは声のあった区切りだけで、1つ約1.2MB です。PC が切れているときは、iPhone 内の Haas-ja かいつもの方法で文字にします。")
+            }
+
+            Section {
+                Button(working ? "試しています…" : "つながるか試す") {
+                    run { await pipeline.homePC.testConnection() }
+                }
+                Button("直近の音声で試す") {
+                    run { await pipeline.homePC.testRecent() }
+                }
+                if !result.isEmpty {
+                    Text(result).font(.callout).textSelection(.enabled)
+                }
+                if !pc.lastResult.isEmpty {
+                    Text(pc.lastResult).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .disabled(working)
+        }
+        .navigationTitle("家の PC")
+    }
+
+    private func saveKey() {
+        pipeline.homePC.setKey(key)
+        key = ""
+    }
+
+    private func run(_ action: @escaping () async -> String) {
+        if !key.isEmpty { saveKey() }
+        working = true
+        Task {
+            result = await action()
+            working = false
+        }
+    }
+}

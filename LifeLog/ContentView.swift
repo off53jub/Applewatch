@@ -324,6 +324,11 @@ private struct SettingsView: View {
 
                 Section {
                     NavigationLink {
+                        HomePCView()
+                    } label: {
+                        LabeledContent("家の PC の Haas-ja", value: pipeline.homePC.isConfigured ? "使用中" : "オフ")
+                    }
+                    NavigationLink {
                         HaasView()
                     } label: {
                         LabeledContent("iPhone 内の Haas-ja", value: pipeline.haas.isUsable ? "使用中" : "オフ")

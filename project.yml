@@ -56,6 +56,14 @@ targets:
         NSLocationWhenInUseUsageDescription: どこで話したかを、文字起こしの見出しに添えるために使います。
         NSLocationAlwaysAndWhenInUseUsageDescription: 画面を閉じて録音しているあいだも、どこで話したかを見出しに添えるために使います。大きく移動したときだけ記録します。
         ITSAppUsesNonExemptEncryption: false
+        NSLocalNetworkUsageDescription: 家の PC（LifeLog PC）に録音を送って文字にしてもらうために使います。
+        # 家の PC へは http で送る（宛先は家の中の住所か Tailscale の住所。Tailscale は通り道が暗号化されている）
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
         GIDClientID: $(GOOGLE_CLIENT_ID)
         CFBundleURLTypes:
           - CFBundleURLSchemes: [$(GOOGLE_REVERSED_CLIENT_ID)]

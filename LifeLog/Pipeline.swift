@@ -89,6 +89,7 @@ final class Pipeline {
     let vocabulary = Vocabulary()
     /// iPhone の中で動く日本語の音声認識（Haas-ja）
     let haas = HaasEngine()
+    let homePC = HomePC()
     /// ほかのアプリ（AUDAY など）の音声の取り込み
     let importer = AudioImporter()
     /// 待機モード：アプリを裏で起こしておき、時計から届いた区切りをすぐ処理する
@@ -747,7 +748,15 @@ final class Pipeline {
         // 同じ機器の直前の区切りから続いているなら、その終わりの文を文脈として渡す
         let previous = lastTranscript[fromWatch].flatMap { start.timeIntervalSince($0.end) < 90 ? $0.text : nil }
         var usedHaas = false
-        if haas.isUsable {
+        if homePC.shouldTry {
+            // 家の PC の Haas-ja（無料）。PC が切れているときや届かないときは、この区切りはほかの方法で
+            if let lines = try? await homePC.transcribe(url, local: local) {
+                entries = lines.map { ($0.offset, $0.text, nil) }
+                lastEngine = "Haas-ja（家の PC）"
+                usedHaas = true
+            }
+        }
+        if !usedHaas, haas.isUsable {
             // iPhone の中の Haas-ja（無料）。動かせなかったら（裏で Neural Engine が使えないなど）、この区切りはほかの方法で
             do {
                 let lines = try await haas.transcribe(url, local: local)
