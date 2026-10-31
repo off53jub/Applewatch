@@ -101,6 +101,8 @@ struct VoiceEnrollView: View {
 struct PeopleView: View {
     @Environment(Pipeline.self) private var pipeline
     @State private var player = ClipPlayer()
+    @State private var rebuilding = false
+    @State private var rebuildResult = ""
 
     private var others: [SpeakerLabeler.Person] { pipeline.people.filter { !$0.isSelf } }
 
@@ -138,11 +140,20 @@ struct PeopleView: View {
                     Text("名前を付けていない声は、2週間聞かなければ自動で忘れます。")
                 }
             }
-        }
-        .overlay {
-            if others.isEmpty {
-                ContentUnavailableView("まだいません", systemImage: "person.2",
-                                       description: Text("話し相手の声を聞くと、ここに出てきます。右上の＋から、その場で声を録って登録することもできます。"))
+            Section {
+                Button(rebuilding ? "作り直しています…" : "記録から人と声を作り直す") {
+                    rebuilding = true
+                    Task {
+                        rebuildResult = await pipeline.rebuildPeople { rebuildResult = $0 }
+                        rebuilding = false
+                    }
+                }
+                .disabled(rebuilding)
+                if !rebuildResult.isEmpty {
+                    Text(rebuildResult).font(.callout).foregroundStyle(.secondary)
+                }
+            } footer: {
+                Text("覚えている人が消えてしまったときに。これまでの記録に残っている名前（自分を含む）から人を作り直し、その人が話していた録音から声を取り直します。手元に無い録音はドライブから取ってくるので、Wi-Fi のときに。")
             }
         }
         .navigationTitle("話した相手")

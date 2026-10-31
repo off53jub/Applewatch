@@ -700,7 +700,7 @@ final class ConversationLog {
 
     // MARK: - 保存
 
-    private func days() -> [String] {
+    func days() -> [String] {
         let files = (try? FileManager.default.contentsOfDirectory(at: Self.dir, includingPropertiesForKeys: nil)) ?? []
         return files.filter { $0.pathExtension == "json" }
             .map { $0.deletingPathExtension().lastPathComponent }

@@ -68,8 +68,8 @@ struct HomePCView: View {
         Form {
             Section {
                 Toggle("家の PC で文字起こし", isOn: $pc.enabled)
-                TextField("宛先（例: 100.101.102.103）", text: $pc.address)
-                    .keyboardType(.numbersAndPunctuation)
+                TextField("宛先（例: my-pc.tail1234.ts.net:47615）", text: $pc.address)
+                    .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 SecureField(pc.hasKey ? "合言葉（入力済み）" : "合言葉", text: $key)
@@ -81,7 +81,7 @@ struct HomePCView: View {
                 }
                 Toggle("モバイル通信でも送る", isOn: $pc.useCellular)
             } footer: {
-                Text("PC で LifeLogPC.exe を起動すると、宛先と合言葉が表示されます。「100.」で始まる宛先（Tailscale）なら、外にいるときもモバイル通信で届きます。送るのは声のあった区切りだけで、1つ約1.2MB です。PC が切れているときは、iPhone 内の Haas-ja かいつもの方法で文字にします。")
+                Text("PC で LifeLogPC.exe を起動すると、宛先（〜.ts.net の名前）と合言葉が表示されます。Tailscale の名前なので、外にいるときもモバイル通信で届きます。送るのは声のあった区切りだけで、1つ約1.2MB です。PC が切れているときは、iPhone 内の Haas-ja かいつもの方法で文字にします。")
             }
 
             Section {

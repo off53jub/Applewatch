@@ -294,6 +294,27 @@ def addresses() -> list[str]:
     return sorted(found, key=order)
 
 
+def tailscale_name() -> str | None:
+    """この PC の Tailscale の名前（例: my-pc.tail1234.ts.net）。iPhone のアプリはこの名前で送る。"""
+    import shutil
+    import subprocess
+
+    candidates = [shutil.which("tailscale"), r"C:\Program Files\Tailscale\tailscale.exe"]
+    for exe in candidates:
+        if not exe or not Path(exe).exists():
+            continue
+        try:
+            out = subprocess.run([exe, "status", "--json"], capture_output=True, timeout=10,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            name = (json.loads(out.stdout or b"{}").get("Self") or {}).get("DNSName", "")
+        except (OSError, ValueError, subprocess.SubprocessError):
+            continue
+        name = name.rstrip(".")
+        if name.endswith(".ts.net"):
+            return name
+    return None
+
+
 class Server(ThreadingHTTPServer):
     # Windows では、同じ番号をほかのソフトと分け合ってしまわないよう、先に使われていたら始めない
     allow_reuse_address = False
@@ -318,10 +339,16 @@ def serve(threads: int, provider: str, port: int) -> None:
     print(" LifeLog PC を始めました。この画面は閉じずに置いておいてください。")
     print()
     print(" iPhone の LifeLog → 設定 → 家の PC に、次の2つを入れます。")
-    for ip in addresses():
-        tag = "（Tailscale・外からも使える）" if ip.startswith("100.") else "（家の Wi-Fi の中だけ）"
-        print(f"   宛先: {ip}:{port}  {tag}")
+    name = tailscale_name()
+    if name:
+        print(f"   宛先: {name}:{port}")
+    else:
+        print("   宛先: （Tailscale の名前が見つかりません）")
+        print("     Tailscale にログインしているか、Tailscale の管理画面（login.tailscale.com）の")
+        print("     DNS で MagicDNS がオンになっているかを確かめて、起動し直してください。")
     print(f"   合言葉: {key}")
+    print()
+    print(" （iPhone のアプリは、番号の宛先 " + ", ".join(addresses()) + " には送れません。上の名前を使います）")
     print("=" * 60)
     print(flush=True)
     try:

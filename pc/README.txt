@@ -14,8 +14,10 @@ LifeLog PC — 家の PC で Haas-ja を動かして、iPhone の録音を文字
 家の外（モバイル通信）から PC につなぐには、無料の Tailscale を使います。
 1. PC に Tailscale を入れてログインします: https://tailscale.com/download/windows
 2. iPhone にも App Store から Tailscale を入れて、同じアカウントでログインし、接続をオンにします。
-3. LifeLogPC.exe を起動し直すと、「100.」で始まる宛先が表示されます。iPhone にはその宛先を入れます。
+3. LifeLogPC.exe を起動し直すと、「〜.ts.net:47615」の形の宛先が表示されます。iPhone にはその宛先を入れます。
    この宛先なら、家の Wi-Fi でもモバイル通信でも同じようにつながります。
+   （番号だけの宛先 100.xx.xx.xx は、iPhone の決まりで http では送れないので使いません）
+   名前が出ないときは、Tailscale の管理画面 https://login.tailscale.com/admin/dns で MagicDNS をオンにします。
 ※ 職場の Wi-Fi につないだ iPhone から Tailscale を使うと、職場のルールに触れることがあります。
   職場ではモバイル通信を使うか、職場のルールを確かめてください。
 
@@ -25,7 +27,7 @@ LifeLog PC — 家の PC で Haas-ja を動かして、iPhone の録音を文字
     New-NetFirewallRule -DisplayName "LifeLog PC" -Direction Inbound -Protocol TCP -LocalPort 47615 -RemoteAddress 100.64.0.0/10,LocalSubnet -Action Allow
 ・iPhone の Safari で http://宛先/hello を開くと「合言葉が違います」と出れば、PC までは届いています。
 ・番号 47615 をほかのソフトが使っているときは、LifeLogPC.exe --port 47616 のように別の番号で起動し、
-  iPhone の宛先も「100.xx.xx.xx:47616」のように番号付きで入れます。
+  iPhone の宛先も「〜.ts.net:47616」のように番号付きで入れます。
 
 ■ Windows の起動時に自動で始める
 コマンドプロンプトでこのフォルダに移り、次を実行します。

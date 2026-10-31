@@ -104,7 +104,18 @@ actor SpeakerLabeler {
 
     private var diarizer: OfflineDiarizerManager?
     private var loading: Task<Loaded, Error>?
-    private var store = Store()
+    /// 覚えている人。聞き分けのモデルの準備とは別に、最初に触ったときにファイルから読む。
+    /// （読む前に書くと、覚えている人を空で上書きしてしまうので、必ずこれを通す）
+    private var loadedStore: Store?
+    private var store: Store {
+        get {
+            if let loadedStore { return loadedStore }
+            let loaded = Self.readStore()
+            loadedStore = loaded
+            return loaded
+        }
+        set { loadedStore = newValue }
+    }
 
     private static let storeURL = URL.applicationSupportDirectory.appendingPathComponent("people.json")
     /// 以前の形式（FluidAudio の Speaker の一覧）
@@ -127,7 +138,6 @@ actor SpeakerLabeler {
             let loaded = try await task.value
             if diarizer == nil {
                 diarizer = loaded.manager
-                load()
             }
         } catch {
             loading = nil
@@ -317,6 +327,23 @@ actor SpeakerLabeler {
             .map { ($0.id, $0.samples) }
     }
 
+    /// 記録に残っている名前から、人を同じ番号で作り直す（覚えている人が消えてしまったとき）。
+    /// 記録に出てくる番号より大きい番号から、新しい人を数え始める。
+    func restore(_ people: [(id: String, name: String?, context: Context?)], usedIDs: Set<String>) {
+        for p in people where index(of: p.id) == nil {
+            if p.id == Self.selfID {
+                ensureSelf()
+            } else {
+                store.people.append(Person(id: p.id, name: p.name, context: p.context))
+            }
+        }
+        let highest = usedIDs.compactMap { Int($0) }.max() ?? 0
+        store.nextID = max(store.nextID, highest + 1)
+        save()
+    }
+
+    func hasVoice(_ id: String) -> Bool { person(id)?.voices.contains { $0.model == Self.model } == true }
+
     func newPerson(name: String, context: Context?) -> String {
         let id = String(store.nextID)
         store.nextID += 1
@@ -412,29 +439,33 @@ actor SpeakerLabeler {
         store.people[i].samples = Array(samples.suffix(3))
     }
 
-    private func load() {
-        if let data = try? Data(contentsOf: Self.storeURL), let saved = try? JSONDecoder().decode(Store.self, from: data) {
-            store = saved
-            return
+    private static func readStore() -> Store {
+        if let data = try? Data(contentsOf: storeURL) {
+            if let saved = try? JSONDecoder().decode(Store.self, from: data) { return saved }
+            // 読めないファイルは消さずに取っておく（上書きで失わないように）
+            let backup = storeURL.deletingPathExtension().appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970)).json")
+            try? FileManager.default.copyItem(at: storeURL, to: backup)
         }
         // 以前の形式から引き継ぐ
-        guard let data = try? Data(contentsOf: Self.legacyURL),
-              let speakers = try? JSONDecoder().decode([Speaker].self, from: data) else { return }
+        var store = Store()
+        guard let data = try? Data(contentsOf: legacyURL),
+              let speakers = try? JSONDecoder().decode([Speaker].self, from: data) else { return store }
         var maxID = 0
         for s in speakers {
             let unnamed = s.name == s.id || s.name == "Speaker \(s.id)"
             var voices = [Voice(embedding: s.currentEmbedding, pinned: s.isPermanent, added: s.updatedAt)]
             voices += s.rawEmbeddings.suffix(10).map { Voice(embedding: $0.embedding, pinned: false, added: $0.timestamp) }
-            store.people.append(Person(id: s.id, name: s.id == Self.selfID || unnamed ? nil : s.name, context: nil,
+            store.people.append(Person(id: s.id, name: s.id == selfID || unnamed ? nil : s.name, context: nil,
                                        voices: voices, seconds: Double(s.duration), lastHeard: s.updatedAt))
             maxID = max(maxID, Int(s.id) ?? 0)
         }
         store.nextID = maxID + 1
-        save()
+        if let data = try? JSONEncoder().encode(store) { try? data.write(to: storeURL, options: .atomic) }
+        return store
     }
 
     private func save() {
-        guard let data = try? JSONEncoder().encode(store) else { return }
+        guard let loadedStore, let data = try? JSONEncoder().encode(loadedStore) else { return }
         try? data.write(to: Self.storeURL, options: .atomic)
     }
 }

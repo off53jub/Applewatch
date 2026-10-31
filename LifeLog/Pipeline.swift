@@ -189,6 +189,9 @@ final class Pipeline {
 
     /// 聞き分けのモデルを用意し、覚えている声を読み込む。
     func loadSpeakers() async {
+        // 聞き分けのモデルの準備より先に、覚えている人を出す
+        people = await speakers.people()
+        hasSelfVoice = await speakers.hasSelfVoice
         do {
             try await speakers.prepare()
             // 聞き分けのモデルを替えたので、名前のある人は覚えている声のひとこまから声を取り直す
@@ -275,6 +278,65 @@ final class Pipeline {
         let old = await speakers.name(of: source)
         await speakers.merge(source, into: target)
         await relabel(to: target, renaming: old) { $0.speakerID == source }
+    }
+
+    /// 覚えている人が消えてしまったときに、記録に残っている名前と音声から、名前のある人と自分の声を作り直す。
+    func rebuildPeople(progress: @escaping (String) -> Void) async -> String {
+        do {
+            progress("聞き分けの準備をしています…")
+            try await speakers.prepare()
+        } catch {
+            return "聞き分けを準備できませんでした: \(error.localizedDescription)"
+        }
+        // 記録から、番号ごとの名前・場と、声を取れそうな行を集める
+        var names: [String: String] = [:]
+        var contexts: [String: [SpeakerLabeler.Context]] = [:]
+        var clips: [String: [(line: ConversationLog.Line, end: TimeInterval)]] = [:]
+        var used = Set<String>()
+        for day in conversations.days() {
+            for c in conversations.conversations(on: day) where c.media == nil {
+                for (i, line) in c.lines.enumerated() {
+                    guard let id = line.speakerID else { continue }
+                    used.insert(id)
+                    guard let name = line.speaker, id == SpeakerLabeler.selfID || !name.hasPrefix("人物") else { continue }
+                    names[id] = name
+                    if let context = places.registeredContext(at: line.time) { contexts[id, default: []].append(context) }
+                    // 声を切り出すのは、同じ音声の次の行まで（最長10秒）
+                    if let offset = line.offset, line.audio != nil {
+                        let next = c.lines[(i + 1)...].first { $0.audio == line.audio }?.offset
+                        let end = min(offset + 10, next ?? offset + 10)
+                        if end - offset >= 2 { clips[id, default: []].append((line, end)) }
+                    }
+                }
+            }
+        }
+        let restored = names.map { id, name -> (id: String, name: String?, context: SpeakerLabeler.Context?) in
+            let list = contexts[id] ?? []
+            let work = list.filter { $0 == .work }.count
+            let context: SpeakerLabeler.Context? = list.isEmpty ? nil : (work * 2 > list.count ? .work : .other)
+            return (id, id == SpeakerLabeler.selfID ? nil : name, context)
+        }
+        await speakers.restore(restored, usedIDs: used)
+        // 1人につき、長く話した新しい行から5つまで声を取る
+        var taught = 0
+        for (n, (id, list)) in clips.sorted(by: { $0.key < $1.key }).enumerated() {
+            progress("声を取り直しています… \(n + 1) / \(clips.count) 人")
+            let best = list.sorted { ($0.end - ($0.line.offset ?? 0), $0.line.time) > ($1.end - ($1.line.offset ?? 0), $1.line.time) }
+            var got = 0
+            for clip in best where got < 5 {
+                guard let audio = clip.line.audio, let url = await archive.playableURL(for: audio),
+                      let offset = clip.line.offset else { continue }
+                if (try? await speakers.teach(url, from: offset, to: clip.end, personID: id, pinned: false)) != nil,
+                   await speakers.hasVoice(id) {
+                    got += 1
+                }
+            }
+            if got > 0 { taught += 1 }
+        }
+        hasSelfVoice = await speakers.hasSelfVoice
+        people = await speakers.people()
+        let named = restored.filter { $0.id != SpeakerLabeler.selfID }.count
+        return "名前のある人 \(named) 人\(names[SpeakerLabeler.selfID] != nil ? "と自分" : "")を記録から作り直し、そのうち \(taught) 人の声を録音から取り直しました。"
     }
 
     /// 名前の無い声に近い、名前のある人。

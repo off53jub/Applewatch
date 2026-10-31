@@ -46,7 +46,7 @@ final class HomePC {
         var errorDescription: String? {
             switch self {
             case .notConfigured: "家の PC の宛先と合言葉が入っていません"
-            case .badAddress: "宛先の書き方が違います（例: 100.64.1.2）"
+            case .badAddress: "宛先の書き方が違います（例: my-pc.tail1234.ts.net:47615）"
             case .unauthorized: "合言葉が違います"
             case .server(let reason): "PC で文字にできませんでした: \(reason)"
             }
@@ -127,7 +127,7 @@ final class HomePC {
             return reply.lines.map { CloudTranscriber.Line(offset: $0.start, text: $0.text) }
         } catch {
             failedAt = .now
-            lastResult = "つながりませんでした（\(Date().formatted(date: .omitted, time: .shortened))）: \(error.localizedDescription)"
+            lastResult = "つながりませんでした（\(Date().formatted(date: .omitted, time: .shortened))）: \(Self.describe(error))"
             throw error
         }
     }
@@ -139,7 +139,19 @@ final class HomePC {
             forgetFailure()
             return "つながりました: \(model)"
         } catch {
-            return "つながりませんでした: \(error.localizedDescription)"
+            return "つながりませんでした: \(Self.describe(error))"
+        }
+    }
+
+    /// よくある失敗を分かる言葉にする
+    static func describe(_ error: Error) -> String {
+        switch (error as? URLError)?.code {
+        case .appTransportSecurityRequiresSecureConnection?:
+            return "番号だけの宛先（100.… や 192.168.…）には送れません。PC の画面に出る「〜.ts.net:47615」の名前を入れてください。"
+        case .timedOut?, .cannotConnectToHost?, .cannotFindHost?:
+            return "PC に届きませんでした。PC で LifeLogPC.exe が動いているか、iPhone の Tailscale がオンかを確かめてください。（\(error.localizedDescription)）"
+        default:
+            return error.localizedDescription
         }
     }
 
@@ -154,7 +166,7 @@ final class HomePC {
             return "\(url.lastPathComponent)\n送って文字になるまで \(String(format: "%.1f", took)) 秒\n\n"
                 + (text.isEmpty ? "（声が聞き取れませんでした）" : text)
         } catch {
-            return "試せませんでした: \(error.localizedDescription)"
+            return "試せませんでした: \(Self.describe(error))"
         }
     }
 }
