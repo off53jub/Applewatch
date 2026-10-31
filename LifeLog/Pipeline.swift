@@ -411,6 +411,7 @@ final class Pipeline {
     /// 溜まっている区切りを処理する。失敗や中断で途中でやめたら false。
     private func drainQueue() async -> Bool {
         await conversations.repairBrokenLines()
+        await conversations.removeFillerLines()
         // 取り込んだ昔の音声は、いま録っている分のあとに回す
         let pending = Storage.pendingChunks()
         let ordered = pending.filter { !Storage.isImported($0) } + pending.filter(Storage.isImported)
@@ -549,7 +550,7 @@ final class Pipeline {
         let fromWatch = Storage.isFromWatch(url)
         let duration = Self.duration(of: url)
         // まず端末内で文字起こしする（無料）。何も聞き取れなければ、お金をかけずにここで終わる。
-        let local = try await Transcriber.transcribe(url)
+        let local = try await Transcriber.transcribe(url).filter { !CloudTranscriber.isFiller($0.text) }
         guard !local.isEmpty else { return [] }
         var entries: [(offset: TimeInterval?, text: String, score: Double?)] = local.map { ($0.offset, $0.text, nil) }
         lastEngine = "端末内"

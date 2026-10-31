@@ -251,6 +251,35 @@ final class ConversationLog {
         UserDefaults.standard.set(true, forKey: doneKey)
     }
 
+    /// 声が無いところに書かれてしまった「ご清聴ありがとうございました」などの行を、アプリとドキュメントから消す。
+    /// 1つの会話で同じ文（8文字以上）が3回以上ある行も消す。一度だけ動く。
+    func removeFillerLines() async {
+        let doneKey = "repair-filler-lines"
+        guard !UserDefaults.standard.bool(forKey: doneKey) else { return }
+        for day in days() {
+            var log = load(day)
+            var fixes: [(find: String, replace: String)] = []
+            for c in log.conversations.indices {
+                var counts: [String: Int] = [:]
+                for line in log.conversations[c].lines where line.text.count >= 8 { counts[line.text, default: 0] += 1 }
+                let drop: (Line) -> Bool = { CloudTranscriber.isFiller($0.text) || (counts[$0.text] ?? 0) >= 3 }
+                for line in log.conversations[c].lines where drop(line) {
+                    // ドキュメントでは行の中身を消す（空の行が残る）
+                    fixes.append((find: Self.docLine(line), replace: ""))
+                }
+                log.conversations[c].lines.removeAll(where: drop)
+            }
+            guard !fixes.isEmpty else { continue }
+            do {
+                try await docs.replaceAll(fixes, day: day)
+            } catch {
+                return
+            }
+            save(log, day: day)
+        }
+        UserDefaults.standard.set(true, forKey: doneKey)
+    }
+
     // MARK: - 話者の手直し
 
     /// match に当たる行の話者を name（番号 id）にし、ドキュメントの同じ行も直す。直した行の数を返す。

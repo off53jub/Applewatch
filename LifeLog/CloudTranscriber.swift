@@ -169,24 +169,42 @@ enum CloudTranscriber {
         }
 
         if let segments = json?["segments"] as? [[String: Any]] {
-            return segments.compactMap { segment in
+            let lines = segments.compactMap { segment -> Line? in
                 guard let text = (segment["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !text.isEmpty, !isHallucination(segment, text: text) else { return nil }
                 return Line(offset: segment["start"] as? Double, text: text, score: segment["avg_logprob"] as? Double)
             }
+            return dropRepeats(lines)
         }
         // 時刻が無いときは文ごとに区切り、チャンクの先頭の時刻だけを付ける
-        return sentences(in: text).enumerated().map { i, s in Line(offset: i == 0 ? 0 : nil, text: s) }
+        let lines = sentences(in: text).filter { !isFiller($0) }
+        return dropRepeats(lines.enumerated().map { i, s in Line(offset: i == 0 ? 0 : nil, text: s) })
     }
 
-    /// Whisper は無音や雑音に、動画の締めの決まり文句などを書いてしまうことがある。
+    /// Whisper は無音や雑音（ゲームや BGM など）に、動画の締めの決まり文句などを書いてしまうことがある。
     private static func isHallucination(_ segment: [String: Any], text: String) -> Bool {
-        if let noSpeech = segment["no_speech_prob"] as? Double, noSpeech > 0.6,
-           let logprob = segment["avg_logprob"] as? Double, logprob < -1 {
-            return true
-        }
-        let phrases = ["ご視聴ありがとうございました", "チャンネル登録", "最後までご視聴", "字幕視聴ありがとう"]
-        return phrases.contains { text.contains($0) } && text.count < 30
+        let noSpeech = segment["no_speech_prob"] as? Double ?? 0
+        let logprob = segment["avg_logprob"] as? Double ?? 0
+        let compression = segment["compression_ratio"] as? Double ?? 0
+        if noSpeech > 0.6 && logprob < -1 { return true }
+        if noSpeech > 0.4 && logprob < -0.6 { return true }
+        // 同じ言葉の繰り返しばかりの区間
+        if compression > 2.4 { return true }
+        return isFiller(text)
+    }
+
+    /// 声が無いところに Whisper が書きがちな決まり文句か。短い文で、これらを含むものは捨てる。
+    static func isFiller(_ text: String) -> Bool {
+        let phrases = ["ご清聴ありがとう", "ご視聴ありがとう", "チャンネル登録", "高評価", "最後までご視聴", "最後までご覧",
+                       "字幕視聴", "字幕は", "おやすみなさい。また", "次回もお楽しみに", "提供は"]
+        return text.count < 40 && phrases.contains { text.contains($0) }
+    }
+
+    /// 1つの区切りで同じ文（8文字以上）が3回以上出てきたら、雑音への書き込みとみなして捨てる。
+    private static func dropRepeats(_ lines: [Line]) -> [Line] {
+        var counts: [String: Int] = [:]
+        for line in lines where line.text.count >= 8 { counts[line.text, default: 0] += 1 }
+        return lines.filter { (counts[$0.text] ?? 0) < 3 }
     }
 
     /// 「。」「？」「！」で区切って1文ずつにする。
