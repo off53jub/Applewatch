@@ -18,7 +18,7 @@ final class Standby {
             let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
             MainActor.assumeIsolated {
                 // 電話などが終わったら流し直す
-                if raw.flatMap { AVAudioSession.InterruptionType(rawValue: $0) } == .ended { self?.restart() }
+                if raw.flatMap({ AVAudioSession.InterruptionType(rawValue: $0) }) == .ended { self?.restart() }
             }
         }
         center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
