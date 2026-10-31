@@ -1,0 +1,83 @@
+name: PC
+
+# 家の PC（Windows）で Haas-ja を動かす LifeLog PC を作る。
+# 成果物（Artifacts）の LifeLogPC を展開して LifeLogPC.exe を起動する。
+on:
+  push:
+    paths: ['pc/**', '.github/workflows/pc.yml']
+  pull_request:
+    paths: ['pc/**', '.github/workflows/pc.yml']
+  workflow_dispatch:
+
+jobs:
+  # 試しに文字にする日本語の音声を作る（Mac の読み上げ）
+  sample:
+    runs-on: macos-latest
+    steps:
+      - name: 試す音声を作る
+        run: |
+          say -v Kyoko -o s.aiff "今日の会議では、来月の予算と、新しいシステムの導入について話し合いました。"
+          afconvert s.aiff -o sample.m4a -f m4af -d 'aac@16000' -c 1 -b 32000
+          ls -la sample.m4a
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sample
+          path: sample.m4a
+
+  windows:
+    needs: sample
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: sample
+
+      - name: 部品を入れる
+        run: python -m pip install -r pc/requirements.txt pyinstaller==6.22.3
+
+      - name: モデルの版を確かめる
+        run: |
+          python - <<'PY'
+          from huggingface_hub import HfApi
+          info = HfApi().model_info("oboroge0/Haas-ja-v1.0-onnx", files_metadata=True)
+          print(f"::notice::Haas-ja ONNX の版 {info.sha}")
+          print("::notice::" + ", ".join(f"{s.rfilename} {(s.size or 0) // 1_000_000}MB" for s in info.siblings))
+          PY
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/LifeLogPC/model
+          key: haas-ja-onnx-${{ hashFiles('pc/lifelog_pc.py') }}
+          restore-keys: haas-ja-onnx-
+
+      - name: モデルを取ってくる
+        run: python pc/lifelog_pc.py --download
+
+      - name: Python のまま試す
+        run: |
+          python pc/lifelog_pc.py --test sample.m4a | tee test.txt
+          while IFS= read -r line; do echo "::notice::$line"; done < <(grep -v '^20' test.txt)
+
+      - name: exe にする
+        run: |
+          pyinstaller --noconfirm --onedir --console --name LifeLogPC \
+            --collect-all sherpa_onnx --collect-all av pc/lifelog_pc.py
+          cp pc/README.txt dist/LifeLogPC/
+
+      - name: exe で試す
+        run: |
+          dist/LifeLogPC/LifeLogPC.exe --test sample.m4a | tee test-exe.txt
+          while IFS= read -r line; do echo "::notice::exe: $line"; done < <(grep -v '^20' test-exe.txt)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LifeLogPC
+          path: dist/LifeLogPC
