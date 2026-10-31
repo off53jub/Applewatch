@@ -32,6 +32,10 @@ struct ContentView: View {
                 Section {
                     Toggle("高精度で文字起こし", isOn: $settings.useCloud)
                         .disabled(!settings.hasAPIKey)
+                    Toggle("誤変換を言語モデルで直す", isOn: Binding(
+                        get: { pipeline.correctionOn },
+                        set: { pipeline.correctionOn = $0 }))
+                        .disabled(settings.groqKey == nil)
                     NavigationLink("サービスと API キーの設定") {
                         TranscriptionSettingsView(settings: settings)
                     }

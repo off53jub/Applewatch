@@ -10,6 +10,8 @@ enum Summarizer {
     }
 
     struct Day {
+        /// 「9:00〜11:30　会社　企画会議（田中さん）」のような、時間の塊ごとの流れ
+        let flow: [String]
         let decisions: [String]
         let todos: [String]
         let topics: [String]
@@ -50,14 +52,40 @@ enum Summarizer {
 
     static func day(_ conversations: String, apiKey: String) async throws -> Day {
         let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
-            次は、ある人の1日の会話の見出しと要点の一覧です。1日のまとめを次の JSON で返してください。
+            次は、ある人の1日の会話の見出しと要点の一覧です（時刻・場所・相手・見出し）。1日のまとめを次の JSON で返してください。
             なければ空の配列にしてください。
-            {"decisions": ["決まったこと"], "todos": ["本人がやること・約束（期限があれば添える）"], "topics": ["話題や気になったこと"]}
+            "flow" は1日の流れです。時間の近い会話や、同じ場所・同じ用事の会話をひとまとめにし、
+            「9:00〜11:30　会社　企画会議と提案資料づくり（田中さん、佐藤さん）」の形で、時刻順に2〜8個にしてください。
+            {"flow": ["..."], "decisions": ["決まったこと"], "todos": ["本人がやること・約束（期限があれば添える）"], "topics": ["話題や気になったこと"]}
 
             \(conversations)
             """)
         func list(_ key: String) -> [String] { (json[key] as? [String]) ?? [] }
-        return Day(decisions: list("decisions"), todos: list("todos"), topics: list("topics"))
+        return Day(flow: list("flow"), decisions: list("decisions"), todos: list("todos"), topics: list("topics"))
+    }
+
+    /// 文字起こしの誤変換を、前後の文脈とキーワードから直す。行の数が変わったら使わない（nil）。
+    /// 処理の流れを止めないよう、混んでいるときは待たずにあきらめる。
+    static func correct(_ lines: [String], keywords: [String], previous: String?, apiKey: String) async throws -> [String]? {
+        guard !lines.isEmpty else { return lines }
+        let numbered = lines.enumerated().map { "\($0.offset + 1): \($0.element)" }.joined(separator: "\n")
+        let json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 20, prompt: """
+            次は日本語の会話を音声認識で書き起こしたものです。同音異義語の誤変換（例: 機会→機械）、
+            固有名詞の書き間違い、明らかな聞き間違いだけを、前後の文脈から直してください。
+            言い回しや話し言葉はそのまま残し、要約・言い換え・行の結合や分割はしないでください。
+            分からないところは元のままにしてください。
+            \(keywords.isEmpty ? "" : "よく出る言葉（この表記に寄せる）: " + keywords.joined(separator: "、") + "\n")\
+            \(previous.map { "直前の会話: " + $0 + "\n" } ?? "")\
+            {"lines": ["1行目の直した文", ...]} の形で、\(lines.count) 行すべてを同じ順で返してください。
+
+            \(numbered)
+            """)
+        guard let fixed = json["lines"] as? [String], fixed.count == lines.count else { return nil }
+        // 番号を付けたまま返ってきたら外す
+        return fixed.map { line in
+            guard let range = line.range(of: #"^\d+:\s*"#, options: .regularExpression) else { return line }
+            return String(line[range.upperBound...])
+        }
     }
 
     private static func pieces(of text: String) -> [String] {
@@ -75,7 +103,7 @@ enum Summarizer {
     }
 
     /// JSON で答えさせる。混んでいる（429）ときは指示どおり待って3回まで試す。
-    private static func chat(model: String, apiKey: String, prompt: String) async throws -> [String: Any] {
+    private static func chat(model: String, apiKey: String, maxWait: Double = 90, prompt: String) async throws -> [String: Any] {
         var request = URLRequest(url: URL(string: "https://api.groq.com/openai/v1/chat/completions")!)
         request.httpMethod = "POST"
         request.timeoutInterval = 120
@@ -97,7 +125,8 @@ enum Summarizer {
             let http = response as? HTTPURLResponse
             if http?.statusCode == 429, attempt < 3 {
                 let wait = http?.value(forHTTPHeaderField: "retry-after").flatMap(Double.init) ?? 20
-                try await Task.sleep(for: .seconds(min(wait, 90)))
+                if wait > maxWait { break }
+                try await Task.sleep(for: .seconds(wait))
                 continue
             }
             guard http?.statusCode == 200,

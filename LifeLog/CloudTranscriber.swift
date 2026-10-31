@@ -86,10 +86,12 @@ enum CloudTranscriber {
 
     /// 精度の高いモデルから順に試し、上限に達したモデルはしばらく飛ばす。
     @MainActor
-    static func transcribe(_ url: URL, provider: Provider, apiKey: String, keywords: [String]) async throws -> Transcript {
+    static func transcribe(_ url: URL, provider: Provider, apiKey: String, keywords: [String],
+                           previous: String? = nil) async throws -> Transcript {
         for model in provider.models where (limitedUntil[model] ?? .distantPast) < .now {
             do {
-                let lines = try await send(url, provider: provider, model: model, apiKey: apiKey, keywords: keywords)
+                let lines = try await send(url, provider: provider, model: model, apiKey: apiKey,
+                                           keywords: keywords, previous: previous)
                 return Transcript(model: model, lines: lines)
             } catch let limit as RateLimited {
                 limitedUntil[model] = .now.addingTimeInterval(limit.retryAfter)
@@ -98,8 +100,9 @@ enum CloudTranscriber {
         throw Failure.limited("無料枠の上限に達しました")
     }
 
+    /// previous は直前の区切りの終わりの文。区切りの頭が話の途中から始まっても、つながりが分かる。
     private static func send(_ url: URL, provider: Provider, model: String, apiKey: String,
-                             keywords: [String]) async throws -> [Line] {
+                             keywords: [String], previous: String?) async throws -> [Line] {
         let boundary = "LifeLog-\(UUID().uuidString)"
         var body = Data()
         func field(_ name: String, _ value: String) {
@@ -112,13 +115,16 @@ enum CloudTranscriber {
             field("response_format", "verbose_json")
             field("temperature", "0")
             // Whisper のプロンプトは「直前の書き起こし」として読まれるので、指示ではなく
-            // 句読点つきの文と、出てくる言葉を並べて表記を寄せる（224 トークンまで）
+            // 句読点つきの文と、出てくる言葉を並べて表記を寄せる（224 トークンまで）。
+            // 直前の区切りの終わりがあれば、いちばん後ろ（すぐ前の発言の位置）に置く。
             let words = keywords.prefix(30).joined(separator: "、")
-            field("prompt", "こんにちは。今日もよろしくお願いします。" + (words.isEmpty ? "" : words + "。"))
+            var text = String((words.isEmpty ? "" : words + "。").prefix(100))
+            text += previous.map { String($0.suffix(100)) } ?? "こんにちは。今日もよろしくお願いします。"
+            field("prompt", text)
         case .openai:
             field("model", model)
             field("languages[]", "ja")
-            field("prompt", prompt)
+            field("prompt", prompt + (previous.map { "直前の会話：" + $0.suffix(200) } ?? ""))
             for word in keywords {
                 field("keywords[]", word)
             }

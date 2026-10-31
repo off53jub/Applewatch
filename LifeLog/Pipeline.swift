@@ -32,6 +32,12 @@ final class Pipeline {
     var summariesOn = UserDefaults.standard.object(forKey: "summaries") as? Bool ?? true {
         didSet { UserDefaults.standard.set(summariesOn, forKey: "summaries") }
     }
+    /// 文字起こしの誤変換を言語モデルで直す（Groq の無料枠）
+    var correctionOn = UserDefaults.standard.object(forKey: "correct") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(correctionOn, forKey: "correct") }
+    }
+    /// 直前の区切りの終わり。次の区切りの頭の文脈として使う。
+    @ObservationIgnored private var lastTranscript: (end: Date, text: String)?
     /// どこで話したか
     let places = PlaceLog()
     /// 待機モード：アプリを裏で起こしておき、時計から届いた区切りをすぐ処理する
@@ -264,10 +270,12 @@ final class Pipeline {
         guard !local.isEmpty else { return }
         var entries: [(offset: TimeInterval?, text: String)] = local.map { ($0.offset, $0.text) }
         lastEngine = "端末内"
+        // 直前の区切りから続いているなら、その終わりの文を文脈として渡す
+        let previous = lastTranscript.flatMap { start.timeIntervalSince($0.end) < 90 ? $0.text : nil }
         if settings.shouldUseCloud, let key = settings.apiKey {
             do {
                 let cloud = try await CloudTranscriber.transcribe(
-                    url, provider: settings.provider, apiKey: key, keywords: settings.keywords)
+                    url, provider: settings.provider, apiKey: key, keywords: settings.keywords, previous: previous)
                 settings.addUsage(seconds: Self.duration(of: url))
                 lastEngine = cloud.model
                 if !cloud.lines.isEmpty {
@@ -282,6 +290,19 @@ final class Pipeline {
                 message = reason + "（高精度をオフにして、端末内の文字起こしで続けます）"
             }
         }
+        // 同音の誤変換などを言語モデルで直す。直せなかったら（混雑・上限など）そのまま使う。
+        var originals = [String?](repeating: nil, count: entries.count)
+        if correctionOn, let key = settings.groqKey,
+           let fixed = try? await Summarizer.correct(entries.map { $0.text }, keywords: settings.keywords,
+                                                     previous: previous, apiKey: key) {
+            for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
+                originals[i] = entries[i].text
+                entries[i].text = fixed[i]
+            }
+            lastEngine += "＋補正"
+        }
+        lastTranscript = (start.addingTimeInterval(Self.duration(of: url)),
+                          String(entries.map { $0.text }.joined().suffix(200)))
         let names = await speakerNames(for: entries, in: url)
         let lines = entries.enumerated().map { i, entry in
             let who = names[i].map { "[\($0)] " } ?? ""
@@ -293,7 +314,8 @@ final class Pipeline {
         let logged = entries.enumerated().map { i, entry in
             if let offset = entry.offset { time = start.addingTimeInterval(offset) }
             return ConversationLog.Line(time: time, speaker: names[i], text: entry.text,
-                                        audio: url.lastPathComponent, offset: time.timeIntervalSince(start))
+                                        audio: url.lastPathComponent, offset: time.timeIntervalSince(start),
+                                        original: originals[i])
         }
         let text = lines.map { $0 + "\n" }.joined()
         try await conversations.append(logged, text: text, day: dayFormatter.string(from: start))

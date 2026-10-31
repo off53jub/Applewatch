@@ -12,6 +12,8 @@ final class ConversationLog {
         /// 聞き直し用の音声ファイル名と、その中での位置（秒）。古い記録には無い。
         var audio: String? = nil
         var offset: TimeInterval? = nil
+        /// 言語モデルで直す前の文字起こし（直していなければ nil）
+        var original: String? = nil
     }
 
     struct Conversation: Codable {
@@ -205,26 +207,28 @@ final class ConversationLog {
             var log = load(day)
             guard !log.summaryWritten, !log.conversations.isEmpty,
                   log.conversations.allSatisfy(\.closed) else { continue }
-            let titled = log.conversations.filter { $0.title != nil }
-            guard !titled.isEmpty else {
+            guard log.conversations.contains(where: { $0.title != nil }) else {
                 log.summaryWritten = true
                 save(log, day: day)
                 continue
             }
-            let overview = titled.map { c in
+            // 1日の流れのために、見出しの無い短い会話も時刻と場所だけは渡す
+            let overview = log.conversations.map { c in
                 let place = c.place.map { "・" + $0 } ?? ""
                 let people = c.people.isEmpty ? "" : "（\(c.people.joined(separator: "、"))と）"
-                let head = "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))\(place)\(people) \(c.title ?? "")"
+                let head = "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))\(place)\(people) \(c.title ?? "（短い会話）")"
                 return ([head] + c.points.map { "  ・" + $0 }).joined(separator: "\n")
             }.joined(separator: "\n")
             guard let summary = try? await Summarizer.day(overview, apiKey: key) else { continue }
 
             let people = Array(NSOrderedSet(array: log.conversations.flatMap(\.people))) as? [String] ?? []
-            var body = "会った人: " + (people.isEmpty ? "なし" : people.joined(separator: "、")) + "\n"
+            var body = ""
             func section(_ name: String, _ items: [String]) {
                 guard !items.isEmpty else { return }
                 body += name + "\n" + items.map { "・" + $0 + "\n" }.joined()
             }
+            section("1日の流れ", summary.flow)
+            body += "会った人: " + (people.isEmpty ? "なし" : people.joined(separator: "、")) + "\n"
             section("決まったこと", summary.decisions)
             section("やること", summary.todos)
             section("話題", summary.topics)

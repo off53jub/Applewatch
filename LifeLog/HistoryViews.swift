@@ -81,6 +81,11 @@ struct DayView: View {
                     Text(speaker).font(.caption.bold())
                 }
                 Text(line.text)
+                if let original = line.original {
+                    Text("直す前: " + original)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 0)
             if audio != nil {
