@@ -28,6 +28,15 @@ jobs:
         if: env.HAS_GOOGLE != 'true'
         run: echo "::warning::GOOGLE_CLIENT_ID / GOOGLE_REVERSED_CLIENT_ID が Secrets にありません"
 
+      - name: Haas-ja の Swift 部品を取ってくる
+        run: |
+          base=https://huggingface.co/Sanami/haas-ja-coreml/resolve/main/swift
+          mkdir -p Vendor/HaasCore/Sources/HaasCore Vendor/HaasCore/Resources
+          for f in Package.swift README.md Sources/HaasCore/Audio.swift Sources/HaasCore/Frontend.swift Sources/HaasCore/HaasASR.swift Sources/HaasCore/Tokenizer.swift Resources/frontend.bin Resources/vocab.json; do
+            curl -fsSL "$base/$f" -o "Vendor/HaasCore/$f"
+          done
+          for f in Package.swift Sources/HaasCore/*.swift; do echo "===== $f"; cat "Vendor/HaasCore/$f"; done
+
       - name: プロジェクトを生成
         run: |
           brew install xcodegen
