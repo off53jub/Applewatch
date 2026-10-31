@@ -18,9 +18,15 @@ enum Transcriber {
         }
     }
 
-    static func transcribe(_ url: URL) async throws -> [Line] {
+    /// words は聞き取ってほしい言葉（ヒントとして渡す）
+    static func transcribe(_ url: URL, words: [String] = []) async throws -> [Line] {
         let transcriber = makeTranscriber()
         let analyzer = SpeechAnalyzer(modules: [transcriber])
+        if !words.isEmpty {
+            let context = AnalysisContext()
+            context.contextualStrings[.general] = Array(words.prefix(100))
+            try? await analyzer.setContext(context)
+        }
         let collector = Task {
             var lines: [Line] = []
             for try await result in transcriber.results {

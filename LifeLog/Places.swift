@@ -89,6 +89,13 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         return registered(near: sample.location, accuracy: sample.accuracy)?.isWork == true ? .work : .other
     }
 
+    /// 登録した場所にいたなら、そこが職場かどうか。登録していない場所・分からないときは nil。
+    func registeredContext(at time: Date) -> SpeakerLabeler.Context? {
+        guard isOn, let sample = sample(at: time),
+              let place = registered(near: sample.location, accuracy: sample.accuracy) else { return nil }
+        return place.isWork == true ? .work : .other
+    }
+
     private func registered(near location: CLLocation, accuracy: Double) -> Place? {
         let slack = min(max(accuracy, 0), 200)
         return places

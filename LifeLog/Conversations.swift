@@ -184,14 +184,7 @@ final class ConversationLog {
             if !fixes.isEmpty { try? await docs.replaceAll(fixes, day: day) }
             if !forget.isEmpty { await forgetVoices(forget) }
         }
-        var heading = range
-        if let place = result.place { heading += "　" + place }
-        if let media = result.media {
-            heading += "　［\(media)］" + (result.program.map { "「\($0)」" } ?? "")
-        } else if !conversation.people.isEmpty {
-            heading += "　" + conversation.people.joined(separator: "、") + "と"
-        }
-        if let title = result.title, !title.isEmpty { heading += "　" + title }
+        let heading = Self.headingText(result)
         let body = result.points.map { "・" + $0 + "\n" }.joined()
         do {
             try await docs.insert(heading: heading, body: body, at: conversation.docIndex, style: "HEADING_2", day: day)
@@ -276,6 +269,143 @@ final class ConversationLog {
                 return
             }
             save(log, day: day)
+        }
+        UserDefaults.standard.set(true, forKey: doneKey)
+    }
+
+    // MARK: - 記録の掃除
+
+    /// ドキュメントに書く会話の見出し（例: 「14:05〜14:40　会社　田中と　来週の段取り」）
+    static func headingText(_ c: Conversation) -> String {
+        var heading = "\(minuteFormatter.string(from: c.start))〜\(minuteFormatter.string(from: c.end))"
+        if let place = c.place { heading += "　" + place }
+        if let media = c.media {
+            heading += "　［\(media)］" + (c.program.map { "「\($0)」" } ?? "")
+        } else if !c.people.isEmpty {
+            heading += "　" + c.people.joined(separator: "、") + "と"
+        }
+        if let title = c.title, !title.isEmpty { heading += "　" + title }
+        return heading
+    }
+
+    private static let minuteFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    /// ドキュメントの文字を消したあと、まだ見出しを付けていない会話の位置をずらす。
+    private static func shifted(_ index: Int, removing ranges: [Range<Int>]) -> Int {
+        var result = index
+        for range in ranges {
+            if range.upperBound <= index {
+                result -= range.count
+            } else if range.lowerBound < index {
+                result -= index - range.lowerBound
+            }
+        }
+        return max(1, result)
+    }
+
+    private static let trashURL = URL.applicationSupportDirectory.appendingPathComponent("trash.json")
+    private static let trashKeep: TimeInterval = 30 * 24 * 3600
+
+    /// 消した行（新しい順。30日より前のものは捨てる）
+    func trash() -> [Junk.TrashItem] {
+        guard let data = try? Data(contentsOf: Self.trashURL),
+              let items = try? JSONDecoder().decode([Junk.TrashItem].self, from: data) else { return [] }
+        return items.filter { $0.removed.timeIntervalSinceNow > -Self.trashKeep }.sorted { $0.removed > $1.removed }
+    }
+
+    private func saveTrash(_ items: [Junk.TrashItem]) {
+        guard let data = try? JSONEncoder().encode(items) else { return }
+        try? data.write(to: Self.trashURL, options: .atomic)
+    }
+
+    /// 消す候補を探す。only を渡すとその日だけ。
+    func findJunk(custom: [String], only: [String]? = nil) -> [Junk.Candidate] {
+        let customKeys = Set(custom.map(Junk.normalized).filter { !$0.isEmpty })
+        var result: [Junk.Candidate] = []
+        for day in only ?? days() {
+            let lines = load(day).conversations.flatMap(\.lines).sorted { $0.time < $1.time }
+            let streak = Junk.streaks(lines)
+            for (i, line) in lines.enumerated() {
+                guard let kind = Junk.kind(of: line.text, custom: customKeys) ?? (streak.contains(i) ? .streak : nil)
+                else { continue }
+                result.append(Junk.Candidate(day: day, line: line, kind: kind,
+                                             before: i > 0 ? lines[i - 1].text : nil,
+                                             after: i + 1 < lines.count ? lines[i + 1].text : nil))
+            }
+        }
+        return result
+    }
+
+    /// 行をアプリの記録とドキュメントから行ごと消し、30日間とっておく。
+    /// 会話の行がすべて消えるときは、ドキュメントの見出しと要点も消す。
+    func remove(_ items: [(line: Line, kind: Junk.Kind)], day: String) async throws {
+        guard !items.isEmpty else { return }
+        let keys = Set(items.map { Junk.key($0.line) })
+        let emptied = load(day).conversations.filter { c in
+            c.closed && !c.lines.isEmpty && c.lines.allSatisfy { keys.contains(Junk.key($0)) }
+        }
+        let ranges = try await docs.deleteParagraphs(items.map { Self.docLine($0.line) },
+                                                     headings: emptied.map(Self.headingText), day: day)
+        // 消しているあいだに書き足された分も残すよう、読み直してから直す
+        var log = load(day)
+        let emptiedStarts = Set(emptied.map(\.start))
+        for c in log.conversations.indices {
+            log.conversations[c].lines.removeAll { keys.contains(Junk.key($0)) }
+            if !log.conversations[c].closed {
+                log.conversations[c].docIndex = Self.shifted(log.conversations[c].docIndex, removing: ranges)
+            }
+        }
+        log.conversations.removeAll { emptiedStarts.contains($0.start) && $0.lines.isEmpty }
+        save(log, day: day)
+        saveTrash(trash() + items.map { Junk.TrashItem(day: day, line: $0.line, kind: $0.kind, removed: .now) })
+    }
+
+    /// 消した行を元の位置に戻す。
+    func restore(_ item: Junk.TrashItem) async throws {
+        let all = load(item.day).conversations.flatMap(\.lines).sorted { $0.time < $1.time }
+        let next = all.first { $0.time > item.line.time }
+        let previous = all.last { $0.time <= item.line.time }
+        let inserted = try await docs.insertLine(Self.docLine(item.line), before: next.map(Self.docLine),
+                                                 after: previous.map(Self.docLine), day: item.day)
+        var log = load(item.day)
+        for c in log.conversations.indices where !log.conversations[c].closed && log.conversations[c].docIndex > inserted.at {
+            log.conversations[c].docIndex += inserted.length
+        }
+        if let c = log.conversations.lastIndex(where: { $0.start <= item.line.time }) ?? log.conversations.indices.first {
+            var lines = log.conversations[c].lines
+            lines.insert(item.line, at: lines.firstIndex { $0.time > item.line.time } ?? lines.count)
+            log.conversations[c].lines = lines
+            log.conversations[c].start = min(log.conversations[c].start, item.line.time)
+            log.conversations[c].end = max(log.conversations[c].end, item.line.time)
+        } else {
+            var conversation = Conversation(start: item.line.time, end: item.line.time, docIndex: inserted.at, lines: [item.line])
+            conversation.closed = true
+            log.conversations.append(conversation)
+        }
+        save(log, day: item.day)
+        saveTrash(trash().filter { $0.id != item.id })
+    }
+
+    /// 前に行の中身だけ消したときに残った空の段落を詰める。一度だけ動く。
+    func removeBlankLines() async {
+        let doneKey = "repair-blank-lines"
+        guard !UserDefaults.standard.bool(forKey: doneKey) else { return }
+        for day in days() {
+            do {
+                let ranges = try await docs.deleteParagraphs([], day: day)
+                guard !ranges.isEmpty else { continue }
+                var log = load(day)
+                for c in log.conversations.indices where !log.conversations[c].closed {
+                    log.conversations[c].docIndex = Self.shifted(log.conversations[c].docIndex, removing: ranges)
+                }
+                save(log, day: day)
+            } catch {
+                return
+            }
         }
         UserDefaults.standard.set(true, forKey: doneKey)
     }

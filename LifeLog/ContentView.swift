@@ -1,6 +1,297 @@
 import SwiftUI
 
+/// 画面の下の5つのタブ。録っている間に触るものは「今日」、ふだん触らない設定は「設定」にまとめる。
 struct ContentView: View {
+    var body: some View {
+        TabView {
+            Tab("今日", systemImage: "waveform") { TodayView() }
+            Tab("ライブ", systemImage: "captions.bubble") { LiveView() }
+            Tab("記録", systemImage: "books.vertical") { RecordsView() }
+            Tab("人と場所", systemImage: "person.2") { PeoplePlacesView() }
+            Tab("設定", systemImage: "gearshape") { SettingsView() }
+        }
+    }
+}
+
+// MARK: - 今日
+
+private struct TodayView: View {
+    @Environment(Pipeline.self) private var pipeline
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    var body: some View {
+        let today = Self.dayFormatter.string(from: .now)
+        // 最近の発言が変わる（書き足される）たびに読み直す
+        let talks = pipeline.conversations(on: today)
+        NavigationStack {
+            List {
+                Section {
+                    Button {
+                        Task { await pipeline.toggleRecording() }
+                    } label: {
+                        Label(pipeline.isRecording ? "iPhone の録音を止める" : "iPhone で録音を始める",
+                              systemImage: pipeline.isRecording ? "stop.circle.fill" : "record.circle")
+                            .font(.title2)
+                    }
+                    .tint(pipeline.isRecording ? .red : .accentColor)
+                    Button {
+                        pipeline.addMark()
+                    } label: {
+                        Label("今のところに印を付ける", systemImage: "star")
+                    }
+                    if let mark = pipeline.lastMark {
+                        Text("\(mark.formatted(date: .omitted, time: .shortened)) に印を付けました（前後1分の行に★）")
+                            .foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text("時計で録音中は、時計の「★ 印」ボタン（またはダブルタップ）でも印を付けられます。")
+                }
+
+                Section("いまの様子") {
+                    LabeledContent("時計", value: pipeline.watchStatus)
+                    LabeledContent("文字起こし待ち", value: "\(pipeline.pendingCount) 件")
+                    if !pipeline.lastEngine.isEmpty {
+                        LabeledContent("直近の文字起こし", value: pipeline.lastEngine)
+                    }
+                    if pipeline.email == nil {
+                        Text("「設定」タブで Google にログインすると、ドキュメントに書き始めます。")
+                            .foregroundStyle(.secondary)
+                    }
+                    if !pipeline.message.isEmpty {
+                        Text(pipeline.message).foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("今日の会話") {
+                    if talks.isEmpty {
+                        Text("まだありません").foregroundStyle(.secondary)
+                    } else {
+                        NavigationLink {
+                            DayView(day: today)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(Array(talks.suffix(8).reversed().enumerated()), id: \.offset) { _, c in
+                                    Text(ConversationLog.headingText(c))
+                                        .font(.callout)
+                                        .lineLimit(2)
+                                }
+                                if talks.count > 8 {
+                                    Text("ほか \(talks.count - 8) 件").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !pipeline.lastLines.isEmpty {
+                    Section("最近の発言") {
+                        ForEach(Array(pipeline.lastLines.suffix(8).reversed().enumerated()), id: \.offset) { _, line in
+                            Text(line).font(.callout)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("今日")
+        }
+    }
+}
+
+// MARK: - ライブ
+
+private struct LiveView: View {
+    @Environment(Pipeline.self) private var pipeline
+    @State private var visible = false
+
+    var body: some View {
+        let live = pipeline.live
+        NavigationStack {
+            VStack(spacing: 0) {
+                Toggle(isOn: Binding(
+                    get: { pipeline.liveOn },
+                    set: { on in Task { await pipeline.setLive(on) } })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("ライブ文字起こし").font(.headline)
+                        Text(statusText(live)).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .padding()
+                Divider()
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(live.lines) { line in
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text(line.time.formatted(date: .omitted, time: .shortened))
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                    Text(line.text).font(.title3)
+                                }
+                                .id(line.id)
+                            }
+                        }
+                        .padding()
+                    }
+                    .overlay {
+                        if live.lines.isEmpty {
+                            ContentUnavailableView(
+                                "ライブ文字起こし", systemImage: "captions.bubble",
+                                description: Text("オンにしている間だけ、iPhone のマイクの声を数秒ごとにクラウド（Groq）で文字にして、ここに流します。記録にはいつも通り5分ごとの文字起こしが書かれます。アプリを閉じて10分たつと自動でオフになります。"))
+                        }
+                    }
+                    .onChange(of: live.lines.count) {
+                        if let last = live.lines.last {
+                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("ライブ")
+            .toolbar {
+                if !live.lines.isEmpty {
+                    Button("消す", systemImage: "trash") { live.clear() }
+                }
+            }
+        }
+        // ライブを見ている間は画面を消さない
+        .onAppear { visible = true; keepAwake() }
+        .onDisappear { visible = false; keepAwake() }
+        .onChange(of: pipeline.liveOn) { keepAwake() }
+    }
+
+    private func statusText(_ live: LiveTranscriber) -> String {
+        guard pipeline.liveOn else { return "オフ" }
+        if !live.status.isEmpty { return live.status }
+        if live.waiting > 0 { return "文字にしています…" }
+        return live.hearing ? "聞いています…" : "声を待っています"
+    }
+
+    private func keepAwake() {
+        UIApplication.shared.isIdleTimerDisabled = visible && pipeline.liveOn
+    }
+}
+
+// MARK: - 記録
+
+private struct RecordsView: View {
+    @Environment(Pipeline.self) private var pipeline
+    @State private var days: [String] = []
+    @State private var query = ""
+    @State private var hits: [Pipeline.Hit] = []
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if query.count >= 2 {
+                    if hits.isEmpty {
+                        ContentUnavailableView.search(text: query)
+                    } else {
+                        ForEach(hits) { HitRow(hit: $0) }
+                    }
+                } else {
+                    Section {
+                        NavigationLink {
+                            AskView()
+                        } label: {
+                            Label("記録に質問する", systemImage: "questionmark.bubble")
+                        }
+                    }
+                    Section("日ごと") {
+                        if days.isEmpty {
+                            Text("文字起こしが終わると、ここに日ごとに出てきます。").foregroundStyle(.secondary)
+                        }
+                        ForEach(days, id: \.self) { day in
+                            NavigationLink(day) { DayView(day: day) }
+                        }
+                    }
+                }
+            }
+            .searchable(text: $query, prompt: "言葉や名前で探す")
+            .onChange(of: query) { hits = query.count >= 2 ? pipeline.search(query) : [] }
+            .navigationTitle("記録")
+            .onAppear { days = pipeline.recordedDays() }
+            .refreshable { days = pipeline.recordedDays() }
+        }
+    }
+}
+
+// MARK: - 人と場所
+
+private struct PeoplePlacesView: View {
+    @Environment(Pipeline.self) private var pipeline
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    if pipeline.speakerLabelsOn {
+                        NavigationLink {
+                            PeopleView()
+                        } label: {
+                            let others = pipeline.people.filter { !$0.isSelf }
+                            let waiting = others.filter { !$0.isNamed && $0.seconds >= 30 }.count
+                            LabeledContent("話した相手",
+                                           value: waiting > 0 ? "\(others.count) 人（名前待ち \(waiting)）" : "\(others.count) 人")
+                        }
+                        NavigationLink {
+                            VoiceEnrollView()
+                        } label: {
+                            LabeledContent("自分の声", value: pipeline.hasSelfVoice ? "登録済み" : "未登録")
+                        }
+                    } else {
+                        Toggle("話している人を聞き分ける", isOn: Binding(
+                            get: { pipeline.speakerLabelsOn },
+                            set: { pipeline.speakerLabelsOn = $0 }))
+                    }
+                } header: {
+                    Text("話者")
+                } footer: {
+                    Text("違っていたら「記録」タブで行を長押しして直すと、その声を覚えて次から正確になります。")
+                }
+
+                Section {
+                    if pipeline.places.isOn {
+                        NavigationLink {
+                            PlacesView()
+                        } label: {
+                            LabeledContent("登録した場所", value: "\(pipeline.places.places.count) か所")
+                        }
+                    } else {
+                        Toggle("場所を記録する", isOn: Binding(
+                            get: { pipeline.places.isOn },
+                            set: { pipeline.places.isOn = $0 }))
+                    }
+                } header: {
+                    Text("場所")
+                } footer: {
+                    Text("職場にした場所では、職場の人の声と職場の言葉で照らし合わせます。")
+                }
+
+                Section {
+                    NavigationLink {
+                        VocabularyView()
+                    } label: {
+                        let v = pipeline.vocabulary
+                        LabeledContent("言葉の登録",
+                                       value: "職場 \(v.words(in: .work).count)・職場以外 \(v.words(in: .other).count)・いつも \(v.words(in: .always).count)")
+                    }
+                } header: {
+                    Text("聞き取ってほしい言葉")
+                }
+            }
+            .navigationTitle("人と場所")
+        }
+    }
+}
+
+// MARK: - 設定
+
+private struct SettingsView: View {
     @Environment(Pipeline.self) private var pipeline
 
     var body: some View {
@@ -17,7 +308,6 @@ struct ContentView: View {
                 }
 
                 Section {
-                    Text(pipeline.watchStatus)
                     Toggle("待機モード", isOn: Binding(
                         get: { pipeline.standbyOn },
                         set: { pipeline.standbyOn = $0 }))
@@ -27,10 +317,9 @@ struct ContentView: View {
                 } header: {
                     Text("Apple Watch")
                 } footer: {
-                    Text((pipeline.standbyOn
-                         ? "無音を流してアプリを起こしておき、時計の録音を5分ごとにすぐ文字起こしします。電池を少し多く使います。アプリを上にスワイプして終わらせたときや iPhone を再起動したときは、一度開くと戻ります。"
+                    Text(pipeline.standbyOn
+                         ? "無音を流してアプリを起こしておき、時計の録音を5分ごとにすぐ文字起こしします。電池を少し多く使います。"
                          : "時計の録音は、アプリを開いたときや充電中にまとめて文字起こしします。")
-                         + "\n\n時計で録音中は「★ 印」ボタン（またはダブルタップ）で、大事なところの前後1分に印を付けられます。")
                 }
 
                 Section {
@@ -47,7 +336,7 @@ struct ContentView: View {
                     Text("文字起こし")
                 } footer: {
                     if !settings.hasAPIKey {
-                        Text("API キーを登録すると、クラウドの高精度モデルで文字起こしできます（Groq なら1日16時間まで無料）。オフのときは iPhone の中だけで無料で文字起こしします。")
+                        Text("API キーを登録すると、クラウドの高精度モデルで文字起こしできます（Groq なら無料）。ライブ文字起こしにも Groq のキーを使います。")
                     } else if settings.useCloud && !settings.isUnderLimit {
                         Text("今月の上限に達したので、端末内の文字起こしに戻っています。")
                     } else if settings.provider.dollarsPerMinute > 0 {
@@ -62,29 +351,16 @@ struct ContentView: View {
                         get: { pipeline.speakerLabelsOn },
                         set: { pipeline.speakerLabelsOn = $0 }))
                     if pipeline.speakerLabelsOn {
-                        NavigationLink {
-                            VoiceEnrollView()
-                        } label: {
-                            LabeledContent("自分の声", value: pipeline.hasSelfVoice ? "登録済み" : "未登録")
-                        }
                         Picker("聞き分けの厳しさ", selection: Binding(
                             get: { pipeline.speakerStrictness },
                             set: { pipeline.speakerStrictness = $0 })) {
                             ForEach(SpeakerLabeler.Strictness.allCases) { Text($0.label).tag($0) }
                         }
-                        NavigationLink {
-                            PeopleView()
-                        } label: {
-                            let others = pipeline.people.filter { !$0.isSelf }
-                            let waiting = others.filter { !$0.isNamed && $0.seconds >= 30 }.count
-                            LabeledContent("話した相手",
-                                           value: waiting > 0 ? "\(others.count) 人（名前待ち \(waiting)）" : "\(others.count) 人")
-                        }
                     }
                 } header: {
                     Text("話者")
                 } footer: {
-                    Text("iPhone の中だけで声の特徴を比べ、文字起こしの行に「[自分]」「[人物1]」などを付けます（無料）。違っていたら「これまでの記録」で行を長押しして直すと、その声を覚えて次から正確になります。場所の一覧で職場を決めておくと、職場の人と職場以外の人を分けて照らし合わせます。別の人が同じ名前になるときは「厳しめ」、同じ人が何人にも分かれるときは「ゆるめ」にしてください。名前を付けた人は、ドライブの「LifeLog」フォルダに「人物ノート - 名前」ができます。")
+                    Text("iPhone の中だけで声の特徴を比べ、行に「[自分]」「[人物1]」などを付けます（無料）。別の人が同じ名前になるときは「厳しめ」、同じ人が何人にも分かれるときは「ゆるめ」にしてください。")
                 }
 
                 Section {
@@ -95,78 +371,30 @@ struct ContentView: View {
                     Toggle("場所を記録する", isOn: Binding(
                         get: { pipeline.places.isOn },
                         set: { pipeline.places.isOn = $0 }))
-                    if pipeline.places.isOn {
-                        NavigationLink {
-                            PlacesView()
-                        } label: {
-                            LabeledContent("登録した場所", value: "\(pipeline.places.places.count) か所")
-                        }
-                    }
                 } header: {
                     Text("会話のまとめ")
                 } footer: {
-                    if settings.groqKey == nil {
-                        Text("話が3分途切れるごとに、ドキュメントに「時刻・場所・相手」の見出しを付けます。Groq の API キーを登録すると、見出しに内容の要約が付き、翌日には前の日の先頭に「1日のまとめ」が入ります（無料）。")
-                    } else {
-                        Text("話が3分途切れるごとに、ドキュメントに「時刻・場所・相手・内容」の見出しと要点を付けます。日が変わると、前の日の先頭に「1日のまとめ」が入ります。Groq の無料枠を使います。")
-                    }
+                    Text("話が3分途切れるごとに、ドキュメントに「時刻・場所・相手・内容」の見出しと要点を付け、日が変わると前の日の先頭に「1日のまとめ」を入れます（Groq の無料枠）。")
                 }
 
                 Section {
-                    Button {
-                        Task { await pipeline.toggleRecording() }
-                    } label: {
-                        Label(pipeline.isRecording ? "録音を止める" : "録音を始める",
-                              systemImage: pipeline.isRecording ? "stop.circle.fill" : "record.circle")
-                            .font(.title2)
-                    }
-                    .tint(pipeline.isRecording ? .red : .accentColor)
-                    Button {
-                        pipeline.addMark()
-                    } label: {
-                        Label("今のところに印を付ける", systemImage: "star")
-                    }
-                    if let mark = pipeline.lastMark {
-                        Text("\(mark.formatted(date: .omitted, time: .shortened)) に印を付けました（前後1分の行に★）")
-                            .foregroundStyle(.secondary)
-                    }
-                    LabeledContent("文字起こし待ち", value: "\(pipeline.pendingCount) 件")
-                    if !pipeline.lastEngine.isEmpty {
-                        LabeledContent("直近の文字起こし", value: pipeline.lastEngine)
-                    }
-                    if !pipeline.message.isEmpty {
-                        Text(pipeline.message).foregroundStyle(.secondary)
-                    }
-                } footer: {
-                    Text("5分ごとに区切って文字起こしし、ドライブの「LifeLog」フォルダの日付のドキュメントに追記します。")
-                }
-
-                Section {
-                    NavigationLink("これまでの記録") { HistoryView() }
-                    NavigationLink("記録を探す") { SearchView() }
-                    NavigationLink("記録に質問する") { AskView() }
-                    NavigationLink("ほかのアプリの音声を取り込む") { ImportView() }
                     Toggle("音声をドライブにも保存", isOn: Binding(
                         get: { pipeline.audioBackupOn },
                         set: { pipeline.audioBackupOn = $0 }))
                     if pipeline.audioBackupOn && pipeline.backupPending > 0 {
                         LabeledContent("ドライブに上げる前", value: "\(pipeline.backupPending) 件")
                     }
+                    NavigationLink("ほかのアプリの音声を取り込む") { ImportView() }
+                    NavigationLink("記録の掃除") { CleanupView() }
+                } header: {
+                    Text("音声と記録")
                 } footer: {
                     Text(pipeline.audioBackupOn
-                         ? "文字起こしを日ごと・会話ごとに見られ、行を押すとその場面の音声が流れます。音声は Wi-Fi のときにドライブの「LifeLog/音声」に上げ、古い分はドライブから取ってきて流します。"
-                         : "文字起こしを日ごと・会話ごとに見られます。直近1日ぶんは、行を押すとその場面の音声が流れます。")
-                }
-
-                if !pipeline.lastLines.isEmpty {
-                    Section("最近の発言") {
-                        ForEach(Array(pipeline.lastLines.enumerated()), id: \.offset) { _, line in
-                            Text(line).font(.callout)
-                        }
-                    }
+                         ? "音声は Wi-Fi のときにドライブの「LifeLog/音声」に上げ、古い行もそこから取ってきて聞き直せます。"
+                         : "直近1日ぶんは、記録の行を押すとその場面の音声が流れます。")
                 }
             }
-            .navigationTitle("LifeLog")
+            .navigationTitle("設定")
         }
     }
 }

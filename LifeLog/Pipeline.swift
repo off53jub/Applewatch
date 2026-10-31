@@ -85,6 +85,8 @@ final class Pipeline {
     let archive: AudioArchive
     /// どこで話したか
     let places = PlaceLog()
+    /// 聞き取ってほしい言葉（いつも・職場だけ・職場以外だけ）
+    let vocabulary = Vocabulary()
     /// ほかのアプリ（AUDAY など）の音声の取り込み
     let importer = AudioImporter()
     /// 待機モード：アプリを裏で起こしておき、時計から届いた区切りをすぐ処理する
@@ -97,6 +99,12 @@ final class Pipeline {
     }
 
     private let recorder = Recorder()
+    /// ライブ文字起こし（オンのあいだだけ、iPhone のマイクの声を数秒ごとにクラウドで文字にして流す）
+    let live = LiveTranscriber()
+    private(set) var liveOn = false
+    /// ライブのために録音を始めたか（ライブを切ったら録音も止める）
+    @ObservationIgnored private var liveStartedRecording = false
+    @ObservationIgnored private var liveAutoOff: Task<Void, Never>?
     private let docs: GoogleDocs
     private let conversations: ConversationLog
     private let receiver = PhoneReceiver()
@@ -133,6 +141,7 @@ final class Pipeline {
         }
         recorder.onChunk = { [weak self] _ in self?.processQueue() }
         recorder.onStop = { [weak self] reason in
+            self?.endLive()
             self?.isRecording = false
             self?.message = reason
             self?.standby.resume()
@@ -140,6 +149,11 @@ final class Pipeline {
                 Self.notify(id: "phone-stopped", title: "iPhone の録音が止まりました",
                             body: reason + " LifeLog を開いて再開してください。")
             }
+        }
+        live.apiKey = { [weak self] in self?.settings.groqKey }
+        live.keywords = { [weak self] in
+            guard let self else { return [] }
+            return keywords(for: vocabularyContext(at: .now))
         }
         if standbyOn { standby.start() }
         pendingCount = Storage.pendingChunks().count
@@ -352,6 +366,7 @@ final class Pipeline {
 
     func toggleRecording() async {
         if isRecording {
+            endLive()
             recorder.stop()
             isRecording = false
             standby.resume()
@@ -368,6 +383,53 @@ final class Pipeline {
             standby.resume()
             message = "録音を始められませんでした: \(error.localizedDescription)"
         }
+    }
+
+    // MARK: - ライブ
+
+    func setLive(_ on: Bool) async {
+        guard on != liveOn else { return }
+        if on {
+            if !isRecording {
+                await toggleRecording()
+                guard isRecording else { return }
+                liveStartedRecording = true
+            }
+            live.start()
+            recorder.setListener(live.listener)
+            liveOn = true
+        } else {
+            let startedHere = liveStartedRecording
+            endLive()
+            if startedHere, isRecording { await toggleRecording() }
+        }
+    }
+
+    /// ライブだけを止める（録音はそのまま）
+    private func endLive() {
+        guard liveOn else { return }
+        recorder.setListener(nil)
+        live.stop()
+        liveOn = false
+        liveStartedRecording = false
+        liveAutoOff?.cancel()
+        liveAutoOff = nil
+    }
+
+    /// アプリを閉じて10分たったら、ライブを自動で切る（切り忘れで電池と無料枠を使わないように）
+    func appMovedToBackground() {
+        guard liveOn, liveAutoOff == nil else { return }
+        liveAutoOff = Task {
+            try? await Task.sleep(for: .seconds(600))
+            guard !Task.isCancelled else { return }
+            liveAutoOff = nil
+            await setLive(false)
+        }
+    }
+
+    func appBecameActive() {
+        liveAutoOff?.cancel()
+        liveAutoOff = nil
     }
 
     /// 溜まっている音声を古い順に処理する。
@@ -412,6 +474,7 @@ final class Pipeline {
     private func drainQueue() async -> Bool {
         await conversations.repairBrokenLines()
         await conversations.removeFillerLines()
+        await conversations.removeBlankLines()
         // 取り込んだ昔の音声は、いま録っている分のあとに回す
         let pending = Storage.pendingChunks()
         let ordered = pending.filter { !Storage.isImported($0) } + pending.filter(Storage.isImported)
@@ -451,6 +514,8 @@ final class Pipeline {
         let settled = settledUntil()
         merger.release(before: settled)
         guard await writeMerged() else { return false }
+        // いま書いた行に、決まり文句や連打があれば消す
+        await autoClean()
         // 印の前後1分の行に★を付ける
         if !marks.isEmpty { marks = await conversations.applyMarks(marks, settled: settled) }
         // しばらく話していなければ会話を閉じて見出しを付け、前の日にはまとめを付ける。
@@ -463,6 +528,73 @@ final class Pipeline {
         await archive.uploadPending()
         backupPending = archive.pendingCount
         return true
+    }
+
+    // MARK: - 記録の掃除
+
+    /// その文だけの行を消す言葉
+    var junkPhrases = UserDefaults.standard.stringArray(forKey: "junkPhrases") ?? [] {
+        didSet { UserDefaults.standard.set(junkPhrases, forKey: "junkPhrases") }
+    }
+    /// 掃除の画面で残すことにした行・戻した行（自動でも消さない）
+    @ObservationIgnored private var keptLines = Set(UserDefaults.standard.stringArray(forKey: "keptLines") ?? []) {
+        didSet { UserDefaults.standard.set(Array(keptLines), forKey: "keptLines") }
+    }
+    /// 直近に書いた行（書いたすぐあとに掃除する）
+    @ObservationIgnored private var recentlyWritten: [(day: String, line: ConversationLog.Line)] = []
+
+    /// 全期間から消す候補を探す。
+    func findJunk() -> [Junk.Candidate] {
+        conversations.findJunk(custom: junkPhrases).filter { !keptLines.contains(Junk.key($0.line)) }
+    }
+
+    /// 選んだ行を消し、選ばなかった行は今後も残す。結果を文で返す。
+    func removeJunk(_ chosen: [Junk.Candidate], keeping: [Junk.Candidate]) async -> String {
+        keptLines.formUnion(keeping.map { Junk.key($0.line) })
+        // 書き足しと重ならないよう、処理中ならそれを待つ
+        if let queueTask { await queueTask.value }
+        var removed = 0
+        for (day, items) in Dictionary(grouping: chosen, by: \.day).sorted(by: { $0.key < $1.key }) {
+            do {
+                try await conversations.remove(items.map { ($0.line, $0.kind) }, day: day)
+                removed += items.count
+            } catch {
+                return "\(removed) 行を消したところで止まりました（もう一度押すと続きを消します）: \(error.localizedDescription)"
+            }
+        }
+        let gone = Set(chosen.map { ConversationLog.docLine($0.line) })
+        lastLines.removeAll { gone.contains($0) }
+        return "\(removed) 行を、アプリとドキュメントから消しました。"
+    }
+
+    func trash() -> [Junk.TrashItem] { conversations.trash() }
+
+    /// 消した行を元に戻す（以後は自動でも消さない）。
+    func restore(_ item: Junk.TrashItem) async throws {
+        if let queueTask { await queueTask.value }
+        try await conversations.restore(item)
+        keptLines.insert(Junk.key(item.line))
+    }
+
+    /// いま書いた行と、それと同じ文の連打を消す。取り込んだ昔の音声の行も同じように見る。
+    private func autoClean() async {
+        let written = recentlyWritten
+        recentlyWritten = []
+        guard !written.isEmpty else { return }
+        let keys = Set(written.map { Junk.key($0.line) })
+        let texts = Set(written.map { Junk.normalized($0.line.text) })
+        let found = conversations.findJunk(custom: junkPhrases, only: Array(Set(written.map(\.day))))
+            .filter { item in
+                let key = Junk.key(item.line)
+                guard !keptLines.contains(key) else { return false }
+                return keys.contains(key) || (item.kind == .streak && texts.contains(Junk.normalized(item.line.text)))
+            }
+        guard !found.isEmpty else { return }
+        for (day, items) in Dictionary(grouping: found, by: \.day) {
+            try? await conversations.remove(items.map { ($0.line, $0.kind) }, day: day)
+        }
+        let gone = Set(found.map { ConversationLog.docLine($0.line) })
+        lastLines.removeAll { gone.contains($0) }
     }
 
     /// 記録のある日（新しい順）
@@ -538,6 +670,7 @@ final class Pipeline {
                 return false
             }
             merger.sent(batch.count)
+            recentlyWritten += batch.map { (day, $0) }
             lastLines = Array((lastLines + lines).suffix(20))
         }
         if speakerLabelsOn { people = await speakers.people() }
@@ -550,7 +683,9 @@ final class Pipeline {
         let fromWatch = Storage.isFromWatch(url)
         let duration = Self.duration(of: url)
         // まず端末内で文字起こしする（無料）。何も聞き取れなければ、お金をかけずにここで終わる。
-        let local = try await Transcriber.transcribe(url).filter { !CloudTranscriber.isFiller($0.text) }
+        let context = vocabularyContext(at: start)
+        let keywords = keywords(for: context)
+        let local = try await Transcriber.transcribe(url, words: keywords).filter { !CloudTranscriber.isFiller($0.text) }
         guard !local.isEmpty else { return [] }
         var entries: [(offset: TimeInterval?, text: String, score: Double?)] = local.map { ($0.offset, $0.text, nil) }
         lastEngine = "端末内"
@@ -559,7 +694,7 @@ final class Pipeline {
         if settings.shouldUseCloud, let key = settings.apiKey {
             do {
                 let cloud = try await CloudTranscriber.transcribe(
-                    url, provider: settings.provider, apiKey: key, keywords: settings.keywords, previous: previous)
+                    url, provider: settings.provider, apiKey: key, keywords: keywords, previous: previous)
                 settings.addUsage(seconds: duration)
                 lastEngine = cloud.model
                 if !cloud.lines.isEmpty {
@@ -576,11 +711,18 @@ final class Pipeline {
         }
         // 同音の誤変換などを言語モデルで直す。直せなかったら（混雑・上限など）そのまま使う。
         var originals = [String?](repeating: nil, count: entries.count)
+        // 登録した「間違えやすい書き方」は、そのまま正しい書き方に置き換える
+        for fix in vocabulary.fixes(for: context) {
+            for i in entries.indices where entries[i].text.contains(fix.wrong) {
+                if originals[i] == nil { originals[i] = entries[i].text }
+                entries[i].text = entries[i].text.replacingOccurrences(of: fix.wrong, with: fix.right)
+            }
+        }
         if correctionOn, let key = settings.groqKey,
-           let fixed = try? await Summarizer.correct(entries.map { $0.text }, keywords: settings.keywords,
+           let fixed = try? await Summarizer.correct(entries.map { $0.text }, keywords: keywords,
                                                      previous: previous, apiKey: key) {
             for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
-                originals[i] = entries[i].text
+                if originals[i] == nil { originals[i] = entries[i].text }
                 entries[i].text = fixed[i]
             }
             lastEngine += "＋補正"
@@ -600,6 +742,19 @@ final class Pipeline {
             return Merger.Heard(line: line, end: start.addingTimeInterval(end), fromWatch: fromWatch,
                                 weight: Double(entries[i].text.count) * confidence)
         }
+    }
+
+    /// その時刻に使う言葉の組。登録した場所にいればその場所で、分からなければ時刻（平日8〜19時は職場）で決める。
+    func vocabularyContext(at time: Date) -> SpeakerLabeler.Context {
+        places.registeredContext(at: time) ?? Vocabulary.context(byTime: time)
+    }
+
+    /// その場で聞き取ってほしい言葉（名前を付けた人の名前も入れる）
+    func keywords(for context: SpeakerLabeler.Context) -> [String] {
+        let names = people
+            .filter { $0.isNamed && !$0.isSelf && ($0.context == nil || $0.context == context) }
+            .map(\.displayName)
+        return vocabulary.words(for: context, names: names)
     }
 
     /// 時刻の分からない行に、前後の分かっている時刻のあいだを文字数で割り振った時刻を付ける。

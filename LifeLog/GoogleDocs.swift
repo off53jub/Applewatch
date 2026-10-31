@@ -76,6 +76,104 @@ final class GoogleDocs {
                               json: ["requests": requests])
     }
 
+    /// 本文の段落。text は段落の終わりの改行を除いた中身。index は UTF-16 で数えた位置。
+    private struct Paragraph {
+        let start: Int
+        let end: Int
+        let text: String
+    }
+
+    private func paragraphs(docId: String) async throws -> [Paragraph] {
+        let fields = "body.content(startIndex,endIndex,paragraph(elements(textRun(content))))"
+        let doc = try await request("GET", "https://docs.googleapis.com/v1/documents/\(docId)?fields=\(fields)")
+        let content = (doc["body"] as? [String: Any])?["content"] as? [[String: Any]] ?? []
+        return content.compactMap { item in
+            guard let paragraph = item["paragraph"] as? [String: Any],
+                  let start = item["startIndex"] as? Int, let end = item["endIndex"] as? Int else { return nil }
+            let elements = paragraph["elements"] as? [[String: Any]] ?? []
+            var text = elements.compactMap { ($0["textRun"] as? [String: Any])?["content"] as? String }.joined()
+            if text.hasSuffix("\n") { text.removeLast() }
+            return Paragraph(start: start, end: end, text: text)
+        }
+    }
+
+    private static let timeLine = try! NSRegularExpression(pattern: #"^\d{2}:\d{2}:\d{2}  "#)
+
+    private static func isTimeLine(_ text: String) -> Bool {
+        timeLine.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+
+    /// 中身が lines のどれかと同じ段落を、行ごと消す（同じ行が2つあれば2つまで）。
+    /// headings の見出しは、そのすぐ下の「・」の要点ごと消す。
+    /// 文字起こしの行のすぐ下にある空の段落（前に中身だけ消した名残）も詰める。消した範囲を返す。
+    func deleteParagraphs(_ lines: [String], headings: [String] = [], day: String) async throws -> [Range<Int>] {
+        let docId = try await documentId(for: day)
+        let paragraphs = try await paragraphs(docId: docId)
+        var remaining: [String: Int] = [:]
+        for line in lines { remaining[line, default: 0] += 1 }
+        let headingSet = Set(headings)
+        var ranges: [Range<Int>] = []
+        var lastText = ""
+        var inHeading = false
+        // 最後の段落はドキュメントの終わりなので消せない
+        for p in paragraphs.dropLast() {
+            var drop = false
+            if let n = remaining[p.text], n > 0 {
+                remaining[p.text] = n - 1
+                drop = true
+                inHeading = false
+            } else if headingSet.contains(p.text) {
+                drop = true
+                inHeading = true
+            } else if inHeading && p.text.hasPrefix("・") {
+                drop = true
+            } else if p.text.isEmpty && Self.isTimeLine(lastText) {
+                drop = true
+                inHeading = false
+            } else {
+                inHeading = false
+            }
+            if !p.text.isEmpty { lastText = p.text }
+            guard drop else { continue }
+            if let last = ranges.last, last.upperBound == p.start {
+                ranges[ranges.count - 1] = last.lowerBound..<p.end
+            } else {
+                ranges.append(p.start..<p.end)
+            }
+        }
+        // 後ろから消せば、前の位置はずれない
+        let requests: [[String: Any]] = ranges.reversed().map { range in
+            ["deleteContentRange": ["range": ["startIndex": range.lowerBound, "endIndex": range.upperBound]]]
+        }
+        for start in stride(from: 0, to: requests.count, by: 200) {
+            _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
+                                  json: ["requests": Array(requests[start..<min(requests.count, start + 200)])])
+        }
+        return ranges
+    }
+
+    /// 行を1つ差し戻す。next の行があればその前に、無ければ previous の行のあとに、どちらも無ければ末尾に入れる。
+    /// 差し込んだ位置と長さを返す。
+    func insertLine(_ line: String, before next: String?, after previous: String?, day: String) async throws -> (at: Int, length: Int) {
+        let docId = try await documentId(for: day)
+        let paragraphs = try await paragraphs(docId: docId)
+        let text: String
+        let at: Int
+        if let next, let p = paragraphs.first(where: { $0.text == next }) {
+            at = p.start
+            text = line + "\n"
+        } else if let previous, let p = paragraphs.first(where: { $0.text == previous }) {
+            at = p.end - 1
+            text = "\n" + line
+        } else {
+            at = max(1, (paragraphs.last?.end ?? 2) - 1)
+            text = line + "\n"
+        }
+        _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
+                              json: ["requests": [["insertText": ["location": ["index": at], "text": text]]]])
+        return (at, text.utf16.count)
+    }
+
     /// ドキュメントの中の文字を置き換える（見つかったところすべて）。
     func replaceAll(_ pairs: [(find: String, replace: String)], day: String) async throws {
         guard !pairs.isEmpty else { return }

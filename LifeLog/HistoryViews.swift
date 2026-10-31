@@ -29,6 +29,12 @@ struct DayView: View {
     @State private var conversations: [ConversationLog.Conversation] = []
     @State private var player = ClipPlayer()
     @State private var fixing: Fix?
+    @State private var addingWord: WordTarget?
+
+    struct WordTarget: Identifiable {
+        let id = UUID()
+        let line: ConversationLog.Line
+    }
 
     /// 話者を直す行と、同じ音声の次の行
     struct Fix: Identifiable {
@@ -65,6 +71,9 @@ struct DayView: View {
                                 Button("話者を直す", systemImage: "person.crop.circle.badge.questionmark") {
                                     fixing = Fix(line: line, next: next)
                                 }
+                                Button("言葉を登録", systemImage: "character.book.closed") {
+                                    addingWord = WordTarget(line: line)
+                                }
                             }
                             .swipeActions(edge: .leading) {
                                 Button("話者", systemImage: "person.crop.circle.badge.questionmark") {
@@ -87,6 +96,7 @@ struct DayView: View {
         .onAppear { conversations = pipeline.conversations(on: day) }
         .refreshable { conversations = pipeline.conversations(on: day) }
         .onDisappear { player.stop() }
+        .sheet(item: $addingWord) { AddWordView(line: $0.line) }
         .sheet(item: $fixing) { fix in
             SpeakerFixView(line: fix.line, next: fix.next, context: pipeline.places.context(at: fix.line.time)) {
                 conversations = pipeline.conversations(on: day)

@@ -23,8 +23,14 @@ struct LifeLogApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             // 開いたときに、溜まった音声の処理と、終わった会話の見出し付けを進める
-            if phase == .active { pipeline.processQueue() }
-            if phase == .background { Pipeline.scheduleBackgroundWork() }
+            if phase == .active {
+                pipeline.appBecameActive()
+                pipeline.processQueue()
+            }
+            if phase == .background {
+                pipeline.appMovedToBackground()
+                Pipeline.scheduleBackgroundWork()
+            }
         }
     }
 }

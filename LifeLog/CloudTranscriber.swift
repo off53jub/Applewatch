@@ -102,6 +102,22 @@ enum CloudTranscriber {
         throw Failure.limited("無料枠の上限に達しました")
     }
 
+    /// ライブ文字起こし用。数秒の音を、速い large-v3-turbo（Groq）で文字にする。
+    @MainActor
+    static func quick(_ url: URL, apiKey: String, keywords: [String], previous: String?) async throws -> [Line] {
+        let model = "whisper-large-v3-turbo"
+        if let until = limitedUntil[model], until > .now {
+            throw Failure.limited("無料枠の上限のため、\(until.formatted(date: .omitted, time: .shortened)) まで待っています")
+        }
+        do {
+            return try await send(url, provider: .groq, model: model, apiKey: apiKey, keywords: keywords, previous: previous)
+        } catch let limit as RateLimited {
+            // 1分あたりの回数の上限なら数秒で戻る
+            limitedUntil[model] = .now.addingTimeInterval(min(limit.retryAfter, 3600))
+            throw Failure.limited("無料枠が混んでいます")
+        }
+    }
+
     /// previous は直前の区切りの終わりの文。区切りの頭が話の途中から始まっても、つながりが分かる。
     private static func send(_ url: URL, provider: Provider, model: String, apiKey: String,
                              keywords: [String], previous: String?) async throws -> [Line] {

@@ -126,7 +126,7 @@ extension Pipeline {
 }
 
 /// 記録の1行（日付・時刻・話者・本文）。押すとその日の記録を開く。
-private struct HitRow: View {
+struct HitRow: View {
     let hit: Pipeline.Hit
 
     var body: some View {

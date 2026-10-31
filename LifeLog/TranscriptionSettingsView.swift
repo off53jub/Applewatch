@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 高精度（クラウド）文字起こしのサービス・API キー・聞き取ってほしい言葉・月の上限を決める画面。
+/// 高精度（クラウド）文字起こしのサービス・API キー・月の上限を決める画面。聞き取ってほしい言葉は「人と場所」タブで登録する。
 struct TranscriptionSettingsView: View {
     @Bindable var settings: TranscriptionSettings
     @State private var keyInput = ""
@@ -43,15 +43,6 @@ struct TranscriptionSettingsView: View {
                 Text("API キー")
             } footer: {
                 Text("キーはこの iPhone のキーチェーンにだけ保存します。")
-            }
-
-            Section {
-                TextField("1行に1語（例: 人名、社名、専門用語）", text: $settings.keywordText, axis: .vertical)
-                    .lineLimit(3...8)
-            } header: {
-                Text("聞き取ってほしい言葉")
-            } footer: {
-                Text("よく出てくる名前や言葉を書いておくと、その表記で書き起こされやすくなります。")
             }
 
             if settings.provider.dollarsPerMinute > 0 {
