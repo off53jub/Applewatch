@@ -277,6 +277,14 @@ final class Pipeline {
         await relabel(to: target, renaming: old) { $0.speakerID == source }
     }
 
+    /// 自分の声だった人たちを、自分にまとめる（声も覚え、記録とドキュメントの名前も「自分」に直す）。
+    func mergeIntoSelf(_ ids: [String]) async {
+        await speakers.ensureSelf()
+        for id in ids where id != SpeakerLabeler.selfID {
+            await mergePerson(id, into: SpeakerLabeler.selfID)
+        }
+    }
+
     func removePerson(_ id: String) async {
         await speakers.remove(id)
         people = await speakers.people()

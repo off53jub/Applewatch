@@ -148,6 +148,12 @@ struct PeopleView: View {
         .navigationTitle("話した相手")
         .toolbar {
             NavigationLink {
+                SelfMergeView()
+            } label: {
+                Text("自分をまとめる")
+            }
+            .disabled(others.isEmpty)
+            NavigationLink {
                 RegisterPersonView()
             } label: {
                 Image(systemName: "plus")
@@ -207,6 +213,7 @@ struct PersonView: View {
     @State private var name = ""
     @State private var player = ClipPlayer()
     @State private var merging = false
+    @State private var mergingSelf = false
     @State private var deleting = false
 
     private var person: SpeakerLabeler.Person? { pipeline.people.first { $0.id == id } }
@@ -261,6 +268,7 @@ struct PersonView: View {
                 if !person.isSelf {
                     Section {
                         Button("ほかの人と同じ人としてまとめる") { merging = true }
+                        Button("自分の声だった（自分にまとめる）") { mergingSelf = true }
                         Button("この声を忘れる", role: .destructive) { deleting = true }
                     }
                 }
@@ -271,9 +279,14 @@ struct PersonView: View {
         .onDisappear { player.stop() }
         .sheet(isPresented: $merging) {
             NavigationStack {
-                PersonPicker(exclude: id, includeSelf: false) { target in
+                PersonPicker(exclude: id, includeSelf: true) { target in
                     merging = false
                     Task {
+                        if target == SpeakerLabeler.selfID {
+                            await pipeline.mergeIntoSelf([id])
+                            dismiss()
+                            return
+                        }
                         // 名前の無いほうを、名前のあるほうにまとめる
                         let mine = pipeline.people.first { $0.id == id }
                         let theirs = pipeline.people.first { $0.id == target }
@@ -288,6 +301,17 @@ struct PersonView: View {
                 .navigationTitle("同じ人を選ぶ")
                 .toolbar { Button("キャンセル") { merging = false } }
             }
+        }
+        .confirmationDialog("「\(person?.displayName ?? "")」を自分にまとめますか？", isPresented: $mergingSelf,
+                            titleVisibility: .visible) {
+            Button("自分にまとめる") {
+                Task {
+                    await pipeline.mergeIntoSelf([id])
+                    dismiss()
+                }
+            }
+        } message: {
+            Text("この声を自分の声として覚え、これまでの記録とドキュメントの名前も「\(SpeakerLabeler.selfName)」に直します。")
         }
         .confirmationDialog("この声を忘れますか？", isPresented: $deleting, titleVisibility: .visible) {
             Button("忘れる", role: .destructive) {
@@ -460,5 +484,68 @@ struct SpeakerFixView: View {
             onDone()
             dismiss()
         }
+    }
+}
+
+/// 「話した相手」の中に混ざった自分の声を選んで、まとめて自分にする。
+struct SelfMergeView: View {
+    @Environment(Pipeline.self) private var pipeline
+    @Environment(\.dismiss) private var dismiss
+    @State private var player = ClipPlayer()
+    @State private var chosen: Set<String> = []
+    @State private var confirming = false
+    @State private var working = false
+
+    private var others: [SpeakerLabeler.Person] {
+        pipeline.people.filter { !$0.isSelf }.sorted { ($0.isNamed ? 1 : 0, $1.lastHeard) < ($1.isNamed ? 1 : 0, $0.lastHeard) }
+    }
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(others) { person in
+                    HStack {
+                        if let sample = person.samples.last {
+                            SampleButton(player: player, sample: sample, key: person.id)
+                        }
+                        Button {
+                            if chosen.contains(person.id) { chosen.remove(person.id) } else { chosen.insert(person.id) }
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(person.displayName)
+                                    Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: chosen.contains(person.id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(chosen.contains(person.id) ? Color.accentColor : Color.secondary)
+                            }
+                        }
+                        .tint(.primary)
+                    }
+                }
+            } footer: {
+                Text("▶︎で声を聞いて、自分の声だったものを選んでください。選んだ声は自分の声として覚え、これまでの記録とドキュメントの名前も「\(SpeakerLabeler.selfName)」に直します。ほかの人の声を混ぜると、その人の声まで自分と間違えやすくなるので、確かなものだけを。")
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            Button(working ? "まとめています…" : "選んだ \(chosen.count) 人を自分にまとめる") { confirming = true }
+                .buttonStyle(.borderedProminent)
+                .disabled(chosen.isEmpty || working)
+                .padding()
+        }
+        .confirmationDialog("選んだ \(chosen.count) 人を自分にまとめますか？", isPresented: $confirming, titleVisibility: .visible) {
+            Button("自分にまとめる") {
+                working = true
+                Task {
+                    await pipeline.mergeIntoSelf(Array(chosen))
+                    working = false
+                    dismiss()
+                }
+            }
+        }
+        .navigationTitle("自分の声をまとめる")
+        .onDisappear { player.stop() }
     }
 }
