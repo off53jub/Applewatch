@@ -38,6 +38,13 @@ final class Pipeline {
     }
     /// 直前の区切りの終わり。次の区切りの頭の文脈として使う。
     @ObservationIgnored private var lastTranscript: (end: Date, text: String)?
+    /// 音声をドライブにも保存する（Wi-Fi のときだけ上げる）
+    var audioBackupOn = UserDefaults.standard.object(forKey: "audioBackup") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(audioBackupOn, forKey: "audioBackup") }
+    }
+    /// まだドライブに上げていない音声の数
+    private(set) var backupPending = 0
+    let archive: AudioArchive
     /// どこで話したか
     let places = PlaceLog()
     /// 待機モード：アプリを裏で起こしておき、時計から届いた区切りをすぐ処理する
@@ -72,6 +79,8 @@ final class Pipeline {
         let docs = GoogleDocs()
         self.docs = docs
         conversations = ConversationLog(docs: docs)
+        archive = AudioArchive(docs: docs)
+        archive.enabled = { [weak self] in self?.audioBackupOn ?? false }
         conversations.apiKey = { [weak self] in
             guard let self, summariesOn else { return nil }
             return settings.groqKey
@@ -181,7 +190,11 @@ final class Pipeline {
         guard email != nil, queueTask == nil else { return }
         // 裏にいても、iOS が許すあいだ（30秒ほど）は続けさせてもらう
         let background = UIApplication.shared.beginBackgroundTask(withName: "transcribe")
-        let task = Task { await drainQueue() }
+        let task = Task {
+            // 処理しているあいだに届いた区切りも、続けて処理する
+            while await drainQueue(), !Task.isCancelled,
+                  Storage.pendingChunks().contains(where: { !isActiveChunk($0) }) {}
+        }
         queueTask = task
         // 裏で使える時間が終わったと言われたら、区切りの切れ目で止める
         await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
@@ -191,36 +204,39 @@ final class Pipeline {
         Self.scheduleBackgroundWork()
     }
 
-    private func drainQueue() async {
-        do {
-            for url in Storage.pendingChunks() where !isActiveChunk(url) {
-                // 裏で使える時間が終わったら、残りは次の機会に回す
-                if Task.isCancelled { return }
-                // 書いている途中で録音が終わった区切りは開けない。何度やっても同じなので脇によけて先へ進む
-                guard (try? AVAudioFile(forReading: url)) != nil else {
-                    Storage.setAside(url)
-                    continue
-                }
-                do {
-                    try await process(url)
-                    // 文字起こしした音声は、アプリで聞き直せるよう1日だけ残す
-                    Storage.keep(url)
-                } catch where Self.isBrokenAudio(error) {
-                    // 開けても中身が途中で切れている区切り
-                    Storage.setAside(url)
-                } catch {
-                    message = "処理に失敗しました（あとで再試行します）: \(error.localizedDescription)"
-                    return
-                }
-                pendingCount = Storage.pendingChunks().count
+    /// 溜まっている区切りを処理する。失敗や中断で途中でやめたら false。
+    private func drainQueue() async -> Bool {
+        for url in Storage.pendingChunks() where !isActiveChunk(url) {
+            // 裏で使える時間が終わったら、残りは次の機会に回す
+            if Task.isCancelled { return false }
+            // 書いている途中で録音が終わった区切りは開けない。何度やっても同じなので脇によけて先へ進む
+            guard (try? AVAudioFile(forReading: url)) != nil else {
+                Storage.setAside(url)
+                continue
             }
-            if Task.isCancelled { return }
-            // しばらく話していなければ会話を閉じて見出しを付け、前の日にはまとめを付ける。
-            // 録音中の区切り（5分）に続きが入っているかもしれないので、その分は待つ。
-            await conversations.closeIdle(now: .now, waiting: ConversationLog.gap + 300)
-            await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
-            await conversations.writePeopleNotes()
+            do {
+                try await process(url)
+                // 文字起こしした音声は、アプリで聞き直せるよう1日だけ残す
+                Storage.keep(url)
+            } catch where Self.isBrokenAudio(error) {
+                // 開けても中身が途中で切れている区切り
+                Storage.setAside(url)
+            } catch {
+                message = "処理に失敗しました（あとで再試行します）: \(error.localizedDescription)"
+                return false
+            }
+            pendingCount = Storage.pendingChunks().count
         }
+        if Task.isCancelled { return false }
+        // しばらく話していなければ会話を閉じて見出しを付け、前の日にはまとめを付ける。
+        // 録音中の区切り（5分）に続きが入っているかもしれないので、その分は待つ。
+        await conversations.closeIdle(now: .now, waiting: ConversationLog.gap + 300)
+        await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
+        await conversations.writePeopleNotes()
+        // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
+        await archive.uploadPending()
+        backupPending = archive.pendingCount
+        return true
     }
 
     /// 記録のある日（新しい順）

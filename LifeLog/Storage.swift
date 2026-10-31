@@ -44,7 +44,8 @@ enum Storage {
         }
     }
 
-    /// 文字起こしが終わった音声。アプリで聞き直せるよう、1日（少し余裕を見て26時間）だけ残す。
+    /// 文字起こしが終わった音声。アプリで聞き直せるよう、1日（少し余裕を見て26時間）は手元に残す。
+    /// ドライブに保存する設定なら、上げ終わるまでは消さない（AudioArchive）。
     static let audioDir: URL = {
         let dir = URL.documentsDirectory.appendingPathComponent("audio", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -59,11 +60,12 @@ enum Storage {
         if (try? FileManager.default.moveItem(at: url, to: dest)) == nil {
             try? FileManager.default.removeItem(at: url)
         }
-        let old = Date.now.addingTimeInterval(-keepAudioFor)
-        let files = (try? FileManager.default.contentsOfDirectory(at: audioDir, includingPropertiesForKeys: nil)) ?? []
-        for file in files where (startDate(of: file) ?? .distantPast) < old {
-            try? FileManager.default.removeItem(at: file)
-        }
+    }
+
+    static func keptAudio() -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(at: audioDir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "m4a" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     /// 残っていれば、その音声の場所

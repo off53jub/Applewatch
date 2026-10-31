@@ -71,7 +71,7 @@ struct DayView: View {
 
     @ViewBuilder
     private func row(_ line: ConversationLog.Line, key: String) -> some View {
-        let audio = line.audio.flatMap(Storage.keptAudio(named:))
+        let audio = line.audio.flatMap { pipeline.archive.canPlay($0) ? $0 : nil }
         let label = HStack(alignment: .firstTextBaseline) {
             Text(Self.lineTimeFormatter.string(from: line.time))
                 .font(.caption.monospacedDigit())
@@ -88,14 +88,20 @@ struct DayView: View {
                 }
             }
             Spacer(minLength: 0)
-            if audio != nil {
+            if player.loading == key {
+                ProgressView()
+            } else if audio != nil {
                 Image(systemName: player.playing == key ? "stop.circle.fill" : "play.circle")
                     .foregroundStyle(Color.accentColor)
             }
         }
         if let audio {
             Button {
-                player.toggle(key, file: audio, at: line.offset ?? 0)
+                Task {
+                    await player.toggle(key, at: line.offset ?? 0) {
+                        await pipeline.archive.playableURL(for: audio)
+                    }
+                }
             } label: {
                 label
             }
@@ -114,26 +120,35 @@ struct DayView: View {
     }
 }
 
-/// 残しておいた音声を、行の少し手前から再生する。
+/// 残しておいた音声を、行の少し手前から再生する。手元に無ければドライブから取ってくる。
 @MainActor
 @Observable
 final class ClipPlayer: NSObject, AVAudioPlayerDelegate {
     private(set) var playing: String?
+    /// ドライブから取ってきている行
+    private(set) var loading: String?
     @ObservationIgnored private var player: AVAudioPlayer?
 
-    func toggle(_ key: String, file: URL, at offset: TimeInterval) {
+    func toggle(_ key: String, at offset: TimeInterval, file: () async -> URL?) async {
         if playing == key {
             stop()
             return
         }
         stop()
+        loading = key
+        let url = await file()
+        guard loading == key, let url else {
+            if loading == key { loading = nil }
+            return
+        }
+        loading = nil
         let session = AVAudioSession.sharedInstance()
         // iPhone で録音中は、録音の設定を崩さないようそのまま鳴らす
         if session.category != .playAndRecord {
             try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try? session.setActive(true)
         }
-        guard let player = try? AVAudioPlayer(contentsOf: file) else { return }
+        guard let player = try? AVAudioPlayer(contentsOf: url) else { return }
         player.delegate = self
         player.currentTime = max(0, offset - 1)
         player.play()
@@ -145,6 +160,7 @@ final class ClipPlayer: NSObject, AVAudioPlayerDelegate {
         player?.stop()
         player = nil
         playing = nil
+        loading = nil
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {

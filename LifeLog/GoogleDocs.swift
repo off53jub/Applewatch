@@ -27,7 +27,7 @@ final class GoogleDocs {
     func signOut() {
         GIDSignIn.sharedInstance.signOut()
         defaults.removeObject(forKey: "folderId")
-        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("doc-") {
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("doc-") || key.hasPrefix("audioFolder") {
             defaults.removeObject(forKey: key)
         }
     }
@@ -76,6 +76,51 @@ final class GoogleDocs {
                               json: ["requests": requests])
     }
 
+    // MARK: - 音声
+
+    /// 音声を「LifeLog/音声/日付」フォルダに上げて、ドライブ上の id を返す。
+    func uploadAudio(_ url: URL, day: String) async throws -> String {
+        let folder = try await audioFolder(day: day)
+        // 数 MB あるので、途中で切れても安全な resumable で上げる
+        var start = try await authorized("POST", "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id")
+        start.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        start.setValue("audio/mp4", forHTTPHeaderField: "X-Upload-Content-Type")
+        start.httpBody = try JSONSerialization.data(withJSONObject: ["name": url.lastPathComponent, "parents": [folder]])
+        let (_, opened) = try await send(start)
+        guard let location = opened.value(forHTTPHeaderField: "Location"), let uploadURL = URL(string: location) else {
+            throw GoogleError.unexpected("アップロードを始められませんでした")
+        }
+        var put = URLRequest(url: uploadURL)
+        put.httpMethod = "PUT"
+        put.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
+        put.timeoutInterval = 300
+        let uploaded = try await URLSession.shared.upload(for: put, fromFile: url)
+        let (data, _) = try Self.checked(uploaded)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = json["id"] as? String else { throw GoogleError.unexpected("アップロード結果に id がありません") }
+        return id
+    }
+
+    /// ドライブに上げた音声を取ってくる。
+    func downloadAudio(id: String) async throws -> Data {
+        let req = try await authorized("GET", "https://www.googleapis.com/drive/v3/files/\(id)?alt=media")
+        return try await send(req).0
+    }
+
+    private func audioFolder(day: String) async throws -> String {
+        if let id = defaults.string(forKey: "audioFolder-\(day)") { return id }
+        let root: String
+        if let id = defaults.string(forKey: "audioFolder") {
+            root = id
+        } else {
+            root = try await findOrCreate(name: "音声", mimeType: "application/vnd.google-apps.folder", parent: try await folderId())
+            defaults.set(root, forKey: "audioFolder")
+        }
+        let id = try await findOrCreate(name: day, mimeType: "application/vnd.google-apps.folder", parent: root)
+        defaults.set(id, forKey: "audioFolder-\(day)")
+        return id
+    }
+
     // MARK: - Drive
 
     private func documentId(for day: String) async throws -> String {
@@ -113,21 +158,36 @@ final class GoogleDocs {
     // MARK: - HTTP
 
     private func request(_ method: String, _ url: String, json: [String: Any]? = nil) async throws -> [String: Any] {
+        var req = try await authorized(method, url)
+        if let json {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: json)
+        }
+        let (data, _) = try await send(req)
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    }
+
+    private func authorized(_ method: String, _ url: String) async throws -> URLRequest {
         guard let user = GIDSignIn.sharedInstance.currentUser else { throw GoogleError.notSignedIn }
         let fresh = try await user.refreshTokensIfNeeded()
         var req = URLRequest(url: URL(string: url)!)
         req.httpMethod = method
         req.setValue("Bearer \(fresh.accessToken.tokenString)", forHTTPHeaderField: "Authorization")
-        if let json {
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: json)
-        }
-        let (data, response) = try await URLSession.shared.data(for: req)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(status) else {
+        return req
+    }
+
+    private func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let result = try await URLSession.shared.data(for: req)
+        return try Self.checked(result)
+    }
+
+    private static func checked(_ result: (Data, URLResponse)) throws -> (Data, HTTPURLResponse) {
+        let (data, response) = result
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             throw GoogleError.http(status, String(data: data, encoding: .utf8) ?? "")
         }
-        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        return (data, http)
     }
 }
 

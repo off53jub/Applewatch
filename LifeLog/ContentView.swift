@@ -122,8 +122,16 @@ struct ContentView: View {
 
                 Section {
                     NavigationLink("これまでの記録") { HistoryView() }
+                    Toggle("音声をドライブにも保存", isOn: Binding(
+                        get: { pipeline.audioBackupOn },
+                        set: { pipeline.audioBackupOn = $0 }))
+                    if pipeline.audioBackupOn && pipeline.backupPending > 0 {
+                        LabeledContent("ドライブに上げる前", value: "\(pipeline.backupPending) 件")
+                    }
                 } footer: {
-                    Text("文字起こしを日ごと・会話ごとに見られます。直近1日ぶんは、行を押すとその場面の音声が流れます。")
+                    Text(pipeline.audioBackupOn
+                         ? "文字起こしを日ごと・会話ごとに見られ、行を押すとその場面の音声が流れます。音声は Wi-Fi のときにドライブの「LifeLog/音声」に上げ、古い分はドライブから取ってきて流します。"
+                         : "文字起こしを日ごと・会話ごとに見られます。直近1日ぶんは、行を押すとその場面の音声が流れます。")
                 }
 
                 if !pipeline.lastLines.isEmpty {
