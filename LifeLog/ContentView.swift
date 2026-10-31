@@ -67,6 +67,11 @@ struct ContentView: View {
                         } label: {
                             LabeledContent("自分の声", value: pipeline.hasSelfVoice ? "登録済み" : "未登録")
                         }
+                        Picker("聞き分けの厳しさ", selection: Binding(
+                            get: { pipeline.speakerStrictness },
+                            set: { pipeline.speakerStrictness = $0 })) {
+                            ForEach(SpeakerLabeler.Strictness.allCases) { Text($0.label).tag($0) }
+                        }
                         NavigationLink {
                             PeopleView()
                         } label: {
@@ -79,7 +84,7 @@ struct ContentView: View {
                 } header: {
                     Text("話者")
                 } footer: {
-                    Text("iPhone の中だけで声の特徴を比べ、文字起こしの行に「[自分]」「[人物1]」などを付けます（無料）。違っていたら「これまでの記録」で行を長押しして直すと、その声を覚えて次から正確になります。場所の一覧で職場を決めておくと、職場の人と職場以外の人を分けて照らし合わせます。名前を付けた人は、ドライブの「LifeLog」フォルダに「人物ノート - 名前」ができます。")
+                    Text("iPhone の中だけで声の特徴を比べ、文字起こしの行に「[自分]」「[人物1]」などを付けます（無料）。違っていたら「これまでの記録」で行を長押しして直すと、その声を覚えて次から正確になります。場所の一覧で職場を決めておくと、職場の人と職場以外の人を分けて照らし合わせます。別の人が同じ名前になるときは「厳しめ」、同じ人が何人にも分かれるときは「ゆるめ」にしてください。名前を付けた人は、ドライブの「LifeLog」フォルダに「人物ノート - 名前」ができます。")
                 }
 
                 Section {

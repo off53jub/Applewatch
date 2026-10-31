@@ -29,6 +29,12 @@ final class Pipeline {
         }
     }
 
+    /// 聞き分けの厳しさ
+    var speakerStrictness = SpeakerLabeler.Strictness(
+        rawValue: UserDefaults.standard.object(forKey: "speakerStrictness") as? Int ?? 1) ?? .normal {
+        didSet { UserDefaults.standard.set(speakerStrictness.rawValue, forKey: "speakerStrictness") }
+    }
+
     /// 会話ごとの見出しと要約、1日のまとめ（Groq の無料枠）
     var summariesOn = UserDefaults.standard.object(forKey: "summaries") as? Bool ?? true {
         didSet { UserDefaults.standard.set(summariesOn, forKey: "summaries") }
@@ -157,6 +163,13 @@ final class Pipeline {
     func loadSpeakers() async {
         do {
             try await speakers.prepare()
+            // 聞き分けのモデルを替えたので、名前のある人は覚えている声のひとこまから声を取り直す
+            for (id, samples) in await speakers.peopleNeedingVoices() {
+                for sample in samples {
+                    guard let url = await archive.playableURL(for: sample.audio) else { continue }
+                    try? await speakers.teach(url, from: sample.start, to: sample.end, personID: id, pinned: false)
+                }
+            }
             hasSelfVoice = await speakers.hasSelfVoice
             people = await speakers.people()
         } catch {
@@ -596,7 +609,8 @@ final class Pipeline {
     private func speakerNames(for offsets: [TimeInterval], in url: URL,
                               context: SpeakerLabeler.Context?) async -> [SpeakerLabeler.Segment?] {
         let none = [SpeakerLabeler.Segment?](repeating: nil, count: offsets.count)
-        guard speakerLabelsOn, let segments = try? await speakers.label(url, context: context),
+        guard speakerLabelsOn,
+              let segments = try? await speakers.label(url, context: context, strictness: speakerStrictness),
               !segments.isEmpty else { return none }
         let chunkEnd = Self.duration(of: url)
         return offsets.indices.map { i in

@@ -4,7 +4,8 @@ import Foundation
 
 /// 声の特徴（話者の埋め込み）で「誰が話したか」を聞き分ける。iPhone の中だけで動き、無料。
 ///
-/// 1. 区切り（5分）の中で、FluidAudio に「同じ声のまとまり」に分けてもらう。
+/// 1. 区切り（5分）の中で、FluidAudio のオフライン方式（pyannote community-1 の分け方と VBx のまとめ方）に
+///    「同じ声のまとまり」に分けてもらう。録り終わった音をまとめて処理する方式で、いちばん正確。
 /// 2. まとまりごとに声の特徴を平均し、覚えている人と照らし合わせる。人ごとに声をいくつも覚えておき
 ///    （iPhone と時計、静かな所と騒がしい所で声の聞こえ方が違うため）、近いもの上位3つの平均で比べる。
 /// 3. 職場にいるときは職場の人を、それ以外では職場以外の人を先に比べる。別の場の人は、よほど近いときだけ選ぶ。
@@ -34,6 +35,30 @@ actor SpeakerLabeler {
         /// 登録や手直しで覚えた声。自動では消さない。
         let pinned: Bool
         let added: Date
+        /// どのモデルで取った声の特徴か。モデルが違うと比べられない（nil は以前の方式）
+        var model: String? = nil
+    }
+
+    /// いま使っている声の特徴のモデル
+    static let model = "offline-community1"
+
+    /// 聞き分けの厳しさ。厳しいほど「人物N」が増え、ゆるいほど別の人を同じ人にしやすい。
+    enum Strictness: Int, CaseIterable, Identifiable, Sendable {
+        case strict, normal, loose
+        var id: Int { rawValue }
+        var label: String {
+            switch self {
+            case .strict: "厳しめ"
+            case .normal: "ふつう"
+            case .loose: "ゆるめ"
+            }
+        }
+        /// これより近ければ同じ人（コサイン距離。0 が同じ、1 が無関係）
+        var accept: Float { [0.32, 0.40, 0.48][rawValue] }
+        /// 別の場の人や、2番目の候補と差が小さいときは、これより近いときだけ選ぶ
+        var strictLimit: Float { [0.24, 0.30, 0.36][rawValue] }
+        /// 声を覚え足すのは、これより近くて3秒以上話していたときだけ
+        var learn: Float { strictLimit - 0.05 }
     }
 
     /// 聞き直し用の、その人が話していたところ
@@ -66,24 +91,18 @@ actor SpeakerLabeler {
         var nextID = 1
     }
 
-    /// 読み込んだ DiarizerManager をこの actor に渡すための入れ物（渡したあとは actor だけが触る）
+    /// 読み込んだ OfflineDiarizerManager をこの actor に渡すための入れ物（渡したあとは actor だけが触る）
     private final class Loaded: @unchecked Sendable {
-        let manager: DiarizerManager
-        init(manager: DiarizerManager) { self.manager = manager }
+        let manager: OfflineDiarizerManager
+        init(manager: OfflineDiarizerManager) { self.manager = manager }
     }
 
     static let selfID = "me"
     static let selfName = "自分"
 
-    /// これより近ければ同じ人（コサイン距離。0 が同じ、1 が無関係）
-    private static let accept: Float = 0.5
-    /// 別の場の人や、2番目の候補と差が小さいときは、これより近いときだけ選ぶ
-    private static let strict: Float = 0.38
-    /// 声を覚え足すのは、これより近くて3秒以上話していたときだけ
-    private static let learn: Float = 0.33
     private static let maxAutoVoices = 20
 
-    private var diarizer: DiarizerManager?
+    private var diarizer: OfflineDiarizerManager?
     private var loading: Task<Loaded, Error>?
     private var store = Store()
 
@@ -99,9 +118,8 @@ actor SpeakerLabeler {
             // 録音中は画面が消えていても処理するので、バックグラウンドで使えない GPU は使わない
             let configuration = MLModelConfiguration()
             configuration.computeUnits = .cpuAndNeuralEngine
-            let models = try await DiarizerModels.downloadIfNeeded(configuration: configuration)
-            let manager = DiarizerManager()
-            manager.initialize(models: models)
+            let manager = OfflineDiarizerManager(config: .default)
+            try await manager.prepareModels(configuration: configuration)
             return Loaded(manager: manager)
         }
         loading = task
@@ -117,7 +135,7 @@ actor SpeakerLabeler {
         }
     }
 
-    var hasSelfVoice: Bool { person(Self.selfID)?.voices.isEmpty == false }
+    var hasSelfVoice: Bool { person(Self.selfID)?.voices.contains { $0.model == Self.model } == true }
 
     func people() -> [Person] {
         store.people.sorted { $0.seconds > $1.seconds }
@@ -128,39 +146,35 @@ actor SpeakerLabeler {
     // MARK: - 聞き分け
 
     /// 1つの区切りの中で、いつ誰が話したかを返す。context はその時いた場（分からなければ nil）。
-    func label(_ url: URL, context: Context?) async throws -> [Segment] {
+    func label(_ url: URL, context: Context?, strictness: Strictness = .normal) async throws -> [Segment] {
         try await prepare()
         guard let diarizer else { return [] }
-        let samples = try AudioConverter().resampleAudioFile(url)
         // 区切りの中だけで声を分けてもらう（前の区切りの声とは、下で自分で照らし合わせる）
-        diarizer.speakerManager.reset()
-        diarizer.speakerManager.speakerThreshold = 0.55
-        let result = try diarizer.performCompleteDiarization(samples)
-        diarizer.speakerManager.reset()
+        let result = try await diarizer.process(url)
+        let accept = strictness.accept, strict = strictness.strictLimit
 
-        // 声のまとまりごとに、特徴の平均（話した長さで重み付け）と長さを出す
+        // 声のまとまりごとに、特徴（まとまりの中心）と話した長さ、いちばん長く話したところを出す
         struct Cluster {
-            var sum = [Float](repeating: 0, count: 256)
+            var embedding: [Float] = []
             var seconds: Double = 0
             var longest: (start: Double, end: Double) = (0, 0)
-            var embedding: [Float] { Self.normalized(sum) }
-            static func normalized(_ v: [Float]) -> [Float] {
-                let n = sqrt(v.reduce(0) { $0 + $1 * $1 })
-                return n > 0 ? v.map { $0 / n } : v
-            }
         }
         var clusters: [String: Cluster] = [:]
-        for s in result.segments where !s.speakerId.isEmpty && s.embedding.count == 256 {
+        for s in result.segments where !s.speakerId.isEmpty {
             let seconds = Double(s.durationSeconds)
             var c = clusters[s.speakerId] ?? Cluster()
-            let e = Cluster.normalized(s.embedding)
-            for i in 0..<256 { c.sum[i] += e[i] * Float(seconds) }
             c.seconds += seconds
             if seconds > c.longest.end - c.longest.start {
                 c.longest = (Double(s.startTimeSeconds), Double(s.endTimeSeconds))
             }
             clusters[s.speakerId] = c
         }
+        for key in clusters.keys {
+            let center = result.speakerDatabase?[key]
+                ?? result.segments.first { $0.speakerId == key }?.embedding ?? []
+            clusters[key]?.embedding = Self.normalized(center)
+        }
+        clusters = clusters.filter { !$0.value.embedding.isEmpty }
 
         // 近い組から順に決める。1つの区切りで、同じ人を2つのまとまりに当てるのは、どちらも十分近いときだけ。
         var pairs: [(cluster: String, person: String, distance: Float, second: Float)] = []
@@ -169,7 +183,7 @@ actor SpeakerLabeler {
             for (i, (p, d)) in scored.enumerated() {
                 let second = scored.indices.contains(i == 0 ? 1 : 0) ? scored[i == 0 ? 1 : 0].1 : 1
                 let inContext = context == nil || p.context == nil || p.context == context || p.isSelf
-                let limit = inContext && second - d >= 0.04 ? Self.accept : Self.strict
+                let limit = inContext && second - d >= 0.04 ? accept : strict
                 if d <= limit { pairs.append((key, p.id, d, second)) }
             }
         }
@@ -177,7 +191,7 @@ actor SpeakerLabeler {
         var assigned: [String: (person: String, distance: Float)] = [:]
         var used: Set<String> = []
         for pair in pairs where assigned[pair.cluster] == nil {
-            if used.contains(pair.person) && pair.distance > Self.strict { continue }
+            if used.contains(pair.person) && pair.distance > strict { continue }
             assigned[pair.cluster] = (pair.person, pair.distance)
             used.insert(pair.person)
         }
@@ -189,7 +203,7 @@ actor SpeakerLabeler {
             if let match = assigned[key], let i = index(of: match.person) {
                 store.people[i].seconds += c.seconds
                 store.people[i].lastHeard = .now
-                if match.distance <= Self.learn && c.seconds >= 3 {
+                if match.distance <= strictness.learn && c.seconds >= 3 {
                     addVoice(c.embedding, pinned: false, to: i)
                     remember(sample, for: i)
                 }
@@ -199,7 +213,8 @@ actor SpeakerLabeler {
                 let id = String(store.nextID)
                 store.nextID += 1
                 store.people.append(Person(id: id, name: nil, context: context,
-                                           voices: [Voice(embedding: c.embedding, pinned: false, added: .now)],
+                                           voices: [Voice(embedding: c.embedding, pinned: false, added: .now,
+                                                          model: Self.model)],
                                            seconds: c.seconds, samples: [sample]))
                 labels[key] = id
             }
@@ -218,7 +233,8 @@ actor SpeakerLabeler {
 
     /// 近いもの上位3つの距離の平均
     private func distance(_ embedding: [Float], to person: Person) -> Float {
-        let ds = person.voices.map { 1 - zip($0.embedding, embedding).reduce(0) { $0 + $1.0 * $1.1 } }.sorted()
+        let ds = person.voices.filter { $0.model == Self.model && $0.embedding.count == embedding.count }
+            .map { 1 - zip($0.embedding, embedding).reduce(0) { $0 + $1.0 * $1.1 } }.sorted()
         guard !ds.isEmpty else { return 1 }
         let top = ds.prefix(3)
         return top.reduce(0, +) / Float(top.count)
@@ -248,14 +264,14 @@ actor SpeakerLabeler {
     /// 録音を10秒ずつに分けて、それぞれの声を覚える。
     func enroll(_ url: URL, into id: String) async throws {
         try await prepare()
-        guard let diarizer, let i = index(of: id) else { return }
+        guard index(of: id) != nil else { return }
         let samples = try AudioConverter().resampleAudioFile(url)
         var start = 0
         while start < samples.count {
             let end = min(samples.count, start + 160_000)
             // 3秒より短い残りは使わない（最初の1つだけは短くても使う）
-            if end - start >= 48_000 || start == 0 {
-                let embedding = try diarizer.extractSpeakerEmbedding(from: Array(samples[start..<end]))
+            if end - start >= 48_000 || start == 0, let embedding = try await voice(in: Array(samples[start..<end])),
+               let i = index(of: id) {
                 addVoice(embedding, pinned: true, to: i)
             }
             start = end
@@ -263,18 +279,42 @@ actor SpeakerLabeler {
         save()
     }
 
-    /// 録音の一部（start〜end 秒）がこの人の声だと教える。
-    func teach(_ url: URL, from start: TimeInterval, to end: TimeInterval, personID: String) async throws {
+    /// 録音の一部（start〜end 秒）がこの人の声だと教える。pinned なら自動では消さない。
+    func teach(_ url: URL, from start: TimeInterval, to end: TimeInterval, personID: String,
+               pinned: Bool = true) async throws {
         try await prepare()
-        guard let diarizer, let i = index(of: personID) else { return }
+        guard index(of: personID) != nil else { return }
         let samples = try AudioConverter().resampleAudioFile(url)
         let from = max(0, Int(start * 16_000))
-        let to = min(samples.count, Int(end * 16_000))
+        let to = min(samples.count, Int(end * 16_000), from + 160_000)
         guard to - from >= 16_000 else { return }   // 1秒より短いと声の特徴が出ない
-        let embedding = try diarizer.extractSpeakerEmbedding(from: Array(samples[from..<min(to, from + 160_000)]))
-        addVoice(embedding, pinned: true, to: i)
+        guard let embedding = try await voice(in: Array(samples[from..<to])), let i = index(of: personID) else { return }
+        addVoice(embedding, pinned: pinned, to: i)
         remember(Sample(audio: url.lastPathComponent, start: start, end: end), for: i)
         save()
+    }
+
+    /// 1人が話している音から、声の特徴を取る（いちばん長く話した声のまとまりの中心）。
+    private func voice(in samples: [Float]) async throws -> [Float]? {
+        guard let diarizer else { return nil }
+        let result = try await diarizer.process(audio: samples)
+        var seconds: [String: Float] = [:]
+        for s in result.segments { seconds[s.speakerId, default: 0] += s.durationSeconds }
+        guard let main = seconds.max(by: { $0.value < $1.value })?.key else { return nil }
+        let center = result.speakerDatabase?[main] ?? result.segments.first { $0.speakerId == main }?.embedding
+        return center.map(Self.normalized)
+    }
+
+    /// 以前のモデルの声しか無い人（名前のある人）の一覧と、覚えている聞き直し用のところ。
+    /// 新しいモデルで声を取り直すのに使う。名前の無い声は、取り直さずに忘れる。
+    func peopleNeedingVoices() -> [(id: String, samples: [Sample])] {
+        store.people.removeAll { p in
+            !p.isNamed && !p.voices.contains { $0.model == Self.model }
+        }
+        save()
+        return store.people
+            .filter { p in !p.voices.contains { $0.model == Self.model } && !p.samples.isEmpty }
+            .map { ($0.id, $0.samples) }
     }
 
     func newPerson(name: String, context: Context?) -> String {
@@ -320,10 +360,17 @@ actor SpeakerLabeler {
     private func index(of id: String) -> Int? { store.people.firstIndex { $0.id == id } }
 
     private func addVoice(_ embedding: [Float], pinned: Bool, to i: Int) {
-        guard embedding.count == 256, embedding.contains(where: { $0 != 0 }) else { return }
-        let n = sqrt(embedding.reduce(0) { $0 + $1 * $1 })
-        store.people[i].voices.append(Voice(embedding: embedding.map { $0 / n }, pinned: pinned, added: .now))
+        guard !embedding.isEmpty, embedding.contains(where: { $0 != 0 }) else { return }
+        store.people[i].voices.append(Voice(embedding: Self.normalized(embedding), pinned: pinned, added: .now,
+                                            model: Self.model))
+        // 以前のモデルの声は比べられないので消す
+        store.people[i].voices.removeAll { $0.model != Self.model }
         trimVoices(i)
+    }
+
+    private static func normalized(_ v: [Float]) -> [Float] {
+        let n = sqrt(v.reduce(0) { $0 + $1 * $1 })
+        return n > 0 ? v.map { $0 / n } : v
     }
 
     /// 自動で覚えた声は新しい20個まで。登録・手直しの声は50個まで。
