@@ -1,46 +1,36 @@
 import AVFoundation
 import SwiftUI
 
-/// 自分の声を20秒録って登録する画面。
-struct VoiceEnrollView: View {
+/// 何秒か録音して、録れたファイルを渡す部品。自分の声・相手の声の登録で使う。
+struct VoiceCapture: View {
     @Environment(Pipeline.self) private var pipeline
-    @Environment(\.dismiss) private var dismiss
+    var seconds = 20
+    var title: String
+    var disabled = false
+    /// 録れた音声を受け取って、結果の一文を返す。終わったらファイルは消す。
+    var onRecorded: (URL) async -> String
+
     @State private var recorder: AVAudioRecorder?
     @State private var remaining = 0
     @State private var status = ""
 
-    private static let seconds = 20
-    private static let sample = "今日はいい天気ですね。朝は駅まで歩いて、電車の中でニュースを読みました。午後からは打ち合わせが二つあって、そのあと資料をまとめる予定です。夜は家でゆっくり過ごそうと思います。"
-
     var body: some View {
-        Form {
-            Section {
-                Text(Self.sample)
-            } header: {
-                Text("この文を、ふだんの声で読んでください")
-            } footer: {
-                Text("静かな場所で、自分だけが話している状態で録ってください。声の特徴だけをこの iPhone に保存し、録音は登録が終わったら消します。")
-            }
-            Section {
-                if remaining > 0 {
-                    Label("録音中… あと \(remaining) 秒", systemImage: "waveform")
-                } else {
-                    Button(pipeline.hasSelfVoice ? "録り直す" : "録音を始める（\(Self.seconds)秒）") { start() }
-                        .disabled(pipeline.isRecording)
-                }
-                if pipeline.isRecording {
-                    Text("ライフログの録音を止めてから登録してください。").foregroundStyle(.secondary)
-                }
-                if !status.isEmpty {
-                    Text(status).foregroundStyle(.secondary)
-                }
-            }
+        if remaining > 0 {
+            Label("録音中… あと \(remaining) 秒", systemImage: "waveform")
+        } else {
+            Button(title) { start() }
+                .disabled(disabled || pipeline.isRecording)
         }
-        .navigationTitle("自分の声を登録")
+        if pipeline.isRecording {
+            Text("ライフログの録音を止めてから録ってください。").foregroundStyle(.secondary)
+        }
+        if !status.isEmpty {
+            Text(status).foregroundStyle(.secondary)
+        }
     }
 
     private func start() {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("enroll.m4a")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("voice-\(UUID().uuidString).m4a")
         pipeline.suspendStandby()
         do {
             let session = AVAudioSession.sharedInstance()
@@ -51,9 +41,9 @@ struct VoiceEnrollView: View {
                 AVSampleRateKey: 16_000,
                 AVNumberOfChannelsKey: 1,
             ])
-            guard r.record(forDuration: TimeInterval(Self.seconds)) else { throw NSError(domain: "Enroll", code: 1) }
+            guard r.record(forDuration: TimeInterval(seconds)) else { throw NSError(domain: "Enroll", code: 1) }
             recorder = r
-            remaining = Self.seconds
+            remaining = seconds
             status = ""
             Task { await countDown(url) }
         } catch {
@@ -72,62 +62,403 @@ struct VoiceEnrollView: View {
         try? AVAudioSession.sharedInstance().setActive(false)
         pipeline.resumeStandby()
         status = "声の特徴を調べています…（初回はモデルのダウンロードがあります）"
-        do {
-            try await pipeline.enrollSelf(from: url)
-            status = "登録しました。これからは文字起こしに「[自分]」と付きます。"
-        } catch {
-            status = "登録できませんでした: \(error.localizedDescription)"
-        }
+        status = await onRecorded(url)
         try? FileManager.default.removeItem(at: url)
     }
 }
 
-/// これまでに聞いた、自分以外の声の一覧。名前を付けたり消したりできる。
+/// 自分の声を20秒録って登録する画面。録り直すと前の登録に足していく。
+struct VoiceEnrollView: View {
+    @Environment(Pipeline.self) private var pipeline
+
+    static let sample = "今日はいい天気ですね。朝は駅まで歩いて、電車の中でニュースを読みました。午後からは打ち合わせが二つあって、そのあと資料をまとめる予定です。夜は家でゆっくり過ごそうと思います。"
+
+    var body: some View {
+        Form {
+            Section {
+                Text(Self.sample)
+            } header: {
+                Text("この文を、ふだんの声で読んでください")
+            } footer: {
+                Text("静かな場所で、自分だけが話している状態で録ってください。声の特徴だけをこの iPhone に保存し、録音は登録が終わったら消します。何度か録ると（小声・会議の声など）聞き分けが正確になります。")
+            }
+            Section {
+                VoiceCapture(title: pipeline.hasSelfVoice ? "もう一度録って足す（20秒）" : "録音を始める（20秒）") { url in
+                    do {
+                        try await pipeline.enrollSelf(from: url)
+                        return "登録しました。これからは文字起こしに「[自分]」と付きます。"
+                    } catch {
+                        return "登録できませんでした: \(error.localizedDescription)"
+                    }
+                }
+            }
+        }
+        .navigationTitle("自分の声を登録")
+    }
+}
+
+/// これまでに聞いた声の一覧。職場・職場以外に分けて出す。
 struct PeopleView: View {
     @Environment(Pipeline.self) private var pipeline
-    @State private var editing: SpeakerLabeler.Person?
-    @State private var newName = ""
+    @State private var player = ClipPlayer()
+
+    private var others: [SpeakerLabeler.Person] { pipeline.people.filter { !$0.isSelf } }
 
     var body: some View {
         List {
-            Section {
-                ForEach(pipeline.people) { person in
-                    Button {
-                        newName = person.name.hasPrefix("人物") ? "" : person.name
-                        editing = person
-                    } label: {
-                        LabeledContent(person.name) {
-                            Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))")
-                        }
-                    }
-                    .tint(.primary)
+            // 名前の無い声のうち、よく聞く声から名前を付けてもらう
+            let waiting = others.filter { !$0.isNamed && $0.seconds >= 30 }
+                .sorted { $0.lastHeard > $1.lastHeard }
+            if !waiting.isEmpty {
+                Section {
+                    ForEach(waiting) { person in row(person) }
+                } header: {
+                    Text("名前を付けてほしい声")
+                } footer: {
+                    Text("▶︎で声を聞いて、タップして名前を付けてください。名前を付けると、これまでの記録とドキュメントの「人物N」もその名前に変わります。")
                 }
-                .onDelete { offsets in
-                    let ids = offsets.map { pipeline.people[$0].id }
-                    Task { for id in ids { await pipeline.removePerson(id) } }
+            }
+            ForEach([SpeakerLabeler.Context.work, .other], id: \.self) { context in
+                let list = others.filter { $0.isNamed && $0.context == context }
+                if !list.isEmpty {
+                    Section(context.label) { ForEach(list) { row($0) } }
                 }
-            } footer: {
-                Text("文字起こしで「人物3」などと出た人です。タップして名前を付けると、次からその名前で出て、その人の「人物ノート」に会話が書き足されます。名前を付けていない声は、2週間聞かなければ自動で忘れます。")
+            }
+            let both = others.filter { $0.isNamed && $0.context == nil }
+            if !both.isEmpty {
+                Section("どちらでも") { ForEach(both) { row($0) } }
+            }
+            let rest = others.filter { !$0.isNamed && $0.seconds < 30 }
+            if !rest.isEmpty {
+                Section {
+                    ForEach(rest) { row($0) }
+                } header: {
+                    Text("少しだけ聞いた声")
+                } footer: {
+                    Text("名前を付けていない声は、2週間聞かなければ自動で忘れます。")
+                }
             }
         }
         .overlay {
-            if pipeline.people.isEmpty {
+            if others.isEmpty {
                 ContentUnavailableView("まだいません", systemImage: "person.2",
-                                       description: Text("話し相手の声を聞くと、ここに出てきます。"))
+                                       description: Text("話し相手の声を聞くと、ここに出てきます。右上の＋から、その場で声を録って登録することもできます。"))
             }
         }
         .navigationTitle("話した相手")
-        .alert("名前を付ける", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
-            TextField("名前", text: $newName)
-            Button("保存") {
-                if let person = editing, !newName.isEmpty {
-                    Task { await pipeline.renamePerson(person.id, to: newName) }
-                }
-                editing = nil
+        .toolbar {
+            NavigationLink {
+                RegisterPersonView()
+            } label: {
+                Image(systemName: "plus")
             }
-            Button("キャンセル", role: .cancel) { editing = nil }
+        }
+        .onDisappear { player.stop() }
+    }
+
+    private func row(_ person: SpeakerLabeler.Person) -> some View {
+        HStack {
+            if let sample = person.samples.last {
+                SampleButton(player: player, sample: sample, key: person.id)
+            }
+            NavigationLink {
+                PersonView(id: person.id)
+            } label: {
+                LabeledContent(person.displayName) {
+                    Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))")
+                }
+            }
+        }
+    }
+}
+
+/// 覚えている声のひとこまを鳴らすボタン。音声が手元に無ければドライブから取ってくる。
+struct SampleButton: View {
+    @Environment(Pipeline.self) private var pipeline
+    let player: ClipPlayer
+    let sample: SpeakerLabeler.Sample
+    let key: String
+
+    var body: some View {
+        if player.loading == key {
+            ProgressView()
+        } else {
+            Button {
+                Task {
+                    await player.toggle(key, at: sample.start + 1, until: sample.end) {
+                        await pipeline.archive.playableURL(for: sample.audio)
+                    }
+                }
+            } label: {
+                Image(systemName: player.playing == key ? "stop.circle.fill" : "play.circle")
+                    .font(.title3)
+            }
+            .buttonStyle(.borderless)
+            .disabled(!pipeline.archive.canPlay(sample.audio))
+        }
+    }
+}
+
+/// 1人分の設定：名前・場・声を足す・ほかの人とまとめる・消す。
+struct PersonView: View {
+    @Environment(Pipeline.self) private var pipeline
+    @Environment(\.dismiss) private var dismiss
+    let id: String
+    @State private var name = ""
+    @State private var player = ClipPlayer()
+    @State private var merging = false
+    @State private var deleting = false
+
+    private var person: SpeakerLabeler.Person? { pipeline.people.first { $0.id == id } }
+
+    var body: some View {
+        Form {
+            if let person {
+                if !person.isSelf {
+                    Section {
+                        TextField("名前", text: $name)
+                            .onSubmit { save() }
+                        if name != (person.name ?? "") && !name.isEmpty {
+                            Button("この名前にする") { save() }
+                        }
+                    } header: {
+                        Text("名前")
+                    } footer: {
+                        Text("名前を付けると、これまでの記録とドキュメントの名前も変わり、その人の「人物ノート」に会話が書き足されます。")
+                    }
+                    Section {
+                        Picker("会う場", selection: Binding(
+                            get: { person.context },
+                            set: { value in Task { await pipeline.setContext(id, to: value) } })) {
+                            Text("どちらでも").tag(SpeakerLabeler.Context?.none)
+                            ForEach(SpeakerLabeler.Context.allCases) { Text($0.label).tag(Optional($0)) }
+                        }
+                    } footer: {
+                        Text("職場の人は職場にいるときに、職場以外の人はそれ以外のときに先に照らし合わせます。")
+                    }
+                }
+                Section {
+                    ForEach(Array(person.samples.enumerated()).reversed(), id: \.offset) { i, sample in
+                        HStack {
+                            SampleButton(player: player, sample: sample, key: "\(i)")
+                            Text("声のひとこま \(person.samples.count - i)")
+                        }
+                    }
+                    LabeledContent("覚えている声", value: "\(person.voices.count)（登録・手直し \(person.pinnedCount)）")
+                    VoiceCapture(seconds: 15, title: "その場で声を録って足す（15秒）") { url in
+                        do {
+                            try await pipeline.addVoice(from: url, to: id)
+                            return "声を足しました。"
+                        } catch {
+                            return "足せませんでした: \(error.localizedDescription)"
+                        }
+                    }
+                } header: {
+                    Text("声")
+                } footer: {
+                    Text("その人だけが話しているときに録ってください（相手の了承を取ってから）。記録の行を長押しして「話者を直す」と、その行の声も覚えます。")
+                }
+                if !person.isSelf {
+                    Section {
+                        Button("ほかの人と同じ人としてまとめる") { merging = true }
+                        Button("この声を忘れる", role: .destructive) { deleting = true }
+                    }
+                }
+            }
+        }
+        .navigationTitle(person?.displayName ?? "")
+        .onAppear { name = person?.name ?? "" }
+        .onDisappear { player.stop() }
+        .sheet(isPresented: $merging) {
+            NavigationStack {
+                PersonPicker(exclude: id, includeSelf: false) { target in
+                    merging = false
+                    Task {
+                        // 名前の無いほうを、名前のあるほうにまとめる
+                        let mine = pipeline.people.first { $0.id == id }
+                        let theirs = pipeline.people.first { $0.id == target }
+                        if mine?.isNamed == true && theirs?.isNamed == false {
+                            await pipeline.mergePerson(target, into: id)
+                        } else {
+                            await pipeline.mergePerson(id, into: target)
+                            dismiss()
+                        }
+                    }
+                }
+                .navigationTitle("同じ人を選ぶ")
+                .toolbar { Button("キャンセル") { merging = false } }
+            }
+        }
+        .confirmationDialog("この声を忘れますか？", isPresented: $deleting, titleVisibility: .visible) {
+            Button("忘れる", role: .destructive) {
+                Task {
+                    await pipeline.removePerson(id)
+                    dismiss()
+                }
+            }
         } message: {
-            if let person = editing { Text("\(person.name) の名前") }
+            Text("これまでの記録の名前はそのまま残ります。")
+        }
+    }
+
+    private func save() {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        Task { await pipeline.renamePerson(id, to: trimmed) }
+    }
+}
+
+/// 人を1人選ぶ一覧（職場・職場以外・名前の無い声の順）。
+struct PersonPicker: View {
+    @Environment(Pipeline.self) private var pipeline
+    var exclude: String? = nil
+    var includeSelf = true
+    /// 先に出す場（今いる場など）
+    var context: SpeakerLabeler.Context? = nil
+    var onPick: (String) -> Void
+
+    var body: some View {
+        let people = pipeline.people.filter { $0.id != exclude && (includeSelf || !$0.isSelf) }
+        let named = people.filter { $0.isNamed && !$0.isSelf }
+        let order: [SpeakerLabeler.Context?] = context == .other ? [.other, nil, .work] : [.work, nil, .other]
+        List {
+            if includeSelf {
+                Button(SpeakerLabeler.selfName) { onPick(SpeakerLabeler.selfID) }
+            }
+            ForEach(order, id: \.self) { c in
+                let list = named.filter { $0.context == c }
+                if !list.isEmpty {
+                    Section(c?.label ?? "どちらでも") {
+                        ForEach(list) { p in Button(p.displayName) { onPick(p.id) } }
+                    }
+                }
+            }
+            let unnamed = people.filter { !$0.isNamed }.sorted { $0.lastHeard > $1.lastHeard }
+            if !unnamed.isEmpty {
+                Section("名前の無い声") {
+                    ForEach(unnamed) { p in Button(p.displayName) { onPick(p.id) } }
+                }
+            }
+        }
+        .tint(.primary)
+    }
+}
+
+/// 相手の声をその場で録って、名前を付けて登録する。
+struct RegisterPersonView: View {
+    @Environment(Pipeline.self) private var pipeline
+    @State private var name = ""
+    @State private var context: SpeakerLabeler.Context? = nil
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("名前", text: $name)
+                Picker("会う場", selection: $context) {
+                    Text("どちらでも").tag(SpeakerLabeler.Context?.none)
+                    ForEach(SpeakerLabeler.Context.allCases) { Text($0.label).tag(Optional($0)) }
+                }
+            }
+            Section {
+                VoiceCapture(title: "その人の声を録る（20秒）",
+                             disabled: name.trimmingCharacters(in: .whitespaces).isEmpty) { url in
+                    let trimmed = name.trimmingCharacters(in: .whitespaces)
+                    do {
+                        try await pipeline.registerPerson(from: url, name: trimmed, context: context)
+                        name = ""
+                        return "\(trimmed) さんを登録しました。続けて別の人も登録できます。"
+                    } catch {
+                        return "登録できませんでした: \(error.localizedDescription)"
+                    }
+                }
+            } footer: {
+                Text("相手の了承を取ってから、その人だけが話している状態で録ってください（自己紹介や雑談で十分です）。声の特徴だけをこの iPhone に保存し、録音は消します。")
+            }
+        }
+        .navigationTitle("相手の声を登録")
+    }
+}
+
+/// 記録の行の話者を直す画面。直すと、その行の声をその人の声として覚える。
+struct SpeakerFixView: View {
+    @Environment(Pipeline.self) private var pipeline
+    @Environment(\.dismiss) private var dismiss
+    let line: ConversationLog.Line
+    let next: ConversationLog.Line?
+    /// その時いた場（候補の並び順に使う）
+    let context: SpeakerLabeler.Context?
+    var onDone: () -> Void
+
+    @State private var scope: Pipeline.SpeakerFix = .sameVoice
+    @State private var creating = false
+    @State private var newName = ""
+    @State private var working = false
+
+    private var oldIsUnnamed: Bool {
+        guard let id = line.speakerID else { return false }
+        return pipeline.people.first { $0.id == id }?.isNamed == false
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(line.speaker.map { "いま: \($0)" } ?? "いま: 話者なし").font(.caption).foregroundStyle(.secondary)
+                Text(line.text).lineLimit(3)
+                Picker("直す範囲", selection: $scope) {
+                    Text("この行だけ").tag(Pipeline.SpeakerFix.line)
+                    Text("同じ5分の同じ声").tag(Pipeline.SpeakerFix.sameVoice)
+                    if line.speakerID != nil {
+                        Text("この声すべて").tag(Pipeline.SpeakerFix.everywhere)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text(scopeHint).font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal)
+            PersonPicker(exclude: line.speakerID, context: context) { id in apply(id) }
+                .overlay { if working { ProgressView() } }
+                .disabled(working)
+                .navigationTitle("この声は誰？")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("キャンセル") { dismiss() } }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("新しい人") {
+                            newName = ""
+                            creating = true
+                        }
+                    }
+                }
+                .alert("新しい人の名前", isPresented: $creating) {
+                    TextField("名前", text: $newName)
+                    Button("登録して直す") {
+                        let name = newName.trimmingCharacters(in: .whitespaces)
+                        guard !name.isEmpty else { return }
+                        Task { apply(await pipeline.newPerson(name: name, context: context)) }
+                    }
+                    Button("キャンセル", role: .cancel) {}
+                }
+            }
+        }
+        .onAppear { if oldIsUnnamed { scope = .everywhere } }
+    }
+
+    private var scopeHint: String {
+        switch scope {
+        case .line: "この行だけ直します。"
+        case .sameVoice: "同じ録音の区切り（5分）で、同じ声とされた行をまとめて直します。"
+        case .everywhere: "これまでに「\(line.speaker ?? "")」とされた行をすべて直し、2人を1人にまとめます。"
+        }
+    }
+
+    private func apply(_ id: String) {
+        working = true
+        Task {
+            await pipeline.fixSpeaker(of: line, next: next, to: id, scope: scope)
+            working = false
+            onDone()
+            dismiss()
         }
     }
 }

@@ -28,6 +28,14 @@ struct DayView: View {
     let day: String
     @State private var conversations: [ConversationLog.Conversation] = []
     @State private var player = ClipPlayer()
+    @State private var fixing: Fix?
+
+    /// 話者を直す行と、同じ音声の次の行
+    struct Fix: Identifiable {
+        let id = UUID()
+        let line: ConversationLog.Line
+        let next: ConversationLog.Line?
+    }
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -51,7 +59,19 @@ struct DayView: View {
                             .foregroundStyle(.secondary)
                     }
                     ForEach(Array(conversation.lines.enumerated()), id: \.offset) { l, line in
+                        let next = conversation.lines[(l + 1)...].first { $0.audio == line.audio }
                         row(line, key: "\(c)-\(l)")
+                            .contextMenu {
+                                Button("話者を直す", systemImage: "person.crop.circle.badge.questionmark") {
+                                    fixing = Fix(line: line, next: next)
+                                }
+                            }
+                            .swipeActions(edge: .leading) {
+                                Button("話者", systemImage: "person.crop.circle.badge.questionmark") {
+                                    fixing = Fix(line: line, next: next)
+                                }
+                                .tint(.indigo)
+                            }
                     }
                 } header: {
                     Text(heading(for: conversation))
@@ -67,6 +87,11 @@ struct DayView: View {
         .onAppear { conversations = pipeline.conversations(on: day) }
         .refreshable { conversations = pipeline.conversations(on: day) }
         .onDisappear { player.stop() }
+        .sheet(item: $fixing) { fix in
+            SpeakerFixView(line: fix.line, next: fix.next, context: pipeline.places.context(at: fix.line.time)) {
+                conversations = pipeline.conversations(on: day)
+            }
+        }
     }
 
     @ViewBuilder
@@ -135,7 +160,9 @@ final class ClipPlayer: NSObject, AVAudioPlayerDelegate {
     private(set) var loading: String?
     @ObservationIgnored private var player: AVAudioPlayer?
 
-    func toggle(_ key: String, at offset: TimeInterval, file: () async -> URL?) async {
+    /// until を渡すと、その位置（秒）で止める。
+    func toggle(_ key: String, at offset: TimeInterval, until end: TimeInterval? = nil,
+                file: () async -> URL?) async {
         if playing == key {
             stop()
             return
@@ -160,6 +187,13 @@ final class ClipPlayer: NSObject, AVAudioPlayerDelegate {
         player.play()
         self.player = player
         playing = key
+        if let end {
+            let length = max(1, end - player.currentTime) + 0.5
+            Task {
+                try? await Task.sleep(for: .seconds(length))
+                if self.player === player { self.stop() }
+            }
+        }
     }
 
     func stop() {

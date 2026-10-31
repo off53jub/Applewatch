@@ -66,13 +66,16 @@ struct ContentView: View {
                         NavigationLink {
                             PeopleView()
                         } label: {
-                            LabeledContent("話した相手", value: "\(pipeline.people.count) 人")
+                            let others = pipeline.people.filter { !$0.isSelf }
+                            let waiting = others.filter { !$0.isNamed && $0.seconds >= 30 }.count
+                            LabeledContent("話した相手",
+                                           value: waiting > 0 ? "\(others.count) 人（名前待ち \(waiting)）" : "\(others.count) 人")
                         }
                     }
                 } header: {
                     Text("話者")
                 } footer: {
-                    Text("iPhone の中だけで声の特徴を比べ、文字起こしの行に「[自分]」「[人物1]」などを付けます（無料）。名前を付けた人は、ドライブの「LifeLog」フォルダに「人物ノート - 名前」ができ、話すたびにその会話が書き足されます。")
+                    Text("iPhone の中だけで声の特徴を比べ、文字起こしの行に「[自分]」「[人物1]」などを付けます（無料）。違っていたら「これまでの記録」で行を長押しして直すと、その声を覚えて次から正確になります。場所の一覧で職場を決めておくと、職場の人と職場以外の人を分けて照らし合わせます。名前を付けた人は、ドライブの「LifeLog」フォルダに「人物ノート - 名前」ができます。")
                 }
 
                 Section {

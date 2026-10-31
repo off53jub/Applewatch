@@ -80,11 +80,14 @@ final class GoogleDocs {
     func replaceAll(_ pairs: [(find: String, replace: String)], day: String) async throws {
         guard !pairs.isEmpty else { return }
         let docId = try await documentId(for: day)
-        let requests: [[String: Any]] = pairs.map { pair in
-            ["replaceAllText": ["containsText": ["text": pair.find, "matchCase": true], "replaceText": pair.replace]]
+        // 1回に送る量を抑えるため、100件ずつに分ける
+        for start in stride(from: 0, to: pairs.count, by: 100) {
+            let requests: [[String: Any]] = pairs[start..<min(pairs.count, start + 100)].map { pair in
+                ["replaceAllText": ["containsText": ["text": pair.find, "matchCase": true], "replaceText": pair.replace]]
+            }
+            _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
+                                  json: ["requests": requests])
         }
-        _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
-                              json: ["requests": requests])
     }
 
     /// このアプリが作ったファイルのうち、名前が prefix で始まるものをゴミ箱に入れる。

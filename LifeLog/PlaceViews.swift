@@ -24,7 +24,13 @@ struct PlacesView: View {
             }
             Section {
                 ForEach(places.places) { place in
-                    Text(place.name)
+                    Toggle(isOn: Binding(get: { place.isWork == true },
+                                         set: { places.setWork(place.id, $0) })) {
+                        Text(place.name)
+                        if place.isWork == true {
+                            Text("職場").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 .onDelete { places.removePlaces(at: $0) }
                 Button("今いる場所を登録") {
@@ -35,7 +41,7 @@ struct PlacesView: View {
                     Text(status).foregroundStyle(.secondary)
                 }
             } footer: {
-                Text("登録した場所から300 m 以内で話した会話は、見出しにその名前が出ます。それ以外は「〇〇駅近く」「〇〇付近」と出ます。位置は大きく移動したときだけ記録するので、電池はほとんど使いません。")
+                Text("登録した場所から300 m 以内で話した会話は、見出しにその名前が出ます。それ以外は「〇〇駅近く」「〇〇付近」と出ます。位置は大きく移動したときだけ記録するので、電池はほとんど使いません。\n\nスイッチをオンにした場所は「職場」です。職場にいるあいだは職場の人の声を、それ以外では職場以外の人の声を先に照らし合わせるので、聞き分けが正確になります。")
             }
         }
         .navigationTitle("場所")
@@ -46,7 +52,10 @@ struct PlacesView: View {
                 guard !name.isEmpty else { return }
                 status = "現在地を調べています…"
                 Task {
-                    status = await places.addCurrentPlace(named: name) ? "" : "現在地が分かりませんでした。位置情報の許可を確認してください。"
+                    // 「会社」「職場」「オフィス」を含む名前は職場にしておく（あとで切り替えられる）
+                    let isWork = ["会社", "職場", "オフィス", "事務所"].contains { name.contains($0) }
+                    status = await places.addCurrentPlace(named: name, isWork: isWork)
+                        ? "" : "現在地が分かりませんでした。位置情報の許可を確認してください。"
                 }
             }
             Button("キャンセル", role: .cancel) {}

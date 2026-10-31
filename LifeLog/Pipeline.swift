@@ -138,16 +138,106 @@ final class Pipeline {
     func enrollSelf(from url: URL) async throws {
         try await speakers.enrollSelf(from: url)
         hasSelfVoice = await speakers.hasSelfVoice
+        people = await speakers.people()
     }
 
-    func renamePerson(_ id: String, to name: String) async {
-        await speakers.rename(id, to: name)
+    /// その人だけが話している録音から、新しい人を登録する。
+    func registerPerson(from url: URL, name: String, context: SpeakerLabeler.Context?) async throws {
+        _ = try await speakers.register(url, name: name, context: context)
         people = await speakers.people()
+    }
+
+    /// 登録済みの人に、録音した声を足す。
+    func addVoice(from url: URL, to id: String) async throws {
+        try await speakers.enroll(url, into: id)
+        people = await speakers.people()
+    }
+
+    /// 名前を付ける・付け替える。これまでの記録とドキュメントの名前も直す。
+    func renamePerson(_ id: String, to name: String) async {
+        let old = await speakers.name(of: id)
+        await speakers.rename(id, to: name)
+        await refreshLines(of: id, previousName: old)
+    }
+
+    func setContext(_ id: String, to context: SpeakerLabeler.Context?) async {
+        await speakers.setContext(id, to: context)
+        people = await speakers.people()
+    }
+
+    /// 同じ人だった2人をまとめる。source の行は target の名前になる。
+    func mergePerson(_ source: String, into target: String) async {
+        let old = await speakers.name(of: source)
+        await speakers.merge(source, into: target)
+        await relabel(to: target, renaming: old) { $0.speakerID == source }
     }
 
     func removePerson(_ id: String) async {
         await speakers.remove(id)
         people = await speakers.people()
+    }
+
+    func newPerson(name: String, context: SpeakerLabeler.Context?) async -> String {
+        let id = await speakers.newPerson(name: name, context: context)
+        people = await speakers.people()
+        return id
+    }
+
+    /// 記録の行の話者を直す範囲
+    enum SpeakerFix {
+        /// この行だけ
+        case line
+        /// 同じ区切り（5分）で同じ声とされた行
+        case sameVoice
+        /// これまでにこの声とされたすべての行（2人を1人にまとめる）
+        case everywhere
+    }
+
+    /// 記録の行の話者を直し、その行の声をその人の声として覚える。
+    /// next は同じ音声の次の行（声を切り出す終わりに使う）。
+    func fixSpeaker(of line: ConversationLog.Line, next: ConversationLog.Line?, to id: String,
+                    scope: SpeakerFix) async {
+        if id == SpeakerLabeler.selfID { await speakers.ensureSelf() }
+        // 声を覚える。音声が手元にもドライブにも無ければ、名前だけ直す
+        if let audio = line.audio, let url = await archive.playableURL(for: audio) {
+            let start = line.offset ?? 0
+            let end = min(start + 10, next?.offset ?? start + 10)
+            try? await speakers.teach(url, from: start, to: max(end, start + 1), personID: id)
+        }
+        let old = line.speakerID
+        switch scope {
+        case .line:
+            await relabel(to: id) { $0.time == line.time && $0.text == line.text && $0.audio == line.audio }
+        case .sameVoice:
+            await relabel(to: id) { other in
+                other.audio == line.audio
+                    && (old != nil ? other.speakerID == old : other.speaker == line.speaker)
+            }
+        case .everywhere:
+            guard let old, old != id else {
+                await relabel(to: id) { $0.time == line.time && $0.text == line.text && $0.audio == line.audio }
+                return
+            }
+            await mergePerson(old, into: id)
+        }
+        hasSelfVoice = await speakers.hasSelfVoice
+    }
+
+    private func relabel(to id: String, renaming: String? = nil,
+                         where match: (ConversationLog.Line) -> Bool) async {
+        guard let name = await speakers.name(of: id) else { return }
+        do {
+            try await conversations.relabel(to: id, name: name, renaming: renaming, where: match)
+        } catch {
+            message = "ドキュメントの名前を直せませんでした: \(error.localizedDescription)"
+        }
+        people = await speakers.people()
+    }
+
+    private func refreshLines(of id: String, previousName old: String?) async {
+        await relabel(to: id, renaming: old) { line in
+            line.speakerID == id || (line.speakerID == nil && old != nil && line.speaker == old)
+        }
     }
 
     func restoreSignIn() async {
@@ -399,12 +489,12 @@ final class Pipeline {
         lastTranscript[fromWatch] = (start.addingTimeInterval(duration),
                                      String(entries.map { $0.text }.joined().suffix(200)))
         let offsets = Self.fillOffsets(entries.map { ($0.offset, $0.text) }, duration: duration)
-        let names = await speakerNames(for: offsets, in: url)
+        let names = await speakerNames(for: offsets, in: url, context: places.context(at: start))
         return entries.indices.map { i in
             let end = i + 1 < offsets.count ? offsets[i + 1] : max(duration, offsets[i])
-            let line = ConversationLog.Line(time: start.addingTimeInterval(offsets[i]), speaker: names[i],
+            let line = ConversationLog.Line(time: start.addingTimeInterval(offsets[i]), speaker: names[i]?.name,
                                             text: entries[i].text, audio: url.lastPathComponent,
-                                            offset: offsets[i], original: originals[i])
+                                            offset: offsets[i], original: originals[i], speakerID: names[i]?.personID)
             // 確からしさが分からない行（端末内・OpenAI）は中くらいとみなす
             let confidence = entries[i].score.map { exp($0) } ?? 0.6
             return Merger.Heard(line: line, end: start.addingTimeInterval(end), fromWatch: fromWatch,
@@ -438,18 +528,20 @@ final class Pipeline {
     }
 
     /// 各行を、その時間にいちばん長く話していた人に結びつける。聞き分けがオフ・失敗したときは nil。
-    private func speakerNames(for offsets: [TimeInterval], in url: URL) async -> [String?] {
-        let none = [String?](repeating: nil, count: offsets.count)
-        guard speakerLabelsOn, let segments = try? await speakers.label(url), !segments.isEmpty else { return none }
+    private func speakerNames(for offsets: [TimeInterval], in url: URL,
+                              context: SpeakerLabeler.Context?) async -> [SpeakerLabeler.Segment?] {
+        let none = [SpeakerLabeler.Segment?](repeating: nil, count: offsets.count)
+        guard speakerLabelsOn, let segments = try? await speakers.label(url, context: context),
+              !segments.isEmpty else { return none }
         let chunkEnd = Self.duration(of: url)
         return offsets.indices.map { i in
             let from = offsets[i]
             let to = i + 1 < offsets.count ? offsets[i + 1] : chunkEnd
-            let best = segments.max { a, b in
-                overlap(a, from, to) < overlap(b, from, to)
-            }
-            guard let best, overlap(best, from, to) > 0 else { return nil }
-            return best.name
+            // 行の時間に、いちばん長く話していた人（同じ人の区間は足し合わせる）
+            var total: [String: TimeInterval] = [:]
+            for segment in segments { total[segment.personID, default: 0] += overlap(segment, from, to) }
+            guard let best = total.max(by: { $0.value < $1.value }), best.value > 0 else { return nil }
+            return segments.first { $0.personID == best.key }
         }
     }
 

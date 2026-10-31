@@ -7,13 +7,15 @@ import Foundation
 final class ConversationLog {
     struct Line: Codable {
         let time: Date
-        let speaker: String?
+        var speaker: String?
         let text: String
         /// 聞き直し用の音声ファイル名と、その中での位置（秒）。古い記録には無い。
         var audio: String? = nil
         var offset: TimeInterval? = nil
         /// 言語モデルで直す前の文字起こし（直していなければ nil）
         var original: String? = nil
+        /// 話者の聞き分けでの、その人の番号（自分は "me"）。古い記録には無い。
+        var speakerID: String? = nil
     }
 
     struct Conversation: Codable {
@@ -187,6 +189,48 @@ final class ConversationLog {
         }
         guard (try? await docs.trashFiles(namedWithPrefix: Self.notePrefix + "Speaker ")) != nil else { return }
         UserDefaults.standard.set(true, forKey: doneKey)
+    }
+
+    // MARK: - 話者の手直し
+
+    /// match に当たる行の話者を name（番号 id）にし、ドキュメントの同じ行も直す。直した行の数を返す。
+    /// renaming を渡すと、会話の見出しの「〇〇と」も置き換える（人の名前を付け替えたとき）。
+    @discardableResult
+    func relabel(to id: String, name: String, renaming: String? = nil,
+                 where match: (Line) -> Bool) async throws -> Int {
+        let clock = DateFormatter()
+        clock.dateFormat = "HH:mm:ss"
+        var changed = 0
+        for day in days() {
+            var log = load(day)
+            var fixes: [(find: String, replace: String)] = []
+            let before = changed
+            for c in log.conversations.indices {
+                for l in log.conversations[c].lines.indices {
+                    let line = log.conversations[c].lines[l]
+                    guard match(line), line.speakerID != id || line.speaker != name else { continue }
+                    if line.speaker != name {
+                        let head = clock.string(from: line.time) + "  "
+                        fixes.append((find: head + (line.speaker.map { "[\($0)] " } ?? "") + line.text,
+                                      replace: head + "[\(name)] " + line.text))
+                    }
+                    log.conversations[c].lines[l].speaker = name
+                    log.conversations[c].lines[l].speakerID = id
+                    changed += 1
+                }
+            }
+            // この日に直した行が無ければ、ドキュメントには触らない
+            guard !fixes.isEmpty || changed > before else { continue }
+            if let old = renaming, old != name {
+                // 見出しは「A、Bと」の形
+                for (a, b) in [("　", "と"), ("　", "、"), ("、", "と"), ("、", "、")] {
+                    fixes.append((find: a + old + b, replace: a + name + b))
+                }
+            }
+            if !fixes.isEmpty { try await docs.replaceAll(fixes, day: day) }
+            save(log, day: day)
+        }
+        return changed
     }
 
     // MARK: - 人物ノート

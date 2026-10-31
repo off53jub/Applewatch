@@ -14,6 +14,8 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         var longitude: Double
         /// この距離（m）の中なら、その場所にいるとみなす
         var radius: Double = 300
+        /// 職場か（話者の聞き分けで、職場の人を先に比べる）
+        var isWork: Bool?
 
         var location: CLLocation { CLLocation(latitude: latitude, longitude: longitude) }
     }
@@ -70,13 +72,21 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
 
     /// 会話の始まった時刻にいた場所の名前。分からなければ nil。
     func name(at time: Date) async -> String? {
-        guard isOn else { return nil }
-        // その時刻より前の最後の位置。無ければ、30分以内に分かった位置。
-        let sample = samples.last(where: { $0.time <= time.addingTimeInterval(60) })
-            ?? samples.first(where: { $0.time.timeIntervalSince(time) < 1800 })
-        guard let sample else { return nil }
+        guard isOn, let sample = sample(at: time) else { return nil }
         if let place = registered(near: sample.location, accuracy: sample.accuracy) { return place.name }
         return await areaName(for: sample.location)
+    }
+
+    /// その時刻より前の最後の位置。無ければ、30分以内に分かった位置。
+    private func sample(at time: Date) -> Sample? {
+        samples.last(where: { $0.time <= time.addingTimeInterval(60) })
+            ?? samples.first(where: { $0.time.timeIntervalSince(time) < 1800 })
+    }
+
+    /// その時刻に職場にいたか。職場を登録していない・位置が分からないときは nil。
+    func context(at time: Date) -> SpeakerLabeler.Context? {
+        guard isOn, places.contains(where: { $0.isWork == true }), let sample = sample(at: time) else { return nil }
+        return registered(near: sample.location, accuracy: sample.accuracy)?.isWork == true ? .work : .other
     }
 
     private func registered(near location: CLLocation, accuracy: Double) -> Place? {
@@ -115,11 +125,18 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     // MARK: - 登録した場所
 
     /// 今いる場所を、名前を付けて登録する。
-    func addCurrentPlace(named name: String) async -> Bool {
+    func addCurrentPlace(named name: String, isWork: Bool = false) async -> Bool {
         guard let location = await currentLocation() else { return false }
-        places.append(Place(name: name, latitude: location.coordinate.latitude, longitude: location.coordinate.longitude))
+        places.append(Place(name: name, latitude: location.coordinate.latitude, longitude: location.coordinate.longitude,
+                            isWork: isWork))
         savePlaces()
         return true
+    }
+
+    func setWork(_ id: UUID, _ isWork: Bool) {
+        guard let i = places.firstIndex(where: { $0.id == id }) else { return }
+        places[i].isWork = isWork
+        savePlaces()
     }
 
     func removePlaces(at offsets: IndexSet) {
