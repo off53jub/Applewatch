@@ -25,6 +25,12 @@ struct SilenceGate {
         UserDefaults.standard.object(forKey: "skipSilence") as? Bool ?? true
     }
 
+    /// 家の近くなど、書くのを休む場所にいるか（iPhone が決めて、時計にも届く）。オンのあいだは音がしても書かない。
+    static var held: Bool {
+        get { UserDefaults.standard.bool(forKey: "recordingHeld") }
+        set { UserDefaults.standard.set(newValue, forKey: "recordingHeld") }
+    }
+
     enum Step {
         /// そのまま
         case keep
@@ -54,6 +60,12 @@ struct SilenceGate {
         let newFloor = db < current ? db : current + Self.floorRise * Float(seconds)
         floor = newFloor
         let sound = db >= Self.absoluteQuiet && db >= newFloor + Self.margin
+        // 書くのを休む場所では、すぐに区切りを閉じて、音がしても起きない（マイクは握ったまま）
+        if Self.held {
+            quiet = 0
+            loud = 0
+            return resting ? .keep : .rest
+        }
         if resting {
             // 0.2秒ほど続けて音がしたら起きる（一瞬の音では起きない）
             loud = sound ? loud + 1 : 0

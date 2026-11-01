@@ -57,10 +57,22 @@ final class Pipeline {
     /// 時計が静かで書くのを休んでいるなら、休み始めた時刻
     @ObservationIgnored private var watchRestingSince: Date?
     /// 音がしないあいだは録音ファイルに書かない（iPhone と時計）
+    /// 録音を休む場所（家など）にいて、書くのを休んでいる
+    private(set) var recordingHeld = SilenceGate.held
+
+    /// 休む場所にいるかを確かめて、iPhone と時計に伝える
+    func updateHold() {
+        let held = places.atPausePlace()
+        guard held != recordingHeld || SilenceGate.held != held else { return }
+        recordingHeld = held
+        SilenceGate.held = held
+        receiver.sendSettings(skipSilence: skipSilence, held: held)
+    }
+
     var skipSilence = SilenceGate.enabled {
         didSet {
             UserDefaults.standard.set(skipSilence, forKey: "skipSilence")
-            receiver.sendSettings(skipSilence: skipSilence)
+            receiver.sendSettings(skipSilence: skipSilence, held: recordingHeld)
         }
     }
     /// 時計の区切りがこれ以上遅れたら、待たずに iPhone の分だけで書く
@@ -162,6 +174,7 @@ final class Pipeline {
             return settings.groqKey
         }
         conversations.placeName = { [weak self] time in await self?.places.name(at: time) }
+        places.onChange = { [weak self] in self?.updateHold() }
         conversations.eventInfo = { [weak self] start, end in
             guard let event = self?.calendar.events(from: start, to: end).first, !event.title.isEmpty else { return nil }
             let detail = event.title + (event.location.map { "（場所: \($0)）" } ?? "")
@@ -652,6 +665,7 @@ final class Pipeline {
             standby.resume()
             return
         }
+        updateHold()
         let started = Date.now
         if fromButton { RecordingActivity.start(started: started) }
         do {
@@ -727,6 +741,7 @@ final class Pipeline {
     }
 
     func appBecameActive() {
+        updateHold()
         liveAutoOff?.cancel()
         liveAutoOff = nil
         // ボタンで始めた録音の Live Activity は、古ければ出し直す（8時間で iOS に終わらせられるため）。

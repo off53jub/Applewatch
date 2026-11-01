@@ -14,9 +14,9 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     var onWatchResting: (@MainActor (Date?) -> Void)?
 
     /// iPhone の設定を時計に送る（時計がつながったときに受け取る）
-    func sendSettings(skipSilence: Bool) {
+    func sendSettings(skipSilence: Bool, held: Bool) {
         guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
-        try? WCSession.default.updateApplicationContext(["skipSilence": skipSilence])
+        try? WCSession.default.updateApplicationContext(["skipSilence": skipSilence, "held": held])
     }
 
     /// 時計との接続状態を、画面に出せる一文にする。
@@ -41,7 +41,7 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
 
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
         report(session)
-        if state == .activated { sendSettings(skipSilence: SilenceGate.enabled) }
+        if state == .activated { sendSettings(skipSilence: SilenceGate.enabled, held: SilenceGate.held) }
         // 前回知らせてきた状態は、つながる前から読める
         readContext(session.receivedApplicationContext)
     }

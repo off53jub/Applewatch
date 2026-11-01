@@ -54,6 +54,10 @@ private struct TodayView: View {
                 }
 
                 Section("いまの様子") {
+                    if pipeline.recordingHeld {
+                        Label("録音を休む場所にいるので、書くのを休んでいます", systemImage: "pause.circle")
+                            .foregroundStyle(.orange)
+                    }
                     LabeledContent("時計", value: pipeline.watchStatus)
                     LabeledContent("文字起こし待ち", value: "\(pipeline.pendingCount) 件")
                     if !pipeline.lastEngine.isEmpty {

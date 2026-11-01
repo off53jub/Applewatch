@@ -30,6 +30,14 @@ struct PlacesView: View {
                         if place.isWork == true {
                             Text("職場").font(.caption).foregroundStyle(.secondary)
                         }
+                        if place.pausesRecording == true {
+                            Text("ここでは録音を休む").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .contextMenu {
+                        Button(place.pausesRecording == true ? "ここでも録音する" : "ここでは録音を休む") {
+                            places.setPause(place.id, place.pausesRecording != true)
+                        }
                     }
                 }
                 .onDelete { places.removePlaces(at: $0) }
@@ -41,7 +49,7 @@ struct PlacesView: View {
                     Text(status).foregroundStyle(.secondary)
                 }
             } footer: {
-                Text("登録した場所から300 m 以内で話した会話は、見出しにその名前が出ます。それ以外は「〇〇駅近く」「〇〇付近」と出ます。位置は大きく移動したときだけ記録するので、電池はほとんど使いません。\n\nスイッチをオンにした場所は「職場」です。職場にいるあいだは職場の人の声を、それ以外では職場以外の人の声を先に照らし合わせるので、聞き分けが正確になります。")
+                Text("登録した場所から300 m 以内で話した会話は、見出しにその名前が出ます。それ以外は「〇〇駅近く」「〇〇付近」と出ます。位置は大きく移動したときだけ記録するので、電池はほとんど使いません。\n\n場所を長押しして「ここでは録音を休む」を選ぶと、そこから離れるまで、iPhone と時計は書くのを休みます（マイクは聞き続けるだけで、離れると自動で書き始めます）。家の iPad が録音するときに使います。\n\nスイッチをオンにした場所は「職場」です。職場にいるあいだは職場の人の声を、それ以外では職場以外の人の声を先に照らし合わせるので、聞き分けが正確になります。")
             }
         }
         .navigationTitle("場所")

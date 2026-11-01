@@ -16,6 +16,8 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         var radius: Double = 300
         /// 職場か（話者の聞き分けで、職場の人を先に比べる）
         var isWork: Bool?
+        /// ここでは録音を休む（家の iPad が録音するとき用）。ない場合は休まない。
+        var pausesRecording: Bool?
 
         var location: CLLocation { CLLocation(latitude: latitude, longitude: longitude) }
     }
@@ -37,6 +39,8 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     }
     private(set) var places: [Place] = []
     private(set) var authorization: CLAuthorizationStatus = .notDetermined
+    /// 位置や場所の登録が変わったら呼ぶ
+    @ObservationIgnored var onChange: (() -> Void)?
 
     @ObservationIgnored private let manager = CLLocationManager()
     @ObservationIgnored private var samples: [Sample] = []
@@ -146,9 +150,25 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         savePlaces()
     }
 
+    func setPause(_ id: UUID, _ pauses: Bool) {
+        guard let i = places.firstIndex(where: { $0.id == id }) else { return }
+        places[i].pausesRecording = pauses ? true : nil
+        savePlaces()
+        onChange?()
+    }
+
     func removePlaces(at offsets: IndexSet) {
         places.remove(atOffsets: offsets)
         savePlaces()
+        onChange?()
+    }
+
+    /// いま、録音を休む場所にいるか。位置が分からない・位置情報が使えないときは false（書き落とさないように）。
+    func atPausePlace() -> Bool {
+        guard isOn, authorization == .authorizedAlways || authorization == .authorizedWhenInUse,
+              places.contains(where: { $0.pausesRecording == true }), let last = samples.last,
+              Date.now.timeIntervalSince(last.time) < 36 * 3600 else { return false }
+        return registered(near: last.location, accuracy: last.accuracy)?.pausesRecording == true
     }
 
     private func currentLocation() async -> CLLocation? {
@@ -189,6 +209,7 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         if let data = try? JSONEncoder().encode(samples) {
             try? data.write(to: Self.samplesURL, options: .atomic)
         }
+        onChange?()
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {

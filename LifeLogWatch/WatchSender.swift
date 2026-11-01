@@ -161,6 +161,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
 
     static func readSettings(_ context: [String: Any]) {
         if let skip = context["skipSilence"] as? Bool { UserDefaults.standard.set(skip, forKey: "skipSilence") }
+        if let held = context["held"] as? Bool { SilenceGate.held = held }
     }
 
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
