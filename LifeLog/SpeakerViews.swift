@@ -108,6 +108,10 @@ struct PeopleView: View {
 
     var body: some View {
         List {
+            // 自分の声（声を足す・まとめた人を分け直す）
+            if let me = pipeline.people.first(where: \.isSelf) {
+                Section { row(me) }
+            }
             // 名前の無い声のうち、よく聞く声から名前を付けてもらう
             let waiting = others.filter { !$0.isNamed && $0.seconds >= 30 }
                 .sorted { $0.lastHeard > $1.lastHeard }
