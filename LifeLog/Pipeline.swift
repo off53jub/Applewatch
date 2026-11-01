@@ -54,6 +54,15 @@ final class Pipeline {
         timeIntervalSince1970: UserDefaults.standard.double(forKey: "lastWatchEnd")) {
         didSet { UserDefaults.standard.set(lastWatchEnd.timeIntervalSince1970, forKey: "lastWatchEnd") }
     }
+    /// 時計が静かで書くのを休んでいるなら、休み始めた時刻
+    @ObservationIgnored private var watchRestingSince: Date?
+    /// 音がしないあいだは録音ファイルに書かない（iPhone と時計）
+    var skipSilence = SilenceGate.enabled {
+        didSet {
+            UserDefaults.standard.set(skipSilence, forKey: "skipSilence")
+            receiver.sendSettings(skipSilence: skipSilence)
+        }
+    }
     /// 時計の区切りがこれ以上遅れたら、待たずに iPhone の分だけで書く
     private static let watchWait: TimeInterval = 12 * 60
     @ObservationIgnored private var retry: Task<Void, Never>?
@@ -95,6 +104,10 @@ final class Pipeline {
     let motion = MotionLink()
     let sleep = SleepGuess()
     let officeFilter = OfficeFilter()
+    /// 会話に出てきた言葉の数え上げ（人ごとの言葉・言葉の登録の候補）
+    let wordStats = WordStats()
+    /// 直前の区切りで聞こえた、名前のある人（iPhone・時計それぞれ）。次の区切りのヒントに、その人の言葉を使う
+    @ObservationIgnored private var recentPeople: [Bool: (end: Date, names: [String])] = [:]
     /// ほかのアプリ（AUDAY など）の音声の取り込み
     let importer = AudioImporter()
     /// 待機モード：アプリを裏で起こしておき、時計から届いた区切りをすぐ処理する
@@ -156,6 +169,10 @@ final class Pipeline {
             return (event.title, detail)
         }
         conversations.dayActivities = { [weak self] day in await self?.activities(on: day) ?? [] }
+        conversations.spellingHints = { [weak self] c in
+            guard let self else { return [] }
+            return wordStats.hints(for: c.people, limit: 15) + keywords(for: vocabularyContext(at: c.start))
+        }
         conversations.movementName = { [weak self] start, end in
             await self?.motion.movement(from: start, to: end)?.label
         }
@@ -209,6 +226,12 @@ final class Pipeline {
             processQueue()
         }
         receiver.onMark = { [weak self] time in self?.addMark(at: time) }
+        receiver.onWatchResting = { [weak self] since in
+            guard let self, since != watchRestingSince else { return }
+            watchRestingSince = since
+            // 時計が休みに入ったら、待っていた iPhone の分を書ける
+            if since != nil { processQueue() }
+        }
         importer.onQueued = { [weak self] in
             self?.pendingCount = Storage.pendingChunks().count
             self?.processQueue()
@@ -672,9 +695,14 @@ final class Pipeline {
         await conversations.closeIdle(now: settled, waiting: ConversationLog.gap)
         // 閉じた会話の中で、同じ人が別の「人物N」に分かれていたらまとめる
         await consolidateSpeakers(conversations.takeClosed())
+        // 閉じた会話の言葉を数える（はじめは、これまでの記録を全部）
+        let recentDays = wordStats.isEmpty ? conversations.days() : Array(conversations.days().suffix(2))
+        wordStats.count(days: recentDays.map { ($0, conversations.conversations(on: $0)) })
         await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
         await conversations.writePeopleNotes()
         await conversations.writeWeeklySummary(today: dayFormatter.string(from: .now))
+        // ドライブを読む AI 向けの案内と索引を、中身が変わっていたら書き直す
+        await updateDriveGuide()
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
         backupPending = archive.pendingCount
@@ -846,6 +874,69 @@ final class Pipeline {
             trip.movement.activityTitle.map { (start: trip.start, end: trip.end, title: $0) }
         }
         return ActivityBuilder.addUnrecorded(recorded, events: events, trips: trips, until: until)
+    }
+
+    // MARK: - ドライブを読む AI 向けの案内と索引
+
+    /// 最後に案内と索引を確かめた時刻（書き直しは多くても20分に1回）
+    @ObservationIgnored private var driveGuideChecked: Date = .distantPast
+
+    /// 「00 はじめに読んでください（AI 向けの説明）」と「01 日ごとの索引」を、中身が変わっていたら書き直す。
+    /// アプリの中の記録は読むだけ。日ごとのドキュメントには触らない。
+    func updateDriveGuide(force: Bool = false) async {
+        guard email != nil, force || Date.now.timeIntervalSince(driveGuideChecked) >= 20 * 60 else { return }
+        driveGuideChecked = .now
+        let days = conversations.days().filter { !conversations.conversations(on: $0).isEmpty }
+
+        let people = self.people.filter { $0.name != nil && !$0.isSelf }.map { person in
+            DriveGuide.Person(name: person.displayName, context: person.context?.label,
+                              words: wordStats.topWords(for: person.displayName))
+        }
+        var words = DriveGuide.Words()
+        for group in Vocabulary.Group.allCases {
+            words.groups.append((label: group.label, words: vocabulary.words(in: group)))
+        }
+        words.topics = vocabulary.topics.map { (name: $0.name, words: $0.triggers + $0.words) }
+        words.fixes = vocabulary.fixes.map { (wrong: $0.wrong, right: $0.right) }
+        let guide = DriveGuide.guide(people: people, words: words, days: days)
+
+        let entries = days.map { day -> DriveGuide.DayEntry in
+            let list = conversations.conversations(on: day)
+            let summary = conversations.summary(on: day)
+            var flow = savedActivities(on: day).map(\.flowLine)
+            if flow.isEmpty { flow = summary?.flow ?? [] }
+            if flow.isEmpty {
+                flow = list.filter { $0.closed && $0.title != nil }.map(ConversationLog.headingText)
+            }
+            var people: [String] = []
+            var unnamed = Set<String>()
+            for name in list.flatMap(\.people) {
+                if name.hasPrefix("人物") { unnamed.insert(name); continue }
+                if !people.contains(name) { people.append(name) }
+            }
+            if !unnamed.isEmpty { people.append("名前の無い人\(unnamed.count)人") }
+            var places: [String] = []
+            for place in list.compactMap(\.place) where !places.contains(place) { places.append(place) }
+            let marked = list.reduce(0) { count, c in count + c.lines.filter { $0.marked == true }.count }
+            return DriveGuide.DayEntry(day: day, flow: flow, people: people, places: places,
+                                       decisions: summary?.decisions ?? [], todos: summary?.todos ?? [],
+                                       conversations: list.count, marked: marked)
+        }
+        let index = DriveGuide.index(entries)
+
+        for (name, paragraphs) in [(DriveGuide.guideName, guide), (DriveGuide.indexName, index)] {
+            let key = "driveStamp-" + name
+            let stamp = DriveGuide.stamp(paragraphs)
+            guard force || UserDefaults.standard.string(forKey: key) != stamp else { continue }
+            do {
+                try await docs.overwrite(paragraphs, name: name)
+                UserDefaults.standard.set(stamp, forKey: key)
+            } catch {
+                // 通信できないときは5分ほどしてやり直す
+                driveGuideChecked = Date.now.addingTimeInterval(-15 * 60)
+                return
+            }
+        }
     }
 
     // MARK: - 会話ごとの話者のまとめ直し
@@ -1159,7 +1250,9 @@ final class Pipeline {
             if let start = Storage.startDate(of: url) { frontier = min(frontier, start) }
         }
         // 時計が録音中なら、時計の区切りが届いたところまで。届くのが遅すぎるときは待たない。
-        if watchRecording {
+        // 時計が静かで書くのを休んでいて、休む前の区切りが届いていれば、待たない
+        let watchResting = watchRestingSince.map { lastWatchEnd >= $0.addingTimeInterval(-5) } ?? false
+        if watchRecording, !watchResting {
             frontier = min(frontier, max(lastWatchEnd, .now.addingTimeInterval(-Self.watchWait)))
         }
         return frontier
@@ -1199,7 +1292,13 @@ final class Pipeline {
         let context = vocabularyContext(at: start)
         let placeWords = keywords(for: context)
         let local = try await Transcriber.transcribe(url, words: placeWords).filter { !CloudTranscriber.isFiller($0.text) }
-        guard !local.isEmpty else { return [] }
+        // 人の声がしているところ（端末内の VAD）。モデルが使えなければ nil（そのときは今までどおり）
+        let voice = await VoiceDetector.shared.speech(in: url)
+        let voiceSeconds = voice.map(VoiceDetector.total)
+        // 声がほとんど無い区切り：重い文字起こしはしない（端末内で聞き取れた文は、確かめたほうがよい行として残す）
+        let silent = (voiceSeconds ?? 1) < 0.5
+        // 端末内では何も聞き取れなくても、はっきり声がしていれば Haas-ja で聞き取る（小さな声の取りこぼしを減らす）
+        guard !local.isEmpty || (voiceSeconds ?? 0) >= 3 else { return [] }
         var entries: [(offset: TimeInterval?, text: String, score: Double?)] = local.map { ($0.offset, $0.text, nil) }
         lastEngine = "端末内"
         // 同じ機器の直前の区切りから続いているなら、その終わりの文を文脈として渡す
@@ -1211,20 +1310,27 @@ final class Pipeline {
         let eventWords = event.map { [$0.title] + $0.attendees + ($0.location.map { [$0] } ?? []) }?.filter { !$0.isEmpty } ?? []
         // 「さいとうさん」のように呼ばれた名前は、読みが同じ連絡先の人の書き方（「齋藤」など）をヒントにする
         let contactWords = await contacts.mentioned(in: local.map(\.text) + [previous ?? ""])
+        // 直前の区切りで聞こえた人と、よく話す言葉（「人ごとの言葉」）
+        let personWords = recentPeople[fromWatch].flatMap { start.timeIntervalSince($0.end) < 600 ? $0.names : nil }
+            .map { wordStats.hints(for: $0) } ?? []
         // 呼ばれた名前と話題の言葉は場所の言葉より具体的なので先に置く（Whisper のヒントは先頭の30語まで）
         var seenWords = Set<String>()
-        let keywords = (contactWords + topics.flatMap(\.words) + eventWords + placeWords).filter { seenWords.insert($0).inserted }
+        let keywords = (contactWords + topics.flatMap(\.words) + personWords + eventWords + placeWords)
+            .filter { seenWords.insert($0).inserted }
         // 寝ているあいだは、端末内の文字起こしだけで済ませる（電池を使わず、寝息に作られた文も出にくい）
         let asleep = await sleep.isAsleep(from: start, to: start.addingTimeInterval(duration), motion: motion)
         if asleep { lastEngine = "端末内（睡眠中）" }
+        if silent, !asleep { lastEngine = "端末内（声がほとんど無い区切り）" }
+        // Haas-ja に渡す区間：声のある区間（VAD が使えなければ、端末内で聞き取れた区間）
+        let haasSegments = voice.map { HaasEngine.segments(voice: $0, local: local) } ?? HaasEngine.segments(from: local)
         // 低電力モードで充電していなければ、iPhone の Haas-ja は動かさない（夜の聞き直しで取り戻す）
         let saving = Power.isSaving
-        var usedHaas = asleep
+        var usedHaas = asleep || silent
         /// 端末内とは別の聞き取りの結果（2つの食い違いを見比べるのに使う）
         var second: [CloudTranscriber.Line]?
-        if !asleep, homePC.shouldTry {
+        if !usedHaas, homePC.shouldTry {
             // 家の PC の Haas-ja（無料）。PC が切れているときや届かないときは、この区切りはほかの方法で
-            if let lines = try? await homePC.transcribe(url, local: local) {
+            if let lines = try? await homePC.transcribe(url, segments: haasSegments) {
                 entries = lines.map { ($0.offset, $0.text, nil) }
                 second = lines
                 lastEngine = "Haas-ja（家の PC）"
@@ -1234,7 +1340,7 @@ final class Pipeline {
         if !usedHaas, haas.isUsable, !saving {
             // iPhone の中の Haas-ja（無料）。動かせなかったら（裏で Neural Engine が使えないなど）、この区切りはほかの方法で
             do {
-                let lines = try await haas.transcribe(url, local: local)
+                let lines = try await haas.transcribe(url, segments: haasSegments)
                 entries = lines.map { ($0.offset, $0.text, nil) }
                 second = lines
                 lastEngine = "Haas-ja（iPhone 内）"
@@ -1243,7 +1349,7 @@ final class Pipeline {
                 lastEngine = "端末内（Haas-ja が動かなかったため）"
             }
         }
-        if !usedHaas, !asleep, settings.shouldUseCloud, let key = settings.apiKey {
+        if !usedHaas, !asleep, !local.isEmpty, settings.shouldUseCloud, let key = settings.apiKey {
             do {
                 let cloud = try await CloudTranscriber.transcribe(
                     url, provider: settings.provider, apiKey: key, keywords: keywords, previous: previous)
@@ -1251,7 +1357,14 @@ final class Pipeline {
                 lastEngine = cloud.model
                 if !cloud.lines.isEmpty {
                     // 端末内でも同じような音が聞き取れていない行は、実際には話されていない（雑音・外国語の動画など）とみなして捨てる
-                    let checked = TranscriptCheck.agreeing(cloud.lines, with: local, duration: duration)
+                    var checked = TranscriptCheck.agreeing(cloud.lines, with: local, duration: duration)
+                    // 声の見つからなかったところの行も捨てる（無音や雑音に作られた文）
+                    if let voice {
+                        checked = checked.filter { line in
+                            guard let offset = line.offset else { return true }
+                            return voice.contains { offset >= $0.start - 1.5 && offset <= $0.end + 1.5 }
+                        }
+                    }
                     entries = checked.map { ($0.offset, $0.text, $0.score) }
                     second = checked
                 }
@@ -1267,6 +1380,9 @@ final class Pipeline {
         if saving, haas.isUsable, !usedHaas, !asleep { lastEngine += "（電池優先）" }
         // Haas-ja で書けた区切りは、夜の聞き直しで文字起こしし直さない
         if usedHaas, !asleep { NightlyRecheck.markHaasDone(url.lastPathComponent) }
+        // 声がほとんど無い区切りは、夜の聞き直しでも Haas-ja にかけない
+        if silent { NightlyRecheck.markHaasDone(url.lastPathComponent) }
+        guard !entries.isEmpty else { return [] }
         // 2つの聞き取り（端末内と Haas-ja・クラウド）がどれだけ合っているか。確からしさの目安にし、
         // 大きく食い違う行（読みが半分も合わない行）は、言語モデルに見比べてもらう
         var agreement = [Double?](repeating: nil, count: entries.count)
@@ -1289,7 +1405,7 @@ final class Pipeline {
                 entries[i].text = entries[i].text.replacingOccurrences(of: fix.wrong, with: fix.right)
             }
         }
-        if correctionOn, !asleep, let key = settings.groqKey,
+        if correctionOn, !asleep, !silent, let key = settings.groqKey,
            let fixed = try? await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
                                                      previous: previous, alternatives: others, apiKey: key) {
             for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
@@ -1305,6 +1421,8 @@ final class Pipeline {
                                      String(entries.map { $0.text }.joined().suffix(200)))
         // 行ごとの確からしさ（0〜1）。2つの聞き取りの合い方と、クラウドの自信の低いほう。分からなければ nil
         let confidence: [Double?] = entries.indices.map { i in
+            // 声がほとんど無い区切りで書いた行は、確かめたほうがよい行にする
+            if silent { return 0.3 }
             let score = entries[i].score.map { exp($0) }
             switch (agreement[i], score) {
             case let (a?, s?): return min(a, s)
@@ -1316,6 +1434,13 @@ final class Pipeline {
         let offsets = Self.fillOffsets(entries.map { ($0.offset, $0.text) }, duration: duration)
         let names = await speakerNames(for: offsets, in: url, context: places.context(at: start),
                                        selfLevel: officeFilter.selfLevel(watch: fromWatch))
+        // この区切りで聞こえた名前のある人を覚えておく（次の区切りで、その人の言葉をヒントにする）
+        var heardPeople: [String] = []
+        for segment in names.compactMap({ $0 }) where segment.personID != SpeakerLabeler.selfID
+            && !segment.name.hasPrefix("人物") && !heardPeople.contains(segment.name) {
+            heardPeople.append(segment.name)
+        }
+        recentPeople[fromWatch] = (start.addingTimeInterval(duration), heardPeople)
         // 周りの人の声や、寝ているあいだの短い文・小さな声を外す（外した行は「消した行」に残す）
         let ends = entries.indices.map { i in i + 1 < offsets.count ? offsets[i + 1] : max(duration, offsets[i]) }
         let spans = entries.indices.map { (start: offsets[$0], end: ends[$0]) }
@@ -1427,6 +1552,6 @@ final class Pipeline {
     /// iPhone で録音中の最新ファイルはまだ書き込み中なので飛ばす（時計の区切りは書き終わってから届く）。
     private func isActiveChunk(_ url: URL) -> Bool {
         isRecording && !Storage.isFromWatch(url)
-            && url == Storage.pendingChunks().last(where: { !Storage.isFromWatch($0) })
+            && url.lastPathComponent == recorder.writingURL?.lastPathComponent
     }
 }

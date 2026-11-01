@@ -134,6 +134,36 @@ enum Summarizer {
         }
     }
 
+    /// 会話の中で、同じ名前や言葉が行によって違う字で書かれているところを見つけ、そろえる書き方を返す。
+    /// 返すのは（直す前の書き方, そろえた書き方）の組。読みが合うかは呼ぶ側で確かめる。
+    static func unify(_ text: String, title: String?, hints: [String], apiKey: String) async throws -> [(wrong: String, right: String)] {
+        let prompt = """
+            次は、ある会話の文字起こしです\(title.map { "（話題: \($0)）" } ?? "")。音声認識なので、同じ人の名前や同じ言葉が、行によって違う字で書かれていることがあります。
+            会話の中で同じものを指しているのに書き方がばらばらな、人の名前・固有名詞・専門用語を見つけ、どの書き方にそろえるかを決めてください。
+            ・そろえる先は、会話の中にある書き方か、下の「正しい書き方の候補」にあるものだけにしてください。
+            ・読み（音）が同じか、ほとんど同じものだけにしてください。意味の違う言葉への置き換えや、言い回しの直しはしないでください。
+            ・そろえるものが無ければ空の配列にしてください。最大10組です。
+            \(hints.isEmpty ? "" : "正しい書き方の候補: " + hints.prefix(40).joined(separator: "、") + "\n")\
+            次の JSON で返してください。
+            {"pairs": [{"wrong": "直す前の書き方", "right": "そろえた書き方"}, ...]}
+
+            \(text)
+            """
+        let json: [String: Any]
+        do {
+            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+        } catch CloudTranscriber.Failure.limited {
+            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+        }
+        let pairs = ((json["pairs"] as? [[String: Any]]) ?? []).compactMap { pair -> (wrong: String, right: String)? in
+            guard let wrong = (pair["wrong"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  let right = (pair["right"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  wrong.count >= 2, !right.isEmpty, wrong != right, right.count <= 16 else { return nil }
+            return (wrong, right)
+        }
+        return Array(pairs.prefix(10))
+    }
+
     /// 過ごし方の塊ごとに、その中でしたことを短い箇条書きにする。塊の数が合わなければ失敗。
     static func activityDetails(_ blocks: [(header: String, body: String)], apiKey: String) async throws -> [[String]] {
         guard !blocks.isEmpty else { return [] }

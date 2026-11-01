@@ -113,6 +113,8 @@ final class ConversationLog {
     var eventInfo: (Date, Date) async -> (name: String, detail: String)? = { _, _ in nil }
     /// その時間の移動の様子
     var movementName: (Date, Date) async -> String? = { _, _ in nil }
+    /// 会話の書き方をそろえるときの「正しい書き方の候補」（登録した言葉・人の名前・人ごとの言葉）
+    var spellingHints: (Conversation) async -> [String] = { _ in [] }
     /// その日の過ごし方（1日のまとめの「1日の流れ」に使う）
     var dayActivities: (String) async -> [Activity] = { _ in [] }
     /// テレビや動画だった会話で、名前の無い声として覚えてしまった番号（忘れてもらう）
@@ -178,6 +180,8 @@ final class ConversationLog {
                 log.conversations[i] = closed
                 save(log, day: openDay)
                 justClosed.append(closed)
+                // 会話全体を見て、同じ名前や言葉の書き方をそろえる
+                if let key = apiKey() { await unifySpelling(closed, day: openDay, apiKey: key) }
             }
         }
     }
@@ -233,6 +237,54 @@ final class ConversationLog {
         } catch {
             return nil
         }
+    }
+
+    // MARK: - 書き方をそろえる
+
+    /// 会話の中で、同じ名前や言葉が行によって違う字で書かれていたら、1つの書き方にそろえる。
+    /// そろえる先は会話の中にある書き方か登録した言葉だけで、読みが同じものだけ置き換える。手で直した行は変えない。
+    /// 直した行の元の文は「直す前」として残る。
+    private func unifySpelling(_ c: Conversation, day: String, apiKey: String) async {
+        guard c.media == nil else { return }
+        let lines = c.lines.filter { $0.checked != true }
+        guard lines.reduce(0, { $0 + $1.text.count }) >= Self.minimumCharacters else { return }
+        let hints = await spellingHints(c)
+        let all = lines.map(\.text).joined(separator: "\n")
+        guard let pairs = try? await Summarizer.unify(String(all.prefix(6_000)), title: c.title, hints: hints, apiKey: apiKey)
+        else { return }
+        let safe = pairs.filter { pair in
+            all.contains(pair.wrong)
+                && (all.contains(pair.right) || hints.contains(pair.right))
+                && Self.soundsSame(pair.wrong, pair.right)
+        }
+        guard !safe.isEmpty else { return }
+        var changes: [TextChange] = []
+        for line in lines {
+            var text = line.text
+            for pair in safe { text = text.replacingOccurrences(of: pair.wrong, with: pair.right) }
+            if text != line.text {
+                changes.append(TextChange(line: line, text: text, confidence: line.confidence, manual: false))
+            }
+        }
+        _ = try? await editText(changes, day: day)
+    }
+
+    /// 読み（ローマ字。長音はそろえる）が同じか、ほとんど同じか
+    static func soundsSame(_ a: String, _ b: String) -> Bool {
+        let x = Array(ContactsLink.reading(a)), y = Array(ContactsLink.reading(b))
+        guard !x.isEmpty, !y.isEmpty else { return false }
+        if x == y { return true }
+        var row = Array(0...y.count)
+        for i in 1...x.count {
+            var diagonal = row[0]
+            row[0] = i
+            for j in 1...y.count {
+                let above = row[j]
+                row[j] = min(above + 1, row[j - 1] + 1, diagonal + (x[i - 1] == y[j - 1] ? 0 : 1))
+                diagonal = above
+            }
+        }
+        return row[y.count] <= max(1, min(x.count, y.count) / 6)
     }
 
     // MARK: - 不具合の後始末
@@ -787,6 +839,9 @@ final class ConversationLog {
     func recordedDays() -> [String] { days().reversed() }
 
     func conversations(on day: String) -> [Conversation] { load(day).conversations }
+
+    /// 1日のまとめの中身（まだ付けていなければ nil）
+    func summary(on day: String) -> Summarizer.Day? { load(day).summary }
 
     // MARK: - 保存
 

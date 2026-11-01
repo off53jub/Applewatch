@@ -27,7 +27,7 @@ final class GoogleDocs {
     func signOut() {
         GIDSignIn.sharedInstance.signOut()
         defaults.removeObject(forKey: "folderId")
-        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("doc-") || key.hasPrefix("audioFolder") {
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("doc-") || key.hasPrefix("audioFolder") || key.hasPrefix("driveStamp-") {
             defaults.removeObject(forKey: key)
         }
     }
@@ -71,6 +71,38 @@ final class GoogleDocs {
                 "paragraphStyle": ["namedStyleType": "NORMAL_TEXT"],
                 "fields": "namedStyleType",
             ]])
+        }
+        _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
+                              json: ["requests": requests])
+    }
+
+    /// 名前 name のドキュメントの中身を、まるごと書き換える（このアプリが作った案内や索引のドキュメント用。日ごとの記録には使わない）。
+    /// paragraphs は段落の文字（改行なし）と、見出しの種類（"HEADING_1" など。nil なら普通の文字）。
+    func overwrite(_ paragraphs: [(text: String, style: String?)], name: String) async throws {
+        let docId = try await documentId(for: name)
+        let end = try await endIndex(day: name)
+        let text = paragraphs.map { $0.text + "\n" }.joined()
+        var requests: [[String: Any]] = []
+        if end > 1 {
+            requests.append(["deleteContentRange": ["range": ["startIndex": 1, "endIndex": end]]])
+        }
+        requests.append(["insertText": ["location": ["index": 1], "text": text]])
+        requests.append(["updateParagraphStyle": [
+            "range": ["startIndex": 1, "endIndex": 1 + text.utf16.count],
+            "paragraphStyle": ["namedStyleType": "NORMAL_TEXT"],
+            "fields": "namedStyleType",
+        ]])
+        var at = 1
+        for p in paragraphs {
+            let length = (p.text + "\n").utf16.count
+            if let style = p.style {
+                requests.append(["updateParagraphStyle": [
+                    "range": ["startIndex": at, "endIndex": at + length],
+                    "paragraphStyle": ["namedStyleType": style],
+                    "fields": "namedStyleType",
+                ]])
+            }
+            at += length
         }
         _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
                               json: ["requests": requests])

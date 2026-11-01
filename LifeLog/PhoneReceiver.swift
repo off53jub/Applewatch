@@ -10,6 +10,14 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     var onWatchRecording: (@MainActor (Bool, Date?) -> Void)?
     /// 時計で「印」が押された
     var onMark: (@MainActor (Date) -> Void)?
+    /// 時計が静かで書くのを休んでいるなら、休み始めた時刻（書いていれば nil）
+    var onWatchResting: (@MainActor (Date?) -> Void)?
+
+    /// iPhone の設定を時計に送る（時計がつながったときに受け取る）
+    func sendSettings(skipSilence: Bool) {
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
+        try? WCSession.default.updateApplicationContext(["skipSilence": skipSilence])
+    }
 
     /// 時計との接続状態を、画面に出せる一文にする。
     static func describe(_ session: WCSession) -> String {
@@ -33,6 +41,7 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
 
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
         report(session)
+        if state == .activated { sendSettings(skipSilence: SilenceGate.enabled) }
         // 前回知らせてきた状態は、つながる前から読める
         readContext(session.receivedApplicationContext)
     }
@@ -48,7 +57,11 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     private func readContext(_ context: [String: Any]) {
         guard let recording = context["recording"] as? Bool else { return }
         let at = (context["at"] as? Double).map { Date(timeIntervalSince1970: $0) }
-        Task { @MainActor in self.onWatchRecording?(recording, at) }
+        let resting = (context["resting"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        Task { @MainActor in
+            self.onWatchResting?(recording ? resting : nil)
+            self.onWatchRecording?(recording, at)
+        }
     }
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {

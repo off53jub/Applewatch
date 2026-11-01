@@ -100,7 +100,10 @@ final class HomePC {
 
     /// 区切りを PC で文字にする。local は端末内の文字起こし（声のある区間を決めるのに使う）。
     func transcribe(_ url: URL, local: [Transcriber.Line]) async throws -> [CloudTranscriber.Line] {
-        let segments = HaasEngine.segments(from: local)
+        try await transcribe(url, segments: HaasEngine.segments(from: local))
+    }
+
+    func transcribe(_ url: URL, segments: [(start: TimeInterval, end: TimeInterval)]) async throws -> [CloudTranscriber.Line] {
         guard !segments.isEmpty else { return [] }
         do {
             // 先に短く確かめる。PC が切れていたら、長く待たずにほかの方法へ

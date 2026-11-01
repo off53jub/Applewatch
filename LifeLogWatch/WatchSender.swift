@@ -21,8 +21,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
     }()
 
     /// 次の区切りのファイルの場所（名前は録音を始めた時刻）
-    static func newChunkURL() -> URL {
-        pendingDir.appendingPathComponent(nameFormatter.string(from: .now) + ".m4a")
+    static func newChunkURL(at date: Date = .now) -> URL {
+        pendingDir.appendingPathComponent(nameFormatter.string(from: date) + ".m4a")
     }
 
     /// 低電力モードで、これだけ溜まったらまとめて送る
@@ -47,6 +47,13 @@ final class WatchSender: NSObject, WCSessionDelegate {
     }
 
     private var recordingNow = false
+    private var resting: Date?
+
+    /// 静かで書くのを休んでいるなら、休み始めた時刻。iPhone は、それより前の区切りが届いていれば待たない。
+    var restingSince: Date? {
+        get { lock.withLock { resting } }
+        set { lock.withLock { resting = newValue } }
+    }
 
     /// 録音しているかを iPhone に知らせる。iPhone は、時計の区切りが届くのを待ってから
     /// 同じ時間帯の iPhone の録音と聞き比べる。
@@ -60,8 +67,9 @@ final class WatchSender: NSObject, WCSessionDelegate {
 
     private func publish() {
         guard WCSession.default.activationState == .activated else { return }
-        try? WCSession.default.updateApplicationContext(
-            ["recording": isRecording, "at": Date.now.timeIntervalSince1970])
+        var context: [String: Any] = ["recording": isRecording, "at": Date.now.timeIntervalSince1970]
+        if let since = restingSince { context["resting"] = since.timeIntervalSince1970 }
+        try? WCSession.default.updateApplicationContext(context)
     }
 
     /// 区切るたびに呼ぶ。iPhone は、しばらく知らせが無いと「止まっているかも」と通知する。
@@ -138,11 +146,21 @@ final class WatchSender: NSObject, WCSessionDelegate {
 
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
         if state == .activated {
+            Self.readSettings(session.receivedApplicationContext)
             if !ProcessInfo.processInfo.isLowPowerModeEnabled || unsentCount() >= Self.batch { resendPending() }
             publish()
             flushMarks()
         }
         onChange?()
+    }
+
+    /// iPhone の設定（無音のあいだは書かない、など）を受け取る
+    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+        Self.readSettings(applicationContext)
+    }
+
+    static func readSettings(_ context: [String: Any]) {
+        if let skip = context["skipSilence"] as? Bool { UserDefaults.standard.set(skip, forKey: "skipSilence") }
     }
 
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {

@@ -8,6 +8,8 @@ struct VocabularyView: View {
     @State private var wrong = ""
     @State private var right = ""
     @State private var newTopic = ""
+    /// 登録の候補（手で直した言葉・何日にもわたって出てくる言葉）
+    @State private var candidates: [WordStats.Candidate] = []
 
     var body: some View {
         let vocabulary = pipeline.vocabulary
@@ -29,6 +31,39 @@ struct VocabularyView: View {
                         .onSubmit(addWord)
                     Button("追加", action: addWord)
                         .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+
+            if !candidates.isEmpty {
+                Section {
+                    ForEach(candidates) { candidate in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(candidate.word)
+                                Text(candidate.edited ? "手で直した言葉（\(candidate.count) 回）"
+                                     : "\(candidate.days) 日・\(candidate.count) 回の会話に出てきた")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("「\(group.label)」に足す") {
+                                vocabulary.add(candidate.word, to: group)
+                                loadCandidates()
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                        }
+                        .swipeActions {
+                            Button("候補から外す", role: .destructive) {
+                                pipeline.wordStats.dismiss(candidate.word)
+                                loadCandidates()
+                            }
+                        }
+                    }
+                } header: {
+                    Text("登録の候補")
+                } footer: {
+                    Text("手で直した言葉と、何日にもわたって出てくる名前や専門用語らしい言葉です。押したときだけ、上で選んだ組に足します。左にスワイプすると候補から外せます。")
                 }
             }
 
@@ -80,6 +115,16 @@ struct VocabularyView: View {
             }
         }
         .navigationTitle("言葉の登録")
+        .onAppear(perform: loadCandidates)
+    }
+
+    private func loadCandidates() {
+        let vocabulary = pipeline.vocabulary
+        var known = Set(Vocabulary.Group.allCases.flatMap { vocabulary.words(in: $0) })
+        known.formUnion(vocabulary.fixes.map(\.right))
+        known.formUnion(vocabulary.topics.flatMap(\.words))
+        known.formUnion(pipeline.people.compactMap(\.name))
+        candidates = pipeline.wordStats.candidates(known: known)
     }
 
     private func addTopic() {

@@ -323,12 +323,16 @@ private struct SettingsView: View {
                     Toggle("録音が止まったら知らせる", isOn: Binding(
                         get: { pipeline.stopAlertsOn },
                         set: { pipeline.stopAlertsOn = $0 }))
+                    Toggle("音がしないあいだは書かない", isOn: Binding(
+                        get: { pipeline.skipSilence },
+                        set: { pipeline.skipSilence = $0 }))
                 } header: {
                     Text("Apple Watch")
                 } footer: {
-                    Text(pipeline.standbyOn
+                    Text((pipeline.standbyOn
                          ? "時計が録音しているあいだだけ無音を流してアプリを起こしておき、時計の録音を5分ごとにすぐ文字起こしします。電池を少し多く使います。"
                          : "時計の録音は、アプリを開いたときや充電中にまとめて文字起こしします。")
+                         + "\n「音がしないあいだは書かない」をオンにすると、時計と iPhone で1分続けて静かなときは録音ファイルに書かず、音がしたらその1秒前から書き始めます（マイクは聞き続けます）。無音を送ったり文字にしたりしないぶん、電池が長持ちします。時計の設定は、時計と iPhone がつながったときに伝わります。")
                 }
 
                 Section {

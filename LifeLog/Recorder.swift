@@ -12,7 +12,10 @@ final class Recorder: NSObject {
     private(set) var isRecording = false
 
     private var engine: AVAudioEngine?
-    private let writer = ChunkWriter { Storage.pendingDir.appendingPathComponent(Storage.chunkName(for: .now)) }
+    private let writer = ChunkWriter { Storage.pendingDir.appendingPathComponent(Storage.chunkName(for: $0)) }
+
+    /// いま書いている区切り（静かで休んでいるときは nil）
+    var writingURL: URL? { writer.currentURL }
     private var observers: [NSObjectProtocol] = []
 
     /// ライブ文字起こしに音を渡す（録音の裏の糸で呼ばれる）。nil で止める。
@@ -154,6 +157,7 @@ final class Recorder: NSObject {
 }
 
 /// マイクの音を 16kHz・1ch にして、いまの区切りのファイルに書く。録音の糸と画面の糸の両方から触るので鍵をかける。
+/// 1分続けて静かなら区切りを閉じて休み、音がしたらその1秒前から次の区切りを書き始める（SilenceGate）。
 final class ChunkWriter: @unchecked Sendable {
     static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
     static let fileSettings: [String: Any] = [
@@ -172,14 +176,23 @@ final class ChunkWriter: @unchecked Sendable {
     private var listener: (@Sendable (AVAudioPCMBuffer) -> Void)?
     /// 区切る位置を決める
     private var cutter = ChunkCutter()
-    /// 次の区切りのファイルの場所を作る
-    private let makeURL: @Sendable () -> URL
+    /// 音がしないあいだは書かない
+    private var gate = SilenceGate()
+    /// 静かで休んでいるか
+    private var resting = false
+    /// 休んでいるあいだの直近の音（書き始めるときに頭に足す）
+    private var preRoll: [AVAudioPCMBuffer] = []
+    /// 次の区切りのファイルの場所を作る（引数は区切りの始まりの時刻）
+    private let makeURL: @Sendable (Date) -> URL
     /// 区切りを切り替えたら呼ぶ（画面の糸で）。終わった区切り、その中のいちばん大きな音（dB）、次を開けなかったときのエラー
     private var onCut: (@Sendable (URL, Float, Error?) -> Void)?
 
-    init(makeURL: @escaping @Sendable () -> URL) {
+    init(makeURL: @escaping @Sendable (Date) -> URL) {
         self.makeURL = makeURL
     }
+
+    /// いま書いている区切り（休んでいるときは nil）
+    var currentURL: URL? { lock.withLock { url } }
 
     func setOnCut(_ onCut: (@Sendable (URL, Float, Error?) -> Void)?) {
         lock.withLock { self.onCut = onCut }
@@ -201,12 +214,17 @@ final class ChunkWriter: @unchecked Sendable {
             self.url = url
             peak = 0
             cutter.reset()
+            gate.reset()
+            resting = false
+            preRoll.removeAll()
         }
     }
 
-    /// いまの区切りを閉じる（ファイルを手放すと書き終わる）。peak は dB。
+    /// いまの区切りを閉じる（ファイルを手放すと書き終わる）。peak は dB。休んでいたら nil。
     func close() -> (url: URL, peak: Float)? {
         lock.withLock {
+            resting = false
+            preRoll.removeAll()
             guard let url else { return nil }
             file = nil
             self.url = nil
@@ -233,12 +251,64 @@ final class ChunkWriter: @unchecked Sendable {
             return buffer
         }
         guard error == nil, out.frameLength > 0, let samples = out.floatChannelData?[0] else { return }
-        for i in 0..<Int(out.frameLength) { peak = max(peak, abs(samples[i])) }
-        try? file?.write(from: out)
+        let frames = Int(out.frameLength)
         listener?(out)
-        if file != nil, cutter.feed(samples, count: Int(out.frameLength), rate: Self.format.sampleRate) {
+        let step = gate.feed(samples, count: frames, rate: Self.format.sampleRate, resting: resting)
+        if resting {
+            preRoll.append(out)
+            var total = preRoll.reduce(0) { $0 + Int($1.frameLength) }
+            while total > Int(SilenceGate.preRoll * Self.format.sampleRate), preRoll.count > 1 {
+                total -= Int(preRoll.removeFirst().frameLength)
+            }
+            if step == .wake { wake(frames: total) }
+            return
+        }
+        for i in 0..<frames { peak = max(peak, abs(samples[i])) }
+        try? file?.write(from: out)
+        if step == .rest {
+            rest()
+        } else if file != nil, cutter.feed(samples, count: frames, rate: Self.format.sampleRate) {
             cutHere()
         }
+    }
+
+    /// 休みに入る：いまの区切りを閉じ、次は開かない（鍵をかけたまま呼ぶ）。
+    private func rest() {
+        guard let finished = url else { return }
+        let peakDB = 20 * log10(max(peak, 1e-8))
+        file = nil
+        url = nil
+        resting = true
+        preRoll.removeAll()
+        peak = 0
+        cutter.reset()
+        let callback = onCut
+        DispatchQueue.main.async { callback?(finished, peakDB, nil) }
+    }
+
+    /// 音がしたので、溜めておいた直前の音から次の区切りを書き始める（鍵をかけたまま呼ぶ）。
+    private func wake(frames: Int) {
+        let started = Date.now.addingTimeInterval(-Double(frames) / Self.format.sampleRate)
+        let next = makeURL(started)
+        do {
+            file = try AVAudioFile(forWriting: next, settings: Self.fileSettings,
+                                   commonFormat: .pcmFormatFloat32, interleaved: false)
+            url = next
+        } catch {
+            // 開けなければ休んだまま、次の音でまた試す
+            return
+        }
+        resting = false
+        peak = 0
+        cutter.reset()
+        for piece in preRoll {
+            if let samples = piece.floatChannelData?[0] {
+                for i in 0..<Int(piece.frameLength) { peak = max(peak, abs(samples[i])) }
+                _ = cutter.feed(samples, count: Int(piece.frameLength), rate: Self.format.sampleRate)
+            }
+            try? file?.write(from: piece)
+        }
+        preRoll.removeAll()
     }
 
     /// いまの区切りを閉じ、すぐ次の区切りを開く（鍵をかけたまま呼ぶ）。
@@ -249,7 +319,7 @@ final class ChunkWriter: @unchecked Sendable {
         file = nil
         url = nil
         var failure: Error?
-        let next = makeURL()
+        let next = makeURL(.now)
         do {
             file = try AVAudioFile(forWriting: next, settings: Self.fileSettings,
                                    commonFormat: .pcmFormatFloat32, interleaved: false)

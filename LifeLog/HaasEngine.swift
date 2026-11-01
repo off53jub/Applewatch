@@ -112,20 +112,49 @@ final class HaasEngine {
 
     /// 区切りを文字にする。local は端末内の文字起こし（声のある区間を決めるのに使う）。
     func transcribe(_ url: URL, local: [Transcriber.Line]) async throws -> [CloudTranscriber.Line] {
-        let segments = Self.segments(from: local)
+        try await transcribe(url, segments: Self.segments(from: local))
+    }
+
+    func transcribe(_ url: URL, segments: [(start: TimeInterval, end: TimeInterval)]) async throws -> [CloudTranscriber.Line] {
         guard !segments.isEmpty else { return [] }
         return try await HaasRunner.shared.transcribe(url, segments: segments)
     }
 
     /// 端末内の文字起こしの区間を、間が1秒未満なら14秒まで1つにまとめる。前後に少し余白を付ける。
     static func segments(from local: [Transcriber.Line]) -> [(start: TimeInterval, end: TimeInterval)] {
+        merge(local.map { (start: $0.offset, end: max($0.end, $0.offset + 0.5)) })
+    }
+
+    /// 声のある区間（VAD）から、Haas-ja に渡す区間を作る。端末内で聞き取れた区間のうち、声のある区間と重なるものも足す
+    /// （声が見つからなかったところの端末内の文は、雑音から作られた文かもしれないので渡さない）。
+    static func segments(voice: [(start: TimeInterval, end: TimeInterval)],
+                         local: [Transcriber.Line]) -> [(start: TimeInterval, end: TimeInterval)] {
+        let heard = local.map { (start: $0.offset, end: max($0.end, $0.offset + 0.5)) }
+            .filter { span in voice.contains { $0.start < span.end + 0.5 && $0.end > span.start - 0.5 } }
+        return merge(voice + heard)
+    }
+
+    /// 区間を時刻順に並べ、間が1秒未満なら14秒まで1つにまとめる（長い区間は14秒ずつに分ける）。前後に少し余白を付ける。
+    private static func merge(_ spans: [(start: TimeInterval, end: TimeInterval)]) -> [(start: TimeInterval, end: TimeInterval)] {
+        var pieces: [(start: TimeInterval, end: TimeInterval)] = []
+        for span in spans where span.end > span.start {
+            // 14秒より長い区間は分ける
+            var from = span.start
+            while from < span.end {
+                let to = min(span.end, from + 14)
+                pieces.append((from, to))
+                from = to
+            }
+        }
         var result: [(start: TimeInterval, end: TimeInterval)] = []
-        for line in local.sorted(by: { $0.offset < $1.offset }) {
-            let end = max(line.end, line.offset + 0.5)
-            if let last = result.last, line.offset - last.end < 1.0, end - last.start <= 14 {
-                result[result.count - 1].end = max(last.end, end)
+        for piece in pieces.sorted(by: { $0.start < $1.start }) {
+            if let last = result.last, piece.start - last.end < 1.0, max(last.end, piece.end) - last.start <= 14 {
+                result[result.count - 1].end = max(last.end, piece.end)
+            } else if let last = result.last, piece.start < last.end {
+                // 重なっているが、まとめると長すぎる：重ならないところだけ
+                if piece.end > last.end { result.append((last.end, piece.end)) }
             } else {
-                result.append((line.offset, end))
+                result.append(piece)
             }
         }
         return result.map { (max(0, $0.start - 0.3), $0.end + 0.4) }
