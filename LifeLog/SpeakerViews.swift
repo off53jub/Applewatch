@@ -567,6 +567,8 @@ struct UnnamedVoicesView: View {
     let day: String
     @State private var player = ClipPlayer()
     @State private var suggestions: [String: (id: String, name: String, distance: Float)] = [:]
+    /// 「〇〇さん」と呼ばれたすぐあとに話した声と、その名前
+    @State private var called: [String: [(name: String, count: Int)]] = [:]
     @State private var picking: Pick?
     @State private var naming: Pick?
     @State private var newName = ""
@@ -612,6 +614,9 @@ struct UnnamedVoicesView: View {
                                 apply(item.person.id) { await pipeline.assign(item.person.id, to: s.id) }
                             }
                         }
+                        if let top = called[item.person.id]?.first {
+                            calledButton(item.person.id, name: top.name, count: top.count)
+                        }
                         Button("ほかの人を選ぶ") { picking = Pick(id: item.person.id) }
                         Button("新しく名前を付ける") {
                             newName = ""
@@ -630,6 +635,7 @@ struct UnnamedVoicesView: View {
         }
         .navigationTitle("人物Nを整理")
         .task(id: list.map(\.id)) {
+            called = pipeline.calledNames(on: day)
             for item in list where suggestions[item.person.id] == nil {
                 if let s = await pipeline.voiceSuggestion(for: item.person.id) {
                     suggestions[item.person.id] = s
@@ -660,6 +666,31 @@ struct UnnamedVoicesView: View {
             Button("キャンセル", role: .cancel) { naming = nil }
         } message: {
             Text("これまでの記録とドキュメントの名前も変わります。")
+        }
+    }
+
+    /// 「〇〇さん」と呼ばれた名前から。名前を付けた人に同じ名前の人がいればその人にまとめ、いなければその名前を付ける。
+    @ViewBuilder
+    private func calledButton(_ id: String, name: String, count: Int) -> some View {
+        let heard = "「\(name)さん」と呼ばれたあとに話していました（\(count)回）"
+        if let match = pipeline.people.first(where: { $0.isNamed && !$0.isSelf && ($0.displayName.hasPrefix(name) || name.hasPrefix($0.displayName)) }) {
+            Button {
+                apply(id) { await pipeline.assign(id, to: match.id) }
+            } label: {
+                VStack(alignment: .leading) {
+                    Text("「\(match.displayName)」にまとめる")
+                    Text(heard).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            Button {
+                apply(id) { await pipeline.renamePerson(id, to: name) }
+            } label: {
+                VStack(alignment: .leading) {
+                    Text("「\(name)」と名前を付ける")
+                    Text(heard).font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 import AVFoundation
 
-/// 5分ごとに区切って AAC で録音し続ける。区切るたびに onChunk に完成したファイルを渡す。
+/// 5分ほどで区切って AAC で録音し続ける。区切るたびに onChunk に完成したファイルを渡す。
+/// 区切りは、5分たったあとの声の途切れたところで切る（言葉の途中で切らないため。ChunkCutter）。
 /// マイクの音は AVAudioEngine で受け、16kHz・1ch にしてファイルに書く。ライブ文字起こしがオンなら、同じ音をそちらにも渡す。
 @MainActor
 final class Recorder: NSObject {
@@ -11,8 +12,7 @@ final class Recorder: NSObject {
     private(set) var isRecording = false
 
     private var engine: AVAudioEngine?
-    private let writer = ChunkWriter()
-    private var timer: Timer?
+    private let writer = ChunkWriter { Storage.pendingDir.appendingPathComponent(Storage.chunkName(for: .now)) }
     private var observers: [NSObjectProtocol] = []
 
     /// ライブ文字起こしに音を渡す（録音の裏の糸で呼ばれる）。nil で止める。
@@ -35,6 +35,10 @@ final class Recorder: NSObject {
             },
         ]
         isRecording = true
+        // 書いている糸が静かなところで区切りを切り替えたら、終わった区切りを受け取る
+        writer.setOnCut { [weak self] url, peak, error in
+            Task { @MainActor in self?.cut(url, peak: peak, error: error) }
+        }
         do {
             try writer.open(Self.newChunkURL())
             try startEngine()
@@ -42,15 +46,10 @@ final class Recorder: NSObject {
             stop()
             throw error
         }
-        timer = Timer.scheduledTimer(withTimeInterval: Self.chunkSeconds, repeats: true) { _ in
-            Task { @MainActor in self.rotate() }
-        }
     }
 
     func stop() {
         isRecording = false
-        timer?.invalidate()
-        timer = nil
         stopEngine()
         finishChunk()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
@@ -116,10 +115,14 @@ final class Recorder: NSObject {
         }
     }
 
-    private func rotate() {
-        guard isRecording else { return }
-        finishChunk()
-        do { try writer.open(Self.newChunkURL()) } catch {
+    /// 書いている糸が区切りを切り替えた。終わった区切りを渡し、次を開けなかったら止める。
+    private func cut(_ url: URL, peak: Float, error: Error?) {
+        if peak < -50 {
+            try? FileManager.default.removeItem(at: url)
+        } else {
+            onChunk?(url)
+        }
+        if let error, isRecording {
             stopWithReason("録音を続けられませんでした: \(error.localizedDescription)")
         }
     }
@@ -167,6 +170,20 @@ final class ChunkWriter: @unchecked Sendable {
     private var peak: Float = 0
     private var converter: AVAudioConverter?
     private var listener: (@Sendable (AVAudioPCMBuffer) -> Void)?
+    /// 区切る位置を決める
+    private var cutter = ChunkCutter()
+    /// 次の区切りのファイルの場所を作る
+    private let makeURL: @Sendable () -> URL
+    /// 区切りを切り替えたら呼ぶ（画面の糸で）。終わった区切り、その中のいちばん大きな音（dB）、次を開けなかったときのエラー
+    private var onCut: (@Sendable (URL, Float, Error?) -> Void)?
+
+    init(makeURL: @escaping @Sendable () -> URL) {
+        self.makeURL = makeURL
+    }
+
+    func setOnCut(_ onCut: (@Sendable (URL, Float, Error?) -> Void)?) {
+        lock.withLock { self.onCut = onCut }
+    }
 
     func prepare(from input: AVAudioFormat) {
         lock.withLock { converter = AVAudioConverter(from: input, to: Self.format) }
@@ -183,6 +200,7 @@ final class ChunkWriter: @unchecked Sendable {
             self.file = file
             self.url = url
             peak = 0
+            cutter.reset()
         }
     }
 
@@ -218,5 +236,31 @@ final class ChunkWriter: @unchecked Sendable {
         for i in 0..<Int(out.frameLength) { peak = max(peak, abs(samples[i])) }
         try? file?.write(from: out)
         listener?(out)
+        if file != nil, cutter.feed(samples, count: Int(out.frameLength), rate: Self.format.sampleRate) {
+            cutHere()
+        }
+    }
+
+    /// いまの区切りを閉じ、すぐ次の区切りを開く（鍵をかけたまま呼ぶ）。
+    private func cutHere() {
+        guard let finished = url else { return }
+        let peakDB = 20 * log10(max(peak, 1e-8))
+        // ファイルを手放すと書き終わる
+        file = nil
+        url = nil
+        var failure: Error?
+        let next = makeURL()
+        do {
+            file = try AVAudioFile(forWriting: next, settings: Self.fileSettings,
+                                   commonFormat: .pcmFormatFloat32, interleaved: false)
+            url = next
+        } catch {
+            failure = error
+        }
+        peak = 0
+        cutter.reset()
+        let callback = onCut
+        let error = failure
+        DispatchQueue.main.async { callback?(finished, peakDB, error) }
     }
 }

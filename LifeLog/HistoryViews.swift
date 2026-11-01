@@ -30,6 +30,7 @@ struct DayView: View {
     @State private var player = ClipPlayer()
     @State private var fixing: Fix?
     @State private var addingWord: WordTarget?
+    @State private var editing: WordTarget?
 
     struct WordTarget: Identifiable {
         let id = UUID()
@@ -71,6 +72,9 @@ struct DayView: View {
                                 Button("話者を直す", systemImage: "person.crop.circle.badge.questionmark") {
                                     fixing = Fix(line: line, next: next)
                                 }
+                                Button("文字を直す", systemImage: "pencil") {
+                                    editing = WordTarget(line: line)
+                                }
                                 Button("言葉を登録", systemImage: "character.book.closed") {
                                     addingWord = WordTarget(line: line)
                                 }
@@ -80,6 +84,10 @@ struct DayView: View {
                                     fixing = Fix(line: line, next: next)
                                 }
                                 .tint(.indigo)
+                                Button("文字", systemImage: "pencil") {
+                                    editing = WordTarget(line: line)
+                                }
+                                .tint(.orange)
                             }
                     }
                 } header: {
@@ -104,6 +112,9 @@ struct DayView: View {
         .refreshable { conversations = pipeline.conversations(on: day) }
         .onDisappear { player.stop() }
         .sheet(item: $addingWord) { AddWordView(line: $0.line) }
+        .sheet(item: $editing) { target in
+            EditLineView(line: target.line) { conversations = pipeline.conversations(on: day) }
+        }
         .sheet(item: $fixing) { fix in
             SpeakerFixView(line: fix.line, next: fix.next, context: pipeline.places.context(at: fix.line.time)) {
                 conversations = pipeline.conversations(on: day)
@@ -136,7 +147,13 @@ struct DayView: View {
                     }
                     .font(.caption.bold())
                 }
-                Text(line.text)
+                // 確からしさの低い行は薄く出す（聞き直して確かめたほうがよい行）
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    if line.isUncertain {
+                        Image(systemName: "questionmark.circle").font(.caption).foregroundStyle(.orange)
+                    }
+                    Text(line.text).opacity(line.isUncertain ? 0.55 : 1)
+                }
                 if let original = line.original {
                     Text("直す前: " + original)
                         .font(.caption)
@@ -177,6 +194,67 @@ struct DayView: View {
         }
         if let title = c.title, !title.isEmpty { parts.append(title) }
         return parts.joined(separator: "　")
+    }
+}
+
+/// 記録の行の文字を直す。直したところを、誤変換の一覧に足すかをその場で選べる。
+struct EditLineView: View {
+    @Environment(Pipeline.self) private var pipeline
+    @Environment(\.dismiss) private var dismiss
+    let line: ConversationLog.Line
+    let onDone: () -> Void
+    @State private var text = ""
+    @State private var addFix = true
+    @State private var saving = false
+    @State private var failure: String?
+
+    var body: some View {
+        let part = Pipeline.changedPart(from: line.text, to: text)
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("文", text: $text, axis: .vertical)
+                } header: {
+                    Text("この行の文字")
+                } footer: {
+                    if let original = line.original { Text("最初の文字起こし: " + original) }
+                }
+                if let part {
+                    Section {
+                        Toggle("「\(part.wrong)」→「\(part.right)」を誤変換の一覧に足す", isOn: $addFix)
+                    } footer: {
+                        Text("足すと、これからの文字起こしでも同じ書き間違いを自動で直します。あとから「言葉」の画面で消せます。")
+                    }
+                }
+                if let failure {
+                    Section { Text(failure).foregroundStyle(.red) }
+                }
+            }
+            .navigationTitle("文字を直す")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("やめる") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    if saving {
+                        ProgressView()
+                    } else {
+                        Button("直す") {
+                            saving = true
+                            Task {
+                                failure = await pipeline.editLine(line, to: text, addFix: addFix ? part : nil)
+                                saving = false
+                                if failure == nil {
+                                    onDone()
+                                    dismiss()
+                                }
+                            }
+                        }
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || text == line.text)
+                    }
+                }
+            }
+            .onAppear { text = line.text }
+        }
     }
 }
 

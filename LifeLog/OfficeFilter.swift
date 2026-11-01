@@ -64,6 +64,12 @@ final class OfficeFilter {
         }
     }
 
+    /// 覚えた自分の声の大きさ（dB）。まだ5回分覚えていなければ nil。話者の聞き分けの手がかりにも使う。
+    func selfLevel(watch: Bool) -> Float? {
+        guard let s = selfLevel[watch], s.count >= 5 else { return nil }
+        return s.level
+    }
+
     func selfLevelText(watch: Bool) -> String {
         guard let s = selfLevel[watch], s.count >= 5 else { return "まだ覚えていません" }
         return String(format: "%.0f dB", s.level)

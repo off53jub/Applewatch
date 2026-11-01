@@ -4,3 +4,5 @@ LifeLog/Info.plist
 build/
 Vendor/
 LifeLog/Haas/
+LifeLogWidgets/Info.plist
+LifeLogWatchWidgets/Info.plist

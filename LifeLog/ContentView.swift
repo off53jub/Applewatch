@@ -327,7 +327,7 @@ private struct SettingsView: View {
                     Text("Apple Watch")
                 } footer: {
                     Text(pipeline.standbyOn
-                         ? "無音を流してアプリを起こしておき、時計の録音を5分ごとにすぐ文字起こしします。電池を少し多く使います。"
+                         ? "時計が録音しているあいだだけ無音を流してアプリを起こしておき、時計の録音を5分ごとにすぐ文字起こしします。電池を少し多く使います。"
                          : "時計の録音は、アプリを開いたときや充電中にまとめて文字起こしします。")
                 }
 
@@ -407,6 +407,8 @@ private struct SettingsView: View {
                     NavigationLink("記録の掃除") { CleanupView() }
                     NavigationLink("周りの声と雑音") { NoiseSettingsView() }
                     NavigationLink("カレンダー・移動・睡眠") { IntegrationsView() }
+                    NavigationLink("夜の聞き直し") { NightlyView() }
+                    NavigationLink("ロック画面・時計の文字盤から使う") { ShortcutsHelpView() }
                 } header: {
                     Text("音声と記録")
                 } footer: {

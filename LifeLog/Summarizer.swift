@@ -162,24 +162,40 @@ enum Summarizer {
 
     /// 文字起こしの誤変換を、前後の文脈とキーワードから直す。行の数が変わったら使わない（nil）。
     /// 処理の流れを止めないよう、混んでいるときは待たずにあきらめる。
-    static func correct(_ lines: [String], keywords: [String], previous: String?, apiKey: String) async throws -> [String]? {
+    /// alternatives は、同じ時間に別の音声認識が聞き取った文（行ごと。無ければ空）。
+    /// 2つが食い違う行は、言語モデルに見比べてもらい、実際に話された文として自然なほうを選んでもらう。
+    static func correct(_ lines: [String], keywords: [String], previous: String?,
+                        alternatives: [String]? = nil, apiKey: String) async throws -> [String]? {
         guard !lines.isEmpty else { return lines }
-        let input = String(decoding: try JSONSerialization.data(withJSONObject: ["lines": lines]), as: UTF8.self)
+        let others = alternatives.flatMap { $0.count == lines.count && $0.contains { !$0.isEmpty } ? $0 : nil }
+        var body: [String: Any] = ["lines": lines]
+        if let others { body["others"] = others }
+        let input = String(decoding: try JSONSerialization.data(withJSONObject: body), as: UTF8.self)
+        let compare = others == nil ? "" : """
+            "others" には、別の音声認識が同じ時間に聞き取った文が、"lines" と同じ順に入っています（空の文字列は「無し」）。
+            "lines" の文と "others" の文が食い違うところは、見比べて、実際に話された文として自然なほうに寄せてください。
+            両方の正しい部分を合わせてもかまいませんが、どちらにも無い言葉は足さないでください。"others" は返さないでください。
+
+            """
         let json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 20, prompt: """
             次の JSON の "lines" は、日本語の会話を音声認識で書き起こした文の配列です（\(lines.count) 個）。
             同音異義語の誤変換（例: 機会→機械）、固有名詞の書き間違い、明らかな聞き間違いだけを、前後の文脈から直してください。
             言い回しや話し言葉はそのまま残し、要約・言い換え・行の結合や分割はしないでください。
             直すところが無い文や、分からない文は、元の文をそのまま入れてください。
-            \(keywords.isEmpty ? "" : "よく出る言葉（この表記に寄せる）: " + keywords.joined(separator: "、") + "\n")\
+            \(compare)\(keywords.isEmpty ? "" : "よく出る言葉（この表記に寄せる）: " + keywords.joined(separator: "、") + "\n")\
             \(previous.map { "直前の会話（直さない）: " + $0 + "\n" } ?? "")\
-            同じ形の JSON（"lines" に \(lines.count) 個の文）で返してください。
+            "lines" に \(lines.count) 個の文を入れた JSON で返してください。
 
             \(input)
             """)
         guard let fixed = json["lines"] as? [String], fixed.count == lines.count else { return nil }
-        // 直しすぎ（言い換え・要約・見本の文を返すなど）の行は使わない
-        return zip(lines, fixed).map { original, fixed in
-            isSmallFix(original, fixed) ? fixed : original
+        // 直しすぎ（言い換え・要約・見本の文を返すなど）の行は使わない。
+        // もう1つの聞き取りに寄せた行は、そちらに近ければ使う。
+        return lines.indices.map { i in
+            let original = lines[i], result = fixed[i]
+            if isSmallFix(original, result) { return result }
+            if let other = others?[i], !other.isEmpty, isSmallFix(other, result) { return result }
+            return original
         }
     }
 

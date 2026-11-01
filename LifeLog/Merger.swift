@@ -1,6 +1,8 @@
 import Foundation
 
-/// iPhone と時計の両方で同じ時間帯を録っていたら、30秒ごとに聞き取りの良いほうの文だけを残す。
+/// iPhone と時計の両方で同じ時間帯を録っていたら、発言ごとに聞き取りの良いほうの文だけを残す。
+/// 時間の重なる行（同じ発言を両方で聞いたもの）をひとかたまりにして、かたまりごとに比べる。
+/// 片方でしか聞き取れていない発言は、そのまま残す。
 ///
 /// 文字起こしした行はいったんここに溜め、両方の区切りがそろった時間帯（frontier より前）から
 /// 書き出し待ち（outbox）に移す。書き出しに失敗しても outbox に残るので、次の機会に書き直せる。
@@ -68,18 +70,8 @@ final class Merger {
             guard !isWritten(w), let items = windows[w] else { continue }
             let phone = items.filter { !$0.fromWatch }
             let watch = items.filter { $0.fromWatch }
-            let pick: [Heard]
-            if phone.isEmpty || watch.isEmpty {
-                pick = phone.isEmpty ? watch : phone
-            } else {
-                let phoneScore = phone.reduce(0) { $0 + $1.weight }
-                let watchScore = watch.reduce(0) { $0 + $1.weight }
-                let current = state.lastFromWatch ?? false
-                let (mine, other) = current ? (watchScore, phoneScore) : (phoneScore, watchScore)
-                let stay = mine * Self.switchRatio >= other
-                pick = (stay == current) ? watch : phone
-            }
-            for heard in pick.sorted(by: { $0.line.time < $1.line.time }) {
+            let pick = phone.isEmpty || watch.isEmpty ? (phone.isEmpty ? watch : phone) : choose(items)
+            for heard in pick {
                 // 片方から乗り換えたところで、前の行と同じ時間にかぶる行は飛ばす（同じ話を二度書かない）
                 if let fromWatch = state.lastFromWatch, fromWatch != heard.fromWatch,
                    let start = state.lastStart, let end = state.lastEnd,
@@ -88,7 +80,7 @@ final class Merger {
                 }
                 out.append(heard.line)
                 state.lastStart = heard.line.time
-                state.lastEnd = heard.end
+                state.lastEnd = Self.spokenEnd(heard)
                 state.lastFromWatch = heard.fromWatch
             }
             markWritten(w)
@@ -99,6 +91,47 @@ final class Merger {
         let old = Self.index(.now.addingTimeInterval(-2 * 24 * 3600))
         state.written.removeAll { $0[1] < old }
         save()
+    }
+
+    /// 同じ枠の iPhone と時計の行から、発言ごとに良いほうを選ぶ（時刻順に返す）。
+    private func choose(_ items: [Heard]) -> [Heard] {
+        // 時間の重なる行（前の行が言い終わる2秒後までに始まる行）をひとかたまりにする
+        var groups: [[Heard]] = []
+        var groupEnd = Date.distantPast
+        for heard in items.sorted(by: { $0.line.time < $1.line.time }) {
+            if !groups.isEmpty, heard.line.time < groupEnd.addingTimeInterval(Self.overlapSlack) {
+                groups[groups.count - 1].append(heard)
+                groupEnd = max(groupEnd, Self.spokenEnd(heard))
+            } else {
+                groups.append([heard])
+                groupEnd = Self.spokenEnd(heard)
+            }
+        }
+        var result: [Heard] = []
+        var current = state.lastFromWatch ?? false
+        for group in groups {
+            let phone = group.filter { !$0.fromWatch }
+            let watch = group.filter(\.fromWatch)
+            // 片方でしか聞き取れていない発言は、そのまま使う
+            guard !phone.isEmpty, !watch.isEmpty else {
+                result += group
+                continue
+            }
+            let phoneScore = phone.reduce(0) { $0 + $1.weight }
+            let watchScore = watch.reduce(0) { $0 + $1.weight }
+            let (mine, other) = current ? (watchScore, phoneScore) : (phoneScore, watchScore)
+            if mine * Self.switchRatio < other { current.toggle() }
+            result += current ? watch : phone
+        }
+        return result
+    }
+
+    /// 同じ発言とみなす、時刻のずれ
+    private static let overlapSlack: TimeInterval = 2
+
+    /// 行を言い終わったころ。end は次の行の始まりまでなので、黙っていた時間を含まないよう文字数から見積もる。
+    private static func spokenEnd(_ heard: Heard) -> Date {
+        min(heard.end, heard.line.time.addingTimeInterval(max(1.5, Double(heard.line.text.count) * 0.2)))
     }
 
     /// outbox の先頭から count 行を書き出し終えた

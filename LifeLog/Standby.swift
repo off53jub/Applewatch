@@ -1,6 +1,7 @@
 import AVFoundation
 
 /// 待機モード。無音を流し続けて、画面を消してもアプリを裏で起こしておく。
+/// 電池を使うので、時計が録音しているあいだだけ動かす（Pipeline が start / stop する）。
 /// こうすると、時計から届いた区切りを届いたその場で文字起こしできる。
 /// iPhone で録音しているあいだや声の登録中は、録音がアプリを起こしておくので無音は止める。
 @MainActor
@@ -32,9 +33,13 @@ final class Standby {
     }
 
     func stop() {
+        let wasRunning = engine != nil
         wanted = false
         halt()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // iPhone のマイクを使っているあいだは、録音の音の設定を止めない
+        if wasRunning, !suspended {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     /// iPhone のマイクを使う前に呼ぶ

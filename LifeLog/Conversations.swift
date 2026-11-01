@@ -8,7 +8,7 @@ final class ConversationLog {
     struct Line: Codable {
         let time: Date
         var speaker: String?
-        let text: String
+        var text: String
         /// 聞き直し用の音声ファイル名と、その中での位置（秒）。古い記録には無い。
         var audio: String? = nil
         var offset: TimeInterval? = nil
@@ -18,6 +18,24 @@ final class ConversationLog {
         var speakerID: String? = nil
         /// 時計やアプリで「印」を付けたところ
         var marked: Bool? = nil
+        /// 聞き取りの確からしさ（0〜1。2つの聞き取りの合い方など）。分からなければ nil
+        var confidence: Double? = nil
+
+        /// 手で文字を直した行（夜の聞き直しでも変えない）
+        var checked: Bool? = nil
+
+        /// 確からしさが低く、聞き直して確かめたほうがよい行
+        var isUncertain: Bool { checked != true && (confidence ?? 1) < 0.45 }
+    }
+
+    /// 行の文字の直し
+    struct TextChange {
+        let line: Line
+        let text: String
+        /// 直したあとの確からしさ
+        let confidence: Double?
+        /// 手で直したか
+        let manual: Bool
     }
 
     private static let clock: DateFormatter = {
@@ -139,6 +157,14 @@ final class ConversationLog {
         await closeOpenConversations(before: now.addingTimeInterval(-waiting), day: nil)
     }
 
+    /// 閉じたばかりの会話（話者のまとめ直しに使う）。受け取ったら空にする。
+    private var justClosed: [Conversation] = []
+
+    func takeClosed() -> [Conversation] {
+        defer { justClosed = [] }
+        return justClosed
+    }
+
     private func closeOpenConversations(before time: Date, day: String?) async {
         for openDay in days() {
             var log = load(openDay)
@@ -149,6 +175,7 @@ final class ConversationLog {
             if let closed = await close(conversation, day: openDay) {
                 log.conversations[i] = closed
                 save(log, day: openDay)
+                justClosed.append(closed)
             }
         }
     }
@@ -442,6 +469,41 @@ final class ConversationLog {
             }
         }
         UserDefaults.standard.set(true, forKey: doneKey)
+    }
+
+    // MARK: - 文字の手直し
+
+    /// 行の文字を直す（アプリの記録とドキュメントの両方）。いちばん最初の文は original に残す。直した行の数を返す。
+    @discardableResult
+    func editText(_ changes: [TextChange], day: String) async throws -> Int {
+        guard !changes.isEmpty else { return 0 }
+        // 先にドキュメントを直す
+        let current = load(day).conversations.flatMap(\.lines)
+        var fixes: [(find: String, replace: String)] = []
+        var edited: [String: Line] = [:]
+        for change in changes {
+            let key = Junk.key(change.line)
+            guard edited[key] == nil, let old = current.first(where: { Junk.key($0) == key }),
+                  old.text != change.text else { continue }
+            var new = old
+            new.text = change.text
+            if new.original == nil { new.original = old.text }
+            new.confidence = change.confidence
+            if change.manual { new.checked = true }
+            edited[key] = new
+            fixes.append((find: Self.docLine(old), replace: Self.docLine(new)))
+        }
+        guard !fixes.isEmpty else { return 0 }
+        try await docs.replaceAll(fixes, day: day)
+        // 直しているあいだに書き足された分も残すよう、読み直してから当てる
+        var log = load(day)
+        for c in log.conversations.indices {
+            for l in log.conversations[c].lines.indices {
+                if let new = edited[Junk.key(log.conversations[c].lines[l])] { log.conversations[c].lines[l] = new }
+            }
+        }
+        save(log, day: day)
+        return fixes.count
     }
 
     // MARK: - 話者の手直し

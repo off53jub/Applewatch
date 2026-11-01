@@ -122,3 +122,51 @@ private struct WorkCalendarsView: View {
         .navigationTitle("職場のカレンダー")
     }
 }
+
+/// 夜の充電中の聞き直し。
+struct NightlyView: View {
+    @Environment(Pipeline.self) private var pipeline
+
+    var body: some View {
+        Form {
+            Section {
+                if let progress = pipeline.nightlyProgress {
+                    HStack {
+                        ProgressView()
+                        Text(progress.total > 0 ? "聞き直しています… \(progress.done) / \(progress.total)" : "準備しています…")
+                    }
+                } else {
+                    Button("今すぐ聞き直す") { Task { await pipeline.runNightly(force: true) } }
+                }
+                if !pipeline.nightlyResult.isEmpty {
+                    Text(pipeline.nightlyResult).font(.callout).foregroundStyle(.secondary)
+                }
+            } footer: {
+                Text("夜（22時〜6時）に充電しているとき、iPhone に残っている1日分の音声を聞き直します。その日に出た名前・話題・予定の言葉をヒントにし、Haas-ja で書けていなかった区切り（電池優先のときなど）は Haas-ja で書き直して、前より良くなった行だけ差し替えます。確かさの低い行は、2つの聞き取りを見比べて直します。手で直した行は変えず、差し替えた行の元の文は「直す前」として残ります。")
+            }
+        }
+        .navigationTitle("夜の聞き直し")
+    }
+}
+
+/// ロック画面・コントロールセンター・アクションボタン・時計の文字盤から使う方法。
+struct ShortcutsHelpView: View {
+    var body: some View {
+        Form {
+            Section("ロック画面・コントロールセンター") {
+                Text("コントロールセンターを開いて左上の「＋」→「コントロールを追加」で「LifeLog」を探すと、「録音を始める・止める」と「印を付ける」があります。ロック画面の下の2つのボタンも、ロック画面を長押し→「カスタマイズ」から同じものに替えられます。")
+            }
+            Section("アクションボタン") {
+                Text("設定アプリ →「アクションボタン」で「コントロール」を選び、「LifeLog」の「録音を始める・止める」か「印を付ける」を選びます。")
+            }
+            Section("Apple Watch の文字盤") {
+                Text("文字盤を長押し →「編集」→ コンプリケーションの欄で「LifeLog」を選ぶと、文字盤から1回押すだけで LifeLog を開けます。")
+            }
+            Section {
+                Text("押すと LifeLog が開いて動きます（録音を始めるには、アプリが前に出ている必要があるため）。")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("ほかの場所から使う")
+    }
+}

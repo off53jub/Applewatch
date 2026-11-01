@@ -28,13 +28,15 @@ targets:
   LifeLog:
     type: application
     platform: iOS
-    sources: [LifeLog]
+    sources: [LifeLog, Shared/Audio, Shared/Intents]
     dependencies:
       - package: GoogleSignIn
       - package: FluidAudio
       - package: HaasCoreML
         product: HaasCore
       - target: LifeLogWatch
+      # コントロールセンター・ロック画面のボタン
+      - target: LifeLogWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog
@@ -73,7 +75,10 @@ targets:
     type: application
     platform: watchOS
     deploymentTarget: "11.0"
-    sources: [LifeLogWatch]
+    sources: [LifeLogWatch, Shared/Audio]
+    dependencies:
+      # 文字盤のボタン（コンプリケーション）
+      - target: LifeLogWatchWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog.watchkitapp
@@ -88,3 +93,39 @@ targets:
         WKCompanionAppBundleIdentifier: com.off53jub.lifelog
         WKBackgroundModes: [audio]
         NSMicrophoneUsageDescription: 会話を録音して iPhone に送るためにマイクを使います。
+  # コントロールセンター・ロック画面・アクションボタンに置く LifeLog のボタン
+  LifeLogWidgets:
+    type: app-extension
+    platform: iOS
+    sources: [LifeLogWidgets, Shared/Intents]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog.widgets
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: LifeLogWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: LifeLog
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  # 時計の文字盤に置く LifeLog のボタン
+  LifeLogWatchWidgets:
+    type: app-extension
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources: [LifeLogWatchWidgets]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog.watchkitapp.widgets
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: LifeLogWatchWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: LifeLog
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension

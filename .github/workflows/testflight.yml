@@ -99,12 +99,21 @@ jobs:
             if [ -f "$RUNNER_TEMP/ipa/Payload/LifeLog.app/$f" ]; then echo "::notice::Haas-ja の部品 $f がアプリに入っています"
             else echo "::error::Haas-ja の部品 $f がアプリに入っていません"; exit 1; fi
           done
+          # ロック画面・時計の文字盤のボタン（拡張機能）が入っているか
+          find "$RUNNER_TEMP/ipa/Payload" -name "*.appex" -type d | while IFS= read -r ext; do echo "::notice::拡張機能 ${ext#$RUNNER_TEMP/ipa/Payload/}"; done
           (cd "$RUNNER_TEMP/ipa" && zip -qry LifeLog-unsigned.ipa Payload)
+          # 拡張機能を抜いた版も作る（Sideloadly が拡張機能を署名できなかったときの予備）
+          mkdir -p "$RUNNER_TEMP/ipa-lite"
+          cp -R "$RUNNER_TEMP/ipa/Payload" "$RUNNER_TEMP/ipa-lite/"
+          rm -rf "$RUNNER_TEMP/ipa-lite/Payload/LifeLog.app/PlugIns" "$RUNNER_TEMP/ipa-lite/Payload/LifeLog.app/Watch/LifeLogWatch.app/PlugIns"
+          (cd "$RUNNER_TEMP/ipa-lite" && zip -qry "$RUNNER_TEMP/ipa/LifeLog-unsigned-no-widgets.ipa" Payload)
 
       - uses: actions/upload-artifact@v4
         with:
           name: LifeLog-unsigned-ipa
-          path: ${{ runner.temp }}/ipa/LifeLog-unsigned.ipa
+          path: |
+            ${{ runner.temp }}/ipa/LifeLog-unsigned.ipa
+            ${{ runner.temp }}/ipa/LifeLog-unsigned-no-widgets.ipa
           retention-days: 30
 
       - name: Watch アプリの場所を調べる

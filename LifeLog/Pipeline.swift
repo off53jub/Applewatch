@@ -101,8 +101,13 @@ final class Pipeline {
     var standbyOn = UserDefaults.standard.object(forKey: "standby") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(standbyOn, forKey: "standby")
-            if standbyOn { standby.start() } else { standby.stop() }
+            updateStandby()
         }
+    }
+
+    /// 待機モードは、時計が録音しているあいだだけ動かす（何も届かないあいだに無音を流して電池を使わないように）
+    private func updateStandby() {
+        if standbyOn && watchRecording { standby.start() } else { standby.stop() }
     }
 
     private let recorder = Recorder()
@@ -176,7 +181,6 @@ final class Pipeline {
             guard let self else { return [] }
             return keywords(for: vocabularyContext(at: .now))
         }
-        if standbyOn { standby.start() }
         pendingCount = Storage.pendingChunks().count
         receiver.onFile = { [weak self] in
             self?.pendingCount = Storage.pendingChunks().count
@@ -193,6 +197,7 @@ final class Pipeline {
             }
             guard watchRecording != recording else { return }
             watchRecording = recording
+            updateStandby()
             // 時計が止まったら、待っていた iPhone の分を書ける
             processQueue()
         }
@@ -202,6 +207,7 @@ final class Pipeline {
             self?.processQueue()
         }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        Power.start()
         receiver.activate()
     }
 
@@ -492,6 +498,14 @@ final class Pipeline {
         }
     }
 
+    /// ロック画面・コントロールセンター・アクションボタンからの操作
+    func handle(_ action: LifeLogAction) async {
+        switch action {
+        case .toggleRecording: await toggleRecording()
+        case .mark: addMark()
+        }
+    }
+
     // MARK: - ライブ
 
     func setLive(_ on: Bool) async {
@@ -567,6 +581,8 @@ final class Pipeline {
         pendingCount = Storage.pendingChunks().count
         if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
         Self.scheduleBackgroundWork()
+        // 夜に充電していれば、1日分を聞き直す
+        startNightlyIfTime()
         // 時計の区切りを待っている行があれば、少ししてから見直す
         if merger.hasHeld, retry == nil {
             retry = Task {
@@ -628,6 +644,8 @@ final class Pipeline {
         // しばらく話していなければ会話を閉じて見出しを付け、前の日にはまとめを付ける。
         // まだ書いていない時間帯（録音中の区切りや、届いていない時計の区切り）に続きがあるかもしれないので、その手前で見る。
         await conversations.closeIdle(now: settled, waiting: ConversationLog.gap)
+        // 閉じた会話の中で、同じ人が別の「人物N」に分かれていたらまとめる
+        await consolidateSpeakers(conversations.takeClosed())
         await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
         await conversations.writePeopleNotes()
         await conversations.writeWeeklySummary(today: dayFormatter.string(from: .now))
@@ -762,6 +780,265 @@ final class Pipeline {
 
     func conversations(on day: String) -> [ConversationLog.Conversation] { conversations.conversations(on: day) }
 
+    // MARK: - 会話ごとの話者のまとめ直し
+
+    /// 閉じた会話ごとに、同じ人が別の「人物N」に分かれてしまっていたらまとめる。
+    /// まとめるのは、名前が無く、登録や手直しで覚えた声も無い「人物N」だけ（名前のある人どうしはまとめない）。
+    /// 同じ区切り（5分）の中で別の声とされた2人は、別の人とみなしてまとめない。
+    private func consolidateSpeakers(_ closed: [ConversationLog.Conversation]) async {
+        guard speakerLabelsOn else { return }
+        var merged = 0
+        for c in closed where c.media == nil {
+            let ids = Set(c.lines.compactMap(\.speakerID))
+            guard ids.count >= 2 else { continue }
+            var apart = Set<[String]>()
+            for (_, lines) in Dictionary(grouping: c.lines.filter { $0.speakerID != nil }, by: { $0.audio ?? "" }) {
+                let inChunk = Array(Set(lines.compactMap(\.speakerID)))
+                for a in inChunk { for b in inChunk where a < b { apart.insert([a, b]) } }
+            }
+            let merges = await speakers.consolidation(among: ids, apart: apart, strictness: speakerStrictness)
+            for m in merges { await mergePerson(m.source, into: m.target) }
+            merged += merges.count
+        }
+        if merged > 0 { lastEngine += "・同じ人の声を \(merged) つまとめた" }
+    }
+
+    // MARK: - 呼ばれた名前
+
+    /// その日の会話で「〇〇さん」と呼ばれたすぐあと（20秒以内）に、別の声で答えた人と、その名前。声ごとに、多い順。
+    func calledNames(on day: String) -> [String: [(name: String, count: Int)]] {
+        var counts: [String: [String: Int]] = [:]
+        for c in conversations(on: day) where c.media == nil {
+            let lines = c.lines
+            for (i, line) in lines.enumerated() {
+                let called = Self.calledNames(in: line.text)
+                guard !called.isEmpty,
+                      let reply = lines[(i + 1)...].prefix(3).first(where: {
+                          $0.speakerID != nil && $0.speakerID != line.speakerID
+                              && $0.time.timeIntervalSince(line.time) <= 20
+                      }),
+                      let id = reply.speakerID else { continue }
+                for name in called { counts[id, default: [:]][name, default: 0] += 1 }
+            }
+        }
+        return counts.mapValues { names in
+            names.map { (name: $0.key, count: $0.value) }.sorted { $0.count > $1.count }
+        }
+    }
+
+    /// 人の呼び方ではない「〇〇さん」
+    private static let notNames: Set<String> = [
+        "皆", "奥", "父", "母", "兄", "姉", "弟", "妹", "娘", "息子", "旦那", "店員", "運転手", "大家", "業者",
+        "隣", "向こう", "相手", "先方", "担当", "客", "親御", "神", "仏", "王", "姫", "赤", "坊", "皆様",
+    ]
+
+    /// 文の中の「田中さん」「タナカくん」などの名前の部分（漢字かカタカナだけのもの）
+    static func calledNames(in text: String) -> [String] {
+        let string = text as CFString
+        guard let tokenizer = CFStringTokenizerCreate(nil, string, CFRange(location: 0, length: CFStringGetLength(string)),
+                                                      kCFStringTokenizerUnitWord, Locale(identifier: "ja_JP") as CFLocale)
+        else { return [] }
+        var tokens: [String] = []
+        while CFStringTokenizerAdvanceToNextToken(tokenizer) != [] {
+            let r = CFStringTokenizerGetCurrentTokenRange(tokenizer)
+            tokens.append((text as NSString).substring(with: NSRange(location: r.location, length: r.length)))
+        }
+        var names: [String] = []
+        for (i, token) in tokens.enumerated() {
+            for suffix in ["さん", "くん", "ちゃん"] {
+                var name: String?
+                if token == suffix, i > 0 {
+                    name = tokens[i - 1]
+                } else if token.hasSuffix(suffix), token.count > suffix.count {
+                    name = String(token.dropLast(suffix.count))
+                }
+                if let name, isNameLike(name), !names.contains(name) { names.append(name) }
+            }
+        }
+        return names
+    }
+
+    private static func isNameLike(_ s: String) -> Bool {
+        guard (1...6).contains(s.count), !notNames.contains(s) else { return false }
+        return s.unicodeScalars.allSatisfy { $0.properties.isIdeographic || $0 == "々" || (0x30A1...0x30FC).contains($0.value) }
+    }
+
+    // MARK: - 行の文字の手直し
+
+    /// 記録の行の文字を直す。fix を渡すと、その「間違い→正しい」を誤変換の一覧にも足す。失敗したら理由を返す。
+    func editLine(_ line: ConversationLog.Line, to text: String, addFix fix: (wrong: String, right: String)?) async -> String? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text != line.text else { return nil }
+        // 書き足しと重ならないよう、処理中ならそれを待つ
+        if let queueTask { await queueTask.value }
+        do {
+            try await conversations.editText([.init(line: line, text: text, confidence: 1, manual: true)],
+                                             day: dayFormatter.string(from: line.time))
+        } catch {
+            return "直せませんでした: \(error.localizedDescription)"
+        }
+        if let fix {
+            let group: Vocabulary.Group = vocabularyContext(at: line.time) == .work ? .work : .other
+            vocabulary.addFix(wrong: fix.wrong, right: fix.right, group: group)
+        }
+        let old = ConversationLog.docLine(line)
+        if let i = lastLines.firstIndex(of: old) {
+            var edited = line
+            edited.text = text
+            lastLines[i] = ConversationLog.docLine(edited)
+        }
+        return nil
+    }
+
+    /// 直す前と後の文から、変わったところ（間違い→正しい）を取り出す。誤変換の一覧に足せそうなときだけ返す。
+    static func changedPart(from old: String, to new: String) -> (wrong: String, right: String)? {
+        let a = Array(old), b = Array(new)
+        var prefix = 0
+        while prefix < min(a.count, b.count), a[prefix] == b[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < min(a.count, b.count) - prefix, a[a.count - 1 - suffix] == b[b.count - 1 - suffix] { suffix += 1 }
+        // 1文字だけの違いは、前後の1文字を含めて言葉にする（1文字の置き換えはほかの文まで変えてしまうため）
+        while a.count - suffix - prefix < 2 {
+            if prefix > 0 { prefix -= 1 } else if suffix > 0 { suffix -= 1 } else { break }
+        }
+        let wrong = String(a[prefix..<(a.count - suffix)])
+        let right = String(b[prefix..<(b.count - suffix)])
+        guard (2...12).contains(wrong.count), !right.isEmpty, right.count <= 16, wrong != right else { return nil }
+        return (wrong, right)
+    }
+
+    // MARK: - 夜の聞き直し
+
+    /// 最後に聞き直した結果（画面に出す）
+    private(set) var nightlyResult = UserDefaults.standard.string(forKey: "nightlyResult") ?? "" {
+        didSet { UserDefaults.standard.set(nightlyResult, forKey: "nightlyResult") }
+    }
+    /// 聞き直しの進み具合（済んだ区切り・全部の区切り）。動いていなければ nil。
+    private(set) var nightlyProgress: (done: Int, total: Int)?
+
+    /// 充電中に、手元に残っている音声（1日分）を聞き直し、良くなった行だけ差し替える。
+    /// 1. その日に出た名前・話題・予定を全部ヒントにして、端末内でもう一度聞き取る
+    /// 2. Haas-ja で書けていなかった区切り（電池優先・家の PC に届かなかったときなど）は、Haas-ja で書き直し、
+    ///    端末内の聞き取りに前より合う行だけ差し替える
+    /// 3. 確からしさの低い行は、その日の言葉をヒントに言語モデルで直す（2つの聞き取りを見比べる）
+    /// 手で直した行は変えない。差し替えた行の元の文は「直す前」として残る。
+    func runNightly(force: Bool = false) async {
+        guard nightlyProgress == nil, email != nil, force || Power.isCharging else { return }
+        // 二重に走らせないよう、待つ前に「動いている」にする
+        nightlyProgress = (0, 0)
+        defer { nightlyProgress = nil }
+        if let queueTask { await queueTask.value }
+        let targets = conversations.linesByAudio().filter { item in
+            Storage.keptAudio(named: item.audio) != nil && !NightlyRecheck.isNightDone(item.audio)
+                && !item.audio.hasSuffix("-i.m4a")
+        }
+        guard !targets.isEmpty else {
+            if force { nightlyResult = "聞き直す音声がありません（聞き直していない1日分の音声が手元にありません）。" }
+            return
+        }
+        nightlyProgress = (0, targets.count)
+        var changedLines = 0
+        var processed = 0
+        var hints: [String: [String]] = [:]
+        for (n, target) in targets.enumerated() {
+            if Task.isCancelled { break }
+            nightlyProgress = (n, targets.count)
+            guard let url = Storage.keptAudio(named: target.audio) else { continue }
+            let lines = target.lines.filter { $0.checked != true }
+            guard !lines.isEmpty else {
+                NightlyRecheck.markNightDone(target.audio)
+                processed += 1
+                continue
+            }
+            let context = vocabularyContext(at: lines[0].time)
+            let words = hints[target.day] ?? dayHints(target.day, context: context)
+            hints[target.day] = words
+            let duration = Self.duration(of: url)
+            guard let local = try? await Transcriber.transcribe(url, words: words) else { continue }
+            // 行ごとの時間（同じ音声の次の行まで）と、その時間の端末内の聞き取り
+            let all = target.lines
+            let spans = lines.map { line -> (start: TimeInterval, end: TimeInterval) in
+                let start = line.offset ?? 0
+                let next = all.first { ($0.offset ?? 0) > start }?.offset ?? duration
+                return (start, max(next, start + 0.5))
+            }
+            let heard = spans.map { span in
+                local.filter { $0.offset >= span.start - 1 && $0.offset < span.end + 1 }.map(\.text).joined()
+            }
+            var texts = lines.map(\.text)
+            var confidence = lines.map(\.confidence)
+            if !NightlyRecheck.isHaasDone(target.audio) {
+                var redo: [CloudTranscriber.Line]?
+                if homePC.shouldTry { redo = try? await homePC.transcribe(url, local: local) }
+                if redo == nil, haas.isUsable { redo = try? await haas.transcribe(url, local: local) }
+                if let redo {
+                    for i in lines.indices {
+                        let text = redo.filter { ($0.offset ?? -1) >= spans[i].start - 0.5 && ($0.offset ?? -1) < spans[i].end - 0.2 }
+                            .map(\.text).joined()
+                        guard !text.isEmpty, text != texts[i], !heard[i].isEmpty,
+                              let newScore = TranscriptCheck.similarity(text, heard[i]) else { continue }
+                        let oldScore = TranscriptCheck.similarity(lines[i].original ?? lines[i].text, heard[i]) ?? 0
+                        if newScore >= oldScore + 0.15 {
+                            var fixed = text
+                            for fix in vocabulary.fixes(for: context) {
+                                fixed = fixed.replacingOccurrences(of: fix.wrong, with: fix.right)
+                            }
+                            texts[i] = fixed
+                            confidence[i] = (newScore * 100).rounded() / 100
+                        }
+                    }
+                }
+            }
+            // 確からしさの低い行と、書き直した行は、その日の言葉をヒントに言語モデルで直す
+            if correctionOn, let key = settings.groqKey {
+                let picks = lines.indices.filter { texts[$0] != lines[$0].text || lines[$0].isUncertain }
+                if !picks.isEmpty,
+                   let fixed = try? await Summarizer.correct(picks.map { texts[$0] }, keywords: words, previous: nil,
+                                                             alternatives: picks.map { heard[$0] }, apiKey: key) {
+                    for (k, i) in picks.enumerated() where !fixed[k].isEmpty { texts[i] = fixed[k] }
+                }
+            }
+            let changes = lines.indices.filter { texts[$0] != lines[$0].text }.map {
+                ConversationLog.TextChange(line: lines[$0], text: texts[$0], confidence: confidence[$0], manual: false)
+            }
+            if !changes.isEmpty {
+                // 書き足しと重ならないよう、処理中ならそれを待つ
+                if let queueTask { await queueTask.value }
+                do {
+                    changedLines += try await conversations.editText(changes, day: target.day)
+                } catch {
+                    break
+                }
+            }
+            NightlyRecheck.markNightDone(target.audio)
+            processed += 1
+        }
+        nightlyResult = "\(Date.now.formatted(date: .abbreviated, time: .shortened)) に \(processed) 区切りを聞き直し、\(changedLines) 行を直しました。"
+            + (processed < targets.count ? "（残りは次の充電中に続けます）" : "")
+    }
+
+    /// その日に出た名前・話題・予定の言葉（夜の聞き直しのヒント）
+    private func dayHints(_ day: String, context: SpeakerLabeler.Context) -> [String] {
+        let text = conversations(on: day).flatMap(\.lines).map(\.text).joined()
+        let topicWords = vocabulary.topics.filter { $0.isMentioned(in: text) }.flatMap(\.words)
+        var events: [String] = []
+        if let date = dayFormatter.date(from: day) {
+            for event in calendar.events(from: date, to: date.addingTimeInterval(24 * 3600)) {
+                events.append(event.title)
+                events += event.attendees
+            }
+        }
+        var seen = Set<String>()
+        return (topicWords + events + keywords(for: context)).filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    /// 夜（22時〜6時）に充電していれば、聞き直しを始める
+    private func startNightlyIfTime() {
+        let hour = Calendar.current.component(.hour, from: .now)
+        guard Power.isCharging, hour >= 22 || hour < 6, nightlyProgress == nil else { return }
+        Task { await runNightly() }
+    }
+
     // MARK: - 裏での処理
 
     /// 充電中にまとめて処理する（長く動ける）
@@ -774,7 +1051,11 @@ final class Pipeline {
         for id in [Self.processingTaskID, Self.refreshTaskID] {
             BGTaskScheduler.shared.register(forTaskWithIdentifier: id, using: .main) { [weak self] task in
                 MainActor.assumeIsolated {
-                    let work = Task { await self?.runQueue() }
+                    let work = Task {
+                        await self?.runQueue()
+                        // 充電中の長い処理では、1日分の聞き直しもする
+                        if id == Self.processingTaskID { await self?.runNightly() }
+                    }
                     task.expirationHandler = { work.cancel() }
                     Task {
                         await work.value
@@ -862,20 +1143,26 @@ final class Pipeline {
         // 寝ているあいだは、端末内の文字起こしだけで済ませる（電池を使わず、寝息に作られた文も出にくい）
         let asleep = await sleep.isAsleep(from: start, to: start.addingTimeInterval(duration), motion: motion)
         if asleep { lastEngine = "端末内（睡眠中）" }
+        // 低電力モードで充電していなければ、iPhone の Haas-ja は動かさない（夜の聞き直しで取り戻す）
+        let saving = Power.isSaving
         var usedHaas = asleep
+        /// 端末内とは別の聞き取りの結果（2つの食い違いを見比べるのに使う）
+        var second: [CloudTranscriber.Line]?
         if !asleep, homePC.shouldTry {
             // 家の PC の Haas-ja（無料）。PC が切れているときや届かないときは、この区切りはほかの方法で
             if let lines = try? await homePC.transcribe(url, local: local) {
                 entries = lines.map { ($0.offset, $0.text, nil) }
+                second = lines
                 lastEngine = "Haas-ja（家の PC）"
                 usedHaas = true
             }
         }
-        if !usedHaas, haas.isUsable {
+        if !usedHaas, haas.isUsable, !saving {
             // iPhone の中の Haas-ja（無料）。動かせなかったら（裏で Neural Engine が使えないなど）、この区切りはほかの方法で
             do {
                 let lines = try await haas.transcribe(url, local: local)
                 entries = lines.map { ($0.offset, $0.text, nil) }
+                second = lines
                 lastEngine = "Haas-ja（iPhone 内）"
                 usedHaas = true
             } catch {
@@ -892,6 +1179,7 @@ final class Pipeline {
                     // 端末内でも同じような音が聞き取れていない行は、実際には話されていない（雑音・外国語の動画など）とみなして捨てる
                     let checked = TranscriptCheck.agreeing(cloud.lines, with: local, duration: duration)
                     entries = checked.map { ($0.offset, $0.text, $0.score) }
+                    second = checked
                 }
             } catch CloudTranscriber.Failure.limited {
                 // 無料枠を使い切ったら、この区切りは端末内の結果で済ませる（高精度はオンのまま）
@@ -901,6 +1189,18 @@ final class Pipeline {
                 settings.useCloud = false
                 message = reason + "（高精度をオフにして、端末内の文字起こしで続けます）"
             }
+        }
+        if saving, haas.isUsable, !usedHaas, !asleep { lastEngine += "（電池優先）" }
+        // Haas-ja で書けた区切りは、夜の聞き直しで文字起こしし直さない
+        if usedHaas, !asleep { NightlyRecheck.markHaasDone(url.lastPathComponent) }
+        // 2つの聞き取り（端末内と Haas-ja・クラウド）がどれだけ合っているか。確からしさの目安にし、
+        // 大きく食い違う行（読みが半分も合わない行）は、言語モデルに見比べてもらう
+        var agreement = [Double?](repeating: nil, count: entries.count)
+        var others: [String]?
+        if let second, second.count == entries.count {
+            agreement = TranscriptCheck.agreement(second, with: local, duration: duration)
+            let alternatives = TranscriptCheck.alternatives(second, with: local, duration: duration)
+            others = alternatives.indices.map { (agreement[$0] ?? 1) < 0.5 ? alternatives[$0] : "" }
         }
         // 精度の高い文で見つかった話題の言葉も、直しに使う
         let heardTopics = vocabulary.activeTopics(hearing: entries.map { $0.text }.joined(), at: start)
@@ -916,19 +1216,31 @@ final class Pipeline {
         }
         if correctionOn, !asleep, let key = settings.groqKey,
            let fixed = try? await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
-                                                     previous: previous, apiKey: key) {
+                                                     previous: previous, alternatives: others, apiKey: key) {
             for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
                 if originals[i] == nil { originals[i] = entries[i].text }
                 entries[i].text = fixed[i]
             }
             lastEngine += "＋補正"
+            if let others, others.contains(where: { !$0.isEmpty }) { lastEngine += "・見比べ" }
         }
         if !heardTopics.isEmpty { lastEngine += "・話題: " + heardTopics.map(\.name).joined(separator: "、") }
         if fromWatch { lastEngine += "（時計）" }
         lastTranscript[fromWatch] = (start.addingTimeInterval(duration),
                                      String(entries.map { $0.text }.joined().suffix(200)))
+        // 行ごとの確からしさ（0〜1）。2つの聞き取りの合い方と、クラウドの自信の低いほう。分からなければ nil
+        let confidence: [Double?] = entries.indices.map { i in
+            let score = entries[i].score.map { exp($0) }
+            switch (agreement[i], score) {
+            case let (a?, s?): return min(a, s)
+            case let (a?, nil): return a
+            case let (nil, s?): return s
+            default: return nil
+            }
+        }
         let offsets = Self.fillOffsets(entries.map { ($0.offset, $0.text) }, duration: duration)
-        let names = await speakerNames(for: offsets, in: url, context: places.context(at: start))
+        let names = await speakerNames(for: offsets, in: url, context: places.context(at: start),
+                                       selfLevel: officeFilter.selfLevel(watch: fromWatch))
         // 周りの人の声や、寝ているあいだの短い文・小さな声を外す（外した行は「消した行」に残す）
         let ends = entries.indices.map { i in i + 1 < offsets.count ? offsets[i + 1] : max(duration, offsets[i]) }
         let spans = entries.indices.map { (start: offsets[$0], end: ends[$0]) }
@@ -945,16 +1257,16 @@ final class Pipeline {
             let end = ends[i]
             let line = ConversationLog.Line(time: start.addingTimeInterval(offsets[i]), speaker: names[i]?.name,
                                             text: entries[i].text, audio: url.lastPathComponent,
-                                            offset: offsets[i], original: originals[i], speakerID: names[i]?.personID)
+                                            offset: offsets[i], original: originals[i], speakerID: names[i]?.personID,
+                                            confidence: confidence[i].map { ($0 * 100).rounded() / 100 })
             guard keep[i] else {
                 removed.append(Junk.TrashItem(day: dayFormatter.string(from: line.time), line: line,
                                               kind: asleep ? .asleep : .background, removed: .now))
                 return nil
             }
-            // 確からしさが分からない行（端末内・OpenAI）は中くらいとみなす
-            let confidence = entries[i].score.map { exp($0) } ?? 0.6
+            // 確からしさが分からない行（端末内だけ・OpenAI）は中くらいとみなす
             return Merger.Heard(line: line, end: start.addingTimeInterval(end), fromWatch: fromWatch,
-                                weight: Double(entries[i].text.count) * confidence)
+                                weight: Double(entries[i].text.count) * (confidence[i] ?? 0.6))
         }
         if !removed.isEmpty {
             conversations.addToTrash(removed)
@@ -1003,10 +1315,11 @@ final class Pipeline {
 
     /// 各行を、その時間にいちばん長く話していた人に結びつける。聞き分けがオフ・失敗したときは nil。
     private func speakerNames(for offsets: [TimeInterval], in url: URL,
-                              context: SpeakerLabeler.Context?) async -> [SpeakerLabeler.Segment?] {
+                              context: SpeakerLabeler.Context?, selfLevel: Float?) async -> [SpeakerLabeler.Segment?] {
         let none = [SpeakerLabeler.Segment?](repeating: nil, count: offsets.count)
         guard speakerLabelsOn,
-              let segments = try? await speakers.label(url, context: context, strictness: speakerStrictness),
+              let segments = try? await speakers.label(url, context: context, strictness: speakerStrictness,
+                                                       selfLevel: selfLevel),
               !segments.isEmpty else { return none }
         let chunkEnd = Self.duration(of: url)
         return offsets.indices.map { i in

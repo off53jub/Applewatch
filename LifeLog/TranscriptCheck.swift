@@ -22,12 +22,19 @@ enum TranscriptCheck {
     /// 行ごとに、端末内と合うか。
     static func agrees(_ cloud: [CloudTranscriber.Line], with local: [Transcriber.Line],
                        duration: TimeInterval) -> [Bool] {
+        // 読みが短すぎる行（「はい」など）は比べようがないので、端末内で何か聞こえていれば残す
+        agreement(cloud, with: local, duration: duration).map { $0.map { $0 >= minimumAgreement } ?? !local.isEmpty }
+    }
+
+    /// 行ごとに、読み（ローマ字の3文字の並び）のうち、同じころの端末内の聞き取りにも出てくる割合（0〜1）。
+    /// 2つの聞き取りがどれだけ合っているか（確からしさの目安）に使う。読みが短すぎる行は nil。
+    static func agreement(_ cloud: [CloudTranscriber.Line], with local: [Transcriber.Line],
+                          duration: TimeInterval) -> [Double?] {
         let localReadings = local.map { (offset: $0.offset, grams: trigrams(reading($0.text))) }
         let all = localReadings.reduce(into: Set<String>()) { $0.formUnion($1.grams) }
         return cloud.enumerated().map { i, line in
             let grams = trigrams(reading(line.text))
-            // 読みが短すぎる行（「はい」など）は比べようがないので、端末内で何か聞こえていれば残す
-            guard grams.count >= 3 else { return !local.isEmpty }
+            guard grams.count >= 3 else { return nil }
             var nearby = all
             if let start = line.offset {
                 let end = cloud[(i + 1)...].lazy.compactMap(\.offset).first ?? duration
@@ -36,8 +43,26 @@ enum TranscriptCheck {
                     .reduce(into: Set<String>()) { $0.formUnion($1.grams) }
             }
             let shared = grams.filter(nearby.contains).count
-            return Double(shared) / Double(grams.count) >= minimumAgreement
+            return Double(shared) / Double(grams.count)
         }
+    }
+
+    /// 行ごとに、同じ時間に端末内の聞き取りが聞き取った文（言語モデルに見比べてもらう用）。
+    static func alternatives(_ lines: [CloudTranscriber.Line], with local: [Transcriber.Line],
+                             duration: TimeInterval) -> [String] {
+        lines.enumerated().map { i, line in
+            guard let start = line.offset else { return "" }
+            let end = lines[(i + 1)...].lazy.compactMap(\.offset).first ?? duration
+            return local.filter { $0.offset >= start - 1 && $0.offset < max(start + 0.5, end - 0.2) }
+                .map(\.text).joined()
+        }
+    }
+
+    /// 2つの文の読みがどれだけ同じか（0〜1）。夜の聞き直しで、どちらが端末内の聞き取りに近いかを比べるのに使う。
+    static func similarity(_ a: String, _ b: String) -> Double? {
+        let x = trigrams(reading(a)), y = trigrams(reading(b))
+        guard x.count >= 3, !y.isEmpty else { return nil }
+        return Double(x.filter(y.contains).count) / Double(x.count)
     }
 
     /// 日本語の文を、ローマ字の読み（小文字の英字だけ）にする。

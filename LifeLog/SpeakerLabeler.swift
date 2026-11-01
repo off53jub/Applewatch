@@ -156,7 +156,10 @@ actor SpeakerLabeler {
     // MARK: - 聞き分け
 
     /// 1つの区切りの中で、いつ誰が話したかを返す。context はその時いた場（分からなければ nil）。
-    func label(_ url: URL, context: Context?, strictness: Strictness = .normal) async throws -> [Segment] {
+    /// selfLevel は、その機器で覚えた自分の声の大きさ（dB）。手首や胸元のマイクには自分の声がいちばん大きく入るので、
+    /// 自分の声くらい大きい声は「自分」と決めやすく、ずっと小さい声は「自分」にしにくくする。
+    func label(_ url: URL, context: Context?, strictness: Strictness = .normal,
+               selfLevel: Float? = nil) async throws -> [Segment] {
         try await prepare()
         guard let diarizer else { return [] }
         // 区切りの中だけで声を分けてもらう（前の区切りの声とは、下で自分で照らし合わせる）
@@ -186,6 +189,16 @@ actor SpeakerLabeler {
         }
         clusters = clusters.filter { !$0.value.embedding.isEmpty }
 
+        // まとまりごとの声の大きさ（いちばん長く話したところで測る）
+        var loudness: [String: Float] = [:]
+        if selfLevel != nil {
+            let keys = Array(clusters.keys)
+            let spans = keys.map { (start: clusters[$0]!.longest.start, end: clusters[$0]!.longest.end) }
+            for (key, level) in zip(keys, OfficeFilter.levels(url, spans: spans)) {
+                if let level { loudness[key] = level }
+            }
+        }
+
         // 近い組から順に決める。1つの区切りで、同じ人を2つのまとまりに当てるのは、どちらも十分近いときだけ。
         var pairs: [(cluster: String, person: String, distance: Float, second: Float)] = []
         for (key, c) in clusters {
@@ -193,7 +206,16 @@ actor SpeakerLabeler {
             for (i, (p, d)) in scored.enumerated() {
                 let second = scored.indices.contains(i == 0 ? 1 : 0) ? scored[i == 0 ? 1 : 0].1 : 1
                 let inContext = context == nil || p.context == nil || p.context == context || p.isSelf
-                let limit = inContext && second - d >= 0.04 ? accept : strict
+                var limit = inContext && second - d >= 0.04 ? accept : strict
+                if p.isSelf, let selfLevel, let level = loudness[key] {
+                    if level >= selfLevel - 3 {
+                        // 自分の声と同じくらい大きい声は、声の特徴が少し離れていても自分とみなす
+                        limit = max(limit, accept + 0.08)
+                    } else if level < selfLevel - 12 {
+                        // 自分の声よりずっと小さい声（離れた人）は、よほど近いときだけ自分にする
+                        limit = min(limit, strict)
+                    }
+                }
                 if d <= limit { pairs.append((key, p.id, d, second)) }
             }
         }
@@ -387,6 +409,34 @@ actor SpeakerLabeler {
             if d < (best?.distance ?? 1) { best = (p.id, d) }
         }
         return best
+    }
+
+    /// 1つの会話に出てきた声のうち、同じ人が別の「人物N」に分かれてしまったものを、まとめる組（source を target に）にして返す。
+    /// まとめるのは、名前が無く、登録や手直しで覚えた声も無い「人物N」だけ。名前のある人どうしはまとめない。
+    /// apart は、同じ区切りの中で別の声とされた2人（番号の小さい順の組）。別の人とみなしてまとめない。
+    func consolidation(among ids: Set<String>, apart: Set<[String]>,
+                       strictness: Strictness) -> [(source: String, target: String)] {
+        let members = store.people.filter { p in ids.contains(p.id) && p.voices.contains { $0.model == Self.model } }
+        var result: [(source: String, target: String)] = []
+        var gone = Set<String>()
+        // 話した時間の短い声から、ほかの声にまとめられるか見る
+        for p in members.filter({ !$0.isNamed && $0.pinnedCount == 0 }).sorted(by: { $0.seconds < $1.seconds }) {
+            let voices = p.voices.filter { $0.model == Self.model }
+            var best: (id: String, distance: Float)?
+            for q in members where q.id != p.id && !gone.contains(q.id) {
+                guard !apart.contains([p.id, q.id].sorted()) else { continue }
+                let d = voices.map { distance($0.embedding, to: q) }.reduce(0, +) / Float(voices.count)
+                // 名前のある人（自分を含む）へは、ふだんの聞き分けと同じ近さで。
+                // 名前の無い声どうしは、同じ会話に出てくる人は少ないので、少しゆるく
+                let limit = q.isNamed ? strictness.accept : strictness.accept + 0.08
+                if d <= limit, d < (best?.distance ?? .infinity) { best = (q.id, d) }
+            }
+            if let best {
+                result.append((p.id, best.id))
+                gone.insert(p.id)
+            }
+        }
+        return result
     }
 
     /// テレビや動画の声だった、名前の無い声を忘れる（登録・手直しした声は残す）。
