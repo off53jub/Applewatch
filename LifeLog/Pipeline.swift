@@ -851,7 +851,10 @@ final class Pipeline {
         wordStats.count(days: recentDays.map { ($0, conversations.conversations(on: $0)) })
         await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
         await conversations.writePeopleNotes()
-        await conversations.writeWeeklySummary(today: dayFormatter.string(from: .now))
+        // 週のまとめは iPhone だけが書く（iPad の分と二重にならないように）
+        if UIDevice.current.userInterfaceIdiom != .pad {
+            await conversations.writeWeeklySummary(today: dayFormatter.string(from: .now))
+        }
         // ドライブを読む AI 向けの案内と索引を、中身が変わっていたら書き直す
         await updateDriveGuide()
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
@@ -1075,7 +1078,11 @@ final class Pipeline {
         }
         let index = DriveGuide.index(entries)
 
-        for (name, paragraphs) in [(DriveGuide.guideName, guide), (DriveGuide.indexName, index)] {
+        // iPad は、自分の記録の日だけの索引を別のドキュメントに書く（案内は iPhone だけが書く）
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+        let documents = isPad ? [(DriveGuide.padIndexName, index)]
+            : [(DriveGuide.guideName, guide), (DriveGuide.indexName, index)]
+        for (name, paragraphs) in documents {
             let key = "driveStamp-" + name
             let stamp = DriveGuide.stamp(paragraphs)
             guard force || UserDefaults.standard.string(forKey: key) != stamp else { continue }

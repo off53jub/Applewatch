@@ -8,6 +8,8 @@ import Foundation
 enum DriveGuide {
     static let guideName = "00 はじめに読んでください（AI 向けの説明）"
     static let indexName = "01 日ごとの索引"
+    /// iPad で記録した日の索引（iPhone の索引を上書きしないよう、別のドキュメントにする）
+    static let padIndexName = "01 日ごとの索引（iPad）"
 
     typealias Paragraphs = [(text: String, style: String?)]
 
@@ -57,6 +59,7 @@ enum DriveGuide {
         }
 
         h2("このフォルダにあるもの")
+        item("「01 日ごとの索引（iPad）」: iPad で記録した日の索引。家の iPad が録音した日は、こちらにも載っている（同じ日が両方にあることもある）。")
         item("「01 日ごとの索引」: 日ごとの過ごし方（何時から何時まで何をしていたか）・会った人・場所・決まったこと・やること。新しい日が上。まずここで日を探してから、その日のドキュメントを読むと速い。")
         item("「YYYY-MM-DD」（例: 2026-10-31）: その日の文字起こし。1日に1つ。")
         item("「人物ノート - 名前」: 名前を付けた人ごとの、その人と話した会話の見出しと要点（新しい順）。どの日のドキュメントにあるかも書いてある。")
