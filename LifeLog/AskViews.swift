@@ -131,7 +131,9 @@ struct HitRow: View {
 
     var body: some View {
         NavigationLink {
-            DayView(day: hit.day)
+            // 見つけた行を探しやすいよう、会話ごとの見方で開く
+            ConversationsView(day: hit.day)
+                .navigationTitle(hit.day)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {

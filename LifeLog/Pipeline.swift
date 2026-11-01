@@ -91,6 +91,7 @@ final class Pipeline {
     let haas = HaasEngine()
     let homePC = HomePC()
     let calendar = CalendarLink()
+    let contacts = ContactsLink()
     let motion = MotionLink()
     let sleep = SleepGuess()
     let officeFilter = OfficeFilter()
@@ -148,9 +149,11 @@ final class Pipeline {
         conversations.placeName = { [weak self] time in await self?.places.name(at: time) }
         conversations.eventInfo = { [weak self] start, end in
             guard let event = self?.calendar.events(from: start, to: end).first, !event.title.isEmpty else { return nil }
-            let detail = event.title + (event.attendees.isEmpty ? "" : "（参加者: " + event.attendees.prefix(8).joined(separator: "、") + "）")
+            let detail = event.title + (event.location.map { "（場所: \($0)）" } ?? "")
+                + (event.attendees.isEmpty ? "" : "（参加者: " + event.attendees.prefix(8).joined(separator: "、") + "）")
             return (event.title, detail)
         }
+        conversations.dayActivities = { [weak self] day in await self?.activities(on: day) ?? [] }
         conversations.movementName = { [weak self] start, end in
             await self?.motion.movement(from: start, to: end)?.label
         }
@@ -780,6 +783,48 @@ final class Pipeline {
 
     func conversations(on day: String) -> [ConversationLog.Conversation] { conversations.conversations(on: day) }
 
+    // MARK: - 過ごし方
+
+    /// 作っている途中の過ごし方（同じ日を二重に作らない）
+    @ObservationIgnored private var activityTasks: [String: Task<[Activity], Never>] = [:]
+
+    /// 前に作った過ごし方（すぐ画面に出す用。録音の無い時間の予定・移動は入っていない）
+    func savedActivities(on day: String) -> [Activity] { ActivityStore.load(day)?.activities ?? [] }
+
+    /// 1日の過ごし方。閉じた会話や予定が前に作ったときと同じなら、作り直さない（rebuild で作り直す）。
+    /// 録音の無い時間のカレンダーの予定と移動は、毎回足す。
+    func activities(on day: String, rebuild: Bool = false) async -> [Activity] {
+        if let running = activityTasks[day] { return await running.value }
+        let task = Task { await makeActivities(on: day, rebuild: rebuild) }
+        activityTasks[day] = task
+        let result = await task.value
+        activityTasks[day] = nil
+        return result
+    }
+
+    private func makeActivities(on day: String, rebuild: Bool) async -> [Activity] {
+        guard let dayStart = dayFormatter.date(from: day) else { return [] }
+        let dayEnd = dayStart.addingTimeInterval(24 * 3600)
+        let closed = conversations(on: day).filter { $0.closed && !$0.lines.isEmpty }
+        let events = calendar.dayEvents(from: dayStart, to: dayEnd)
+        let basis = ActivityBuilder.basis(closed, events: events)
+        let key = summariesOn ? settings.groqKey : nil
+        let saved = ActivityStore.load(day)
+        var recorded: [Activity]
+        if !rebuild, let saved, saved.basis == basis, saved.smart || key == nil {
+            recorded = saved.activities
+        } else {
+            let built = await ActivityBuilder.recorded(closed, events: events, previous: saved?.activities, apiKey: key)
+            recorded = built.activities
+            ActivityStore.save(.init(activities: recorded, basis: basis, smart: built.smart), day: day)
+        }
+        let until = min(dayEnd, .now)
+        let trips = await motion.trips(from: dayStart, to: until).compactMap { trip in
+            trip.movement.activityTitle.map { (start: trip.start, end: trip.end, title: $0) }
+        }
+        return ActivityBuilder.addUnrecorded(recorded, events: events, trips: trips, until: until)
+    }
+
     // MARK: - 会話ごとの話者のまとめ直し
 
     /// 閉じた会話ごとに、同じ人が別の「人物N」に分かれてしまっていたらまとめる。
@@ -951,7 +996,8 @@ final class Pipeline {
                 continue
             }
             let context = vocabularyContext(at: lines[0].time)
-            let words = hints[target.day] ?? dayHints(target.day, context: context)
+            let words: [String]
+            if let known = hints[target.day] { words = known } else { words = await dayHints(target.day, context: context) }
             hints[target.day] = words
             let duration = Self.duration(of: url)
             guard let local = try? await Transcriber.transcribe(url, words: words) else { continue }
@@ -1018,18 +1064,21 @@ final class Pipeline {
     }
 
     /// その日に出た名前・話題・予定の言葉（夜の聞き直しのヒント）
-    private func dayHints(_ day: String, context: SpeakerLabeler.Context) -> [String] {
-        let text = conversations(on: day).flatMap(\.lines).map(\.text).joined()
+    private func dayHints(_ day: String, context: SpeakerLabeler.Context) async -> [String] {
+        let texts = conversations(on: day).flatMap(\.lines).map(\.text)
+        let text = texts.joined()
         let topicWords = vocabulary.topics.filter { $0.isMentioned(in: text) }.flatMap(\.words)
         var events: [String] = []
         if let date = dayFormatter.date(from: day) {
             for event in calendar.events(from: date, to: date.addingTimeInterval(24 * 3600)) {
                 events.append(event.title)
                 events += event.attendees
+                if let location = event.location { events.append(location) }
             }
         }
+        let names = await contacts.mentioned(in: texts)
         var seen = Set<String>()
-        return (topicWords + events + keywords(for: context)).filter { !$0.isEmpty && seen.insert($0).inserted }
+        return (names + topicWords + events + keywords(for: context)).filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
     /// 夜（22時〜6時）に充電していれば、聞き直しを始める
@@ -1136,10 +1185,12 @@ final class Pipeline {
         let topics = vocabulary.activeTopics(hearing: local.map(\.text).joined() + (previous ?? ""), at: start)
         // その時間の予定の名前と参加者も、聞き取りのヒントにする
         let event = calendar.events(from: start, to: start.addingTimeInterval(duration)).first
-        let eventWords = event.map { [$0.title] + $0.attendees }?.filter { !$0.isEmpty } ?? []
-        // 話題の言葉は場所の言葉より具体的なので先に置く（Whisper のヒントは先頭の30語まで）
+        let eventWords = event.map { [$0.title] + $0.attendees + ($0.location.map { [$0] } ?? []) }?.filter { !$0.isEmpty } ?? []
+        // 「さいとうさん」のように呼ばれた名前は、読みが同じ連絡先の人の書き方（「齋藤」など）をヒントにする
+        let contactWords = await contacts.mentioned(in: local.map(\.text) + [previous ?? ""])
+        // 呼ばれた名前と話題の言葉は場所の言葉より具体的なので先に置く（Whisper のヒントは先頭の30語まで）
         var seenWords = Set<String>()
-        let keywords = (topics.flatMap(\.words) + eventWords + placeWords).filter { seenWords.insert($0).inserted }
+        let keywords = (contactWords + topics.flatMap(\.words) + eventWords + placeWords).filter { seenWords.insert($0).inserted }
         // 寝ているあいだは、端末内の文字起こしだけで済ませる（電池を使わず、寝息に作られた文も出にくい）
         let asleep = await sleep.isAsleep(from: start, to: start.addingTimeInterval(duration), motion: motion)
         if asleep { lastEngine = "端末内（睡眠中）" }
@@ -1204,7 +1255,8 @@ final class Pipeline {
         }
         // 精度の高い文で見つかった話題の言葉も、直しに使う
         let heardTopics = vocabulary.activeTopics(hearing: entries.map { $0.text }.joined(), at: start)
-        let correctionWords = heardTopics.flatMap(\.words).filter { seenWords.insert($0).inserted } + keywords
+        let heardNames = await contacts.mentioned(in: entries.map { $0.text })
+        let correctionWords = (heardNames + heardTopics.flatMap(\.words)).filter { seenWords.insert($0).inserted } + keywords
         // 同音の誤変換などを言語モデルで直す。直せなかったら（混雑・上限など）そのまま使う。
         var originals = [String?](repeating: nil, count: entries.count)
         // 登録した「間違えやすい書き方」は、そのまま正しい書き方に置き換える

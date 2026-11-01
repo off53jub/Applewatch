@@ -113,6 +113,8 @@ final class ConversationLog {
     var eventInfo: (Date, Date) async -> (name: String, detail: String)? = { _, _ in nil }
     /// その時間の移動の様子
     var movementName: (Date, Date) async -> String? = { _, _ in nil }
+    /// その日の過ごし方（1日のまとめの「1日の流れ」に使う）
+    var dayActivities: (String) async -> [Activity] = { _ in [] }
     /// テレビや動画だった会話で、名前の無い声として覚えてしまった番号（忘れてもらう）
     var forgetVoices: @MainActor (Set<String>) async -> Void = { _ in }
 
@@ -663,7 +665,13 @@ final class ConversationLog {
                 let head = "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))\(place)\(people)\(media) \(c.title ?? "（短い会話）")"
                 return ([head] + c.points.map { "  ・" + $0 }).joined(separator: "\n")
             }.joined(separator: "\n")
-            guard let summary = try? await Summarizer.day(overview, apiKey: key) else { continue }
+            guard var summary = try? await Summarizer.day(overview, apiKey: key) else { continue }
+            // 1日の流れは、アプリの「過ごし方」と同じ塊にする（何時から何時まで何をしていて、その中で何をしたか）
+            let activities = await dayActivities(day)
+            if !activities.isEmpty {
+                summary = Summarizer.Day(flow: activities.map(\.flowLine), decisions: summary.decisions,
+                                         todos: summary.todos, topics: summary.topics)
+            }
 
             let people = Array(NSOrderedSet(array: log.conversations.flatMap(\.people))) as? [String] ?? []
             var body = ""

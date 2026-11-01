@@ -60,6 +60,7 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         NSCalendarsFullAccessUsageDescription: 会話の時間の予定を、見出しと聞き取りのヒントに使います。
         NSMotionUsageDescription: 歩いている・乗り物に乗っている・寝ている、を見分けて、会話の見出しと文字起こしに使います。
+        NSContactsUsageDescription: 会話で呼ばれた名前（「さいとうさん」など）を連絡先の名前の書き方に合わせて、文字起こしを正しくするために使います。
         NSLocalNetworkUsageDescription: 家の PC（LifeLog PC）に録音を送って文字にしてもらうために使います。
         # 家の PC へは http で送る（宛先は家の中の住所か Tailscale の住所。Tailscale は通り道が暗号化されている）
         NSAppTransportSecurity:

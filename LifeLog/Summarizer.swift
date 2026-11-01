@@ -90,6 +90,79 @@ enum Summarizer {
         return Day(flow: list("flow"), decisions: list("decisions"), todos: list("todos"), topics: list("topics"))
     }
 
+    /// 1日の会話の一覧を「何をしていたか」の長い塊に区切る。count は一覧の数。
+    /// 返すのは塊ごとの（最初の番号, 最後の番号, 見出し）で、0〜count-1 の番号を隙間なく分けたもの。
+    static func activityBlocks(_ list: String, count: Int, events: String, previous: String?,
+                               apiKey: String) async throws -> [(from: Int, to: Int, title: String)] {
+        let prompt = """
+            次は、ある人（本人）の1日の録音を、会話ごとに時刻順に並べた一覧です（番号. 時刻｜場所｜相手｜〔カレンダーの予定〕｜見出し）。
+            この人が「何をしていたか」で、1日をいくつかの長い時間の塊に分けてください。
+            ・塊は一覧の番号の連続した範囲です。0 番から \(count - 1) 番まで、すべての番号をちょうど1つの塊に入れ、時刻順に並べてください。
+            ・同じ用事・同じ場所での活動（たとえばダンスの練習、会社での仕事、家族との夕食、買い物）は、途中に短い休憩・電話・雑談・移動が挟まっても1つの塊にしてください。
+              細かく分けすぎないでください（1つの塊は何時間でもかまいません。目安は1日に3〜10個）。
+            ・カレンダーの予定と時間が重なるところは、予定名を参考にしてください（会話の中身と合わないときは使わないでください）。
+            ・"title" は、何をしていたかが一目で分かる15文字以内の名前にしてください。
+            \(events.isEmpty ? "" : "\nこの日のカレンダーの予定:\n\(events)\n")\
+            \(previous.map { "\n前にまとめたときの塊（会話が増えたので見直しています。変える理由が無ければ、区切りと名前はなるべくそのままに）:\n\($0)\n" } ?? "")
+            次の JSON で返してください。from と to は番号（整数）です。
+            {"blocks": [{"from": 整数, "to": 整数, "title": "塊の名前"}, ...]}
+
+            \(list)
+            """
+        let json: [String: Any]
+        do {
+            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+        } catch CloudTranscriber.Failure.limited {
+            // 大きいモデルの枠が無ければ小さいモデルで
+            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+        }
+        func number(_ value: Any?) -> Int? {
+            (value as? Int) ?? (value as? NSNumber)?.intValue ?? (value as? String).flatMap { Int($0) }
+        }
+        var starts: [(from: Int, title: String)] = []
+        for block in (json["blocks"] as? [[String: Any]]) ?? [] {
+            guard let from = number(block["from"]), (0..<count).contains(from),
+                  !starts.contains(where: { $0.from == from }) else { continue }
+            let title = ((block["title"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            starts.append((from, String(title.prefix(24))))
+        }
+        guard !starts.isEmpty else { throw CloudTranscriber.Failure.temporary("過ごし方を区切れませんでした") }
+        starts.sort { $0.from < $1.from }
+        starts[0].from = 0
+        return starts.indices.map { i in
+            (starts[i].from, i + 1 < starts.count ? starts[i + 1].from - 1 : count - 1, starts[i].title)
+        }
+    }
+
+    /// 過ごし方の塊ごとに、その中でしたことを短い箇条書きにする。塊の数が合わなければ失敗。
+    static func activityDetails(_ blocks: [(header: String, body: String)], apiKey: String) async throws -> [[String]] {
+        guard !blocks.isEmpty else { return [] }
+        let budget = max(300, 6_000 / blocks.count)
+        let material = blocks.map { $0.header + "\n" + String($0.body.prefix(budget)) }.joined(separator: "\n\n")
+        let prompt = """
+            次は、ある人（本人）の1日を「何をしていたか」の塊に分けたものと、塊ごとの会話の見出し・要点です。
+            塊ごとに、その中で本人がしたこと・起きたこと・決まったことを、短い箇条書き（1つ30文字以内、1〜4個）にしてください。
+            会話の細かい中身より、その時間に何をしていたかが分かるようにまとめてください。材料に無いことは書かないでください。
+            塊の数（\(blocks.count) 個）と順番はそのままにして、次の JSON で返してください。
+            {"blocks": [{"did": ["したこと", ...]}, ...]}
+
+            \(material)
+            """
+        let json: [String: Any]
+        do {
+            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+        } catch CloudTranscriber.Failure.limited {
+            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+        }
+        guard let raw = json["blocks"] as? [[String: Any]], raw.count == blocks.count else {
+            throw CloudTranscriber.Failure.temporary("したことをまとめられませんでした")
+        }
+        return raw.map { block in
+            let items = (block["did"] as? [String]) ?? []
+            return Array(items.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.prefix(4))
+        }
+    }
+
     struct Week {
         let flow: [String]
         let people: [String]

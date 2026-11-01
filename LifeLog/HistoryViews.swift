@@ -22,10 +22,172 @@ struct HistoryView: View {
     }
 }
 
-/// 1日の記録を、会話ごとに新しい順で見る。行を押すと、その場面から音声を再生する。
+/// 1日の記録。「過ごし方」（何時から何時まで何をしていたか）と「会話ごと」を切り替えて見る。
 struct DayView: View {
+    let day: String
+    /// 0: 過ごし方、1: 会話ごと
+    @AppStorage("dayViewMode") private var mode = 0
+
+    var body: some View {
+        Group {
+            if mode == 0 {
+                ActivitiesView(day: day)
+            } else {
+                ConversationsView(day: day)
+            }
+        }
+        .safeAreaInset(edge: .top) {
+            Picker("見方", selection: $mode) {
+                Text("過ごし方").tag(0)
+                Text("会話ごと").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.bottom, 6)
+            .background(.bar)
+        }
+        .navigationTitle(day)
+        .toolbar {
+            NavigationLink {
+                UnnamedVoicesView(day: day)
+            } label: {
+                Image(systemName: "person.crop.circle.badge.questionmark")
+            }
+        }
+    }
+}
+
+/// 1日を「何をしていたか」の長い塊で、時刻順に見る。塊を押すと、その中の会話を見る。
+struct ActivitiesView: View {
     @Environment(Pipeline.self) private var pipeline
     let day: String
+    @State private var activities: [Activity] = []
+    @State private var building = false
+    /// まだ塊にまとめていない会話（閉じていない会話や、まとめたあとに増えた会話）
+    @State private var newer: [ConversationLog.Conversation] = []
+
+    private static let clock: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    var body: some View {
+        List {
+            if building {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("過ごし方をまとめています…").foregroundStyle(.secondary)
+                }
+            }
+            ForEach(activities) { activity in
+                Section {
+                    if activity.kind == .recorded, let first = activity.first, let last = activity.last {
+                        NavigationLink {
+                            ConversationsView(day: day, range: first...last)
+                                .navigationTitle(activity.title)
+                        } label: {
+                            ActivityRow(activity: activity)
+                        }
+                    } else {
+                        ActivityRow(activity: activity)
+                    }
+                }
+            }
+            if let first = newer.first {
+                Section {
+                    NavigationLink {
+                        ConversationsView(day: day, range: first.start...Date.distantFuture)
+                            .navigationTitle("まだまとめていない会話")
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(Self.clock.string(from: first.start) + "〜")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            Text("まだまとめていない会話（\(newer.count) 件）")
+                            Text("話が3分途切れて会話が閉じると、過ごし方に入ります。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .overlay {
+            if activities.isEmpty && newer.isEmpty && !building {
+                ContentUnavailableView("記録がありません", systemImage: "calendar.day.timeline.left")
+            }
+        }
+        .task { await load(rebuild: false) }
+        .refreshable { await load(rebuild: true) }
+    }
+
+    private func load(rebuild: Bool) async {
+        if activities.isEmpty { activities = pipeline.savedActivities(on: day) }
+        updateNewer()
+        building = true
+        activities = await pipeline.activities(on: day, rebuild: rebuild)
+        building = false
+        updateNewer()
+    }
+
+    private func updateNewer() {
+        let last = activities.compactMap(\.last).max()
+        newer = pipeline.conversations(on: day).filter { c in
+            !c.lines.isEmpty && (last.map { c.start > $0 } ?? true)
+        }
+    }
+}
+
+/// 過ごし方の1つの塊
+private struct ActivityRow: View {
+    let activity: Activity
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(activity.timeRange)
+                    .font(.subheadline.monospacedDigit().bold())
+                Text(activity.length)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                switch activity.kind {
+                case .recorded:
+                    if activity.count > 0 {
+                        Text("会話 \(activity.count)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                case .plan:
+                    Label("予定・録音なし", systemImage: "calendar").font(.caption).foregroundStyle(.secondary)
+                case .move:
+                    Label("移動", systemImage: "figure.walk").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text(activity.title)
+                .font(.headline)
+            if !activity.detail.isEmpty {
+                Text(activity.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !activity.did.isEmpty {
+                Text(activity.did.map { "・" + $0 }.joined(separator: "\n"))
+                    .font(.callout)
+            }
+        }
+        .padding(.vertical, 2)
+        .opacity(activity.kind == .recorded ? 1 : 0.7)
+    }
+}
+
+/// 1日の記録を、会話ごとに新しい順で見る。行を押すと、その場面から音声を再生する。
+/// range を渡すと、その時間に始まった会話だけを出す（過ごし方の塊の中身）。
+struct ConversationsView: View {
+    @Environment(Pipeline.self) private var pipeline
+    let day: String
+    var range: ClosedRange<Date>? = nil
     @State private var conversations: [ConversationLog.Conversation] = []
     @State private var player = ClipPlayer()
     @State private var fixing: Fix?
@@ -100,26 +262,24 @@ struct DayView: View {
                 ContentUnavailableView("記録がありません", systemImage: "text.bubble")
             }
         }
-        .navigationTitle(day)
-        .toolbar {
-            NavigationLink {
-                UnnamedVoicesView(day: day)
-            } label: {
-                Image(systemName: "person.crop.circle.badge.questionmark")
-            }
-        }
-        .onAppear { conversations = pipeline.conversations(on: day) }
-        .refreshable { conversations = pipeline.conversations(on: day) }
+        .onAppear { conversations = load() }
+        .refreshable { conversations = load() }
         .onDisappear { player.stop() }
         .sheet(item: $addingWord) { AddWordView(line: $0.line) }
         .sheet(item: $editing) { target in
-            EditLineView(line: target.line) { conversations = pipeline.conversations(on: day) }
+            EditLineView(line: target.line) { conversations = load() }
         }
         .sheet(item: $fixing) { fix in
             SpeakerFixView(line: fix.line, next: fix.next, context: pipeline.places.context(at: fix.line.time)) {
-                conversations = pipeline.conversations(on: day)
+                conversations = load()
             }
         }
+    }
+
+    private func load() -> [ConversationLog.Conversation] {
+        let all = pipeline.conversations(on: day)
+        guard let range else { return all }
+        return all.filter { range.contains($0.start) }
     }
 
     @ViewBuilder

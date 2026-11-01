@@ -406,7 +406,7 @@ private struct SettingsView: View {
                     NavigationLink("ほかのアプリの音声を取り込む") { ImportView() }
                     NavigationLink("記録の掃除") { CleanupView() }
                     NavigationLink("周りの声と雑音") { NoiseSettingsView() }
-                    NavigationLink("カレンダー・移動・睡眠") { IntegrationsView() }
+                    NavigationLink("カレンダー・連絡先・移動・睡眠") { IntegrationsView() }
                     NavigationLink("夜の聞き直し") { NightlyView() }
                     NavigationLink("ロック画面・時計の文字盤から使う") { ShortcutsHelpView() }
                 } header: {

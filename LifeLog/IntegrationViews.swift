@@ -34,12 +34,13 @@ struct NoiseSettingsView: View {
     }
 }
 
-/// カレンダー・移動の様子・睡眠との連携。
+/// カレンダー・連絡先・移動の様子・睡眠との連携。
 struct IntegrationsView: View {
     @Environment(Pipeline.self) private var pipeline
 
     var body: some View {
         @Bindable var calendar = pipeline.calendar
+        @Bindable var contacts = pipeline.contacts
         @Bindable var motion = pipeline.motion
         @Bindable var sleep = pipeline.sleep
         Form {
@@ -50,12 +51,31 @@ struct IntegrationsView: View {
                     Button("カレンダーを使えるようにする") { Task { await calendar.requestAccess() } }
                 }
                 if calendar.authorized && calendar.enabled {
-                    NavigationLink("職場のカレンダーを選ぶ（\(calendar.workCalendars.count)）") { WorkCalendarsView() }
+                    LabeledContent("Google カレンダー", value: calendar.hasGoogle ? "読めています" : "まだ iPhone に入っていません")
+                    NavigationLink("使うカレンダー・職場のカレンダー") { CalendarsView() }
                 }
             } header: {
                 Text("カレンダー")
             } footer: {
-                Text("会話の時間に予定があれば、見出しに〔予定名〕を付け、要約の参考にします。予定名と参加者の名前は、聞き取りと誤変換直しのヒントにもなります（予定名は誤変換直しのときに Groq に送られます）。職場のカレンダーを選ぶと、その予定の時間は職場とみなします。")
+                Text("""
+                    Google カレンダーは、iPhone の「設定」→「アプリ」→「カレンダー」→「カレンダーアカウント」→「アカウントを追加」→「Google」で、ふだんの Google アカウントを足して「カレンダー」をオンにすると読めるようになります（LifeLog の側で Google の設定を足す必要はありません）。
+                    予定は、記録の「過ごし方」の区切りと名前（12:00〜16:00 ダンス、など）、会話の見出しの〔予定名〕、要約の参考に使います。予定名・場所・参加者の名前は、聞き取りと誤変換直しのヒントにもなります（そのときは Groq に送られます）。職場のカレンダーを選ぶと、その予定の時間は職場とみなします。
+                    """)
+            }
+
+            Section {
+                if contacts.authorized {
+                    Toggle("連絡先の名前を使う", isOn: $contacts.enabled)
+                    if contacts.enabled && contacts.count > 0 {
+                        LabeledContent("読み込んだ名前", value: "\(contacts.count) 個")
+                    }
+                } else {
+                    Button("連絡先を使えるようにする") { Task { await contacts.requestAccess() } }
+                }
+            } header: {
+                Text("連絡先")
+            } footer: {
+                Text("会話で「さいとうさん」「斉藤くん」のように呼ばれた名前と読みが同じ人を連絡先から探し、連絡先での書き方（「齋藤」など）を聞き取りと誤変換直しのヒントにします。ふりがなを入れてある人ほど正確です。連絡先そのものは外に送りません。読みが合った人の名前だけが、ヒントとして Groq やクラウドの文字起こしに渡ります。")
             }
 
             Section {
@@ -88,38 +108,68 @@ struct IntegrationsView: View {
                 Text("寝る時間帯に iPhone がほとんど動いていなければ、寝ているとみなします（移動の様子がオフなら時間帯だけで決めます）。寝ているあいだは端末内の文字起こしだけで済ませて電池を節約し、近くではっきり話した長めの文だけを書きます。ヘルスケアの睡眠の記録は、アプリに特別な許可が要り Sideloadly では入れられないため、使っていません。")
             }
         }
-        .navigationTitle("カレンダー・移動・睡眠")
+        .navigationTitle("カレンダー・連絡先・移動・睡眠")
     }
 }
 
-/// 職場の予定が入っているカレンダーを選ぶ。
-private struct WorkCalendarsView: View {
+/// 使うカレンダーと、職場の予定が入っているカレンダーを選ぶ。アカウント（iCloud・Google など）ごとに並べる。
+private struct CalendarsView: View {
     @Environment(Pipeline.self) private var pipeline
 
     var body: some View {
         let link = pipeline.calendar
         List {
-            ForEach(link.calendars, id: \.calendarIdentifier) { cal in
-                Button {
-                    if link.workCalendars.contains(cal.calendarIdentifier) {
-                        link.workCalendars.remove(cal.calendarIdentifier)
-                    } else {
-                        link.workCalendars.insert(cal.calendarIdentifier)
-                    }
-                } label: {
-                    HStack {
-                        Circle().fill(Color(cgColor: cal.cgColor)).frame(width: 10, height: 10)
-                        Text(cal.title)
-                        Spacer()
-                        if link.workCalendars.contains(cal.calendarIdentifier) {
-                            Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+            ForEach(link.calendarsByAccount, id: \.account) { group in
+                Section(group.account) {
+                    ForEach(group.calendars, id: \.calendarIdentifier) { cal in
+                        let id = cal.calendarIdentifier
+                        let used = !link.ignoredCalendars.contains(id)
+                        HStack {
+                            Circle().fill(Color(cgColor: cal.cgColor)).frame(width: 10, height: 10)
+                            Text(cal.title).foregroundStyle(used ? Color.primary : Color.secondary)
+                            Spacer()
+                            if used {
+                                Button {
+                                    if link.workCalendars.contains(id) {
+                                        link.workCalendars.remove(id)
+                                    } else {
+                                        link.workCalendars.insert(id)
+                                    }
+                                } label: {
+                                    Text("職場")
+                                        .font(.caption.bold())
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(link.workCalendars.contains(id) ? Color.accentColor : Color.secondary.opacity(0.15),
+                                                    in: Capsule())
+                                        .foregroundStyle(link.workCalendars.contains(id) ? Color.white : Color.secondary)
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                            Toggle("使う", isOn: Binding(
+                                get: { !link.ignoredCalendars.contains(id) },
+                                set: { on in
+                                    if on { link.ignoredCalendars.remove(id) } else { link.ignoredCalendars.insert(id) }
+                                }))
+                            .labelsHidden()
                         }
                     }
                 }
-                .tint(.primary)
             }
         }
-        .navigationTitle("職場のカレンダー")
+        .overlay {
+            if link.calendars.isEmpty {
+                ContentUnavailableView("カレンダーがありません", systemImage: "calendar")
+            }
+        }
+        .navigationTitle("カレンダー")
+        .safeAreaInset(edge: .bottom) {
+            Text("右のスイッチを切ったカレンダー（家族の共有カレンダーなど、自分の予定ではないもの）は使いません。「職場」を付けたカレンダーの予定の時間は、職場とみなします。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding()
+                .background(.bar)
+        }
     }
 }
 
