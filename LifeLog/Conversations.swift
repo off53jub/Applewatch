@@ -92,6 +92,8 @@ final class ConversationLog {
         var movement: String?
         /// 端末間の同期で、どちらが新しいかを決める番号。中身が変わるたびに1つ増える（以前の記録は nil で、0 とみなす）
         var rev: Int?
+        /// あとから見出しを作ろうとして、作れる中身が無かった（もうやり直さない）
+        var titleSkipped: Bool?
 
         /// 話した相手。テレビや動画の声は相手に数えない。
         var people: [String] {
@@ -112,6 +114,8 @@ final class ConversationLog {
         var summary: Summarizer.Day?
         /// 消した会話（端末間の同期で、ほかの端末にも消したと伝える）。会話の始まりの時刻と、消したときの番号。
         var removed: [Removed]?
+        /// まとめのあとで見出しが増えたので、まとめを書き足す
+        var summaryStale: Bool?
     }
 
     struct Removed: Codable {
@@ -129,8 +133,12 @@ final class ConversationLog {
 
     /// これだけ話が途切れたら、別の会話とみなす
     static let gap: TimeInterval = 180
+    /// 画面で1つに見せる会話どうしの、間の長さの上限
+    private static let sameTalkGap: TimeInterval = 900
     /// 短すぎる会話（テレビの音や独り言など）には見出しを付けない
     private static let minimumCharacters = 80
+    /// あとから見出しを作るとき、1回に読む文字数の上限（無料枠を使い切らないように）
+    private static let fillBudget = 12_000
 
     private let docs: GoogleDocs
     /// 要約に使う Groq のキー。nil なら見出しは時刻と相手だけにする。
@@ -244,11 +252,8 @@ final class ConversationLog {
 
         let range = "\(timeFormatter.string(from: conversation.start))〜\(timeFormatter.string(from: conversation.end))"
         if let key = apiKey() {
-            let total = max(1, conversation.lines.reduce(0) { $0 + $1.text.count })
-            let mine = conversation.lines.filter { $0.speakerID == SpeakerLabeler.selfID || $0.speaker == SpeakerLabeler.selfName }
-                .reduce(0) { $0 + $1.text.count }
             if let summary = try? await Summarizer.conversation(transcript, timeRange: range,
-                                                                selfShare: Double(mine) / Double(total),
+                                                                selfShare: Self.selfShare(conversation),
                                                                 event: event?.detail, apiKey: key) {
                 result.title = summary.title
                 result.points = summary.points
@@ -281,6 +286,94 @@ final class ConversationLog {
         } catch {
             return nil
         }
+    }
+
+    /// 会話の文字のうち、自分が話した割合
+    private static func selfShare(_ c: Conversation) -> Double {
+        let total = max(1, c.lines.reduce(0) { $0 + $1.text.count })
+        let mine = c.lines.filter { $0.speakerID == SpeakerLabeler.selfID || $0.speaker == SpeakerLabeler.selfName }
+            .reduce(0) { $0 + $1.text.count }
+        return Double(mine) / Double(total)
+    }
+
+    // MARK: - 見出しの穴埋め
+
+    /// 閉じたのに、見出しが付いていない会話か。
+    private static func needsTitle(_ c: Conversation) -> Bool {
+        c.closed && c.title == nil && c.media == nil && c.titleSkipped != true
+            && c.lines.reduce(0) { $0 + $1.text.count } >= minimumCharacters
+    }
+
+    /// 無料枠が足りずに見出しを作れなかった会話に、あとから見出しと要点を付ける。
+    /// 新しい日から少しずつ進め、作れなければやめて次の機会にやり直す。
+    func fillMissingTitles() async {
+        guard let key = apiKey() else { return }
+        var budget = Self.fillBudget
+        for day in days().reversed() {
+            for c in load(day).conversations where Self.needsTitle(c) {
+                guard budget > 0 else { return }
+                let transcript = c.lines.map { line in
+                    (line.speaker.map { "[\($0)] " } ?? "") + line.text
+                }.joined(separator: "\n")
+                budget -= transcript.count
+                let range = "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))"
+                let event = await eventInfo(c.start, c.end)
+                guard let summary = try? await Summarizer.conversation(transcript, timeRange: range,
+                                                                       selfShare: Self.selfShare(c),
+                                                                       event: event?.detail, apiKey: key) else { return }
+                await applyTitle(summary, to: c, day: day)
+            }
+        }
+    }
+
+    private func applyTitle(_ summary: Summarizer.Conversation, to c: Conversation, day: String) async {
+        var updated = c
+        if summary.title.isEmpty {
+            updated.titleSkipped = true
+        } else {
+            updated.title = summary.title
+            updated.points = summary.points
+            updated.media = summary.media
+            updated.program = summary.program
+            // ドキュメントには時刻・場所だけの見出しが入っているので、それを置き換えて要点を足す
+            try? await docs.replaceAll([(find: Self.headingText(c), replace: Self.headingText(updated))], day: day)
+            if let first = c.lines.first {
+                try? await docs.insertLines(updated.points.map { "・" + $0 }, before: Self.docLine(first), day: day)
+            }
+        }
+        // 書いているあいだに記録が変わっていてもよいように、読み直してから置き換える
+        var log = load(day)
+        guard let i = log.conversations.firstIndex(where: { $0.start == c.start }),
+              log.conversations[i].title == nil else { return }
+        updated.lines = log.conversations[i].lines
+        updated.rev = log.conversations[i].rev
+        log.conversations[i] = updated
+        if log.summaryWritten { log.summaryStale = true }
+        save(log, day: day)
+    }
+
+    // MARK: - 画面で見るときのまとまり
+
+    /// 間が短く、場所と相手が同じ会話を1つのまとまりにする（画面で見るときだけ。記録とドキュメントは会話ごとのまま）。
+    static func grouped(_ list: [Conversation]) -> [[Conversation]] {
+        var groups: [[Conversation]] = []
+        for c in list {
+            if let group = groups.last, continues(group, with: c) {
+                groups[groups.count - 1].append(c)
+            } else {
+                groups.append([c])
+            }
+        }
+        return groups
+    }
+
+    private static func continues(_ group: [Conversation], with c: Conversation) -> Bool {
+        guard let last = group.last, let end = group.map(\.end).max(),
+              c.start.timeIntervalSince(end) <= sameTalkGap, c.media == last.media else { return false }
+        if let a = group.compactMap(\.place).last, let b = c.place, a != b { return false }
+        if let a = group.compactMap(\.event).last, let b = c.event, a != b { return false }
+        let before = Set(group.flatMap(\.people)), now = Set(c.people)
+        return before.isEmpty || now.isEmpty || !before.isDisjoint(with: now)
     }
 
     // MARK: - テレビ・放送の行
@@ -798,15 +891,22 @@ final class ConversationLog {
     // MARK: - 1日のまとめ
 
     /// 今日より前で、会話がすべて閉じていて、まだまとめを付けていない日に、まとめを付ける。
+    /// 前に書いた日でも、中身が残っていない日や、あとから見出しが増えた日は、見出しがそろってから書き足す。
     func writeDailySummaries(today: String) async {
         guard let key = apiKey() else { return }
         for day in days() where day < today {
             var log = load(day)
-            guard !log.summaryWritten, !log.conversations.isEmpty,
-                  log.conversations.allSatisfy(\.closed) else { continue }
+            guard !log.conversations.isEmpty, log.conversations.allSatisfy(\.closed) else { continue }
+            let again = log.summaryWritten
+            if again {
+                guard log.summary == nil || log.summaryStale == true,
+                      !log.conversations.contains(where: { Self.needsTitle($0) }) else { continue }
+            }
             guard log.conversations.contains(where: { $0.title != nil }) else {
-                log.summaryWritten = true
-                save(log, day: day)
+                if !again {
+                    log.summaryWritten = true
+                    save(log, day: day)
+                }
                 continue
             }
             // 1日の流れのために、見出しの無い短い会話も時刻と場所だけは渡す
@@ -851,9 +951,16 @@ final class ConversationLog {
             section("やること", summary.todos)
             section("話題", summary.topics)
             body += "\n"
+            // ドキュメントにまとめがある日は、二重に書かない（見出しが増えた日だけ、書き足した分として入れる）
+            var exists = false
+            if again { exists = (try? await docs.hasParagraph("1日のまとめ", day: day)) ?? true }
             do {
-                try await docs.insert(heading: "1日のまとめ", body: body, at: 1, style: "HEADING_1", day: day)
+                if !exists || log.summaryStale == true {
+                    try await docs.insert(heading: exists ? "1日のまとめ（あとから書き足した分）" : "1日のまとめ",
+                                          body: body, at: 1, style: "HEADING_1", day: day)
+                }
                 log.summaryWritten = true
+                log.summaryStale = nil
                 log.summary = summary
                 save(log, day: day)
             } catch {

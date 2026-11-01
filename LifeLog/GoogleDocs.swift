@@ -233,6 +233,20 @@ final class GoogleDocs {
         return (at, text.utf16.count)
     }
 
+    /// 中身が text と同じ段落があるか。
+    func hasParagraph(_ text: String, day: String) async throws -> Bool {
+        try await paragraphs(docId: documentId(for: day)).contains { $0.text == text }
+    }
+
+    /// anchor の行のすぐ前に、行を入れる（見つからなければ何もしない）。
+    func insertLines(_ lines: [String], before anchor: String, day: String) async throws {
+        let docId = try await documentId(for: day)
+        guard !lines.isEmpty, let p = try await paragraphs(docId: docId).first(where: { $0.text == anchor }) else { return }
+        let text = lines.joined(separator: "\n") + "\n"
+        _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
+                              json: ["requests": [["insertText": ["location": ["index": p.start], "text": text]]]])
+    }
+
     /// ドキュメントの中の文字を置き換える（見つかったところすべて）。
     func replaceAll(_ pairs: [(find: String, replace: String)], day: String) async throws {
         guard !pairs.isEmpty else { return }

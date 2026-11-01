@@ -222,40 +222,46 @@ struct ConversationsView: View {
 
     var body: some View {
         List {
-            ForEach(Array(conversations.enumerated()).reversed(), id: \.offset) { c, conversation in
+            // 間が短く、場所と相手が同じ会話は1つのまとまりで見せる
+            ForEach(Array(ConversationLog.grouped(conversations).enumerated()).reversed(), id: \.offset) { g, group in
                 Section {
-                    if !conversation.points.isEmpty {
-                        Text(conversation.points.map { "・" + $0 }.joined(separator: "\n"))
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(Array(conversation.lines.enumerated()), id: \.offset) { l, line in
-                        let next = conversation.lines[(l + 1)...].first { $0.audio == line.audio }
-                        row(line, key: "\(c)-\(l)")
-                            .contextMenu {
-                                Button("話者を直す", systemImage: "person.crop.circle.badge.questionmark") {
-                                    fixing = Fix(line: line, next: next)
+                    ForEach(Array(group.enumerated()), id: \.offset) { c, conversation in
+                        if group.count > 1, let title = conversation.title, !title.isEmpty {
+                            Text(title).font(.subheadline.bold())
+                        }
+                        if !conversation.points.isEmpty {
+                            Text(conversation.points.map { "・" + $0 }.joined(separator: "\n"))
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(Array(conversation.lines.enumerated()), id: \.offset) { l, line in
+                            let next = conversation.lines[(l + 1)...].first { $0.audio == line.audio }
+                            row(line, key: "\(g)-\(c)-\(l)")
+                                .contextMenu {
+                                    Button("話者を直す", systemImage: "person.crop.circle.badge.questionmark") {
+                                        fixing = Fix(line: line, next: next)
+                                    }
+                                    Button("文字を直す", systemImage: "pencil") {
+                                        editing = WordTarget(line: line)
+                                    }
+                                    Button("言葉を登録", systemImage: "character.book.closed") {
+                                        addingWord = WordTarget(line: line)
+                                    }
                                 }
-                                Button("文字を直す", systemImage: "pencil") {
-                                    editing = WordTarget(line: line)
+                                .swipeActions(edge: .leading) {
+                                    Button("話者", systemImage: "person.crop.circle.badge.questionmark") {
+                                        fixing = Fix(line: line, next: next)
+                                    }
+                                    .tint(.indigo)
+                                    Button("文字", systemImage: "pencil") {
+                                        editing = WordTarget(line: line)
+                                    }
+                                    .tint(.orange)
                                 }
-                                Button("言葉を登録", systemImage: "character.book.closed") {
-                                    addingWord = WordTarget(line: line)
-                                }
-                            }
-                            .swipeActions(edge: .leading) {
-                                Button("話者", systemImage: "person.crop.circle.badge.questionmark") {
-                                    fixing = Fix(line: line, next: next)
-                                }
-                                .tint(.indigo)
-                                Button("文字", systemImage: "pencil") {
-                                    editing = WordTarget(line: line)
-                                }
-                                .tint(.orange)
-                            }
+                        }
                     }
                 } header: {
-                    Text(heading(for: conversation))
+                    Text(heading(for: group))
                 }
             }
         }
@@ -350,15 +356,22 @@ struct ConversationsView: View {
         }
     }
 
-    private func heading(for c: ConversationLog.Conversation) -> String {
-        var parts = ["\(Self.timeFormatter.string(from: c.start))〜\(Self.timeFormatter.string(from: c.end))"]
-        if let place = c.place { parts.append(place) }
+    private func heading(for group: [ConversationLog.Conversation]) -> String {
+        guard let c = group.first else { return "" }
+        let end = group.map(\.end).max() ?? c.end
+        var parts = ["\(Self.timeFormatter.string(from: c.start))〜\(Self.timeFormatter.string(from: end))"]
+        if let place = group.compactMap(\.place).first { parts.append(place) }
+        let people = Array(NSOrderedSet(array: group.flatMap(\.people))) as? [String] ?? []
         if let media = c.media {
             parts.append("［\(media)］" + (c.program.map { "「\($0)」" } ?? ""))
-        } else if !c.people.isEmpty {
-            parts.append(c.people.joined(separator: "、") + "と")
+        } else if !people.isEmpty {
+            parts.append(people.joined(separator: "、") + "と")
         }
-        if let title = c.title, !title.isEmpty { parts.append(title) }
+        if group.count > 1 {
+            parts.append("\(group.count) つの会話")
+        } else if let title = c.title, !title.isEmpty {
+            parts.append(title)
+        }
         return parts.joined(separator: "　")
     }
 }

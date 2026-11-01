@@ -153,6 +153,8 @@ final class Pipeline {
     private let conversations: ConversationLog
     /// iPhone と iPad の記録と登録を合わせる
     @ObservationIgnored private(set) var sync: DeviceSync!
+    /// 「こんなのあったけど、どう？」の候補
+    let suggestions = SuggestionBox()
     /// ほかの端末から記録が届くたびに増える（画面を出し直すため）
     private(set) var recordsVersion = 0
     private let receiver = PhoneReceiver()
@@ -976,11 +978,20 @@ final class Pipeline {
         // 1日のまとめ・人物ノート・週のまとめ・AI 向けの案内と索引は、iPhone だけが書く
         // （iPad の会話は同期で iPhone に届くので、iPhone が両方の分をまとめて書く。二重にならないように）
         if UIDevice.current.userInterfaceIdiom != .pad {
+            // 無料枠が足りずに見出しを作れなかった会話を、少しずつ埋める
+            await conversations.fillMissingTitles()
             await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
             await conversations.writePeopleNotes()
             await conversations.writeWeeklySummary(today: dayFormatter.string(from: .now))
             // ドライブを読む AI 向けの案内と索引を、中身が変わっていたら書き直す
             await updateDriveGuide()
+        }
+        // 1日のまとめの「やること」を、候補として出す
+        let recent = conversations.days().suffix(SuggestionBox.recentDays)
+        let added = suggestions.collect(recent.map { (day: $0, todos: conversations.summary(on: $0)?.todos ?? []) })
+        if let first = added.first {
+            Self.notify(id: "suggestions", title: "こんなのあったけど、どう？",
+                        body: added.count > 1 ? "\(first.text) ほか \(added.count - 1) 件" : first.text)
         }
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()

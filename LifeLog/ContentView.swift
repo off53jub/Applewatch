@@ -72,6 +72,16 @@ private struct TodayView: View {
                     }
                 }
 
+                let box = pipeline.suggestions
+                if !box.waiting.isEmpty || !box.kept.isEmpty {
+                    Section("こんなのあったけど、どう？") {
+                        ForEach(box.waiting.prefix(3)) { SuggestionRow(item: $0) }
+                        NavigationLink("すべて見る（まだ \(box.waiting.count) 件・残している \(box.kept.count) 件）") {
+                            SuggestionsView()
+                        }
+                    }
+                }
+
                 Section("今日の会話") {
                     if talks.isEmpty {
                         Text("まだありません").foregroundStyle(.secondary)

@@ -104,6 +104,10 @@ struct PeopleView: View {
     @State private var rebuilding = false
     @State private var rebuildResult = ""
     @State private var places = Pipeline.PlaceIndex()
+    @State private var showAllWaiting = false
+
+    /// 名前を付けてほしい声の、はじめに出す数
+    private static let waitingShown = 10
 
     private var others: [SpeakerLabeler.Person] { pipeline.people.filter { !$0.isSelf && $0.hidden != true } }
 
@@ -113,16 +117,21 @@ struct PeopleView: View {
             if let me = pipeline.people.first(where: \.isSelf) {
                 Section { row(me) }
             }
-            // 名前の無い声のうち、よく聞く声から名前を付けてもらう
+            // 名前の無い声のうち、よく話した声から名前を付けてもらう
             let waiting = others.filter { !$0.isNamed && $0.seconds >= 30 }
-                .sorted { $0.lastHeard > $1.lastHeard }
+                .sorted { $0.seconds > $1.seconds }
             if !waiting.isEmpty {
                 Section {
-                    ForEach(waiting) { person in row(person) }
+                    ForEach(showAllWaiting ? waiting : Array(waiting.prefix(Self.waitingShown))) { person in row(person) }
+                    if waiting.count > Self.waitingShown {
+                        Button(showAllWaiting ? "上の \(Self.waitingShown) 人だけ出す" : "ほか \(waiting.count - Self.waitingShown) 人も出す") {
+                            showAllWaiting.toggle()
+                        }
+                    }
                 } header: {
                     Text("名前を付けてほしい声")
                 } footer: {
-                    Text("▶︎で声を聞いて、タップして名前を付けてください。名前を付けると、これまでの記録とドキュメントの「人物N」もその名前に変わります。")
+                    Text("よく話した順です。▶︎で声を聞いて、タップして名前を付けてください。名前を付けると、これまでの記録とドキュメントの「人物N」もその名前に変わります。")
                 }
             }
             ForEach([SpeakerLabeler.Context.work, .other], id: \.self) { context in
