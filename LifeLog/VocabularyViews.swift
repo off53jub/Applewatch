@@ -23,15 +23,19 @@ struct VocabularyView: View {
                 Text(footer)
             }
 
-            Section("言葉") {
+            Section {
                 ForEach(vocabulary.words(in: group), id: \.self) { Text($0) }
                     .onDelete { vocabulary.remove(at: $0, from: group) }
                 HStack {
-                    TextField("例: 人名、社名、専門用語", text: $newWord)
-                        .onSubmit(addWord)
+                    TextField("例: 人名、社名、専門用語", text: $newWord, axis: .vertical)
+                        .lineLimit(1...6)
                     Button("追加", action: addWord)
-                        .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+            } header: {
+                Text("言葉")
+            } footer: {
+                Text("改行か「、」で区切って貼り付けると、まとめて足せます。")
             }
 
             if !candidates.isEmpty {
@@ -138,7 +142,10 @@ struct VocabularyView: View {
     }
 
     private func addWord() {
-        pipeline.vocabulary.add(newWord, to: group)
+        // 改行・「、」・カンマで区切って、まとめて足す（すでにある言葉は足さない）
+        for word in newWord.components(separatedBy: CharacterSet(charactersIn: "\n、,，")) {
+            pipeline.vocabulary.add(word, to: group)
+        }
         newWord = ""
     }
 }
