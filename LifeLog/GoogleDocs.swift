@@ -108,6 +108,25 @@ final class GoogleDocs {
                               json: ["requests": requests])
     }
 
+    /// その日のドキュメントの、前の版の文字（新しい版から順に、多くても limit 個）。
+    /// Google ドキュメントの「版の履歴」から、書き出し（text/plain）で取ってくる。今の版は除く。
+    func pastVersions(day: String, limit: Int) async throws -> [String] {
+        let docId = try await documentId(for: day)
+        let list = try await request("GET", "https://www.googleapis.com/drive/v3/files/\(docId)/revisions"
+                                     + "?pageSize=1000&fields=revisions(id,modifiedTime,exportLinks)")
+        let revisions = (list["revisions"] as? [[String: Any]] ?? [])
+            .sorted { ($0["modifiedTime"] as? String ?? "") > ($1["modifiedTime"] as? String ?? "") }
+            .dropFirst()
+        var texts: [String] = []
+        for revision in revisions.prefix(limit) {
+            guard let links = revision["exportLinks"] as? [String: String], let link = links["text/plain"] else { continue }
+            let req = try await authorized("GET", link)
+            guard let result = try? await send(req), let text = String(data: result.0, encoding: .utf8) else { continue }
+            texts.append(text)
+        }
+        return texts
+    }
+
     /// 本文の段落。text は段落の終わりの改行を除いた中身。index は UTF-16 で数えた位置。
     private struct Paragraph {
         let start: Int

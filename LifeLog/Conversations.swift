@@ -840,6 +840,11 @@ final class ConversationLog {
 
     func conversations(on day: String) -> [Conversation] { load(day).conversations }
 
+    /// 条件に合う行の時刻（すべての日）
+    func lineTimes(where match: (Line) -> Bool) -> [Date] {
+        days().flatMap { day in load(day).conversations.flatMap { $0.lines.filter(match).map(\.time) } }
+    }
+
     /// 1日のまとめの中身（まだ付けていなければ nil）
     func summary(on day: String) -> Summarizer.Day? { load(day).summary }
 

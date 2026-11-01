@@ -226,8 +226,18 @@ struct PersonView: View {
     @State private var merging = false
     @State private var mergingSelf = false
     @State private var deleting = false
+    @State private var merges: [MergeLog.Record] = []
+    @State private var undoing: MergeLog.Record?
+    @State private var undoMessage: String?
 
     private var person: SpeakerLabeler.Person? { pipeline.people.first { $0.id == id } }
+
+    private static let mergeDate: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = "M/d HH:mm"
+        return f
+    }()
 
     var body: some View {
         Form {
@@ -283,10 +293,43 @@ struct PersonView: View {
                         Button("この声を忘れる", role: .destructive) { deleting = true }
                     }
                 }
+                Section {
+                    ForEach(merges) { record in
+                        Button { undoing = record } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("「\(record.sourceName)」を戻す")
+                                Text("\(Self.mergeDate.string(from: record.date)) に\(record.automatic == true ? "自動で" : "")まとめた・\(record.lines.count) 行")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    NavigationLink("ドキュメントの履歴から探す") { PastMergesView(target: id) }
+                    if let undoMessage { Text(undoMessage).font(.footnote).foregroundStyle(.secondary) }
+                } header: {
+                    Text("まとめた人を分け直す")
+                } footer: {
+                    Text("間違えてまとめた人を、まとめる前の人（「人物123」など）に戻します。記録が残っていない前のまとめは、ドライブの日ごとのドキュメントの版の履歴から探します。")
+                }
             }
         }
         .navigationTitle(person?.displayName ?? "")
-        .onAppear { name = person?.name ?? "" }
+        .onAppear {
+            name = person?.name ?? ""
+            merges = MergeLog.records(into: id)
+        }
+        .confirmationDialog("「\(undoing?.sourceName ?? "")」を戻しますか？",
+                            isPresented: Binding(get: { undoing != nil }, set: { if !$0 { undoing = nil } }),
+                            titleVisibility: .visible, presenting: undoing) { record in
+            Button("戻す") {
+                Task {
+                    await pipeline.undoMerge(record)
+                    merges = MergeLog.records(into: id)
+                    undoMessage = "「\(record.sourceName)」を声ごと戻し、\(record.lines.count) 行の名前も戻しました。"
+                }
+            }
+        } message: { record in
+            Text("まとめる前の「\(record.sourceName)」を声ごと戻し、そのとき「\(record.targetName)」に書き換えた行の名前も戻します。そのあと手で別の人に直した行はそのままです。")
+        }
         .onDisappear { player.stop() }
         .sheet(isPresented: $merging) {
             NavigationStack {
@@ -340,6 +383,87 @@ struct PersonView: View {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         Task { await pipeline.renamePerson(id, to: trimmed) }
+    }
+}
+
+/// まとめを記録していなかったころのまとめを、ドキュメントの版の履歴から探して戻す。
+struct PastMergesView: View {
+    @Environment(Pipeline.self) private var pipeline
+    let target: String
+    @State private var found: [Pipeline.PastMerge] = []
+    @State private var searched = false
+    @State private var working = false
+    @State private var status: String?
+    @State private var confirming: Pipeline.PastMerge?
+
+    private static let lineTime: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "M/d HH:mm:ss"
+        return f
+    }()
+
+    private var targetName: String { pipeline.people.first { $0.id == target }?.displayName ?? "" }
+
+    var body: some View {
+        Form {
+            Section {
+                Button(working ? "探しています…" : (searched ? "もう一度探す" : "探す")) { search() }
+                    .disabled(working)
+                if let status { Text(status).font(.footnote).foregroundStyle(.secondary) }
+            } footer: {
+                Text("いま「\(targetName)」になっている行のうち、ドライブの日ごとのドキュメントの前の版で「人物N」だった行を、番号ごとに集めます。行の話者を手で直したところも混ざるので、中身を見て選んでください。記録はまだ変えません。")
+            }
+            ForEach(found) { past in
+                Section {
+                    ForEach(Array(past.lines.prefix(4).enumerated()), id: \.offset) { _, item in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(Self.lineTime.string(from: item.line.time)).font(.caption).foregroundStyle(.secondary)
+                            Text(item.line.text).lineLimit(2)
+                        }
+                    }
+                    if past.lines.count > 4 {
+                        Text("ほか \(past.lines.count - 4) 行").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button("「\(past.name)」に戻す") { confirming = past }
+                        .disabled(working)
+                } header: {
+                    Text("\(past.name)　\(past.lines.count) 行（\(past.days.map { String($0.dropFirst(5)) }.joined(separator: "、"))）")
+                }
+            }
+        }
+        .navigationTitle("まとめた人を探す")
+        .confirmationDialog("\(confirming?.lines.count ?? 0) 行を「\(confirming?.name ?? "")」に戻しますか？",
+                            isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
+                            titleVisibility: .visible, presenting: confirming) { past in
+            Button("戻す") { restore(past) }
+        } message: { past in
+            Text("行の名前を「\(past.name)」に戻し、その声を録音から覚え直します。「\(targetName)」の登録・手直しで覚えた声と名前はそのままです。")
+        }
+    }
+
+    private func search() {
+        working = true
+        Task {
+            let result = await pipeline.findPastMerges(into: target) { text in
+                Task { @MainActor in status = text }
+            }
+            found = result.found
+            status = result.note ?? (result.found.isEmpty ? nil : "\(result.found.count) 人分見つかりました。")
+            searched = true
+            working = false
+        }
+    }
+
+    private func restore(_ past: Pipeline.PastMerge) {
+        working = true
+        Task {
+            let text = await pipeline.splitOut(past, from: target) { text in
+                Task { @MainActor in status = text }
+            }
+            found.removeAll { $0.id == past.id }
+            status = text
+            working = false
+        }
     }
 }
 

@@ -328,10 +328,143 @@ final class Pipeline {
     }
 
     /// 同じ人だった2人をまとめる。source の行は target の名前になる。
-    func mergePerson(_ source: String, into target: String) async {
+    /// まとめる前の人と書き換えた行は merges.json に残し、人の画面から元に戻せる。
+    func mergePerson(_ source: String, into target: String, automatic: Bool = false) async {
         let old = await speakers.name(of: source)
+        let snapshot = await speakers.snapshot(source)
+        let times = conversations.lineTimes { $0.speakerID == source }
         await speakers.merge(source, into: target)
         await relabel(to: target, renaming: old) { $0.speakerID == source }
+        if let snapshot, source != target {
+            let targetName = await speakers.name(of: target) ?? ""
+            MergeLog.add(.init(date: .now, source: snapshot, sourceName: old ?? "人物\(source)", target: target,
+                               targetName: targetName, lines: times,
+                               automatic: automatic ? true : nil))
+        }
+    }
+
+    // MARK: - まとめた人を戻す
+
+    /// 記録してあるまとめを元に戻す。まとめる前の人（名前・声）を戻し、書き換えた行の名前も戻す。
+    /// そのあと手で別の人に直した行は、そのまま。
+    func undoMerge(_ record: MergeLog.Record) async {
+        await speakers.revive(record.source.id, snapshot: record.source, from: record.target)
+        let times = Set(record.lines)
+        let target = record.target
+        await relabel(to: record.source.id) { $0.speakerID == target && times.contains($0.time) }
+        MergeLog.markUndone(record.id)
+        hasSelfVoice = await speakers.hasSelfVoice
+    }
+
+    /// ドキュメントの版の履歴で見つけた、前は「人物N」だった行のまとまり
+    struct PastMerge: Identifiable {
+        /// 前の番号（「人物123」の 123）
+        let id: String
+        var lines: [(line: ConversationLog.Line, end: TimeInterval?)] = []
+        var days: [String] = []
+        var name: String { "人物\(id)" }
+    }
+
+    private static let clockFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    private static let pastLine = try! NSRegularExpression(pattern: #"^(\d{2}:\d{2}:\d{2})  (?:★ )?\[([^\]]+)\] ?(.*)$"#)
+
+    /// いま target の名前になっている行のうち、ドキュメントの前の版では「人物N」だった行を、N ごとに集める。
+    /// まとめを記録していなかったころのまとめを戻すため。アプリの中の記録は変えない（読むだけ）。
+    func findPastMerges(into target: String, progress: @escaping (String) -> Void) async -> (found: [PastMerge], note: String?) {
+        guard email != nil else { return ([], "Google にログインしていないので、ドキュメントの履歴を読めません。") }
+        let days = conversations.days().filter { day in
+            conversations.conversations(on: day).contains { $0.lines.contains { $0.speakerID == target } }
+        }
+        var groups: [String: PastMerge] = [:]
+        var failed = 0
+        for (n, day) in days.reversed().enumerated() {
+            progress("ドキュメントの履歴を読んでいます… \(n + 1) / \(days.count) 日")
+            // その日の target の行を、時刻ごとに（次の行までを声の切り出しに使う）
+            var byClock: [String: [(line: ConversationLog.Line, end: TimeInterval?)]] = [:]
+            for c in conversations.conversations(on: day) {
+                for (i, line) in c.lines.enumerated() where line.speakerID == target {
+                    var end: TimeInterval?
+                    if let offset = line.offset, line.audio != nil {
+                        let next = c.lines[(i + 1)...].first { $0.audio == line.audio }?.offset
+                        end = min(offset + 10, next ?? offset + 10)
+                    }
+                    byClock[Self.clockFormatter.string(from: line.time), default: []].append((line, end))
+                }
+            }
+            let versions: [String]
+            do {
+                versions = try await docs.pastVersions(day: day, limit: 40)
+            } catch {
+                failed += 1
+                continue
+            }
+            var found: [Date: String] = [:]
+            for version in versions {
+                for raw in version.components(separatedBy: .newlines) {
+                    let text = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\u{FEFF}\r"))
+                    let range = NSRange(text.startIndex..., in: text)
+                    guard let m = Self.pastLine.firstMatch(in: text, range: range),
+                          let clockRange = Range(m.range(at: 1), in: text),
+                          let labelRange = Range(m.range(at: 2), in: text),
+                          let bodyRange = Range(m.range(at: 3), in: text) else { continue }
+                    let label = String(text[labelRange])
+                    guard label.hasPrefix("人物"), let number = Int(label.dropFirst(2)),
+                          String(number) != target,
+                          let candidates = byClock[String(text[clockRange])] else { continue }
+                    let body = String(text[bodyRange])
+                    // 同じ時刻の行が1つならそれ、いくつかあれば文の頭が同じもの
+                    let match = candidates.count == 1 ? candidates.first
+                        : candidates.first { $0.line.text.prefix(8) == body.prefix(8) }
+                    guard let match, found[match.line.time] == nil else { continue }
+                    found[match.line.time] = String(number)
+                    groups[String(number), default: PastMerge(id: String(number))].lines.append(match)
+                    if groups[String(number)]?.days.contains(day) == false { groups[String(number)]?.days.append(day) }
+                }
+            }
+        }
+        let list = groups.values.sorted { $0.lines.count > $1.lines.count }.map { group -> PastMerge in
+            var g = group
+            g.lines.sort { $0.line.time < $1.line.time }
+            g.days.sort()
+            return g
+        }
+        var note: String?
+        if failed > 0 { note = "\(failed) 日分は履歴を読めませんでした（通信やドライブの権限）。" }
+        if list.isEmpty && note == nil { note = "前の版で「人物N」だった行は見つかりませんでした。" }
+        return (list, note)
+    }
+
+    /// 見つけた行を「人物N」に戻し、その行の声を録音から覚え直す。
+    /// まとめた先の人の、自動で覚えた声のうち、戻した人の声に近いものは戻した人に移す（登録・手直しの声は動かさない）。
+    func splitOut(_ past: PastMerge, from target: String, progress: @escaping (String) -> Void) async -> String {
+        await speakers.revive(past.id, snapshot: nil, from: target)
+        let times = Set(past.lines.map(\.line.time))
+        await relabel(to: past.id) { $0.speakerID == target && times.contains($0.time) }
+        // 長く話した行から5つまで声を取る
+        var taught = 0
+        let clips = past.lines.filter { $0.line.audio != nil && $0.line.offset != nil && $0.end != nil }
+            .sorted { ($0.end! - $0.line.offset!) > ($1.end! - $1.line.offset!) }
+        for clip in clips where taught < 5 {
+            progress("声を覚え直しています… \(taught + 1) / 5")
+            guard let audio = clip.line.audio, let url = await archive.playableURL(for: audio),
+                  let offset = clip.line.offset, let end = clip.end, end - offset >= 2 else { continue }
+            if (try? await speakers.teach(url, from: offset, to: end, personID: past.id, pinned: false)) != nil,
+               await speakers.hasVoice(past.id) {
+                taught += 1
+            }
+        }
+        let moved = await speakers.moveVoices(from: target, to: past.id)
+        hasSelfVoice = await speakers.hasSelfVoice
+        people = await speakers.people()
+        var text = "\(past.lines.count) 行を「\(past.name)」に戻しました。"
+        text += taught > 0 ? "声も録音から \(taught) つ覚え直しました。" : "録音が見つからなかったので、声は覚え直していません。"
+        if moved > 0 { text += "まとめた先の自動で覚えた声のうち \(moved) つを移しました。" }
+        return text
     }
 
     /// 覚えている人が消えてしまったときに、記録に残っている名前と音声から、名前のある人と自分の声を作り直す。
@@ -956,7 +1089,7 @@ final class Pipeline {
                 for a in inChunk { for b in inChunk where a < b { apart.insert([a, b]) } }
             }
             let merges = await speakers.consolidation(among: ids, apart: apart, strictness: speakerStrictness)
-            for m in merges { await mergePerson(m.source, into: m.target) }
+            for m in merges { await mergePerson(m.source, into: m.target, automatic: true) }
             merged += merges.count
         }
         if merged > 0 { lastEngine += "・同じ人の声を \(merged) つまとめた" }

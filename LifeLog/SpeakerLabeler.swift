@@ -398,6 +398,52 @@ actor SpeakerLabeler {
         save()
     }
 
+    /// まとめる前の、その人の記録（まとめを戻すために取っておく）
+    func snapshot(_ id: String) -> Person? { person(id) }
+
+    func exists(_ id: String) -> Bool { index(of: id) != nil }
+
+    /// まとめた人を戻す。snapshot（まとめる前の記録）があれば、その名前と声ごと戻し、まとめた先からその声を外す。
+    /// snapshot が無ければ（記録を取っていなかった前のまとめ）、名前の無い人として作り直すだけ（声はあとで覚える）。
+    /// まとめた先の人の、名前・登録した声・ほかの声には触らない。
+    func revive(_ id: String, snapshot: Person?, from target: String) {
+        guard id != Self.selfID, id != target else { return }
+        if index(of: id) == nil {
+            store.people.append(snapshot ?? Person(id: id, name: nil, context: nil))
+        }
+        if let snapshot, let t = index(of: target) {
+            let moved = Set(snapshot.voices.map(\.embedding))
+            store.people[t].voices.removeAll { moved.contains($0.embedding) }
+            store.people[t].seconds = max(0, store.people[t].seconds - snapshot.seconds)
+            store.people[t].samples.removeAll { snapshot.samples.contains($0) }
+        }
+        if let n = Int(id) { store.nextID = max(store.nextID, n + 1) }
+        save()
+    }
+
+    /// 戻した人の声に、まとめた先の人の「登録・手直しで覚えた声」より近い、自動で覚えた声を、戻した人に移す。
+    /// まとめた先に登録・手直しの声が無ければ、どちらの声か決められないので動かさない。登録・手直しの声は動かさない。
+    func moveVoices(from target: String, to id: String) -> Int {
+        guard let t = index(of: target), let restored = person(id),
+              restored.voices.contains(where: { $0.model == Self.model }) else { return 0 }
+        var anchor = store.people[t]
+        anchor.voices = anchor.voices.filter(\.pinned)
+        guard anchor.voices.contains(where: { $0.model == Self.model }) else { return 0 }
+        var moved: [Voice] = []
+        store.people[t].voices.removeAll { v in
+            guard !v.pinned, v.model == Self.model,
+                  distance(v.embedding, to: restored) < distance(v.embedding, to: anchor) else { return false }
+            moved.append(v)
+            return true
+        }
+        if let i = index(of: id), !moved.isEmpty {
+            store.people[i].voices += moved
+            trimVoices(i)
+        }
+        save()
+        return moved.count
+    }
+
     /// その声にいちばん近い、名前のある人（自分を含む）と、その距離。
     func closestNamed(to id: String) -> (id: String, distance: Float)? {
         guard let source = person(id) else { return nil }
