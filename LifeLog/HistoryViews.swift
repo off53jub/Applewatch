@@ -295,6 +295,10 @@ struct ConversationsView: View {
                 if line.audio?.hasSuffix("-w.m4a") == true {
                     Image(systemName: "applewatch").font(.caption2)
                 }
+                // 騒がしいところで聞き取った行
+                if line.noisy == true {
+                    Image(systemName: "speaker.wave.3").font(.caption2)
+                }
             }
             .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {

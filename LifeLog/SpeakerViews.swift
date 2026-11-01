@@ -103,8 +103,9 @@ struct PeopleView: View {
     @State private var player = ClipPlayer()
     @State private var rebuilding = false
     @State private var rebuildResult = ""
+    @State private var places = Pipeline.PlaceIndex()
 
-    private var others: [SpeakerLabeler.Person] { pipeline.people.filter { !$0.isSelf } }
+    private var others: [SpeakerLabeler.Person] { pipeline.people.filter { !$0.isSelf && $0.hidden != true } }
 
     var body: some View {
         List {
@@ -144,6 +145,16 @@ struct PeopleView: View {
                     Text("名前を付けていない声は、2週間聞かなければ自動で忘れます。")
                 }
             }
+            let hidden = pipeline.people.filter { $0.hidden == true }
+            if !hidden.isEmpty {
+                Section {
+                    ForEach(hidden) { row($0) }
+                } header: {
+                    Text("記録に出さない声")
+                } footer: {
+                    Text("この人の声とされた行は、記録にもドキュメントにも書かず、「記録の掃除」の「消した行」に30日間残します。")
+                }
+            }
             Section {
                 Button(rebuilding ? "作り直しています…" : "記録から人と声を作り直す") {
                     rebuilding = true
@@ -175,6 +186,7 @@ struct PeopleView: View {
             }
         }
         .onDisappear { player.stop() }
+        .onAppear { places = pipeline.placeIndex() }
     }
 
     private func row(_ person: SpeakerLabeler.Person) -> some View {
@@ -185,8 +197,17 @@ struct PeopleView: View {
             NavigationLink {
                 PersonView(id: person.id)
             } label: {
-                LabeledContent(person.displayName) {
-                    Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))")
+                VStack(alignment: .leading, spacing: 2) {
+                    LabeledContent(person.displayName) {
+                        Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))")
+                    }
+                    // どこで話した声か（場所の分かる会話から、多い順に3つまで）
+                    if let list = places.byPerson[person.id], !list.isEmpty {
+                        Text(list.prefix(3).map(\.place).joined(separator: "・"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
         }
@@ -233,6 +254,10 @@ struct PersonView: View {
     @State private var merges: [MergeLog.Record] = []
     @State private var undoing: MergeLog.Record?
     @State private var undoMessage: String?
+    @State private var places = Pipeline.PlaceIndex()
+    @State private var removingLines = false
+    @State private var confirmRemove = false
+    @State private var removedMessage: String?
 
     private var person: SpeakerLabeler.Person? { pipeline.people.first { $0.id == id } }
 
@@ -269,11 +294,29 @@ struct PersonView: View {
                         Text("職場の人は職場にいるときに、職場以外の人はそれ以外のときに先に照らし合わせます。")
                     }
                 }
+                if let list = places.byPerson[id], !list.isEmpty {
+                    Section {
+                        ForEach(list.prefix(8), id: \.place) { item in
+                            LabeledContent(item.place) {
+                                Text("\(item.count) 回・最後 \(item.last.formatted(date: .abbreviated, time: .omitted))")
+                            }
+                        }
+                    } header: {
+                        Text("話した場所")
+                    } footer: {
+                        Text("この声が出てきた会話の場所（多い順）。「設定」の「場所を記録する」がオンのときの会話だけです。")
+                    }
+                }
                 Section {
                     ForEach(Array(person.samples.enumerated()).reversed(), id: \.offset) { i, sample in
                         HStack {
                             SampleButton(player: player, sample: sample, key: "\(i)")
-                            Text("声のひとこま \(person.samples.count - i)")
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("声のひとこま \(person.samples.count - i)")
+                                if let place = places.byAudio[sample.audio] {
+                                    Text(place).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                         }
                     }
                     LabeledContent("覚えている声", value: "\(person.voices.count)（登録・手直し \(person.pinnedCount)）")
@@ -291,6 +334,22 @@ struct PersonView: View {
                     Text("その人だけが話しているときに録ってください（相手の了承を取ってから）。記録の行を長押しして「話者を直す」と、その行の声も覚えます。")
                 }
                 if !person.isSelf {
+                    Section {
+                        Toggle("この人の声を記録に出さない", isOn: Binding(
+                            get: { person.hidden == true },
+                            set: { value in Task { await pipeline.setHidden(id, value) } }))
+                        if person.hidden == true {
+                            Button(removingLines ? "消しています…" : "これまでの行も記録から消す") { confirmRemove = true }
+                                .disabled(removingLines)
+                        }
+                        if let removedMessage {
+                            Text(removedMessage).font(.footnote).foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("記録に出さない")
+                    } footer: {
+                        Text("職場のよく通る声など、記録に要らない人に。声で見分けて、その人の行は記録にもドキュメントにも書かず、「記録の掃除」の「消した行」に30日間残します（そこから戻せます）。見分けるのにこの人の声を使い続けるので、声は忘れません。声のひとこまが少ないときは、上の「その場で声を録って足す」か、記録の行の「話者を直す」でこの人を選ぶと見分けやすくなります。")
+                    }
                     Section {
                         Button("ほかの人と同じ人としてまとめる") { merging = true }
                         Button("自分の声だった（自分にまとめる）") { mergingSelf = true }
@@ -320,6 +379,20 @@ struct PersonView: View {
         .onAppear {
             name = person?.name ?? ""
             merges = MergeLog.records(into: id)
+            places = pipeline.placeIndex()
+        }
+        .confirmationDialog("この人のこれまでの行を消しますか？", isPresented: $confirmRemove,
+                            titleVisibility: .visible) {
+            Button("消す", role: .destructive) {
+                removingLines = true
+                Task {
+                    let count = await pipeline.removeLines(of: id)
+                    removedMessage = "\(count) 行を記録とドキュメントから消しました（「消した行」から戻せます）。"
+                    removingLines = false
+                }
+            }
+        } message: {
+            Text("この人の声とされた行を、アプリの記録とドキュメントから消します。「記録の掃除」の「消した行」に30日間残り、そこから戻せます。")
         }
         .confirmationDialog("「\(undoing?.sourceName ?? "")」を戻しますか？",
                             isPresented: Binding(get: { undoing != nil }, set: { if !$0 { undoing = nil } }),
@@ -479,6 +552,7 @@ struct PersonPicker: View {
     /// 先に出す場（今いる場など）
     var context: SpeakerLabeler.Context? = nil
     var onPick: (String) -> Void
+    @State private var places = Pipeline.PlaceIndex()
 
     var body: some View {
         let people = pipeline.people.filter { $0.id != exclude && (includeSelf || !$0.isSelf) }
@@ -499,11 +573,23 @@ struct PersonPicker: View {
             let unnamed = people.filter { !$0.isNamed }.sorted { $0.lastHeard > $1.lastHeard }
             if !unnamed.isEmpty {
                 Section("名前の無い声") {
-                    ForEach(unnamed) { p in Button(p.displayName) { onPick(p.id) } }
+                    ForEach(unnamed) { p in
+                        Button { onPick(p.id) } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(p.displayName)
+                                // どこで聞いた声か（名前の無い声を見分ける手がかり）
+                                if let list = places.byPerson[p.id], !list.isEmpty {
+                                    Text(list.prefix(3).map(\.place).joined(separator: "・"))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
         .tint(.primary)
+        .onAppear { places = pipeline.placeIndex() }
     }
 }
 
@@ -710,6 +796,15 @@ struct UnnamedVoicesView: View {
         var id: String { person.id }
     }
 
+    /// 「この日 12 行・渋谷駅近く、自宅」
+    private func dayCaption(_ item: Item) -> String {
+        var places: [String] = []
+        for c in pipeline.conversations(on: day) where c.lines.contains(where: { $0.speakerID == item.person.id }) {
+            if let place = c.place, !places.contains(place) { places.append(place) }
+        }
+        return "この日 \(item.lines.count) 行" + (places.isEmpty ? "" : "・" + places.joined(separator: "、"))
+    }
+
     /// その日の行に出てくる、名前の無い声と、その行（多い順）
     private var unnamed: [Item] {
         let lines = pipeline.conversations(on: day).flatMap(\.lines)
@@ -731,7 +826,7 @@ struct UnnamedVoicesView: View {
                         }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.lines.last?.text ?? "").lineLimit(2)
-                            Text("この日 \(item.lines.count) 行").font(.caption).foregroundStyle(.secondary)
+                            Text(dayCaption(item)).font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     if working == item.person.id {

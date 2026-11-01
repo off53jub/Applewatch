@@ -39,6 +39,10 @@ final class Pipeline {
     var summariesOn = UserDefaults.standard.object(forKey: "summaries") as? Bool ?? true {
         didSet { UserDefaults.standard.set(summariesOn, forKey: "summaries") }
     }
+    /// 騒がしい区切りは、Haas-ja に加えてクラウドの Whisper でも聞き、取りこぼしを補う
+    var noisyAssistOn = UserDefaults.standard.object(forKey: "noisyAssist") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(noisyAssistOn, forKey: "noisyAssist") }
+    }
     /// 文字起こしの誤変換を言語モデルで直す（Groq の無料枠）
     var correctionOn = UserDefaults.standard.object(forKey: "correct") as? Bool ?? true {
         didSet { UserDefaults.standard.set(correctionOn, forKey: "correct") }
@@ -579,6 +583,67 @@ final class Pipeline {
         for id in ids where id != SpeakerLabeler.selfID {
             await mergePerson(id, into: SpeakerLabeler.selfID)
         }
+    }
+
+    /// 「記録に出さない」を切り替える。オンにすると、これからその人の声とされた行は書かずに「消した行」に回す。
+    func setHidden(_ id: String, _ hidden: Bool) async {
+        await speakers.setHidden(id, hidden)
+        people = await speakers.people()
+    }
+
+    /// その人のこれまでの行を、アプリの記録とドキュメントから消す（「消した行」に30日残り、戻せる）。消した行の数を返す。
+    func removeLines(of id: String) async -> Int {
+        var count = 0
+        for day in conversations.days() {
+            let lines = conversations.conversations(on: day).flatMap(\.lines).filter { $0.speakerID == id }
+            guard !lines.isEmpty else { continue }
+            do {
+                try await conversations.remove(lines.map { (line: $0, kind: Junk.Kind.hidden) }, day: day)
+                count += lines.count
+            } catch {
+                message = "ドキュメントから消せませんでした（あとでもう一度）: \(error.localizedDescription)"
+                break
+            }
+        }
+        recordsVersion += 1
+        placeIndexBuilt = .distantPast
+        return count
+    }
+
+    // MARK: - 話した場所
+
+    /// 人ごとの話した場所と、音声ごとの場所（会話の見出しの場所から）
+    struct PlaceIndex {
+        var byPerson: [String: [(place: String, count: Int, last: Date)]] = [:]
+        var byAudio: [String: String] = [:]
+    }
+
+    @ObservationIgnored private var placeIndexCache = PlaceIndex()
+    @ObservationIgnored private var placeIndexBuilt = Date.distantPast
+
+    /// 場所の分かる会話から、人ごとにどこで話したかをまとめる（1分は覚えておく）。
+    func placeIndex() -> PlaceIndex {
+        if Date.now.timeIntervalSince(placeIndexBuilt) < 60 { return placeIndexCache }
+        var counts: [String: [String: (count: Int, last: Date)]] = [:]
+        var byAudio: [String: String] = [:]
+        for day in conversations.days() {
+            for c in conversations.conversations(on: day) {
+                guard let place = c.place else { continue }
+                for audio in Set(c.lines.compactMap(\.audio)) { byAudio[audio] = place }
+                for id in Set(c.lines.compactMap(\.speakerID)) {
+                    let old = counts[id, default: [:]][place]
+                    counts[id, default: [:]][place] = ((old?.count ?? 0) + 1, max(old?.last ?? .distantPast, c.start))
+                }
+            }
+        }
+        var index = PlaceIndex(byAudio: byAudio)
+        for (id, places) in counts {
+            index.byPerson[id] = places.map { (place: $0.key, count: $0.value.count, last: $0.value.last) }
+                .sorted { ($0.count, $0.last) > ($1.count, $1.last) }
+        }
+        placeIndexCache = index
+        placeIndexBuilt = .now
+        return index
     }
 
     func removePerson(_ id: String) async {
@@ -1510,6 +1575,11 @@ final class Pipeline {
         // 人の声がしているところ（端末内の VAD）。モデルが使えなければ nil（そのときは今までどおり）
         let voice = await VoiceDetector.shared.speech(in: url)
         let voiceSeconds = voice.map(VoiceDetector.total)
+        // 騒がしさ（周りの音の底と、声との差）。騒がしい区切りは、聞き取りを補い、捨てる条件をゆるめる
+        let noise = await Task.detached(priority: .utility) { NoiseMeter.measure(url, voice: voice) }.value
+        let noisy = noise?.isNoisy == true
+        /// 書かずに「消した行」に回す行（あとで戻せる）
+        var unmatched: [Junk.TrashItem] = []
         // 声がほとんど無い区切り：重い文字起こしはしない（端末内で聞き取れた文は、確かめたほうがよい行として残す）
         let silent = (voiceSeconds ?? 1) < 0.5
         // 端末内では何も聞き取れなくても、はっきり声がしていれば Haas-ja で聞き取る（小さな声の取りこぼしを減らす）
@@ -1571,13 +1641,26 @@ final class Pipeline {
                 settings.addUsage(seconds: duration)
                 lastEngine = cloud.model
                 if !cloud.lines.isEmpty {
-                    // 端末内でも同じような音が聞き取れていない行は、実際には話されていない（雑音・外国語の動画など）とみなして捨てる
-                    var checked = TranscriptCheck.agreeing(cloud.lines, with: local, duration: duration)
-                    // 声の見つからなかったところの行も捨てる（無音や雑音に作られた文）
-                    if let voice {
-                        checked = checked.filter { line in
-                            guard let offset = line.offset else { return true }
-                            return voice.contains { offset >= $0.start - 1.5 && offset <= $0.end + 1.5 }
+                    // 端末内でも同じような音が聞き取れていない行は、実際には話されていない（雑音・外国語の動画など）とみなす。
+                    // 声の見つからなかったところの行も同じ（無音や雑音に作られた文）。
+                    // ただし騒がしい所では端末内の聞き取りも崩れるので、声のあるところの行は合わなくても残す（確かめたほうがよい行になる）。
+                    // 書かない行も消さずに「消した行」に回す（あとで戻せる）
+                    let agrees = TranscriptCheck.agrees(cloud.lines, with: local, duration: duration)
+                    var checked: [CloudTranscriber.Line] = []
+                    for (i, line) in cloud.lines.enumerated() {
+                        var inVoice = true
+                        if let voice, let offset = line.offset {
+                            inVoice = voice.contains { offset >= $0.start - 1.5 && offset <= $0.end + 1.5 }
+                        }
+                        if inVoice && (agrees[i] || noisy) {
+                            checked.append(line)
+                        } else if !CloudTranscriber.isFiller(line.text) {
+                            let time = start.addingTimeInterval(line.offset ?? 0)
+                            unmatched.append(Junk.TrashItem(
+                                day: dayFormatter.string(from: time),
+                                line: ConversationLog.Line(time: time, speaker: nil, text: line.text, audio: url.lastPathComponent,
+                                                           offset: line.offset, confidence: 0.2),
+                                kind: .unmatched, removed: .now))
                         }
                     }
                     entries = checked.map { ($0.offset, $0.text, $0.score) }
@@ -1592,11 +1675,42 @@ final class Pipeline {
                 message = reason + "（高精度をオフにして、端末内の文字起こしで続けます）"
             }
         }
+        // 騒がしい区切りを Haas-ja で書いたときは、クラウドの Whisper でも聞いて、Haas-ja が何も書かなかった声のところを補う
+        // （どちらかが雑音に負けても、もう片方が拾えることがある。補った行は確かめたほうがよい行になる）
+        var supplemented = 0
+        if noisy, noisyAssistOn, usedHaas, !asleep, !silent, settings.shouldUseCloud, let key = settings.apiKey, let primary = second,
+           let cloud = try? await CloudTranscriber.transcribe(url, provider: settings.provider, apiKey: key,
+                                                               keywords: keywords, previous: previous) {
+            settings.addUsage(seconds: duration)
+            // Haas-ja が文を書いた区間
+            let covered = haasSegments.filter { span in
+                primary.contains { line in
+                    guard let offset = line.offset else { return false }
+                    return offset >= span.start - 0.5 && offset <= span.end + 0.5
+                }
+            }
+            let extra = cloud.lines.filter { line in
+                guard let offset = line.offset, !CloudTranscriber.isFiller(line.text) else { return false }
+                let inVoice = voice?.contains { offset >= $0.start - 0.5 && offset <= $0.end + 0.5 } ?? false
+                let alreadyHeard = covered.contains { offset >= $0.start - 1 && offset <= $0.end + 1 }
+                return inVoice && !alreadyHeard
+            }
+            if !extra.isEmpty {
+                let merged = (primary + extra).sorted { ($0.offset ?? 0) < ($1.offset ?? 0) }
+                second = merged
+                entries = merged.map { ($0.offset, $0.text, nil) }
+                supplemented = extra.count
+            }
+        }
+        if noisy {
+            lastEngine += "・騒がしい所" + (supplemented > 0 ? "（クラウドで \(supplemented) 行補った）" : "")
+        }
         if saving, haas.isUsable, !usedHaas, !asleep { lastEngine += "（電池優先）" }
         // Haas-ja で書けた区切りは、夜の聞き直しで文字起こしし直さない
         if usedHaas, !asleep { NightlyRecheck.markHaasDone(url.lastPathComponent) }
         // 声がほとんど無い区切りは、夜の聞き直しでも Haas-ja にかけない
         if silent { NightlyRecheck.markHaasDone(url.lastPathComponent) }
+        if !unmatched.isEmpty { conversations.addToTrash(unmatched) }
         guard !entries.isEmpty else { return [] }
         // 2つの聞き取り（端末内と Haas-ja・クラウド）がどれだけ合っているか。確からしさの目安にし、
         // 大きく食い違う行（読みが半分も合わない行）は、言語モデルに見比べてもらう
@@ -1664,6 +1778,8 @@ final class Pipeline {
         var scene: [SoundScene.Window] = []
         if !Power.isSaving { scene = await Task.detached(priority: .utility) { SoundScene.windows(in: url) }.value }
         let namedIDs = Set(people.filter(\.isNamed).map(\.id))
+        // 「記録に出さない」にした人
+        let hiddenIDs = Set(people.filter { $0.hidden == true }.map(\.id))
         let items = entries.indices.map { i in
             OfficeFilter.Item(time: start.addingTimeInterval(offsets[i]), text: entries[i].text,
                               personID: names[i]?.personID,
@@ -1678,6 +1794,12 @@ final class Pipeline {
                                             offset: offsets[i], original: originals[i], speakerID: names[i]?.personID,
                                             confidence: confidence[i].map { ($0 * 100).rounded() / 100 })
             line.sound = SoundScene.label(from: offsets[i], to: end, in: scene)
+            if noisy { line.noisy = true }
+            if let id = names[i]?.personID, hiddenIDs.contains(id) {
+                removed.append(Junk.TrashItem(day: dayFormatter.string(from: line.time), line: line,
+                                              kind: .hidden, removed: .now))
+                return nil
+            }
             guard keep[i] else {
                 removed.append(Junk.TrashItem(day: dayFormatter.string(from: line.time), line: line,
                                               kind: asleep ? .asleep : .background, removed: .now))
@@ -1689,7 +1811,7 @@ final class Pipeline {
         }
         if !removed.isEmpty {
             conversations.addToTrash(removed)
-            lastEngine += "・\(asleep ? "寝ているあいだの" : "周りの声") \(removed.count) 行を外した"
+            lastEngine += "・\(removed.count) 行を外した"
         }
         return lines
     }

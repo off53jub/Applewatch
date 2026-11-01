@@ -31,6 +31,8 @@ final class ConversationLog {
         var heardSpeakerID: String? = nil
         /// その行のあいだ聞こえていた背景の音（音楽・電車・拍手・笑い・テレビ）
         var sound: String? = nil
+        /// 騒がしいところ（周りの音が大きい・声が雑音に埋もれている区切り）で聞き取った行
+        var noisy: Bool? = nil
 
         /// 確からしさが低く、聞き直して確かめたほうがよい行
         var isUncertain: Bool { checked != true && (confidence ?? 1) < 0.45 }

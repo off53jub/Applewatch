@@ -4,7 +4,7 @@ import Foundation
 /// 消した行は30日間とっておき、間違えたら戻せる。
 enum Junk {
     enum Kind: String, CaseIterable, Codable, Identifiable {
-        case filler, streak, broken, custom, unheard, background, asleep
+        case filler, streak, broken, custom, unheard, background, asleep, unmatched, hidden
         var id: String { rawValue }
 
         var label: String {
@@ -16,6 +16,8 @@ enum Junk {
             case .unheard: "聞こえていない文"
             case .background: "周りの声"
             case .asleep: "寝ているあいだ"
+            case .unmatched: "端末内と合わなかった文"
+            case .hidden: "記録に出さない人"
             }
         }
 
@@ -28,6 +30,8 @@ enum Junk {
             case .unheard: "残っている音声を iPhone の中で聞き直しても、似た音が聞こえなかった行（雑音や外国語の動画に作られた文）"
             case .background: "自分の声よりずっと小さい声や、自分とやりとりの無い声として、書かなかった行"
             case .asleep: "寝ているあいだに聞こえた、短い文や小さな声として、書かなかった行"
+            case .unmatched: "クラウドの文字起こしで、iPhone の中の聞き取りに似た音が無かったので書かなかった行（雑音に作られた文のことが多いが、騒がしい所の小さな声のこともある）"
+            case .hidden: "「記録に出さない」にした人の声として、書かなかった行"
             }
         }
     }
