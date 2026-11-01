@@ -262,6 +262,10 @@ final class ConversationLog {
         }
         guard c.lines.contains(where: judgeable),
               c.lines.reduce(0, { $0 + $1.text.count }) >= 20 else { return c }
+        // 場所と移動の様子（家なら動画やテレビ、電車なら車内の放送が多い）
+        let settingText = [c.place, c.movement].compactMap { $0 }.joined(separator: "・")
+            .trimmingCharacters(in: .whitespaces)
+        let setting = settingText.isEmpty ? nil : settingText
         var flagged: [Int: String] = [:]
         // 長い会話は150行ずつ（前後のつながりも見られるよう、判定しない行もいっしょに渡す）
         for from in stride(from: 0, to: c.lines.count, by: 150) {
@@ -272,7 +276,7 @@ final class ConversationLog {
             }
             let judge = Set(range.filter { judgeable(c.lines[$0]) }.map { $0 - from })
             guard !judge.isEmpty,
-                  let found = try? await Summarizer.broadcast(texts, judge: judge, apiKey: apiKey) else { continue }
+                  let found = try? await Summarizer.broadcast(texts, judge: judge, setting: setting, apiKey: apiKey) else { continue }
             for (i, kind) in found { flagged[from + i] = kind }
         }
         guard !flagged.isEmpty else { return c }
