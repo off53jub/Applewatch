@@ -13,8 +13,11 @@ final class AudioArchive {
     private var onWiFi = false
     /// ファイル名 → ドライブ上の id
     private var uploaded: [String: String]
+    /// ほかの端末が上げた音声（ファイル名 → ドライブ上の id）。端末間の同期で受け取る
+    private var remote: [String: String]
 
     private static let storeURL = URL.applicationSupportDirectory.appendingPathComponent("uploads.json")
+    private static let remoteURL = URL.applicationSupportDirectory.appendingPathComponent("uploads-remote.json")
     private static let cacheDir: URL = {
         let dir = URL.cachesDirectory.appendingPathComponent("audio", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -31,6 +34,7 @@ final class AudioArchive {
     init(docs: GoogleDocs) {
         self.docs = docs
         uploaded = (try? JSONDecoder().decode([String: String].self, from: Data(contentsOf: Self.storeURL))) ?? [:]
+        remote = (try? JSONDecoder().decode([String: String].self, from: Data(contentsOf: Self.remoteURL))) ?? [:]
         monitor.pathUpdateHandler = { [weak self] path in
             // モバイル通信やテザリングでは上げない
             let wifi = path.status == .satisfied && !path.isExpensive && !path.isConstrained
@@ -66,13 +70,28 @@ final class AudioArchive {
         if let local = Storage.keptAudio(named: name) { return local }
         let cached = Self.cacheDir.appendingPathComponent(name)
         if FileManager.default.fileExists(atPath: cached.path) { return cached }
-        guard let id = uploaded[name], let data = try? await docs.downloadAudio(id: id) else { return nil }
+        guard let id = uploaded[name] ?? remote[name], let data = try? await docs.downloadAudio(id: id) else { return nil }
         try? data.write(to: cached, options: .atomic)
         return cached
     }
 
     func canPlay(_ name: String) -> Bool {
-        uploaded[name] != nil || Storage.keptAudio(named: name) != nil
+        uploaded[name] != nil || remote[name] != nil || Storage.keptAudio(named: name) != nil
+    }
+
+    // MARK: - 端末間の同期
+
+    /// この端末が上げた音声の一覧（ほかの端末が聞き直しに使う）
+    func syncCopy() -> [String: String] { uploaded }
+
+    /// ほかの端末が上げた音声の一覧を受け取る。
+    func mergeRemote(_ list: [String: String]) {
+        let next = remote.merging(list) { _, new in new }
+        guard next != remote else { return }
+        remote = next
+        if let data = try? JSONEncoder().encode(remote) {
+            try? data.write(to: Self.remoteURL, options: .atomic)
+        }
     }
 
     private func prune() {

@@ -19,6 +19,8 @@ struct HistoryView: View {
         }
         .navigationTitle("これまでの記録")
         .onAppear { days = pipeline.recordedDays() }
+        // ほかの端末から記録が届いたら出し直す
+        .onChange(of: pipeline.recordsVersion) { days = pipeline.recordedDays() }
     }
 }
 

@@ -49,6 +49,13 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored private var names: [String: String] = [:]
 
     private static let samplesURL = URL.applicationSupportDirectory.appendingPathComponent("locations.json")
+    /// 端末間の同期用の、登録と削除の時刻（場所の一覧とは別に保存する）
+    @ObservationIgnored private var times = UserDefaults.standard.data(forKey: "placeSync")
+        .flatMap { try? JSONDecoder().decode(SyncTimes.self, from: $0) } ?? SyncTimes() {
+        didSet {
+            if let data = try? JSONEncoder().encode(times) { UserDefaults.standard.set(data, forKey: "placeSync") }
+        }
+    }
 
     override init() {
         super.init()
@@ -138,8 +145,10 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     /// 今いる場所を、名前を付けて登録する。
     func addCurrentPlace(named name: String, isWork: Bool = false) async -> Bool {
         guard let location = await currentLocation() else { return false }
-        places.append(Place(name: name, latitude: location.coordinate.latitude, longitude: location.coordinate.longitude,
-                            isWork: isWork))
+        let place = Place(name: name, latitude: location.coordinate.latitude, longitude: location.coordinate.longitude,
+                          isWork: isWork)
+        places.append(place)
+        times.added[place.id.uuidString] = .now
         savePlaces()
         return true
     }
@@ -147,6 +156,7 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     func setWork(_ id: UUID, _ isWork: Bool) {
         guard let i = places.firstIndex(where: { $0.id == id }) else { return }
         places[i].isWork = isWork
+        times.added[id.uuidString] = .now
         savePlaces()
     }
 
@@ -158,6 +168,7 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     }
 
     func removePlaces(at offsets: IndexSet) {
+        for i in offsets where places.indices.contains(i) { times.removed[places[i].id.uuidString] = .now }
         places.remove(atOffsets: offsets)
         savePlaces()
         onChange?()
@@ -180,6 +191,54 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
             waiting.append(continuation)
             manager.requestLocation()
         }
+    }
+
+    // MARK: - 端末間の同期
+
+    struct SyncCopy: Codable {
+        var places: [Place]
+        var times: SyncTimes
+    }
+
+    /// ほかの端末に渡す登録した場所。「ここでは録音を休む」は端末ごとの設定なので渡さない。
+    func syncCopy() -> SyncCopy {
+        SyncCopy(places: places.map { p in
+            var p = p
+            p.pausesRecording = nil
+            return p
+        }, times: times)
+    }
+
+    /// ほかの端末の登録した場所を合わせる。この端末の「ここでは録音を休む」はそのまま。変わったら true。
+    @discardableResult
+    func mergeRemote(_ remote: SyncCopy) -> Bool {
+        var result: [Place] = []
+        for place in places {
+            let other = remote.places.first { $0.id == place.id }
+            let d = SyncTimes.decide(place.id.uuidString, here: true, there: other != nil, local: times, remote: remote.times)
+            guard d.present else { continue }
+            if d.fromRemote, var other {
+                other.pausesRecording = place.pausesRecording
+                result.append(other)
+            } else {
+                result.append(place)
+            }
+        }
+        for other in remote.places where !places.contains(where: { $0.id == other.id }) {
+            guard SyncTimes.decide(other.id.uuidString, here: false, there: true, local: times, remote: remote.times).present
+            else { continue }
+            var p = other
+            p.pausesRecording = nil
+            result.append(p)
+        }
+        let merged = times.merged(with: remote.times)
+        if merged != times { times = merged }
+        let before = try? JSONEncoder().encode(places)
+        guard (try? JSONEncoder().encode(result)) != before else { return false }
+        places = result
+        savePlaces()
+        onChange?()
+        return true
     }
 
     private func savePlaces() {

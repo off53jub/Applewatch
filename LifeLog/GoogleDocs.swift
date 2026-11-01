@@ -27,6 +27,7 @@ final class GoogleDocs {
     func signOut() {
         GIDSignIn.sharedInstance.signOut()
         defaults.removeObject(forKey: "folderId")
+        defaults.removeObject(forKey: "syncFolder")
         for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("doc-") || key.hasPrefix("audioFolder") || key.hasPrefix("driveStamp-") {
             defaults.removeObject(forKey: key)
         }
@@ -302,6 +303,77 @@ final class GoogleDocs {
         let id = try await findOrCreate(name: day, mimeType: "application/vnd.google-apps.folder", parent: root)
         defaults.set(id, forKey: "audioFolder-\(day)")
         return id
+    }
+
+    // MARK: - 端末間の同期
+
+    /// 「LifeLog/同期」フォルダのファイル
+    struct SyncFile {
+        let id: String
+        let name: String
+        let modified: String
+    }
+
+    private func syncFolder() async throws -> String {
+        if let id = defaults.string(forKey: "syncFolder") { return id }
+        let id = try await findOrCreate(name: "同期", mimeType: "application/vnd.google-apps.folder", parent: try await folderId())
+        defaults.set(id, forKey: "syncFolder")
+        return id
+    }
+
+    func syncFiles() async throws -> [SyncFile] {
+        let folder = try await syncFolder()
+        var result: [SyncFile] = []
+        var token: String?
+        repeat {
+            var comps = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
+            var items = [URLQueryItem(name: "q", value: "'\(folder)' in parents and trashed = false"),
+                         URLQueryItem(name: "fields", value: "nextPageToken,files(id,name,modifiedTime)"),
+                         URLQueryItem(name: "pageSize", value: "1000")]
+            if let token { items.append(URLQueryItem(name: "pageToken", value: token)) }
+            comps.queryItems = items
+            let page = try await request("GET", comps.url!.absoluteString)
+            for file in page["files"] as? [[String: Any]] ?? [] {
+                guard let id = file["id"] as? String, let name = file["name"] as? String else { continue }
+                result.append(SyncFile(id: id, name: name, modified: file["modifiedTime"] as? String ?? ""))
+            }
+            token = page["nextPageToken"] as? String
+        } while token != nil
+        return result
+    }
+
+    func downloadSync(id: String) async throws -> Data {
+        let req = try await authorized("GET", "https://www.googleapis.com/drive/v3/files/\(id)?alt=media")
+        return try await send(req).0
+    }
+
+    /// 同期のファイルを書く。id があれば中身を置き換え、無ければ（または消えていれば）作る。
+    func uploadSync(_ data: Data, name: String, id: String?) async throws {
+        if let id {
+            var req = try await authorized("PATCH", "https://www.googleapis.com/upload/drive/v3/files/\(id)?uploadType=media&fields=id")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = data
+            do {
+                _ = try await send(req)
+                return
+            } catch GoogleError.http(404, _) {
+                // 消されていたら作り直す
+            }
+        }
+        let boundary = "lifelog-\(UUID().uuidString)"
+        var body = Data()
+        let meta = try JSONSerialization.data(withJSONObject: ["name": name, "parents": [try await syncFolder()],
+                                                               "mimeType": "application/json"])
+        body.append("--\(boundary)\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".data(using: .utf8)!)
+        body.append(meta)
+        body.append("\r\n--\(boundary)\r\nContent-Type: application/json\r\n\r\n".data(using: .utf8)!)
+        body.append(data)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        var req = try await authorized("POST", "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id")
+        req.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        req.timeoutInterval = 120
+        _ = try await send(req)
     }
 
     // MARK: - Drive

@@ -321,6 +321,30 @@ private struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle("iPhone と iPad で同じ記録にする", isOn: Binding(
+                        get: { pipeline.sync.isOn },
+                        set: { pipeline.sync.isOn = $0 }))
+                    if pipeline.sync.isOn {
+                        LabeledContent("最後に合わせた時刻",
+                                       value: pipeline.sync.lastSynced?.formatted(date: .abbreviated, time: .shortened) ?? "まだ")
+                        if !pipeline.sync.lastReceived.isEmpty {
+                            LabeledContent("前回ほかの端末から届いたもの", value: pipeline.sync.lastReceived)
+                        }
+                        Button(pipeline.sync.running ? "合わせています…" : "今すぐ合わせる") {
+                            Task { await pipeline.syncNow() }
+                        }
+                        .disabled(pipeline.sync.running || pipeline.email == nil)
+                        if let problem = pipeline.sync.problem {
+                            Text(problem).font(.footnote).foregroundStyle(.red)
+                        }
+                    }
+                } header: {
+                    Text("iPhone と iPad の同期")
+                } footer: {
+                    Text("同じ Google アカウントでログインした iPhone と iPad で、記録・話した相手（名前と登録した声）・言葉の登録・場所を、ドライブの「LifeLog/同期」フォルダを通して合わせます。アプリを開いたときと、文字起こしのあと（3分おきまで）に合わせます。\n「ここでは録音を休む」と、自動で覚えた声は端末ごとのままです。1日のまとめ・人物ノート・週のまとめ・AI 向けの索引は、iPhone が両方の分をまとめて書きます。\n初めて合わせる前に、今の記録と登録をアプリの中に一度だけ控えておきます。")
+                }
+
+                Section {
                     Toggle("待機モード", isOn: Binding(
                         get: { pipeline.standbyOn },
                         set: { pipeline.standbyOn = $0 }))

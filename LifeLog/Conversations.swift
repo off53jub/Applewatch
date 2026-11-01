@@ -88,6 +88,8 @@ final class ConversationLog {
         var event: String?
         /// 移動の様子（「歩きながら」など）
         var movement: String?
+        /// 端末間の同期で、どちらが新しいかを決める番号。中身が変わるたびに1つ増える（以前の記録は nil で、0 とみなす）
+        var rev: Int?
 
         /// 話した相手。テレビや動画の声は相手に数えない。
         var people: [String] {
@@ -105,6 +107,21 @@ final class ConversationLog {
         var conversations: [Conversation] = []
         var summaryWritten = false
         /// 1日のまとめの中身（週のまとめに使う）
+        var summary: Summarizer.Day?
+        /// 消した会話（端末間の同期で、ほかの端末にも消したと伝える）。会話の始まりの時刻と、消したときの番号。
+        var removed: [Removed]?
+    }
+
+    struct Removed: Codable {
+        let start: Date
+        let rev: Int
+    }
+
+    /// 端末間の同期で、ほかの端末に渡す1日分（閉じた会話だけ）
+    struct SyncDay: Codable {
+        var conversations: [Conversation]
+        var removed: [Removed]
+        var summaryWritten: Bool
         var summary: Summarizer.Day?
     }
 
@@ -153,14 +170,19 @@ final class ConversationLog {
         await closeOpenConversations(before: first.time, day: day)
 
         var log = load(day)
-        if log.conversations.last?.closed ?? true {
+        // 続いている会話はこの端末のもの（ほかの端末からは閉じた会話しか来ない）
+        if log.conversations.lastIndex(where: { !$0.closed }) == nil {
             let index = try await docs.endIndex(day: day)
             log.conversations.append(Conversation(start: first.time, end: first.time, docIndex: index))
             save(log, day: day)
+            log = load(day)
         }
         try await docs.append(text, day: day)
-        log.conversations[log.conversations.count - 1].lines += lines
-        log.conversations[log.conversations.count - 1].end = lines.last?.time ?? first.time
+        // 書いているあいだに同期で会話が増えていてもよいように、読み直してから足す
+        log = load(day)
+        guard let i = log.conversations.lastIndex(where: { !$0.closed }) else { return }
+        log.conversations[i].lines += lines
+        log.conversations[i].end = lines.last?.time ?? first.time
         save(log, day: day)
     }
 
@@ -180,14 +202,22 @@ final class ConversationLog {
 
     private func closeOpenConversations(before time: Date, day: String?) async {
         for openDay in days() {
-            var log = load(openDay)
-            guard let i = log.conversations.indices.last, !log.conversations[i].closed else { continue }
+            let log = load(openDay)
+            // 続いている会話（この端末のもの）。ほかの端末の会話が後ろに並んでいることもある
+            guard let i = log.conversations.lastIndex(where: { !$0.closed }) else { continue }
             let conversation = log.conversations[i]
             let sameDay = day == nil || day == openDay
             guard !sameDay || time.timeIntervalSince(conversation.end) > Self.gap else { continue }
             if let closed = await close(conversation, day: openDay) {
-                log.conversations[i] = closed
-                save(log, day: openDay)
+                // 閉じているあいだに同期で増えた会話も残すよう、読み直してから置き換える
+                var fresh = load(openDay)
+                guard let j = fresh.conversations.firstIndex(where: { $0.start == conversation.start && !$0.closed })
+                else { continue }
+                // 見出しはもう差し込んだので、閉じた版を必ず残す（二重に差し込まないように）
+                var closed = closed
+                closed.rev = fresh.conversations[j].rev
+                fresh.conversations[j] = closed
+                save(fresh, day: openDay)
                 justClosed.append(closed)
                 // 会話全体を見て、同じ名前や言葉の書き方をそろえる
                 if let key = apiKey() { await unifySpelling(closed, day: openDay, apiKey: key) }
@@ -536,6 +566,10 @@ final class ConversationLog {
             if !log.conversations[c].closed {
                 log.conversations[c].docIndex = Self.shifted(log.conversations[c].docIndex, removing: ranges)
             }
+        }
+        // 行がすべて消えた会話は消し、ほかの端末にも消したと伝える
+        for c in log.conversations where emptiedStarts.contains(c.start) && c.lines.isEmpty {
+            log.removed = (log.removed ?? []) + [Removed(start: c.start, rev: (c.rev ?? 0) + 1)]
         }
         log.conversations.removeAll { emptiedStarts.contains($0.start) && $0.lines.isEmpty }
         save(log, day: day)
@@ -927,8 +961,138 @@ final class ConversationLog {
         return log
     }
 
+    /// この端末で記録を変えたときの書き込み。
+    /// - 中身の変わった会話は番号（rev）を1つ増やす（端末間の同期で、新しいほうを残すため）。
+    /// - 読んだあとに同期で新しい版が入っていたら、そちらを残す。
+    /// - 読んだあとに同期で増えた会話は、消したと書いていない限り残す（古い読み込みで上書きして消さないように）。
     private func save(_ log: Day, day: String) {
+        let old = load(day)
+        var tombs: [Date: Int] = [:]
+        for r in (old.removed ?? []) + (log.removed ?? []) { tombs[r.start] = max(tombs[r.start] ?? 0, r.rev) }
+        var previous: [Date: Conversation] = [:]
+        for c in old.conversations where previous[c.start] == nil { previous[c.start] = c }
+
+        var result: [Conversation] = []
+        var starts = Set<Date>()
+        for var c in log.conversations {
+            starts.insert(c.start)
+            if let prev = previous[c.start] {
+                let prevRev = prev.rev ?? 0, rev = c.rev ?? 0
+                if rev < prevRev {
+                    result.append(prev)
+                    continue
+                }
+                if !Self.sameContent(prev, c) { c.rev = max(prevRev, rev) + 1 }
+            } else if let tomb = tombs[c.start], (c.rev ?? 0) <= tomb {
+                // 一度消した会話を戻した
+                c.rev = tomb + 1
+            } else if c.rev == nil {
+                c.rev = 1
+            }
+            result.append(c)
+        }
+        for prev in old.conversations where !starts.contains(prev.start) {
+            if let tomb = tombs[prev.start], tomb > (prev.rev ?? 0) { continue }
+            result.append(prev)
+        }
+        var out = log
+        out.conversations = Self.sortedByStart(result)
+        out.removed = tombs.isEmpty ? nil : tombs.map { Removed(start: $0.key, rev: $0.value) }.sorted { $0.start < $1.start }
+        out.summaryWritten = log.summaryWritten || old.summaryWritten
+        out.summary = log.summary ?? old.summary
+        write(out, day: day)
+    }
+
+    private func write(_ log: Day, day: String) {
         guard let data = try? JSONEncoder().encode(log) else { return }
         try? data.write(to: Self.dir.appendingPathComponent(day + ".json"), options: .atomic)
+    }
+
+    /// 始まりの順に並べる（同じ時刻どうしは元の順のまま）
+    private static func sortedByStart(_ list: [Conversation]) -> [Conversation] {
+        list.enumerated().sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }.map(\.element)
+    }
+
+    private static let canonical: JSONEncoder = {
+        let e = JSONEncoder()
+        e.outputFormatting = [.sortedKeys]
+        return e
+    }()
+
+    /// 番号（rev）を除いた中身の書き出し
+    private static func content(_ c: Conversation) -> Data {
+        var c = c
+        c.rev = nil
+        return (try? canonical.encode(c)) ?? Data()
+    }
+
+    private static func sameContent(_ a: Conversation, _ b: Conversation) -> Bool { content(a) == content(b) }
+
+    // MARK: - 端末間の同期
+
+    /// その日の記録ファイルを最後に書いた時刻（同期で、変わっていない日を飛ばすため）
+    func modified(_ day: String) -> Date? {
+        let url = Self.dir.appendingPathComponent(day + ".json")
+        return (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+
+    /// ほかの端末に渡す、その日の閉じた会話と、消した会話と、1日のまとめ。
+    func syncPayload(_ day: String) -> SyncDay {
+        let log = load(day)
+        return SyncDay(conversations: log.conversations.filter(\.closed), removed: log.removed ?? [],
+                       summaryWritten: log.summaryWritten, summary: log.summary)
+    }
+
+    /// ほかの端末の1日分を合わせる。会話ごとに番号（rev）の大きいほうを残し、同じなら中身で決める（どちらの端末でも同じ結果になるように）。
+    /// この端末で続いている会話には触らない。変わったら true。
+    @discardableResult
+    func mergeRemote(_ remote: SyncDay, day: String) -> Bool {
+        var log = load(day)
+        var changed = false
+        var tombs: [Date: Int] = [:]
+        for r in log.removed ?? [] { tombs[r.start] = max(tombs[r.start] ?? 0, r.rev) }
+        for r in remote.removed where r.rev > (tombs[r.start] ?? 0) {
+            tombs[r.start] = r.rev
+            changed = true
+        }
+        for rc in remote.conversations where rc.closed {
+            if let i = log.conversations.firstIndex(where: { $0.start == rc.start }) {
+                let lc = log.conversations[i]
+                guard lc.closed else { continue }
+                let lr = lc.rev ?? 0, rr = rc.rev ?? 0
+                if rr > lr {
+                    log.conversations[i] = rc
+                    changed = true
+                } else if rr == lr {
+                    let a = Self.content(lc), b = Self.content(rc)
+                    if a != b && a.lexicographicallyPrecedes(b) {
+                        log.conversations[i] = rc
+                        changed = true
+                    }
+                }
+            } else if (rc.rev ?? 0) > (tombs[rc.start] ?? -1) {
+                log.conversations.append(rc)
+                changed = true
+            }
+        }
+        let before = log.conversations.count
+        log.conversations.removeAll { c in
+            guard c.closed, let tomb = tombs[c.start] else { return false }
+            return tomb > (c.rev ?? 0)
+        }
+        if log.conversations.count != before { changed = true }
+        if remote.summaryWritten && !log.summaryWritten {
+            log.summaryWritten = true
+            changed = true
+        }
+        if log.summary == nil, let summary = remote.summary {
+            log.summary = summary
+            changed = true
+        }
+        guard changed else { return false }
+        log.conversations = Self.sortedByStart(log.conversations)
+        log.removed = tombs.isEmpty ? nil : tombs.map { Removed(start: $0.key, rev: $0.value) }.sorted { $0.start < $1.start }
+        write(log, day: day)
+        return true
     }
 }

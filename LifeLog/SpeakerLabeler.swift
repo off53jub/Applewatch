@@ -78,6 +78,8 @@ actor SpeakerLabeler {
         var seconds: Double = 0
         var lastHeard: Date = .now
         var samples: [Sample] = []
+        /// 名前・場・登録した声を最後に変えた時刻（端末間の同期で、新しいほうの名前を残す）
+        var updated: Date? = nil
 
         var isSelf: Bool { id == SpeakerLabeler.selfID }
         var displayName: String { isSelf ? SpeakerLabeler.selfName : name ?? "人物\(id)" }
@@ -89,6 +91,30 @@ actor SpeakerLabeler {
     private struct Store: Codable {
         var people: [Person] = []
         var nextID = 1
+        /// 消した人の番号と、消した時刻（端末間の同期で、ほかの端末にも消したと伝える）
+        var removed: [String: Date]? = nil
+    }
+
+    /// 新しい人の番号の始まり。iPhone は 1 から、iPad は 100000 から数えて、同期したときに番号がぶつからないようにする。
+    static let idFloorKey = "personIDFloor"
+    private var idFloor: Int { max(1, UserDefaults.standard.integer(forKey: Self.idFloorKey)) }
+    /// この端末で付けた番号か（ほかの端末の番号では、次の番号を進めない）
+    private func isOwnID(_ n: Int) -> Bool { idFloor >= 100_000 ? n >= 100_000 : n < 100_000 }
+
+    private func allocateID() -> String {
+        let n = max(store.nextID, idFloor)
+        store.nextID = n + 1
+        return String(n)
+    }
+
+    /// 人を消し、ほかの端末にも消したと伝える印を残す。
+    private func forget(where match: (Person) -> Bool) {
+        let gone = store.people.filter { match($0) && !$0.isSelf }
+        guard !gone.isEmpty else { return }
+        store.people.removeAll { p in gone.contains { $0.id == p.id } }
+        var removed = store.removed ?? [:]
+        for p in gone { removed[p.id] = .now }
+        store.removed = removed
     }
 
     /// 読み込んだ OfflineDiarizerManager をこの actor に渡すための入れ物（渡したあとは actor だけが触る）
@@ -242,8 +268,7 @@ actor SpeakerLabeler {
                 labels[key] = match.person
             } else if c.seconds >= 3 {
                 // 知らない声。新しい人として覚え、その場の人とする
-                let id = String(store.nextID)
-                store.nextID += 1
+                let id = allocateID()
                 store.people.append(Person(id: id, name: nil, context: context,
                                            voices: [Voice(embedding: c.embedding, pinned: false, added: .now,
                                                           model: Self.model)],
@@ -253,7 +278,7 @@ actor SpeakerLabeler {
         }
         // 名前を付けていない声で、2週間聞いていないものは忘れる（通りすがりの人など）
         let old = Date.now.addingTimeInterval(-14 * 24 * 3600)
-        store.people.removeAll { !$0.isNamed && $0.pinnedCount == 0 && $0.lastHeard < old }
+        forget { !$0.isNamed && $0.pinnedCount == 0 && $0.lastHeard < old }
         save()
 
         return result.segments.compactMap { s in
@@ -305,6 +330,7 @@ actor SpeakerLabeler {
             if end - start >= 48_000 || start == 0, let embedding = try await voice(in: Array(samples[start..<end])),
                let i = index(of: id) {
                 addVoice(embedding, pinned: true, to: i)
+                store.people[i].updated = .now
             }
             start = end
         }
@@ -322,6 +348,7 @@ actor SpeakerLabeler {
         guard to - from >= 16_000 else { return }   // 1秒より短いと声の特徴が出ない
         guard let embedding = try await voice(in: Array(samples[from..<to])), let i = index(of: personID) else { return }
         addVoice(embedding, pinned: pinned, to: i)
+        if pinned { store.people[i].updated = .now }
         remember(Sample(audio: url.lastPathComponent, start: start, end: end), for: i)
         save()
     }
@@ -340,8 +367,9 @@ actor SpeakerLabeler {
     /// 以前のモデルの声しか無い人（名前のある人）の一覧と、覚えている聞き直し用のところ。
     /// 新しいモデルで声を取り直すのに使う。名前の無い声は、取り直さずに忘れる。
     func peopleNeedingVoices() -> [(id: String, samples: [Sample])] {
+        // （ほかの端末から同期した、声を持たない人は消さない）
         store.people.removeAll { p in
-            !p.isNamed && !p.voices.contains { $0.model == Self.model }
+            !p.isNamed && !p.voices.isEmpty && !p.voices.contains { $0.model == Self.model }
         }
         save()
         return store.people
@@ -359,7 +387,7 @@ actor SpeakerLabeler {
                 store.people.append(Person(id: p.id, name: p.name, context: p.context))
             }
         }
-        let highest = usedIDs.compactMap { Int($0) }.max() ?? 0
+        let highest = usedIDs.compactMap { Int($0) }.filter(isOwnID).max() ?? 0
         store.nextID = max(store.nextID, highest + 1)
         save()
     }
@@ -367,9 +395,8 @@ actor SpeakerLabeler {
     func hasVoice(_ id: String) -> Bool { person(id)?.voices.contains { $0.model == Self.model } == true }
 
     func newPerson(name: String, context: Context?) -> String {
-        let id = String(store.nextID)
-        store.nextID += 1
-        store.people.append(Person(id: id, name: name, context: context))
+        let id = allocateID()
+        store.people.append(Person(id: id, name: name, context: context, updated: .now))
         save()
         return id
     }
@@ -377,12 +404,14 @@ actor SpeakerLabeler {
     func rename(_ id: String, to name: String) {
         guard let i = index(of: id), !store.people[i].isSelf else { return }
         store.people[i].name = name.isEmpty ? nil : name
+        store.people[i].updated = .now
         save()
     }
 
     func setContext(_ id: String, to context: Context?) {
         guard let i = index(of: id) else { return }
         store.people[i].context = context
+        store.people[i].updated = .now
         save()
     }
 
@@ -394,7 +423,8 @@ actor SpeakerLabeler {
         store.people[t].lastHeard = max(store.people[t].lastHeard, s.lastHeard)
         store.people[t].samples = Array((store.people[t].samples + s.samples).suffix(3))
         trimVoices(t)
-        store.people.removeAll { $0.id == source }
+        store.people[t].updated = .now
+        forget { $0.id == source }
         save()
     }
 
@@ -409,7 +439,10 @@ actor SpeakerLabeler {
     func revive(_ id: String, snapshot: Person?, from target: String) {
         guard id != Self.selfID, id != target else { return }
         if index(of: id) == nil {
-            store.people.append(snapshot ?? Person(id: id, name: nil, context: nil))
+            var revived = snapshot ?? Person(id: id, name: nil, context: nil)
+            revived.updated = .now
+            store.people.append(revived)
+            store.removed?[id] = nil
         }
         if let snapshot, let t = index(of: target) {
             let moved = Set(snapshot.voices.map(\.embedding))
@@ -417,7 +450,7 @@ actor SpeakerLabeler {
             store.people[t].seconds = max(0, store.people[t].seconds - snapshot.seconds)
             store.people[t].samples.removeAll { snapshot.samples.contains($0) }
         }
-        if let n = Int(id) { store.nextID = max(store.nextID, n + 1) }
+        if let n = Int(id), isOwnID(n) { store.nextID = max(store.nextID, n + 1) }
         save()
     }
 
@@ -487,13 +520,144 @@ actor SpeakerLabeler {
 
     /// テレビや動画の声だった、名前の無い声を忘れる（登録・手直しした声は残す）。
     func forgetUnnamed(_ ids: Set<String>) {
-        store.people.removeAll { ids.contains($0.id) && !$0.isNamed && $0.pinnedCount == 0 }
+        forget { ids.contains($0.id) && !$0.isNamed && $0.pinnedCount == 0 }
         save()
     }
 
     func remove(_ id: String) {
-        store.people.removeAll { $0.id == id }
+        if id == Self.selfID {
+            // 自分の声は端末ごとに登録し直せるよう、ほかの端末には伝えない
+            store.people.removeAll { $0.id == id }
+        } else {
+            forget { $0.id == id }
+        }
         save()
+    }
+
+    // MARK: - 端末間の同期
+
+    /// 同期で渡す声（登録・手直しで覚えた声だけ。自動で覚えた声は端末ごとのマイクに合わせたものなので渡さない）
+    struct SyncVoice: Codable, Sendable {
+        /// Float32 を並べたもの
+        let embedding: Data
+        let added: Date
+        let model: String?
+    }
+
+    struct SyncPerson: Codable, Sendable {
+        let id: String
+        let name: String?
+        let context: Context?
+        let voices: [SyncVoice]
+        let seconds: Double
+        let lastHeard: Date
+        let samples: [Sample]
+        let updated: Date?
+    }
+
+    struct SyncPeople: Codable, Sendable {
+        let people: [SyncPerson]
+        let removed: [String: Date]
+    }
+
+    private static func pack(_ v: [Float]) -> Data { v.withUnsafeBufferPointer { Data(buffer: $0) } }
+
+    private static func unpack(_ d: Data) -> [Float] {
+        let count = d.count / MemoryLayout<Float>.size
+        var result = [Float](repeating: 0, count: count)
+        _ = result.withUnsafeMutableBytes { d.copyBytes(to: $0, count: count * MemoryLayout<Float>.size) }
+        return result
+    }
+
+    func syncCopy() -> SyncPeople {
+        // 2か月より前に消した印は、もう渡さない
+        let cutoff = Date.now.addingTimeInterval(-60 * 24 * 3600)
+        let removed = (store.removed ?? [:]).filter { $0.value > cutoff }
+        let people = store.people.sorted { $0.id < $1.id }.map { p in
+            SyncPerson(id: p.id, name: p.name, context: p.context,
+                       voices: p.voices.filter(\.pinned).map { SyncVoice(embedding: Self.pack($0.embedding), added: $0.added, model: $0.model) },
+                       // 細かく変わり続けないように、分と日にそろえる
+                       seconds: (p.seconds / 60).rounded(.down) * 60,
+                       lastHeard: Date(timeIntervalSince1970: (p.lastHeard.timeIntervalSince1970 / 86400).rounded(.down) * 86400),
+                       samples: p.samples, updated: p.updated)
+        }
+        return SyncPeople(people: people, removed: removed)
+    }
+
+    /// ほかの端末の人を合わせる。
+    /// - 同じ番号の人は、名前と場は後から変えたほうを残し、登録・手直しの声は両方を足す（自動で覚えた声はこの端末のまま）。
+    /// - 向こうで消した人は、そのあとこちらで聞いたり直したりしていなければ消す。自分は消さない。
+    /// - 次に付ける番号は変えない（番号の範囲が端末ごとに分かれているため）。
+    /// 変わったら true。
+    func mergeRemote(_ remote: SyncPeople) -> Bool {
+        var changed = false
+        var removed = store.removed ?? [:]
+        for rp in remote.people {
+            let voices = rp.voices.map { Voice(embedding: Self.unpack($0.embedding), pinned: true, added: $0.added, model: $0.model) }
+            let remoteTouched = max(rp.updated ?? .distantPast, rp.lastHeard)
+            if let i = index(of: rp.id) {
+                var p = store.people[i]
+                let before = p
+                if (rp.updated ?? .distantPast) > (p.updated ?? .distantPast), !p.isSelf {
+                    p.name = rp.name
+                    p.context = rp.context
+                    p.updated = rp.updated
+                }
+                let known = Set(p.voices.map(\.embedding))
+                let added = voices.filter { !known.contains($0.embedding) && !$0.embedding.isEmpty }
+                if !added.isEmpty { p.voices += added }
+                p.seconds = max(p.seconds, rp.seconds)
+                p.lastHeard = max(p.lastHeard, rp.lastHeard)
+                for sample in rp.samples where !p.samples.contains(sample) { p.samples.append(sample) }
+                p.samples = Array(p.samples.suffix(3))
+                if !added.isEmpty || p.name != before.name || p.context != before.context
+                    || p.seconds != before.seconds || p.lastHeard != before.lastHeard || p.samples != before.samples {
+                    store.people[i] = p
+                    if !added.isEmpty { trimVoices(i) }
+                    changed = true
+                }
+            } else {
+                if let gone = removed[rp.id], gone >= remoteTouched { continue }
+                store.people.append(Person(id: rp.id, name: rp.name, context: rp.context, voices: voices,
+                                           seconds: rp.seconds, lastHeard: rp.lastHeard, samples: rp.samples,
+                                           updated: rp.updated))
+                removed[rp.id] = nil
+                changed = true
+            }
+        }
+        for (id, when) in remote.removed where id != Self.selfID {
+            if (removed[id] ?? .distantPast) < when { removed[id] = when }
+            guard let p = person(id) else { continue }
+            let touched = max(p.updated ?? .distantPast, p.lastHeard)
+            if touched < when {
+                store.people.removeAll { $0.id == id }
+                changed = true
+            }
+        }
+        if removed != (store.removed ?? [:]) {
+            store.removed = removed
+            changed = true
+        }
+        if changed { save() }
+        return changed
+    }
+
+    /// iPad で、同期を始める前に一度だけ、この端末で付けた番号を iPad の範囲（100000〜）に付け替える。
+    /// extra は記録の行にだけ残っている番号（もう覚えていない人）。古い番号 → 新しい番号を返す。
+    func moveIDsIntoRange(extra: Set<String>) -> [String: String] {
+        var map: [String: String] = [:]
+        let floor = idFloor
+        guard floor >= 100_000 else { return [:] }
+        let ids = Set(store.people.map(\.id)).union(extra).filter { id in Int(id).map { $0 < floor } ?? false }
+        for id in ids.sorted(by: { (Int($0) ?? 0) < (Int($1) ?? 0) }) { map[id] = allocateID() }
+        for i in store.people.indices {
+            guard let new = map[store.people[i].id] else { continue }
+            let p = store.people[i]
+            store.people[i] = Person(id: new, name: p.name, context: p.context, voices: p.voices, seconds: p.seconds,
+                                     lastHeard: p.lastHeard, samples: p.samples, updated: p.updated)
+        }
+        save()
+        return map
     }
 
     // MARK: - 中身

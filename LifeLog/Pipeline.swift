@@ -147,6 +147,10 @@ final class Pipeline {
     @ObservationIgnored private var liveAutoOff: Task<Void, Never>?
     private let docs: GoogleDocs
     private let conversations: ConversationLog
+    /// iPhone と iPad の記録と登録を合わせる
+    @ObservationIgnored private(set) var sync: DeviceSync!
+    /// ほかの端末から記録が届くたびに増える（画面を出し直すため）
+    private(set) var recordsVersion = 0
     private let receiver = PhoneReceiver()
     /// 処理中の列。二重に走らせないよう、走っていればそれを待つ。
     private var queueTask: Task<Void, Never>?
@@ -164,6 +168,11 @@ final class Pipeline {
     }()
 
     init() {
+        // iPad は人の番号を 100000 から付ける（iPhone の番号とぶつからないように）
+        if UIDevice.current.userInterfaceIdiom == .pad,
+           UserDefaults.standard.integer(forKey: SpeakerLabeler.idFloorKey) < 100_000 {
+            UserDefaults.standard.set(100_000, forKey: SpeakerLabeler.idFloorKey)
+        }
         let docs = GoogleDocs()
         self.docs = docs
         conversations = ConversationLog(docs: docs)
@@ -249,6 +258,15 @@ final class Pipeline {
             self?.pendingCount = Storage.pendingChunks().count
             self?.processQueue()
         }
+        sync = DeviceSync(docs: docs, conversations: conversations, vocabulary: vocabulary, places: places,
+                          speakers: speakers, archive: archive)
+        sync.prepare = { [weak self] in await self?.prepareSync() ?? false }
+        sync.peopleChanged = { [weak self] in
+            guard let self else { return }
+            people = await speakers.people()
+            hasSelfVoice = await speakers.hasSelfVoice
+        }
+        sync.recordsChanged = { [weak self] in self?.recordsVersion += 1 }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         Power.start()
         receiver.activate()
@@ -631,6 +649,44 @@ final class Pipeline {
         }
     }
 
+    /// iPad で初めて同期する前に、iPad で付けた人の番号を iPad の範囲（100000〜）に付け替える。
+    /// 記録の行とドキュメントの名前も直す。直しきれなければ false（同期は次の機会に）。
+    private func prepareSync() async -> Bool {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return true }
+        let movedKey = "personIDsMoved", pendingKey = "personIDMoves"
+        if !UserDefaults.standard.bool(forKey: movedKey) {
+            var used = Set<String>()
+            for day in conversations.days() {
+                for c in conversations.conversations(on: day) {
+                    for line in c.lines { if let id = line.speakerID { used.insert(id) } }
+                }
+            }
+            let map = await speakers.moveIDsIntoRange(extra: used)
+            UserDefaults.standard.set(map, forKey: pendingKey)
+            UserDefaults.standard.set(true, forKey: movedKey)
+        }
+        guard let map = UserDefaults.standard.dictionary(forKey: pendingKey) as? [String: String], !map.isEmpty else {
+            return true
+        }
+        for (old, new) in map.sorted(by: { $0.key < $1.key }) {
+            let name = await speakers.name(of: new) ?? "人物\(new)"
+            do {
+                try await conversations.relabel(to: new, name: name) { $0.speakerID == old }
+            } catch {
+                return false
+            }
+        }
+        UserDefaults.standard.removeObject(forKey: pendingKey)
+        people = await speakers.people()
+        return true
+    }
+
+    /// 今すぐ同期する（設定の画面から）
+    func syncNow() async {
+        guard email != nil else { return }
+        await sync.run(force: true)
+    }
+
     func restoreSignIn() async {
         await docs.restore()
         email = docs.signedInEmail
@@ -742,6 +798,7 @@ final class Pipeline {
 
     func appBecameActive() {
         updateHold()
+        if email != nil { Task { await sync.run() } }
         liveAutoOff?.cancel()
         liveAutoOff = nil
         // ボタンで始めた録音の Live Activity は、古ければ出し直す（8時間で iOS に終わらせられるため）。
@@ -849,14 +906,17 @@ final class Pipeline {
         // 閉じた会話の言葉を数える（はじめは、これまでの記録を全部）
         let recentDays = wordStats.isEmpty ? conversations.days() : Array(conversations.days().suffix(2))
         wordStats.count(days: recentDays.map { ($0, conversations.conversations(on: $0)) })
-        await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
-        await conversations.writePeopleNotes()
-        // 週のまとめは iPhone だけが書く（iPad の分と二重にならないように）
+        // iPad と記録・登録を合わせる（まとめを書く前に、ほかの端末の会話も入れておく）
+        await sync.run()
+        // 1日のまとめ・人物ノート・週のまとめ・AI 向けの案内と索引は、iPhone だけが書く
+        // （iPad の会話は同期で iPhone に届くので、iPhone が両方の分をまとめて書く。二重にならないように）
         if UIDevice.current.userInterfaceIdiom != .pad {
+            await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
+            await conversations.writePeopleNotes()
             await conversations.writeWeeklySummary(today: dayFormatter.string(from: .now))
+            // ドライブを読む AI 向けの案内と索引を、中身が変わっていたら書き直す
+            await updateDriveGuide()
         }
-        // ドライブを読む AI 向けの案内と索引を、中身が変わっていたら書き直す
-        await updateDriveGuide()
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
         backupPending = archive.pendingCount
@@ -1078,10 +1138,7 @@ final class Pipeline {
         }
         let index = DriveGuide.index(entries)
 
-        // iPad は、自分の記録の日だけの索引を別のドキュメントに書く（案内は iPhone だけが書く）
-        let isPad = UIDevice.current.userInterfaceIdiom == .pad
-        let documents = isPad ? [(DriveGuide.padIndexName, index)]
-            : [(DriveGuide.guideName, guide), (DriveGuide.indexName, index)]
+        let documents = [(DriveGuide.guideName, guide), (DriveGuide.indexName, index)]
         for (name, paragraphs) in documents {
             let key = "driveStamp-" + name
             let stamp = DriveGuide.stamp(paragraphs)
