@@ -11,6 +11,9 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
     exactVersion: 0.17.7
+  # 日本語の音声認識 Haas-ja の Core ML 版。CI が Hugging Face から取ってきて Vendor/HaasCore に置く
+  HaasCoreML:
+    path: Vendor/HaasCore
 settings:
   base:
     MARKETING_VERSION: "0.1.0"
@@ -25,15 +28,19 @@ targets:
   LifeLog:
     type: application
     platform: iOS
-    sources: [LifeLog]
+    sources: [LifeLog, Shared/Audio, Shared/Intents]
     dependencies:
       - package: GoogleSignIn
       - package: FluidAudio
+      - package: HaasCoreML
+        product: HaasCore
       - target: LifeLogWatch
+      # コントロールセンター・ロック画面のボタン
+      - target: LifeLogWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
     info:
       path: LifeLog/Info.plist
@@ -42,18 +49,39 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
-        UIBackgroundModes: [audio]
+        UIBackgroundModes: [audio, fetch, processing]
+        # アクションボタンなどで、アプリを開かずに録音を始めたときの表示
+        NSSupportsLiveActivities: true
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.off53jub.lifelog.process
+          - com.off53jub.lifelog.refresh
         NSMicrophoneUsageDescription: 会話を録音して文字起こしするためにマイクを使います。
         NSSpeechRecognitionUsageDescription: 録音した音声を端末内で文字起こしします。
+        NSLocationWhenInUseUsageDescription: どこで話したかを、文字起こしの見出しに添えるために使います。
+        NSLocationAlwaysAndWhenInUseUsageDescription: 画面を閉じて録音しているあいだも、どこで話したかを見出しに添えるために使います。大きく移動したときだけ記録します。
         ITSAppUsesNonExemptEncryption: false
+        NSCalendarsFullAccessUsageDescription: 会話の時間の予定を、見出しと聞き取りのヒントに使います。
+        NSMotionUsageDescription: 歩いている・乗り物に乗っている・寝ている、を見分けて、会話の見出しと文字起こしに使います。
+        NSContactsUsageDescription: 会話で呼ばれた名前（「さいとうさん」など）を連絡先の名前の書き方に合わせて、文字起こしを正しくするために使います。
+        NSLocalNetworkUsageDescription: 家の PC（LifeLog PC）に録音を送って文字にしてもらうために使います。
+        # 家の PC へは http で送る（宛先は家の中の住所か Tailscale の住所。Tailscale は通り道が暗号化されている）
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
         GIDClientID: $(GOOGLE_CLIENT_ID)
         CFBundleURLTypes:
           - CFBundleURLSchemes: [$(GOOGLE_REVERSED_CLIENT_ID)]
   LifeLogWatch:
     type: application
     platform: watchOS
-    deploymentTarget: "10.0"
-    sources: [LifeLogWatch]
+    deploymentTarget: "11.0"
+    sources: [LifeLogWatch, Shared/Audio]
+    dependencies:
+      # 文字盤のボタン（コンプリケーション）
+      - target: LifeLogWatchWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog.watchkitapp
@@ -68,3 +96,39 @@ targets:
         WKCompanionAppBundleIdentifier: com.off53jub.lifelog
         WKBackgroundModes: [audio]
         NSMicrophoneUsageDescription: 会話を録音して iPhone に送るためにマイクを使います。
+  # コントロールセンター・ロック画面・アクションボタンに置く LifeLog のボタン
+  LifeLogWidgets:
+    type: app-extension
+    platform: iOS
+    sources: [LifeLogWidgets, Shared/Intents]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog.widgets
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: LifeLogWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: LifeLog
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  # 時計の文字盤に置く LifeLog のボタン
+  LifeLogWatchWidgets:
+    type: app-extension
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources: [LifeLogWatchWidgets]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog.watchkitapp.widgets
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: LifeLogWatchWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: LifeLog
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension

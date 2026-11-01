@@ -55,9 +55,11 @@ enum CloudTranscriber {
     }
 
     /// offset が nil の行は時刻が分からない（直前の行の続き）。
+    /// score は聞き取りの確からしさ（Whisper の avg_logprob。0 に近いほど確か）。
     struct Line {
         let offset: TimeInterval?
         let text: String
+        var score: Double? = nil
     }
 
     enum Failure: LocalizedError {
@@ -86,10 +88,12 @@ enum CloudTranscriber {
 
     /// 精度の高いモデルから順に試し、上限に達したモデルはしばらく飛ばす。
     @MainActor
-    static func transcribe(_ url: URL, provider: Provider, apiKey: String, keywords: [String]) async throws -> Transcript {
+    static func transcribe(_ url: URL, provider: Provider, apiKey: String, keywords: [String],
+                           previous: String? = nil) async throws -> Transcript {
         for model in provider.models where (limitedUntil[model] ?? .distantPast) < .now {
             do {
-                let lines = try await send(url, provider: provider, model: model, apiKey: apiKey, keywords: keywords)
+                let lines = try await send(url, provider: provider, model: model, apiKey: apiKey,
+                                           keywords: keywords, previous: previous)
                 return Transcript(model: model, lines: lines)
             } catch let limit as RateLimited {
                 limitedUntil[model] = .now.addingTimeInterval(limit.retryAfter)
@@ -98,8 +102,25 @@ enum CloudTranscriber {
         throw Failure.limited("無料枠の上限に達しました")
     }
 
+    /// ライブ文字起こし用。数秒の音を、速い large-v3-turbo（Groq）で文字にする。
+    @MainActor
+    static func quick(_ url: URL, apiKey: String, keywords: [String], previous: String?) async throws -> [Line] {
+        let model = "whisper-large-v3-turbo"
+        if let until = limitedUntil[model], until > .now {
+            throw Failure.limited("無料枠の上限のため、\(until.formatted(date: .omitted, time: .shortened)) まで待っています")
+        }
+        do {
+            return try await send(url, provider: .groq, model: model, apiKey: apiKey, keywords: keywords, previous: previous)
+        } catch let limit as RateLimited {
+            // 1分あたりの回数の上限なら数秒で戻る
+            limitedUntil[model] = .now.addingTimeInterval(min(limit.retryAfter, 3600))
+            throw Failure.limited("無料枠が混んでいます")
+        }
+    }
+
+    /// previous は直前の区切りの終わりの文。区切りの頭が話の途中から始まっても、つながりが分かる。
     private static func send(_ url: URL, provider: Provider, model: String, apiKey: String,
-                             keywords: [String]) async throws -> [Line] {
+                             keywords: [String], previous: String?) async throws -> [Line] {
         let boundary = "LifeLog-\(UUID().uuidString)"
         var body = Data()
         func field(_ name: String, _ value: String) {
@@ -112,13 +133,16 @@ enum CloudTranscriber {
             field("response_format", "verbose_json")
             field("temperature", "0")
             // Whisper のプロンプトは「直前の書き起こし」として読まれるので、指示ではなく
-            // 句読点つきの文と、出てくる言葉を並べて表記を寄せる（224 トークンまで）
+            // 句読点つきの文と、出てくる言葉を並べて表記を寄せる（224 トークンまで）。
+            // 直前の区切りの終わりがあれば、いちばん後ろ（すぐ前の発言の位置）に置く。
             let words = keywords.prefix(30).joined(separator: "、")
-            field("prompt", "こんにちは。今日もよろしくお願いします。" + (words.isEmpty ? "" : words + "。"))
+            var text = String((words.isEmpty ? "" : words + "。").prefix(100))
+            text += previous.map { String($0.suffix(100)) } ?? "こんにちは。今日もよろしくお願いします。"
+            field("prompt", text)
         case .openai:
             field("model", model)
             field("languages[]", "ja")
-            field("prompt", prompt)
+            field("prompt", prompt + (previous.map { "直前の会話：" + $0.suffix(200) } ?? ""))
             for word in keywords {
                 field("keywords[]", word)
             }
@@ -161,24 +185,42 @@ enum CloudTranscriber {
         }
 
         if let segments = json?["segments"] as? [[String: Any]] {
-            return segments.compactMap { segment in
+            let lines = segments.compactMap { segment -> Line? in
                 guard let text = (segment["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !text.isEmpty, !isHallucination(segment, text: text) else { return nil }
-                return Line(offset: segment["start"] as? Double, text: text)
+                return Line(offset: segment["start"] as? Double, text: text, score: segment["avg_logprob"] as? Double)
             }
+            return dropRepeats(lines)
         }
         // 時刻が無いときは文ごとに区切り、チャンクの先頭の時刻だけを付ける
-        return sentences(in: text).enumerated().map { i, s in Line(offset: i == 0 ? 0 : nil, text: s) }
+        let lines = sentences(in: text).filter { !isFiller($0) }
+        return dropRepeats(lines.enumerated().map { i, s in Line(offset: i == 0 ? 0 : nil, text: s) })
     }
 
-    /// Whisper は無音や雑音に、動画の締めの決まり文句などを書いてしまうことがある。
+    /// Whisper は無音や雑音（ゲームや BGM など）に、動画の締めの決まり文句などを書いてしまうことがある。
     private static func isHallucination(_ segment: [String: Any], text: String) -> Bool {
-        if let noSpeech = segment["no_speech_prob"] as? Double, noSpeech > 0.6,
-           let logprob = segment["avg_logprob"] as? Double, logprob < -1 {
-            return true
-        }
-        let phrases = ["ご視聴ありがとうございました", "チャンネル登録", "最後までご視聴", "字幕視聴ありがとう"]
-        return phrases.contains { text.contains($0) } && text.count < 30
+        let noSpeech = segment["no_speech_prob"] as? Double ?? 0
+        let logprob = segment["avg_logprob"] as? Double ?? 0
+        let compression = segment["compression_ratio"] as? Double ?? 0
+        if noSpeech > 0.6 && logprob < -1 { return true }
+        if noSpeech > 0.4 && logprob < -0.6 { return true }
+        // 同じ言葉の繰り返しばかりの区間
+        if compression > 2.4 { return true }
+        return isFiller(text)
+    }
+
+    /// 声が無いところに Whisper が書きがちな決まり文句か。短い文で、これらを含むものは捨てる。
+    static func isFiller(_ text: String) -> Bool {
+        let phrases = ["ご清聴ありがとう", "ご視聴ありがとう", "チャンネル登録", "高評価", "最後までご視聴", "最後までご覧",
+                       "字幕視聴", "字幕は", "おやすみなさい。また", "次回もお楽しみに", "提供は"]
+        return text.count < 40 && phrases.contains { text.contains($0) }
+    }
+
+    /// 1つの区切りで同じ文（8文字以上）が3回以上出てきたら、雑音への書き込みとみなして捨てる。
+    private static func dropRepeats(_ lines: [Line]) -> [Line] {
+        var counts: [String: Int] = [:]
+        for line in lines where line.text.count >= 8 { counts[line.text, default: 0] += 1 }
+        return lines.filter { (counts[$0.text] ?? 0) < 3 }
     }
 
     /// 「。」「？」「！」で区切って1文ずつにする。

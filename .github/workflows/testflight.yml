@@ -28,6 +28,34 @@ jobs:
         if: env.HAS_GOOGLE != 'true'
         run: echo "::warning::GOOGLE_CLIENT_ID / GOOGLE_REVERSED_CLIENT_ID が Secrets にありません"
 
+      # 日本語の音声認識 Haas-ja-v1.0 の Core ML 版（Apache-2.0、非公式の変換）。版を固定して取ってくる。
+      # モデル本体（約620MB）はアプリが初回にダウンロードする。
+      - name: Haas-ja の Swift 部品を取ってくる
+        run: |
+          set -e
+          rev=62f542657b454afa7873424e3dfb6d7a1d9c270d
+          base=https://huggingface.co/Sanami/haas-ja-coreml/resolve/$rev
+          mkdir -p Vendor/HaasCore/Sources/HaasCore LifeLog/Haas
+          for f in Audio Frontend HaasASR Tokenizer; do
+            curl -fsSL "$base/swift/Sources/HaasCore/$f.swift" -o "Vendor/HaasCore/Sources/HaasCore/$f.swift"
+          done
+          curl -fsSL "$base/LICENSE" -o Vendor/HaasCore/LICENSE
+          curl -fsSL "$base/NOTICE" -o Vendor/HaasCore/NOTICE
+          curl -fsSL "$base/swift/Resources/frontend.bin" -o LifeLog/Haas/frontend.bin
+          curl -fsSL "$base/swift/Resources/vocab.json" -o LifeLog/Haas/vocab.json
+          # 確かめ用のコマンドラインツールは使わないので、ライブラリだけの Package.swift にする
+          cat > Vendor/HaasCore/Package.swift <<'SWIFT'
+          // swift-tools-version:5.9
+          import PackageDescription
+
+          let package = Package(
+              name: "HaasCoreML",
+              platforms: [.macOS(.v14), .iOS(.v17)],
+              products: [.library(name: "HaasCore", targets: ["HaasCore"])],
+              targets: [.target(name: "HaasCore", path: "Sources/HaasCore")]
+          )
+          SWIFT
+
       - name: プロジェクトを生成
         run: |
           brew install xcodegen
@@ -55,18 +83,37 @@ jobs:
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
             GOOGLE_REVERSED_CLIENT_ID="$GOOGLE_REVERSED_CLIENT_ID" \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/build.log"
+          status=${PIPESTATUS[0]}
+          # コンパイルのエラーは、ログを開かなくても見えるよう注記にも出す
+          if [ "$status" -ne 0 ]; then
+            grep -E "error:" "$RUNNER_TEMP/build.log" | sort -u | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
+          fi
+          exit $status
 
       - name: 署名なしの IPA を作る
         run: |
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -R "$RUNNER_TEMP/LifeLog.xcarchive/Products/Applications/LifeLog.app" "$RUNNER_TEMP/ipa/Payload/"
+          for f in frontend.bin vocab.json; do
+            if [ -f "$RUNNER_TEMP/ipa/Payload/LifeLog.app/$f" ]; then echo "::notice::Haas-ja の部品 $f がアプリに入っています"
+            else echo "::error::Haas-ja の部品 $f がアプリに入っていません"; exit 1; fi
+          done
+          # ロック画面・時計の文字盤のボタン（拡張機能）が入っているか
+          find "$RUNNER_TEMP/ipa/Payload" -name "*.appex" -type d | while IFS= read -r ext; do echo "::notice::拡張機能 ${ext#$RUNNER_TEMP/ipa/Payload/}"; done
           (cd "$RUNNER_TEMP/ipa" && zip -qry LifeLog-unsigned.ipa Payload)
+          # 拡張機能を抜いた版も作る（Sideloadly が拡張機能を署名できなかったときの予備）
+          mkdir -p "$RUNNER_TEMP/ipa-lite"
+          cp -R "$RUNNER_TEMP/ipa/Payload" "$RUNNER_TEMP/ipa-lite/"
+          rm -rf "$RUNNER_TEMP/ipa-lite/Payload/LifeLog.app/PlugIns" "$RUNNER_TEMP/ipa-lite/Payload/LifeLog.app/Watch/LifeLogWatch.app/PlugIns"
+          (cd "$RUNNER_TEMP/ipa-lite" && zip -qry "$RUNNER_TEMP/ipa/LifeLog-unsigned-no-widgets.ipa" Payload)
 
       - uses: actions/upload-artifact@v4
         with:
           name: LifeLog-unsigned-ipa
-          path: ${{ runner.temp }}/ipa/LifeLog-unsigned.ipa
+          path: |
+            ${{ runner.temp }}/ipa/LifeLog-unsigned.ipa
+            ${{ runner.temp }}/ipa/LifeLog-unsigned-no-widgets.ipa
           retention-days: 30
 
       - name: Watch アプリの場所を調べる

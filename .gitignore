@@ -2,3 +2,7 @@ LifeLog.xcodeproj/
 LifeLog/Info.plist
 .DS_Store
 build/
+Vendor/
+LifeLog/Haas/
+LifeLogWidgets/Info.plist
+LifeLogWatchWidgets/Info.plist
