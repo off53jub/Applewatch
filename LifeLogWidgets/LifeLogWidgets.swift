@@ -1,15 +1,65 @@
+import ActivityKit
 import AppIntents
 import SwiftUI
 import WidgetKit
 
-/// コントロールセンター・ロック画面・アクションボタンに置ける LifeLog のボタン。
-/// アプリとデータを共有する仕組み（App Group）は Sideloadly で入れられないので、状態は出さず、押すと LifeLog を開いて動かす。
+/// コントロールセンター・ロック画面・アクションボタンに置ける LifeLog のボタンと、録音中の Live Activity。
+/// アプリとデータを共有する仕組み（App Group）は Sideloadly で入れられないので、ボタンには状態を出さない。
 @main
 struct LifeLogWidgets: WidgetBundle {
     var body: some Widget {
         RecordControl()
         MarkControl()
         LauncherWidget()
+        RecordingLiveActivity()
+    }
+}
+
+/// アプリを開かずに録音を始めたときの表示（ロック画面と Dynamic Island）。目立たないよう小さくする。
+struct RecordingLiveActivity: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: RecordingActivityAttributes.self) { context in
+            HStack(spacing: 12) {
+                Image(systemName: "waveform")
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("LifeLog 録音中").font(.subheadline.bold())
+                    Text(context.state.started, style: .timer)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(intent: ToggleRecordingIntent()) {
+                    Label("止める", systemImage: "stop.fill")
+                }
+                .tint(.red)
+            }
+            .padding()
+            .activityBackgroundTint(nil)
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    Label("録音中", systemImage: "waveform").foregroundStyle(.red)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    Text(context.state.started, style: .timer)
+                        .monospacedDigit()
+                        .frame(maxWidth: 80, alignment: .trailing)
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    Button(intent: ToggleRecordingIntent()) {
+                        Label("録音を止める", systemImage: "stop.fill")
+                    }
+                    .tint(.red)
+                }
+            } compactLeading: {
+                Image(systemName: "waveform").foregroundStyle(.red)
+            } compactTrailing: {
+                EmptyView()
+            } minimal: {
+                Image(systemName: "waveform").foregroundStyle(.red)
+            }
+        }
     }
 }
 
@@ -21,7 +71,7 @@ struct RecordControl: ControlWidget {
             }
         }
         .displayName("録音を始める・止める")
-        .description("LifeLog を開いて、iPhone の録音を始めるか止めます。")
+        .description("LifeLog を開かずに、iPhone の録音を始めるか止めます。")
     }
 }
 

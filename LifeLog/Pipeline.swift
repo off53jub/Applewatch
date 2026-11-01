@@ -117,6 +117,8 @@ final class Pipeline {
     private(set) var liveOn = false
     /// ライブのために録音を始めたか（ライブを切ったら録音も止める）
     @ObservationIgnored private var liveStartedRecording = false
+    /// アクションボタンなどから（Live Activity を出して）始めた録音の、始めた時刻
+    @ObservationIgnored private var buttonRecordingStarted: Date?
     @ObservationIgnored private var liveAutoOff: Task<Void, Never>?
     private let docs: GoogleDocs
     private let conversations: ConversationLog
@@ -166,6 +168,8 @@ final class Pipeline {
         recorder.onStop = { [weak self] reason in
             self?.endLive()
             self?.isRecording = false
+            self?.buttonRecordingStarted = nil
+            RecordingActivity.end()
             self?.message = reason
             self?.standby.resume()
             if self?.stopAlertsOn == true, UIApplication.shared.applicationState != .active {
@@ -480,31 +484,43 @@ final class Pipeline {
         email = nil
     }
 
-    func toggleRecording() async {
+    /// fromButton: アクションボタン・コントロールセンター・ショートカットなど、アプリを開かずに押されたとき。
+    /// そのときは iOS の決まりで、録音を始める前に Live Activity を出す（出さないと録音が止められる）。
+    func toggleRecording(fromButton: Bool = false) async {
         if isRecording {
             endLive()
             recorder.stop()
             isRecording = false
+            buttonRecordingStarted = nil
+            RecordingActivity.end()
             standby.resume()
             return
         }
+        let started = Date.now
+        if fromButton { RecordingActivity.start(started: started) }
         do {
             message = "日本語モデルを確認中…"
             try await Transcriber.prepare()
             standby.suspend()
             try recorder.start()
             isRecording = true
+            if fromButton { buttonRecordingStarted = started }
             message = ""
         } catch {
+            RecordingActivity.end()
             standby.resume()
             message = "録音を始められませんでした: \(error.localizedDescription)"
+            if fromButton, stopAlertsOn {
+                Self.notify(id: "phone-stopped", title: "iPhone の録音を始められませんでした",
+                            body: error.localizedDescription + " LifeLog を開いて始めてください。")
+            }
         }
     }
 
     /// ロック画面・コントロールセンター・アクションボタンからの操作
     func handle(_ action: LifeLogAction) async {
         switch action {
-        case .toggleRecording: await toggleRecording()
+        case .toggleRecording: await toggleRecording(fromButton: true)
         case .mark: addMark()
         }
     }
@@ -554,6 +570,13 @@ final class Pipeline {
     func appBecameActive() {
         liveAutoOff?.cancel()
         liveAutoOff = nil
+        // ボタンで始めた録音の Live Activity は、古ければ出し直す（8時間で iOS に終わらせられるため）。
+        // 録音していないのに残っている表示は消す。
+        if isRecording, let started = buttonRecordingStarted {
+            RecordingActivity.renewIfNeeded(started: started)
+        } else if !isRecording {
+            RecordingActivity.end()
+        }
     }
 
     /// 溜まっている音声を古い順に処理する。

@@ -50,6 +50,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UIBackgroundModes: [audio, fetch, processing]
+        # アクションボタンなどで、アプリを開かずに録音を始めたときの表示
+        NSSupportsLiveActivities: true
         BGTaskSchedulerPermittedIdentifiers:
           - com.off53jub.lifelog.process
           - com.off53jub.lifelog.refresh
