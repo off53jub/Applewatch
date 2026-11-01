@@ -677,6 +677,9 @@ final class Pipeline {
     func handle(_ action: LifeLogAction) async {
         switch action {
         case .toggleRecording: await toggleRecording(fromButton: true)
+        case .startRecording: if !isRecording { await toggleRecording(fromButton: true) }
+        case .stopRecording: if isRecording { await toggleRecording(fromButton: true) }
+        case .startRecordingInApp: if !isRecording { await toggleRecording() }
         case .mark: addMark()
         }
     }

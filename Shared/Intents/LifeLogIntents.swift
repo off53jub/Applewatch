@@ -8,6 +8,12 @@ import AppIntents
 /// このファイルはアプリとウィジェット（コントロール・Live Activity）の両方に入れる。動くのはアプリの中。
 enum LifeLogAction: Sendable {
     case toggleRecording
+    /// 録音していなければ始める（すでに録音中なら何もしない。ショートカットの自動化用）
+    case startRecording
+    /// 録音していれば止める（録音していなければ何もしない）
+    case stopRecording
+    /// アプリを開いて、録音していなければ始める（Live Activity が出せない iPad 用）
+    case startRecordingInApp
     case mark
 }
 
@@ -46,6 +52,45 @@ struct ToggleRecordingIntent: AudioRecordingIntent, LiveActivityIntent {
     @MainActor
     func perform() async throws -> some IntentResult {
         await LifeLogActions.run(.toggleRecording)
+        return .result()
+    }
+}
+
+/// 録音を始める。ショートカットの自動化（家に着いたとき・家を出たとき）に使う。すでに録音中なら何もしない。
+struct StartRecordingIntent: AudioRecordingIntent, LiveActivityIntent {
+    static let title: LocalizedStringResource = "録音を始める（録音中なら何もしない）"
+    static let description: IntentDescription? = IntentDescription("LifeLog を開かずに録音を始めます。すでに録音中なら何もしません。ショートカットの自動化に使います。")
+    static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        await LifeLogActions.run(.startRecording)
+        return .result()
+    }
+}
+
+/// 録音を止める。録音中でなければ何もしない。
+struct StopRecordingIntent: AppIntent {
+    static let title: LocalizedStringResource = "録音を止める（録音中でなければ何もしない）"
+    static let description: IntentDescription? = IntentDescription("LifeLog を開かずに録音を止めます。録音中でなければ何もしません。ショートカットの自動化に使います。")
+    static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        await LifeLogActions.run(.stopRecording)
+        return .result()
+    }
+}
+
+/// LifeLog を開いて録音を始める。Live Activity が出せない iPad で、上の「録音を始める」が動かないときに使う。
+struct StartRecordingInAppIntent: AppIntent {
+    static let title: LocalizedStringResource = "LifeLog を開いて録音を始める"
+    static let description: IntentDescription? = IntentDescription("LifeLog を開いて録音を始めます。すでに録音中なら何もしません。")
+    static let openAppWhenRun = true
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        await LifeLogActions.run(.startRecordingInApp)
         return .result()
     }
 }

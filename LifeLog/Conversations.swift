@@ -243,7 +243,8 @@ final class ConversationLog {
         let heading = Self.headingText(result)
         let body = result.points.map { "・" + $0 + "\n" }.joined()
         do {
-            try await docs.insert(heading: heading, body: body, at: conversation.docIndex, style: "HEADING_2", day: day)
+            try await docs.insert(heading: heading, body: body, at: conversation.docIndex,
+                                  before: conversation.lines.first.map(Self.docLine), style: "HEADING_2", day: day)
             return result
         } catch {
             return nil

@@ -51,10 +51,17 @@ final class GoogleDocs {
     }
 
     /// 段落の頭（index）に、見出し1行と本文を差し込む。index は UTF-16 で数えた位置。
-    func insert(heading: String, body: String, at index: Int, style: String, day: String) async throws {
+    /// before は、見出しの次に来る行（会話の最初の行）の文字。ほかの端末が同じドキュメントに書いたり、行を消したりして
+    /// 位置がずれていても、その行を探して頭に差し込む。見つからなければ index の位置。
+    func insert(heading: String, body: String, at index: Int, before anchor: String? = nil,
+                style: String, day: String) async throws {
         let docId = try await documentId(for: day)
-        // 手で編集されて短くなっていても、ドキュメントの外には書かない
-        let at = min(index, try await endIndex(day: day))
+        var at = min(index, try await endIndex(day: day))
+        if let anchor, !anchor.isEmpty {
+            let found = try await paragraphs(docId: docId).filter { $0.text == anchor }
+            // 同じ文字の段落が複数あれば、記憶している位置にいちばん近いもの
+            if let best = found.min(by: { abs($0.start - index) < abs($1.start - index) }) { at = best.start }
+        }
         let headingLength = (heading + "\n").utf16.count
         var requests: [[String: Any]] = [
             ["insertText": ["location": ["index": at], "text": heading + "\n" + body]],
