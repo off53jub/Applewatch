@@ -164,6 +164,45 @@ enum Summarizer {
         return Array(pairs.prefix(10))
     }
 
+    /// 会話ではない声の種類（行の話した人の名前にもなる）
+    static let broadcastKinds = ["テレビ", "CM", "ドラマ・映画", "動画", "ラジオ・音楽", "放送"]
+
+    /// 会話の行のうち、本人のまわりの実際の会話ではなく、テレビ・CM・ドラマ・動画・ラジオ・放送の声だった行を見つける。
+    /// 選べるのは judge の行だけ。返すのは 行番号 → 種類（broadcastKinds のどれか）。
+    static func broadcast(_ lines: [String], judge: Set<Int>, apiKey: String) async throws -> [Int: String] {
+        guard !judge.isEmpty else { return [:] }
+        let numbered = lines.enumerated().map { "\($0.offset): \($0.element)" }.joined(separator: "\n")
+        let prompt = """
+            次は、本人が1日中身に着けているマイクで録った音声の文字起こしです。行の頭の数字は行番号、[自分] は本人、\
+            [人物N] は声で聞き分けた名前の無い人です。（背景: 音楽）などは、その行のあいだ聞こえていた音です。
+            この中から、本人のまわりの実際の会話ではない声の行を見つけてください。
+            ・テレビ番組（ニュース・バラエティなど）、CM、ドラマ・映画・アニメのセリフ、YouTube などの動画、ラジオや音楽、\
+            電車・駅・お店・施設の放送（「次は〇〇です」「ドアが閉まります」「本日はご来店」など）。
+            ・手がかり: 前後の会話とつながらない、台本やナレーションのような言い回し、商品名・値段・「今なら」、決まり文句の放送、背景の音楽や拍手・笑い。
+            ・本人と言葉を交わしている人の行は選ばないでください。迷ったら選ばないでください。
+            ・選べるのは次の行番号だけです: \(judge.sorted().map(String.init).joined(separator: ", "))
+            種類は \(broadcastKinds.map { "「\($0)」" }.joined(separator: "")) のどれかです（駅・車内・お店などのアナウンスは「放送」）。
+            次の JSON で返してください。無ければ空の配列にしてください。
+            {"lines": [{"n": 行番号, "kind": "種類"}]}
+
+            \(numbered)
+            """
+        let json: [String: Any]
+        do {
+            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+        } catch CloudTranscriber.Failure.limited {
+            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+        }
+        var result: [Int: String] = [:]
+        for item in (json["lines"] as? [[String: Any]]) ?? [] {
+            guard let n = (item["n"] as? Int) ?? (item["n"] as? Double).map({ Int($0) }) ?? (item["n"] as? String).flatMap({ Int($0) }),
+                  judge.contains(n) else { continue }
+            let kind = (item["kind"] as? String) ?? ""
+            result[n] = broadcastKinds.first { kind.contains($0) } ?? "テレビ"
+        }
+        return result
+    }
+
     /// 過ごし方の塊ごとに、その中でしたことを短い箇条書きにする。塊の数が合わなければ失敗。
     static func activityDetails(_ blocks: [(header: String, body: String)], apiKey: String) async throws -> [[String]] {
         guard !blocks.isEmpty else { return [] }

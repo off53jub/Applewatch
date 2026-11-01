@@ -24,6 +24,14 @@ final class ConversationLog {
         /// 手で文字を直した行（夜の聞き直しでも変えない）
         var checked: Bool? = nil
 
+        /// 会話ではなく、テレビ・CM・ドラマ・動画・ラジオ・放送の声だった行なら、その種類（話した人の名前にもなる）
+        var media: String? = nil
+        /// 放送の行と見分ける前の、話した人の名前と番号（見分け違いを戻すため）
+        var heardSpeaker: String? = nil
+        var heardSpeakerID: String? = nil
+        /// その行のあいだ聞こえていた背景の音（音楽・電車・拍手・笑い・テレビ）
+        var sound: String? = nil
+
         /// 確からしさが低く、聞き直して確かめたほうがよい行
         var isUncertain: Bool { checked != true && (confidence ?? 1) < 0.45 }
     }
@@ -85,7 +93,8 @@ final class ConversationLog {
         var people: [String] {
             guard media == nil else { return [] }
             var seen: [String] = []
-            for name in lines.compactMap(\.speaker) where name != SpeakerLabeler.selfName && !seen.contains(name) {
+            for name in lines.filter({ $0.media == nil }).compactMap(\.speaker)
+            where name != SpeakerLabeler.selfName && !seen.contains(name) {
                 seen.append(name)
             }
             return seen
@@ -194,7 +203,9 @@ final class ConversationLog {
         let event = await eventInfo(conversation.start, conversation.end)
         result.event = event?.name
         result.movement = await movementName(conversation.start, conversation.end)
-        let transcript = conversation.lines.map { line in
+        // テレビ・CM・ドラマ・放送の声だった行を見分けて、[テレビ] などの名前にする（相手には数えない）
+        if let key = apiKey() { result = await tagBroadcast(result, day: day, apiKey: key) }
+        let transcript = result.lines.map { line in
             (line.speaker.map { "[\($0)] " } ?? "") + line.text
         }.joined(separator: "\n")
         guard transcript.count >= Self.minimumCharacters else { return result }
@@ -237,6 +248,53 @@ final class ConversationLog {
         } catch {
             return nil
         }
+    }
+
+    // MARK: - テレビ・放送の行
+
+    /// 会話の中の、テレビ・CM・ドラマ・動画・ラジオ・電車や駅の放送・店内放送の声だった行を見分け、
+    /// 話した人を [テレビ] [CM] などにする（元の人は heardSpeaker に残す）。自分・名前を付けた人・手で直した行は変えない。
+    private func tagBroadcast(_ c: Conversation, day: String, apiKey: String) async -> Conversation {
+        var result = c
+        func judgeable(_ line: Line) -> Bool {
+            line.media == nil && line.checked != true && line.speakerID != SpeakerLabeler.selfID
+                && (line.speaker == nil || line.speaker?.hasPrefix("人物") == true)
+        }
+        guard c.lines.contains(where: judgeable),
+              c.lines.reduce(0, { $0 + $1.text.count }) >= 20 else { return c }
+        var flagged: [Int: String] = [:]
+        // 長い会話は150行ずつ（前後のつながりも見られるよう、判定しない行もいっしょに渡す）
+        for from in stride(from: 0, to: c.lines.count, by: 150) {
+            let range = from..<min(c.lines.count, from + 150)
+            let texts = range.map { i -> String in
+                let line = c.lines[i]
+                return (line.speaker.map { "[\($0)] " } ?? "") + line.text + (line.sound.map { "（背景: \($0)）" } ?? "")
+            }
+            let judge = Set(range.filter { judgeable(c.lines[$0]) }.map { $0 - from })
+            guard !judge.isEmpty,
+                  let found = try? await Summarizer.broadcast(texts, judge: judge, apiKey: apiKey) else { continue }
+            for (i, kind) in found { flagged[from + i] = kind }
+        }
+        guard !flagged.isEmpty else { return c }
+        var fixes: [(find: String, replace: String)] = []
+        for (i, kind) in flagged {
+            let line = result.lines[i]
+            result.lines[i].media = kind
+            result.lines[i].heardSpeaker = line.speaker
+            result.lines[i].heardSpeakerID = line.speakerID
+            result.lines[i].speaker = kind
+            result.lines[i].speakerID = nil
+            fixes.append((find: Self.docLine(line), replace: Self.docLine(result.lines[i])))
+        }
+        try? await docs.replaceAll(fixes, day: day)
+        // 放送の声としか出てこなかった名前の無い声は、覚えている声から忘れる
+        var forget = Set<String>()
+        for id in Set(c.lines.compactMap(\.speakerID)) where id != SpeakerLabeler.selfID {
+            let lines = c.lines.indices.filter { c.lines[$0].speakerID == id }
+            if lines.allSatisfy({ flagged[$0] != nil }) { forget.insert(id) }
+        }
+        if !forget.isEmpty { await forgetVoices(forget) }
+        return result
     }
 
     // MARK: - 書き方をそろえる
@@ -578,6 +636,7 @@ final class ConversationLog {
                     guard match(line), line.speakerID != id || line.speaker != name else { continue }
                     log.conversations[c].lines[l].speaker = name
                     log.conversations[c].lines[l].speakerID = id
+                    log.conversations[c].lines[l].media = nil
                     if line.speaker != name {
                         fixes.append((find: Self.docLine(line), replace: Self.docLine(log.conversations[c].lines[l])))
                     }

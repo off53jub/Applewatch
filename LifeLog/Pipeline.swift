@@ -1578,6 +1578,9 @@ final class Pipeline {
         let ends = entries.indices.map { i in i + 1 < offsets.count ? offsets[i + 1] : max(duration, offsets[i]) }
         let spans = entries.indices.map { (start: offsets[$0], end: ends[$0]) }
         let levels = await Task.detached(priority: .utility) { OfficeFilter.levels(url, spans: spans) }.value
+        // 背景の音（音楽・電車・拍手や笑い）。放送やテレビの行を見分ける手がかりにする
+        var scene: [SoundScene.Window] = []
+        if !Power.isSaving { scene = await Task.detached(priority: .utility) { SoundScene.windows(in: url) }.value }
         let namedIDs = Set(people.filter(\.isNamed).map(\.id))
         let items = entries.indices.map { i in
             OfficeFilter.Item(time: start.addingTimeInterval(offsets[i]), text: entries[i].text,
@@ -1588,10 +1591,11 @@ final class Pipeline {
         var removed: [Junk.TrashItem] = []
         let lines = entries.indices.compactMap { i -> Merger.Heard? in
             let end = ends[i]
-            let line = ConversationLog.Line(time: start.addingTimeInterval(offsets[i]), speaker: names[i]?.name,
+            var line = ConversationLog.Line(time: start.addingTimeInterval(offsets[i]), speaker: names[i]?.name,
                                             text: entries[i].text, audio: url.lastPathComponent,
                                             offset: offsets[i], original: originals[i], speakerID: names[i]?.personID,
                                             confidence: confidence[i].map { ($0 * 100).rounded() / 100 })
+            line.sound = SoundScene.label(from: offsets[i], to: end, in: scene)
             guard keep[i] else {
                 removed.append(Junk.TrashItem(day: dayFormatter.string(from: line.time), line: line,
                                               kind: asleep ? .asleep : .background, removed: .now))
