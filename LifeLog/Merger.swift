@@ -57,17 +57,24 @@ final class Merger {
     }
 
     /// frontier より前の枠を、良いほうを選んで outbox に移す。
-    func release(before frontier: Date) {
+    /// 遅れて届いたので使わなかった時計の枠を、その音声の名前で返す（1枠につき1つ）。
+    @discardableResult
+    func release(before frontier: Date) -> [String] {
         let limit = Self.index(frontier)
         let ready = state.held.filter { Self.index($0.line.time) < limit }
-        guard !ready.isEmpty else { return }
+        guard !ready.isEmpty else { return [] }
         state.held.removeAll { Self.index($0.line.time) < limit }
 
         var out: [ConversationLog.Line] = []
+        var late: [String] = []
         let windows = Dictionary(grouping: ready) { Self.index($0.line.time) }
         for w in windows.keys.sorted() {
+            guard let items = windows[w] else { continue }
             // 先に書いた枠に、もう片方が遅れて届いたら捨てる（もう書いてあるので）
-            guard !isWritten(w), let items = windows[w] else { continue }
+            guard !isWritten(w) else {
+                late += Set(items.filter(\.fromWatch).compactMap(\.line.audio))
+                continue
+            }
             let phone = items.filter { !$0.fromWatch }
             let watch = items.filter { $0.fromWatch }
             let pick = phone.isEmpty || watch.isEmpty ? (phone.isEmpty ? watch : phone) : choose(items)
@@ -91,6 +98,7 @@ final class Merger {
         let old = Self.index(.now.addingTimeInterval(-2 * 24 * 3600))
         state.written.removeAll { $0[1] < old }
         save()
+        return late
     }
 
     /// 同じ枠の iPhone と時計の行から、発言ごとに良いほうを選ぶ（時刻順に返す）。

@@ -59,6 +59,13 @@ private struct TodayView: View {
                             .foregroundStyle(.orange)
                     }
                     LabeledContent("時計", value: pipeline.watchStatus)
+                    if let last = pipeline.watchDelays.entries.last {
+                        NavigationLink {
+                            WatchDelayView()
+                        } label: {
+                            LabeledContent("時計の遅れ", value: "直近 " + WatchDelayLog.text(last.arrival))
+                        }
+                    }
                     LabeledContent("文字起こし待ち", value: "\(pipeline.pendingCount) 件")
                     if !pipeline.lastEngine.isEmpty {
                         LabeledContent("直近の文字起こし", value: pipeline.lastEngine)

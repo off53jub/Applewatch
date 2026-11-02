@@ -67,7 +67,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
 
     private func publish() {
         guard WCSession.default.activationState == .activated else { return }
-        var context: [String: Any] = ["recording": isRecording, "at": Date.now.timeIntervalSince1970]
+        var context: [String: Any] = ["recording": isRecording, "at": Date.now.timeIntervalSince1970,
+                                      "lowPower": ProcessInfo.processInfo.isLowPowerModeEnabled]
         if let since = restingSince { context["resting"] = since.timeIntervalSince1970 }
         try? WCSession.default.updateApplicationContext(context)
     }

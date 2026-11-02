@@ -155,6 +155,10 @@ final class Pipeline {
     @ObservationIgnored private(set) var sync: DeviceSync!
     /// 「こんなのあったけど、どう？」の候補
     let suggestions = SuggestionBox()
+    /// 時計の区切りが届くまでの遅れ
+    let watchDelays = WatchDelayLog()
+    /// 時計が低電力モードか（時計が知らせてくる。まだ知らなければ nil）
+    private(set) var watchLowPower: Bool?
     /// ほかの端末から記録が届くたびに増える（画面を出し直すため）
     private(set) var recordsVersion = 0
     private let receiver = PhoneReceiver()
@@ -239,6 +243,12 @@ final class Pipeline {
             self?.processQueue()
         }
         receiver.onStateChange = { [weak self] in self?.watchStatus = $0 }
+        receiver.onArrival = { [weak self] url, time in
+            guard let self, let start = Storage.startDate(of: url) else { return }
+            watchDelays.received(url.lastPathComponent, ended: start.addingTimeInterval(Self.duration(of: url)),
+                                 at: time, lowPower: watchLowPower)
+        }
+        receiver.onWatchLowPower = { [weak self] in self?.watchLowPower = $0 }
         receiver.onWatchRecording = { [weak self] recording, at in
             guard let self else { return }
             // 時計は区切るたびに知らせてくる。しばらく知らせが無ければ通知する
@@ -944,6 +954,7 @@ final class Pipeline {
                 merger.add(try await transcribe(url))
                 if Storage.isFromWatch(url), let start = Storage.startDate(of: url) {
                     lastWatchEnd = max(lastWatchEnd, start.addingTimeInterval(Self.duration(of: url)))
+                    watchDelays.processed(url.lastPathComponent)
                 }
                 // 文字起こしした音声は、アプリで聞き直せるよう1日だけ残す
                 Storage.keep(url)
@@ -959,7 +970,7 @@ final class Pipeline {
         if Task.isCancelled { return false }
         // 両方の区切りがそろった時間帯まで、良いほうを選んで書く
         let settled = settledUntil()
-        merger.release(before: settled)
+        watchDelays.dropped(merger.release(before: settled))
         guard await writeMerged() else { return false }
         // いま書いた行に、決まり文句や連打があれば消す
         await autoClean()

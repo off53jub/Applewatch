@@ -4,6 +4,10 @@ import WatchConnectivity
 /// Apple Watch から届いた録音の区切りを、iPhone の文字起こし待ちフォルダに移す。
 final class PhoneReceiver: NSObject, WCSessionDelegate {
     var onFile: (@MainActor () -> Void)?
+    /// 区切りを受け取った（移した先と、受け取った時刻）
+    var onArrival: (@MainActor (URL, Date) -> Void)?
+    /// 時計が低電力モードか
+    var onWatchLowPower: (@MainActor (Bool) -> Void)?
     var onStateChange: (@MainActor (String) -> Void)?
     /// 時計が録音中かどうか（時計のアプリが知らせてくる）
     /// 時計が録音中か（at は時計が知らせた時刻）
@@ -58,7 +62,9 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         guard let recording = context["recording"] as? Bool else { return }
         let at = (context["at"] as? Double).map { Date(timeIntervalSince1970: $0) }
         let resting = (context["resting"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        let lowPower = context["lowPower"] as? Bool
         Task { @MainActor in
+            if let lowPower { self.onWatchLowPower?(lowPower) }
             self.onWatchResting?(recording ? resting : nil)
             self.onWatchRecording?(recording, at)
         }
@@ -72,10 +78,14 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
         // この関数を抜けると一時ファイルが消えるので、その場で移す。
         // iPhone で録った区切りと見分けられるよう、名前に「-w」を付ける。
+        let received = Date.now
         let name = Storage.watchChunkName(from: file.fileURL.lastPathComponent)
         let dest = Storage.pendingDir.appendingPathComponent(name)
         try? FileManager.default.removeItem(at: dest)
         do { try FileManager.default.moveItem(at: file.fileURL, to: dest) } catch { return }
-        Task { @MainActor in self.onFile?() }
+        Task { @MainActor in
+            self.onArrival?(dest, received)
+            self.onFile?()
+        }
     }
 }
