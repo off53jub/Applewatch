@@ -96,6 +96,13 @@ final class ConversationLog {
         var titleSkipped: Bool?
         /// 手で文字を直したので、見出しと要点を作り直す
         var resummarize: Bool?
+        /// 会話のあいだの心拍（平均と最大。ヘルスケアが使えるときだけ）
+        var heartRate: Int?
+        var heartRateMax: Int?
+        /// ふだんより心拍がはっきり上がっていた（緊張・興奮していたかもしれない）
+        var tense: Bool?
+        /// 議事録を作ったドキュメントの名前
+        var minutes: String?
 
         /// 話した相手。テレビや動画の声は相手に数えない。
         var people: [String] {

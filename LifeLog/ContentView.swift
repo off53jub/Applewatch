@@ -285,6 +285,11 @@ private struct PeoplePlacesView: View {
                         } label: {
                             LabeledContent("自分の声", value: pipeline.hasSelfVoice ? "登録済み" : "未登録")
                         }
+                        NavigationLink {
+                            SpeakingView()
+                        } label: {
+                            Label("話し方の振り返り", systemImage: "person.wave.2")
+                        }
                     } else {
                         Toggle("話している人を聞き分ける", isOn: Binding(
                             get: { pipeline.speakerLabelsOn },

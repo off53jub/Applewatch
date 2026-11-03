@@ -279,6 +279,19 @@ enum Summarizer {
                     todos: list("todos"), topics: list("topics"))
     }
 
+    /// 話し方の数字から、ひとことの振り返り（良かったところ・気をつけるとよいところ・次に試すこと）を作る。会話の中身は渡さない。
+    static func speaking(_ numbers: String, apiKey: String) async throws -> [String] {
+        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+            次は、ある人の会話での話し方を、記録から数えた数字です（話す割合・1分あたりの文字数・千字あたりの口ぐせ・会話1つあたりの質問）。
+            数字だけを根拠に、本人への短い振り返りを3つ返してください。1つ目は良かったところ、2つ目は気をつけるとよいところ、3つ目は次の会話で試すこと。
+            それぞれ40文字くらい。数字に無いことは書かないでください。決めつけず、相手や場面による違いがあればそれに触れてください。
+            {"items": ["...", "...", "..."]}
+
+            \(numbers)
+            """)
+        return (json["items"] as? [String]) ?? []
+    }
+
     /// 聞き間違いと思われる言葉1つ
     struct Misheard {
         /// その言葉がある行の時刻（HH:MM:SS）

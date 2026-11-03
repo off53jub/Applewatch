@@ -66,6 +66,9 @@ extension Pipeline {
                 guard let c = last[name] else { continue }
                 var text = "\(name)：前回 \(Self.briefDate.string(from: c.start))"
                 if let title = c.title, !title.isEmpty { text += "「\(title)」" }
+                if let stats = SpeakStats.of(c), stats.selfLines > 0, let share = stats.share {
+                    text += "（あなたが話した割合 \(Int((share * 100).rounded()))%）"
+                }
                 for point in c.points.prefix(3) { text += "\n・" + point }
                 parts.append(text)
             }

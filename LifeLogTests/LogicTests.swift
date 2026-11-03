@@ -167,6 +167,25 @@ final class LogicTests: XCTestCase {
         XCTAssertTrue(box.kept.contains("会義テスト"))
     }
 
+    // MARK: - 話し方
+
+    func testSpeakStats() {
+        let t = Date(timeIntervalSince1970: 915_190_000)
+        var c = conversation(t, title: "x", rev: 1)
+        c.lines = [
+            .init(time: t, speaker: "自分", text: "えっと、明日の件ですか？", speakerID: "me"),
+            .init(time: t.addingTimeInterval(4), speaker: "田中", text: "そうです。資料は木曜までにお願いします", speakerID: "1"),
+            .init(time: t.addingTimeInterval(10), speaker: "自分", text: "わかりました", speakerID: "me"),
+        ]
+        guard let s = SpeakStats.of(c) else { return XCTFail() }
+        XCTAssertEqual(s.selfLines, 2)
+        XCTAssertEqual(s.questions, 1)
+        XCTAssertEqual(s.fillers, 1)
+        XCTAssertEqual(s.selfChars, "えっと、明日の件ですか？".count + "わかりました".count)
+        XCTAssertTrue(SpeakStats.isQuestion("それでいいかな"))
+        XCTAssertFalse(SpeakStats.isQuestion("それでいいです"))
+    }
+
     // MARK: - 端末内の言語モデル
 
     func testLocalModelParsesJSONInsideText() {
