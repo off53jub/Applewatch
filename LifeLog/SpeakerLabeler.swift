@@ -371,8 +371,11 @@ actor SpeakerLabeler {
 
     /// 1人に混ざっていた2人を分ける。id の覚えている声のうち、moved の声のほうが keep の声より近いもの（近さ0.3未満）を外し、
     /// moved の声を target の声として覚える（手直しと同じく、自動では消さない声。10個まで）。外した声の数を返す。
-    func split(_ id: String, keep: [[Float]], moved: [[Float]], to target: String) -> Int {
-        guard let i = index(of: id), let t = index(of: target), id != target else { return 0 }
+    /// target が nil（テレビなどの声だった）なら、外すだけで、だれの声にもしない。
+    func split(_ id: String, keep: [[Float]], moved: [[Float]], to target: String?) -> Int {
+        guard let i = index(of: id), id != target else { return 0 }
+        let t = target.flatMap { index(of: $0) }
+        if target != nil && t == nil { return 0 }
         func nearest(_ v: [Float], _ list: [[Float]]) -> Float {
             list.filter { $0.count == v.count }.map { 1 - zip($0, v).reduce(0) { $0 + $1.0 * $1.1 } }.min() ?? 1
         }
@@ -384,8 +387,10 @@ actor SpeakerLabeler {
         }
         let removed = before - store.people[i].voices.count
         store.people[i].updated = .now
-        for embedding in moved.prefix(10) { addVoice(embedding, pinned: true, to: t) }
-        store.people[t].updated = .now
+        if let t {
+            for embedding in moved.prefix(10) { addVoice(embedding, pinned: true, to: t) }
+            store.people[t].updated = .now
+        }
         save()
         return removed
     }

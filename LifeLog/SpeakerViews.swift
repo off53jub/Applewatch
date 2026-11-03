@@ -334,6 +334,8 @@ struct PersonView: View {
     @State private var naming = false
     /// 声のひとこまごとの、その時に話していた文
     @State private var sampleInfo: [SpeakerLabeler.Sample: Pipeline.SampleInfo] = [:]
+    @State private var askingMedia = false
+    @State private var markingMedia = false
 
     private var person: SpeakerLabeler.Person? { pipeline.people.first { $0.id == id } }
 
@@ -460,7 +462,15 @@ struct PersonView: View {
                     Section {
                         Button("ほかの人と同じ人としてまとめる") { merging = true }
                         Button("自分の声だった（自分にまとめる）") { mergingSelf = true }
+                        if !person.isNamed {
+                            Button(markingMedia ? "書き換えています…" : "テレビ・動画・ラジオの声だった") { askingMedia = true }
+                                .disabled(markingMedia)
+                        }
                         Button("この声を忘れる", role: .destructive) { deleting = true }
+                    } footer: {
+                        if !person.isNamed {
+                            Text("「テレビ・動画・ラジオの声だった」は、この声の行をすべて「テレビ」などの行に書き換えて、声を忘れます（行は消えず、これからの数にも入りません）。")
+                        }
                     }
                 }
                 Section {
@@ -558,6 +568,21 @@ struct PersonView: View {
             }
         } message: {
             Text("この声を自分の声として覚え、これまでの記録とドキュメントの名前も「\(SpeakerLabeler.selfName)」に直します。")
+        }
+        .confirmationDialog("「\(person?.displayName ?? "")」は何の声でしたか？", isPresented: $askingMedia,
+                            titleVisibility: .visible) {
+            ForEach(Pipeline.mediaKinds, id: \.self) { kind in
+                Button("\(kind)の声だった") {
+                    markingMedia = true
+                    Task {
+                        _ = await pipeline.markPersonAsMedia(id, kind: kind)
+                        markingMedia = false
+                        dismiss()
+                    }
+                }
+            }
+        } message: {
+            Text("この声の行をすべて、その種類の行（「テレビ」など）に書き換え、この声を忘れます。行は消えません。")
         }
         .confirmationDialog("この声を忘れますか？", isPresented: $deleting, titleVisibility: .visible) {
             Button("忘れる", role: .destructive) {

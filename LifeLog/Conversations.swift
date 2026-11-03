@@ -934,6 +934,34 @@ final class ConversationLog {
         return changed
     }
 
+    /// match に当たる行を、テレビ・動画・ラジオなどの放送の行（kind）にし、ドキュメントの同じ行も直す。
+    /// 夜の見分けと同じく、元の名前と番号は heardSpeaker / heardSpeakerID に残す。直した行の数を返す。
+    @discardableResult
+    func markMedia(_ kind: String, where match: (Line) -> Bool) async throws -> Int {
+        var changed = 0
+        for day in days() {
+            var log = load(day)
+            var fixes: [(find: String, replace: String)] = []
+            for c in log.conversations.indices {
+                for l in log.conversations[c].lines.indices {
+                    let line = log.conversations[c].lines[l]
+                    guard line.media == nil, match(line) else { continue }
+                    log.conversations[c].lines[l].media = kind
+                    log.conversations[c].lines[l].heardSpeaker = line.speaker
+                    log.conversations[c].lines[l].heardSpeakerID = line.speakerID
+                    log.conversations[c].lines[l].speaker = kind
+                    log.conversations[c].lines[l].speakerID = nil
+                    fixes.append((find: Self.docLine(line), replace: Self.docLine(log.conversations[c].lines[l])))
+                    changed += 1
+                }
+            }
+            guard !fixes.isEmpty else { continue }
+            try await docs.replaceAll(fixes, day: day)
+            save(log, day: day)
+        }
+        return changed
+    }
+
     // MARK: - 印
 
     /// 印の前後1分の行に「★」を付け、ドキュメントの同じ行も直す。

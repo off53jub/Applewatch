@@ -686,6 +686,7 @@ final class Pipeline {
     /// 声のひとこまを、その人から外す。target を渡すと、その声を target の声として覚え直す。結果の一文を返す。
     func dropSample(_ sample: SpeakerLabeler.Sample, from id: String, moveTo target: String?) async -> String {
         let url = await archive.playableURL(for: sample.audio)
+        if target == SpeakerLabeler.selfID { await speakers.ensureSelf() }
         do {
             let removed = try await speakers.dropSample(sample, from: id, url: url, moveTo: target)
             people = await speakers.people()
@@ -856,13 +857,44 @@ final class Pipeline {
     }
 
     /// 分けた組をまとめて直す。moves の組の行をそれぞれの人にし、覚えている声も移す。keep はこの人の声のまま残す組。
-    func applyGroups(_ id: String, keep: [SplitClip], moves: [(clips: [SplitClip], target: String)]) async -> String {
+    func applyGroups(_ id: String, keep: [SplitClip], moves: [(clips: [SplitClip], target: String)],
+                     media: [SplitClip] = [], kind: String = "テレビ") async -> String {
         var parts: [String] = []
         for move in moves where !move.clips.isEmpty && move.target != id {
             let others = keep + moves.filter { $0.target != move.target }.flatMap(\.clips)
             parts.append(await applySplit(id, keep: others.isEmpty ? keep : others, moved: move.clips, to: move.target))
         }
+        if !media.isEmpty {
+            parts.append(await applyMedia(id, keep: keep + moves.flatMap(\.clips), clips: media, kind: kind))
+        }
         return parts.isEmpty ? "移す組がありませんでした。" : parts.joined(separator: "\n")
+    }
+
+    /// テレビ・動画などの声だった組の行を、放送の行（kind）にする。id の覚えている声から、その組に近いものを外す（だれの声にもしない）。
+    func applyMedia(_ id: String, keep: [SplitClip], clips: [SplitClip], kind: String) async -> String {
+        let removed = await speakers.split(id, keep: keep.map(\.embedding), moved: clips.map(\.embedding), to: nil)
+        let times = Set(clips.map(\.line.time))
+        let count = await markMedia(kind) { $0.speakerID == id && times.contains($0.time) }
+        people = await speakers.people()
+        return "\(count) 行を「\(kind)」の行にしました。覚えていた声のうち \(removed) つを外しました。"
+    }
+
+    /// 放送の種類（夜の見分けと同じ名前）
+    static let mediaKinds = ["テレビ", "動画", "ラジオ・音楽"]
+
+    /// match に当たる行を放送の行（kind）にする。直した行の数を返す。
+    func markMedia(_ kind: String, where match: (ConversationLog.Line) -> Bool) async -> Int {
+        do {
+            let count = try await conversations.markMedia(kind, where: match)
+            if count > 0 {
+                placeIndexBuilt = .distantPast
+                recordsVersion += 1
+            }
+            return count
+        } catch {
+            message = "ドキュメントの行を直せませんでした: \(error.localizedDescription)"
+            return 0
+        }
     }
 
     /// 分けたうち moved の行を target の人にする。id の覚えている声から moved に近いものを外し、target の声として覚える。
@@ -879,23 +911,37 @@ final class Pipeline {
 
     /// 分けたあと、まだ id のままの行（調べた行より前のもの。多くても limit 行）の声を取り、
     /// いちばん近い組が移した組で、この人の声（keep）より0.05以上近い行を、その組の人にする。直した行の数を返す。
-    func reassignRest(_ id: String, keep: [SplitClip], moves: [(clips: [SplitClip], target: String)], limit: Int = 300,
+    func reassignRest(_ id: String, keep: [SplitClip], moves: [(clips: [SplitClip], target: String)],
+                      media: [SplitClip] = [], kind: String = "テレビ", limit: Int = 300,
                       progress: @escaping (String) -> Void) async -> Int {
-        let seen = Set((keep + moves.flatMap(\.clips)).map(\.line.time))
+        let seen = Set((keep + moves.flatMap(\.clips) + media).map(\.line.time))
         let clips = await embed(splitCandidates(for: id, limit: limit, skipping: seen), progress: progress)
         let keepCenter = Self.voiceCenter(keep.map(\.embedding))
-        let centers = moves.filter { !$0.clips.isEmpty }.map { (center: Self.voiceCenter($0.clips.map(\.embedding)), target: $0.target) }
+        // target が nil の組は、テレビなどの声の組
+        var centers: [(center: [Float], target: String?)] = moves.filter { !$0.clips.isEmpty }
+            .map { (center: Self.voiceCenter($0.clips.map(\.embedding)), target: $0.target) }
+        if !media.isEmpty { centers.append((center: Self.voiceCenter(media.map(\.embedding)), target: nil)) }
         var byTarget: [String: Set<Date>] = [:]
+        var mediaTimes = Set<Date>()
         for clip in clips {
             guard let near = centers.min(by: { Self.voiceDistance(clip.embedding, $0.center) < Self.voiceDistance(clip.embedding, $1.center) })
             else { continue }
             let toKeep = keep.isEmpty ? Float.infinity : Self.voiceDistance(clip.embedding, keepCenter)
-            if Self.voiceDistance(clip.embedding, near.center) + 0.05 < toKeep { byTarget[near.target, default: []].insert(clip.line.time) }
+            guard Self.voiceDistance(clip.embedding, near.center) + 0.05 < toKeep else { continue }
+            if let target = near.target {
+                byTarget[target, default: []].insert(clip.line.time)
+            } else {
+                mediaTimes.insert(clip.line.time)
+            }
         }
         var count = 0
         for (target, times) in byTarget {
             await relabel(to: target) { $0.speakerID == id && times.contains($0.time) }
             count += times.count
+        }
+        if !mediaTimes.isEmpty {
+            let marked = mediaTimes
+            count += await markMedia(kind) { $0.speakerID == id && marked.contains($0.time) }
         }
         if count > 0 {
             placeIndexBuilt = .distantPast

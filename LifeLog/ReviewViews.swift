@@ -10,8 +10,62 @@ struct VoiceReviewView: View {
     @State private var player = ClipPlayer()
     @State private var working: String?
     @State private var done: [String: String] = [:]
+    /// 「ほかの人の声だった」で、移す先を選んでいるひとこま
+    @State private var picking: String?
+    @State private var naming: String?
+    @State private var newName = ""
+    /// 「まるごとテレビの声だった」を確かめているひとこま
+    @State private var wholeMedia: Pipeline.ReviewItem?
 
     var body: some View {
+        list
+            .sheet(item: Binding(get: { picking.map(Pick.init) }, set: { picking = $0?.id })) { pick in
+                NavigationStack {
+                    PersonPicker(exclude: items.first { $0.id == pick.id }?.person.id, includeSelf: true) { target in
+                        picking = nil
+                        if let item = items.first(where: { $0.id == pick.id }) { run(item, moveTo: target) }
+                    }
+                    .navigationTitle("だれの声ですか")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("キャンセル") { picking = nil } }
+                        ToolbarItem(placement: .primaryAction) {
+                            Button("新しい人") {
+                                picking = nil
+                                newName = ""
+                                naming = pick.id
+                            }
+                        }
+                    }
+                }
+            }
+            .alert("新しい人の名前", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
+                TextField("名前", text: $newName)
+                Button("決める") {
+                    let name = newName.trimmingCharacters(in: .whitespaces)
+                    if let key = naming, !name.isEmpty, let item = items.first(where: { $0.id == key }) {
+                        Task {
+                            let target = await pipeline.newPerson(name: name, context: item.person.context)
+                            run(item, moveTo: target)
+                        }
+                    }
+                    naming = nil
+                }
+                Button("キャンセル", role: .cancel) { naming = nil }
+            }
+            .confirmationDialog("「\(wholeMedia?.person.displayName ?? "")」はテレビ・動画などの声でしたか？",
+                                isPresented: Binding(get: { wholeMedia != nil }, set: { if !$0 { wholeMedia = nil } }),
+                                titleVisibility: .visible, presenting: wholeMedia) { item in
+                ForEach(Pipeline.mediaKinds, id: \.self) { kind in
+                    Button("\(kind)だった") { markWhole(item, kind: kind) }
+                }
+            } message: { item in
+                Text("「\(item.person.displayName)」とされた行を、すべて「テレビ」などの行に書き換え、この声を忘れます（行は消えません）。")
+            }
+    }
+
+    struct Pick: Identifiable { let id: String }
+
+    private var list: some View {
         List {
             ForEach(items) { item in
                 Section {
@@ -33,10 +87,25 @@ struct VoiceReviewView: View {
                                 Button("「\(target.displayName)」の声だった（移す）") { run(item, moveTo: other) }
                             }
                         }
-                        Button("このひとこまを忘れる", role: .destructive) { run(item, moveTo: nil) }
                         Button("「\(item.person.displayName)」の声で合っている") {
                             pipeline.keepSample(item)
                             done[item.id] = "このままにしました。もう出しません。"
+                        }
+                        Menu("その他…") {
+                            Button("ほかの人の声だった（選ぶ）") { picking = item.id }
+                            if !item.person.isSelf {
+                                Button("自分の声だった") { run(item, moveTo: SpeakerLabeler.selfID) }
+                            }
+                            Button("テレビ・動画・音楽の声だった（忘れる）") {
+                                run(item, moveTo: nil, note: "テレビなどの声として外しました。")
+                            }
+                            Button("何人かの声が重なっている（忘れる）") { run(item, moveTo: nil) }
+                            if !item.person.isNamed && !item.person.isSelf {
+                                Button("「\(item.person.displayName)」がまるごとテレビ・動画の声だった") { wholeMedia = item }
+                            }
+                            Button("分からない（今は飛ばす）") {
+                                done[item.id] = "飛ばしました。次に開いたときに、また出ます。"
+                            }
                         }
                     }
                 } header: {
@@ -56,7 +125,7 @@ struct VoiceReviewView: View {
         .onDisappear { player.stop() }
         .safeAreaInset(edge: .bottom) {
             if !items.isEmpty {
-                Text("▶︎で聞いて、その人の声でなければ直してください。忘れると、そのひとこまの音と同じ声も忘れるので、聞き分けの間違いが減ります。")
+                Text("▶︎で聞いて、その人の声でなければ直してください。どちらでもないときは「その他…」から（ほかの人・自分・テレビ・分からない）。忘れると、そのひとこまの音と同じ声も忘れるので、聞き分けの間違いが減ります。")
                     .font(.caption).foregroundStyle(.secondary).padding(.horizontal).padding(.bottom, 8)
             }
         }
@@ -68,11 +137,24 @@ struct VoiceReviewView: View {
         return "テレビ・動画・放送などの行と重なっています"
     }
 
-    private func run(_ item: Pipeline.ReviewItem, moveTo target: String?) {
+    private func run(_ item: Pipeline.ReviewItem, moveTo target: String?, note: String? = nil) {
         player.stop()
         working = item.id
         Task {
-            done[item.id] = await pipeline.dropSample(item.sample, from: item.person.id, moveTo: target)
+            let text = await pipeline.dropSample(item.sample, from: item.person.id, moveTo: target)
+            done[item.id] = (note.map { $0 + "\n" } ?? "") + text
+            working = nil
+        }
+    }
+
+    /// 名前の無い声がまるごとテレビなどの声だった。その人のほかのひとこまも、もう出さない。
+    private func markWhole(_ item: Pipeline.ReviewItem, kind: String) {
+        player.stop()
+        working = item.id
+        Task {
+            let count = await pipeline.markPersonAsMedia(item.person.id, kind: kind)
+            let note = "「\(item.person.displayName)」の \(count) 行を「\(kind)」の行にし、この声を忘れました。"
+            for other in items where other.person.id == item.person.id { done[other.id] = note }
             working = nil
         }
     }
@@ -94,11 +176,14 @@ struct SplitPersonView: View {
     @State private var naming: Pick?
     @State private var newName = ""
     @State private var done: String?
-    @State private var applied: (keep: [Pipeline.SplitClip], moves: [(clips: [Pipeline.SplitClip], target: String)])?
+    @State private var applied: (keep: [Pipeline.SplitClip], moves: [(clips: [Pipeline.SplitClip], target: String)],
+                                 media: [Pipeline.SplitClip], kind: String)?
 
     enum Choice: Equatable {
         case keep
         case move(String)
+        /// テレビ・動画などの声だった（その種類）
+        case media(String)
     }
 
     struct Pick: Identifiable { let id: Int }
@@ -119,7 +204,12 @@ struct SplitPersonView: View {
         return false
     }
 
-    private var moveCount: Int { choices.values.filter { isMove($0) }.count }
+    private func isMedia(_ choice: Choice?) -> Bool {
+        if case .media = choice { return true }
+        return false
+    }
+
+    private var moveCount: Int { choices.values.filter { isMove($0) || isMedia($0) }.count }
 
     private func groupTitle(_ g: Int, _ result: Pipeline.SplitResult) -> String {
         if g == result.scattered { return "ばらばらの声（\(result.groups[g].count) 行）" }
@@ -152,6 +242,15 @@ struct SplitPersonView: View {
                         HStack {
                             choiceButton("この人の声", selected: choices[g] == .keep) { choices[g] = .keep }
                             choiceButton(movedLabel(g), selected: isMove(choices[g])) { picking = Pick(id: g) }
+                        }
+                        HStack {
+                            Menu {
+                                ForEach(Pipeline.mediaKinds, id: \.self) { kind in
+                                    Button("\(kind)の声だった") { choices[g] = .media(kind) }
+                                }
+                            } label: {
+                                choiceLabel(mediaLabel(g), selected: isMedia(choices[g]))
+                            }
                             choiceButton("放っておく", selected: choices[g] == nil) { choices[g] = nil }
                         }
                     } header: {
@@ -166,7 +265,7 @@ struct SplitPersonView: View {
                     Button(working ? progress : "分ける（\(moveCount) 組を移す）") { apply() }
                         .disabled(working || moveCount == 0)
                 } footer: {
-                    Text("移す組の行の名前を変え、覚えている声も移すので、これからの聞き分けも分かれます。「この人の声」を選んだ組は、残す声の見本にします。")
+                    Text("移す組の行の名前を変え、覚えている声も移すので、これからの聞き分けも分かれます。「テレビなど」を選んだ組は、行を「テレビ」などの行に書き換え、その声を忘れます（行は消えません）。「この人の声」を選んだ組は、残す声の見本にします。")
                 }
             }
             if let done {
@@ -176,7 +275,8 @@ struct SplitPersonView: View {
                         Button(working ? progress : "残りの古い行も、声で振り分ける（300 行まで）") {
                             working = true
                             Task {
-                                let count = await pipeline.reassignRest(id, keep: applied.keep, moves: applied.moves) { text in
+                                let count = await pipeline.reassignRest(id, keep: applied.keep, moves: applied.moves,
+                                                                        media: applied.media, kind: applied.kind) { text in
                                     Task { @MainActor in progress = text }
                                 }
                                 self.done = (self.done ?? "") + "\n古い行のうち \(count) 行も直しました。"
@@ -235,11 +335,21 @@ struct SplitPersonView: View {
         return "別の人に移す"
     }
 
+    private func mediaLabel(_ g: Int) -> String {
+        if case .media(let kind) = choices[g] { return "→ \(kind)" }
+        return "テレビなどの声"
+    }
+
+    private func choiceLabel(_ title: String, selected: Bool) -> some View {
+        Text(title).font(.caption).lineLimit(1)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .background(selected ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1), in: Capsule())
+            .foregroundStyle(selected ? Color.accentColor : Color.primary)
+    }
+
     private func choiceButton(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).font(.caption).lineLimit(1)
-                .padding(.horizontal, 8).padding(.vertical, 6)
-                .background(selected ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1), in: Capsule())
+            choiceLabel(title, selected: selected)
         }
         .buttonStyle(.borderless)
         .tint(selected ? .accentColor : .primary)
@@ -293,18 +403,28 @@ struct SplitPersonView: View {
         guard let result else { return }
         var keep: [Pipeline.SplitClip] = []
         var moves: [(clips: [Pipeline.SplitClip], target: String)] = []
+        var media: [Pipeline.SplitClip] = []
+        // テレビなどの組がいくつかあれば、いちばん行の多い組の種類にそろえる
+        var kind = "テレビ"
+        var kindCount = 0
         for (g, choice) in choices where g < result.groups.count {
             switch choice {
             case .keep: keep += result.groups[g]
             case .move(let target): moves.append((result.groups[g], target))
+            case .media(let k):
+                media += result.groups[g]
+                if result.groups[g].count > kindCount {
+                    kind = k
+                    kindCount = result.groups[g].count
+                }
             }
         }
         player.stop()
         working = true
         progress = "分けています…"
         Task {
-            done = await pipeline.applyGroups(id, keep: keep, moves: moves)
-            applied = (keep, moves)
+            done = await pipeline.applyGroups(id, keep: keep, moves: moves, media: media, kind: kind)
+            applied = (keep, moves, media, kind)
             working = false
         }
     }

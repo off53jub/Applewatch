@@ -314,6 +314,16 @@ extension Pipeline {
         return ids.count
     }
 
+    /// 名前の無い声が、まるごとテレビ・動画などの声だったとき：その声の行をすべて放送の行（kind）にし、声を忘れる。
+    /// 名前のある人には使わない（混ざっているだけなら「分ける」で、その組だけテレビにする）。直した行の数を返す。
+    func markPersonAsMedia(_ id: String, kind: String) async -> Int {
+        guard let person = people.first(where: { $0.id == id }), !person.isNamed, !person.isSelf else { return 0 }
+        let count = await markMedia(kind) { $0.speakerID == id }
+        await removePerson(id)
+        Self.broadcastCache = (.distantPast, [])
+        return count
+    }
+
     /// 候補を選んだとき：名前のある人に同じ名前の人がいればその人にまとめ、いなければその名前を付ける。
     func applyName(_ candidate: NameCandidate, to id: String) async {
         if let target = candidate.target {
