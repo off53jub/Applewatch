@@ -862,8 +862,7 @@ final class Pipeline {
             let others = keep + moves.filter { $0.target != move.target }.flatMap(\.clips)
             parts.append(await applySplit(id, keep: others.isEmpty ? keep : others, moved: move.clips, to: move.target))
         }
-        return parts.isEmpty ? "移す組がありませんでした。" : parts.joined(separator: "
-")
+        return parts.isEmpty ? "移す組がありませんでした。" : parts.joined(separator: "\n")
     }
 
     /// 分けたうち moved の行を target の人にする。id の覚えている声から moved に近いものを外し、target の声として覚える。
