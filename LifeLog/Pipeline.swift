@@ -1266,26 +1266,7 @@ final class Pipeline {
 
     // MARK: - 呼ばれた名前
 
-    /// その日の会話で「〇〇さん」と呼ばれたすぐあと（20秒以内）に、別の声で答えた人と、その名前。声ごとに、多い順。
-    func calledNames(on day: String) -> [String: [(name: String, count: Int)]] {
-        var counts: [String: [String: Int]] = [:]
-        for c in conversations(on: day) where c.media == nil {
-            let lines = c.lines
-            for (i, line) in lines.enumerated() {
-                let called = Self.calledNames(in: line.text)
-                guard !called.isEmpty,
-                      let reply = lines[(i + 1)...].prefix(3).first(where: {
-                          $0.speakerID != nil && $0.speakerID != line.speakerID
-                              && $0.time.timeIntervalSince(line.time) <= 20
-                      }),
-                      let id = reply.speakerID else { continue }
-                for name in called { counts[id, default: [:]][name, default: 0] += 1 }
-            }
-        }
-        return counts.mapValues { names in
-            names.map { (name: $0.key, count: $0.value) }.sorted { $0.count > $1.count }
-        }
-    }
+    // 「〇〇さん」と呼ばれたすぐあとに答えた声と、その名前は VoiceClues.swift の voiceClues で数える。
 
     /// 人の呼び方ではない「〇〇さん」
     private static let notNames: Set<String> = [

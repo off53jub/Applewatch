@@ -105,11 +105,18 @@ struct PeopleView: View {
     @State private var rebuildResult = ""
     @State private var places = Pipeline.PlaceIndex()
     @State private var showAllWaiting = false
+    /// 名前の無い声の、話した1行と名前の候補
+    @State private var clues: [String: Pipeline.VoiceClues] = [:]
 
     /// 名前を付けてほしい声の、はじめに出す数
     private static let waitingShown = 10
 
     private var others: [SpeakerLabeler.Person] { pipeline.people.filter { !$0.isSelf && $0.hidden != true } }
+
+    /// 名前の無い声のうち、よく話した声（よく話した順）
+    private var waiting: [SpeakerLabeler.Person] {
+        others.filter { !$0.isNamed && $0.seconds >= 30 }.sorted { $0.seconds > $1.seconds }
+    }
 
     var body: some View {
         List {
@@ -118,8 +125,6 @@ struct PeopleView: View {
                 Section { row(me) }
             }
             // 名前の無い声のうち、よく話した声から名前を付けてもらう
-            let waiting = others.filter { !$0.isNamed && $0.seconds >= 30 }
-                .sorted { $0.seconds > $1.seconds }
             if !waiting.isEmpty {
                 Section {
                     ForEach(showAllWaiting ? waiting : Array(waiting.prefix(Self.waitingShown))) { person in row(person) }
@@ -131,7 +136,7 @@ struct PeopleView: View {
                 } header: {
                     Text("名前を付けてほしい声")
                 } footer: {
-                    Text("よく話した順です。▶︎で声を聞いて、タップして名前を付けてください。名前を付けると、これまでの記録とドキュメントの「人物N」もその名前に変わります。")
+                    Text("よく話した順です。声だけで分からないときは、押すと、その声が話したこと・会話の時刻と場所・名前の候補（呼ばれた名前・予定の参加者・声の近い人）が出ます。名前を付けると、これまでの記録とドキュメントの「人物N」もその名前に変わります。")
                 }
             }
             ForEach([SpeakerLabeler.Context.work, .other], id: \.self) { context in
@@ -196,6 +201,10 @@ struct PeopleView: View {
         }
         .onDisappear { player.stop() }
         .onAppear { places = pipeline.placeIndex() }
+        .task(id: waiting.map(\.id)) {
+            clues = await pipeline.voiceClues(for: Set(waiting.map(\.id)), talkLimit: 2,
+                                              withCalendar: false, withVoice: false)
+        }
     }
 
     private func row(_ person: SpeakerLabeler.Person) -> some View {
@@ -216,6 +225,15 @@ struct PeopleView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                    }
+                    // 名前の無い声は、話した1行と、呼ばれた名前を添える（声だけでは分かりにくいので）
+                    if let clue = clues[person.id] {
+                        if let sample = clue.sample {
+                            Text("「\(sample)」").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        if let top = clue.candidates.first {
+                            Text("もしかして: \(top.name)").font(.caption).foregroundStyle(Color.accentColor)
+                        }
                     }
                 }
             }
@@ -267,6 +285,9 @@ struct PersonView: View {
     @State private var removingLines = false
     @State private var confirmRemove = false
     @State private var removedMessage: String?
+    /// この声が話したことと、名前の候補（声だけでは誰か分かりにくいので）
+    @State private var clues = Pipeline.VoiceClues()
+    @State private var naming = false
 
     private var person: SpeakerLabeler.Person? { pipeline.people.first { $0.id == id } }
 
@@ -291,6 +312,21 @@ struct PersonView: View {
                         Text("名前")
                     } footer: {
                         Text("名前を付けると、これまでの記録とドキュメントの名前も変わり、その人の「人物ノート」に会話が書き足されます。")
+                    }
+                    if !person.isNamed && !clues.candidates.isEmpty {
+                        Section {
+                            ForEach(clues.candidates) { candidate in
+                                NameCandidateRow(candidate: candidate) { pick(candidate) }
+                                    .disabled(naming)
+                            }
+                        } header: {
+                            Text("名前の候補")
+                        } footer: {
+                            Text("「〇〇さん」と呼ばれたすぐあとに話していた名前、その会話の時間のカレンダーの予定の参加者、声の近い人から。下の「この声が話したこと」で確かめてから押してください。名前を付けた人に同じ名前の人がいれば、その人にまとめます。")
+                        }
+                    }
+                    if !clues.talks.isEmpty {
+                        VoiceTalksSection(talks: clues.talks, player: player)
                     }
                     Section {
                         Picker("会う場", selection: Binding(
@@ -390,6 +426,11 @@ struct PersonView: View {
             merges = MergeLog.records(into: id)
             places = pipeline.placeIndex()
         }
+        .task(id: person?.name) {
+            guard person?.isSelf == false else { return }
+            let named = person?.isNamed == true
+            clues = await pipeline.voiceClues(for: [id], withCalendar: !named, withVoice: !named)[id] ?? .init()
+        }
         .confirmationDialog("この人のこれまでの行を消しますか？", isPresented: $confirmRemove,
                             titleVisibility: .visible) {
             Button("消す", role: .destructive) {
@@ -469,6 +510,20 @@ struct PersonView: View {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         Task { await pipeline.renamePerson(id, to: trimmed) }
+    }
+
+    /// 名前の候補を選ぶ。ほかの人にまとめたら、この人はいなくなるので画面を閉じる。
+    private func pick(_ candidate: Pipeline.NameCandidate) {
+        naming = true
+        Task {
+            await pipeline.applyName(candidate, to: id)
+            naming = false
+            if candidate.target != nil {
+                dismiss()
+            } else {
+                name = candidate.name
+            }
+        }
     }
 }
 
@@ -789,9 +844,8 @@ struct UnnamedVoicesView: View {
     @Environment(Pipeline.self) private var pipeline
     let day: String
     @State private var player = ClipPlayer()
-    @State private var suggestions: [String: (id: String, name: String, distance: Float)] = [:]
-    /// 「〇〇さん」と呼ばれたすぐあとに話した声と、その名前
-    @State private var called: [String: [(name: String, count: Int)]] = [:]
+    /// 声ごとの名前の候補（呼ばれた名前・予定の参加者・声の近い人）
+    @State private var clues: [String: Pipeline.VoiceClues] = [:]
     @State private var picking: Pick?
     @State private var naming: Pick?
     @State private var newName = ""
@@ -841,14 +895,12 @@ struct UnnamedVoicesView: View {
                     if working == item.person.id {
                         HStack { ProgressView(); Text("直しています…") }
                     } else {
-                        if let s = suggestions[item.person.id], s.distance <= Self.showLimit {
-                            Button("「\(s.name)」にまとめる（\(s.distance <= Self.closeLimit ? "声がよく似ています" : "少し似ています")）") {
-                                apply(item.person.id) { await pipeline.assign(item.person.id, to: s.id) }
+                        ForEach(clues[item.person.id]?.candidates ?? []) { candidate in
+                            NameCandidateRow(candidate: candidate) {
+                                apply(item.person.id) { await pipeline.applyName(candidate, to: item.person.id) }
                             }
                         }
-                        if let top = called[item.person.id]?.first {
-                            calledButton(item.person.id, name: top.name, count: top.count)
-                        }
+                        NavigationLink("この声が話したことを見る") { PersonView(id: item.person.id) }
                         Button("ほかの人を選ぶ") { picking = Pick(id: item.person.id) }
                         Button("新しく名前を付ける") {
                             newName = ""
@@ -867,12 +919,7 @@ struct UnnamedVoicesView: View {
         }
         .navigationTitle("人物Nを整理")
         .task(id: list.map(\.id)) {
-            called = pipeline.calledNames(on: day)
-            for item in list where suggestions[item.person.id] == nil {
-                if let s = await pipeline.voiceSuggestion(for: item.person.id) {
-                    suggestions[item.person.id] = s
-                }
-            }
+            clues = await pipeline.voiceClues(for: Set(list.map(\.id)), talkLimit: 0)
         }
         .onDisappear { player.stop() }
         .sheet(item: $picking) { pick in
@@ -901,40 +948,11 @@ struct UnnamedVoicesView: View {
         }
     }
 
-    /// 「〇〇さん」と呼ばれた名前から。名前を付けた人に同じ名前の人がいればその人にまとめ、いなければその名前を付ける。
-    @ViewBuilder
-    private func calledButton(_ id: String, name: String, count: Int) -> some View {
-        let heard = "「\(name)さん」と呼ばれたあとに話していました（\(count)回）"
-        if let match = pipeline.people.first(where: { $0.isNamed && !$0.isSelf && ($0.displayName.hasPrefix(name) || name.hasPrefix($0.displayName)) }) {
-            Button {
-                apply(id) { await pipeline.assign(id, to: match.id) }
-            } label: {
-                VStack(alignment: .leading) {
-                    Text("「\(match.displayName)」にまとめる")
-                    Text(heard).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        } else {
-            Button {
-                apply(id) { await pipeline.renamePerson(id, to: name) }
-            } label: {
-                VStack(alignment: .leading) {
-                    Text("「\(name)」と名前を付ける")
-                    Text(heard).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    /// 似ていると出す距離と、よく似ているとする距離
-    private static let showLimit: Float = 0.55
-    private static let closeLimit: Float = 0.40
-
     private func apply(_ id: String, _ action: @escaping () async -> Void) {
         working = id
         Task {
             await action()
-            suggestions[id] = nil
+            clues[id] = nil
             working = nil
         }
     }
