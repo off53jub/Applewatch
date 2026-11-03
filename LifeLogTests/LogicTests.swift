@@ -1,0 +1,129 @@
+import XCTest
+@testable import LifeLog
+
+/// 記録を壊しうる処理（同期の合わせ方・消す行の見つけ方）と、名前の取り出しを確かめる。
+/// CI（.github/workflows/tests.yml）が iPhone のシミュレーターで動かす。
+@MainActor
+final class LogicTests: XCTestCase {
+    // MARK: - 名前
+
+    func testIntroducedNames() {
+        XCTAssertEqual(Pipeline.introducedNames(in: "田中と申します"), ["田中"])
+        XCTAssertEqual(Pipeline.introducedNames(in: "私は田中といいます。"), ["田中"])
+        XCTAssertEqual(Pipeline.introducedNames(in: "営業の田中です、よろしくお願いします"), ["田中"])
+        // 「〇〇です」だけでは名乗りとみなさない
+        XCTAssertEqual(Pipeline.introducedNames(in: "大丈夫です"), [])
+        XCTAssertEqual(Pipeline.introducedNames(in: "そうですね"), [])
+    }
+
+    func testCalledNames() {
+        XCTAssertEqual(Pipeline.calledNames(in: "田中さん、これお願いします"), ["田中"])
+        XCTAssertEqual(Pipeline.calledNames(in: "皆さん、こんにちは"), [])
+    }
+
+    func testSameName() {
+        XCTAssertTrue(Pipeline.sameName("田中", "田中太郎"))
+        XCTAssertTrue(Pipeline.sameName("田中さん", "田中"))
+        XCTAssertTrue(Pipeline.sameName("田中 太郎", "田中太郎"))
+        XCTAssertFalse(Pipeline.sameName("田", "田中"))
+        XCTAssertFalse(Pipeline.sameName("佐藤", "田中"))
+        XCTAssertFalse(Pipeline.sameName("", "田中"))
+    }
+
+    func testReadingIgnoresKanaKindAndLongVowels() {
+        XCTAssertEqual(ContactsLink.reading("さとう"), ContactsLink.reading("サトウ"))
+    }
+
+    // MARK: - 消す行の見つけ方
+
+    func testJunkKinds() {
+        XCTAssertEqual(Junk.kind(of: "ご視聴ありがとうございました", custom: []), .filler)
+        XCTAssertEqual(Junk.kind(of: "3行目の直した文", custom: []), .broken)
+        XCTAssertEqual(Junk.kind(of: "うん。", custom: [Junk.normalized("うん")]), .custom)
+        XCTAssertNil(Junk.kind(of: "来週の資料は木曜までに作ります", custom: []))
+        // 長い文は、決まり文句を含んでいても消さない
+        XCTAssertNil(Junk.kind(of: "チャンネル登録の話をしたけど、結局どうするかは来週の会議で決めることになったので、資料を用意しておきます", custom: []))
+    }
+
+    func testChangedPart() {
+        let part = Pipeline.changedPart(from: "会義の資料", to: "会議の資料")
+        XCTAssertEqual(part?.wrong, "会義")
+        XCTAssertEqual(part?.right, "会議")
+        XCTAssertNil(Pipeline.changedPart(from: "同じ文", to: "同じ文"))
+    }
+
+    // MARK: - 騒がしさ
+
+    func testNoiseThresholds() {
+        XCTAssertTrue(NoiseMeter.Reading(floor: -40, speech: -20).isNoisy)
+        XCTAssertFalse(NoiseMeter.Reading(floor: -60, speech: -30).isNoisy)
+        XCTAssertTrue(NoiseMeter.Reading(floor: -50, speech: -45).isNoisy)
+        XCTAssertFalse(NoiseMeter.Reading(floor: -50, speech: -30).isNoisy)
+    }
+
+    // MARK: - 端末間の同期
+
+    /// テスト用の日（実際の記録とぶつからない日付）
+    private let day = "1999-01-01"
+
+    private func freshLog() throws -> ConversationLog {
+        let url = URL.applicationSupportDirectory.appendingPathComponent("days/\(day).json")
+        try? FileManager.default.removeItem(at: url)
+        return ConversationLog(docs: GoogleDocs())
+    }
+
+    private func conversation(_ start: Date, title: String, rev: Int) -> ConversationLog.Conversation {
+        ConversationLog.Conversation(start: start, end: start.addingTimeInterval(60), docIndex: 1, title: title,
+                                     closed: true, rev: rev)
+    }
+
+    func testMergeKeepsNewerRevision() throws {
+        let log = try freshLog()
+        let start = Date(timeIntervalSince1970: 915_150_000)
+        XCTAssertTrue(log.mergeRemote(.init(conversations: [conversation(start, title: "2", rev: 2)], removed: [],
+                                            summaryWritten: false, summary: nil), day: day))
+        XCTAssertEqual(log.conversations(on: day).map(\.title), ["2"])
+        // 古い版は入れない
+        XCTAssertFalse(log.mergeRemote(.init(conversations: [conversation(start, title: "1", rev: 1)], removed: [],
+                                             summaryWritten: false, summary: nil), day: day))
+        XCTAssertEqual(log.conversations(on: day).map(\.title), ["2"])
+        // 新しい版に置き換える
+        XCTAssertTrue(log.mergeRemote(.init(conversations: [conversation(start, title: "3", rev: 3)], removed: [],
+                                            summaryWritten: false, summary: nil), day: day))
+        XCTAssertEqual(log.conversations(on: day).map(\.title), ["3"])
+    }
+
+    func testMergeRemovesAndDoesNotRevive() throws {
+        let log = try freshLog()
+        let start = Date(timeIntervalSince1970: 915_160_000)
+        _ = log.mergeRemote(.init(conversations: [conversation(start, title: "a", rev: 3)], removed: [],
+                                  summaryWritten: false, summary: nil), day: day)
+        // ほかの端末で消した（消した印の番号が新しい）
+        XCTAssertTrue(log.mergeRemote(.init(conversations: [], removed: [.init(start: start, rev: 4)],
+                                            summaryWritten: false, summary: nil), day: day))
+        XCTAssertTrue(log.conversations(on: day).isEmpty)
+        // 消す前の版が遅れて届いても、戻さない
+        _ = log.mergeRemote(.init(conversations: [conversation(start, title: "a", rev: 4)], removed: [],
+                                  summaryWritten: false, summary: nil), day: day)
+        XCTAssertTrue(log.conversations(on: day).isEmpty)
+    }
+
+    func testMergeKeepsSeparateConversations() throws {
+        let log = try freshLog()
+        let first = Date(timeIntervalSince1970: 915_170_000)
+        let second = first.addingTimeInterval(3600)
+        _ = log.mergeRemote(.init(conversations: [conversation(second, title: "後", rev: 1)], removed: [],
+                                  summaryWritten: false, summary: nil), day: day)
+        _ = log.mergeRemote(.init(conversations: [conversation(first, title: "先", rev: 1)], removed: [],
+                                  summaryWritten: true, summary: nil), day: day)
+        // 始まりの順に並び、どちらも残る
+        XCTAssertEqual(log.conversations(on: day).map(\.title), ["先", "後"])
+    }
+
+    // MARK: - 控え
+
+    func testBackupLabel() {
+        let entry = BackupKeeper.Entry(name: "控え-zzzzzzzz-2026-11-03.json", local: nil, driveID: "x")
+        XCTAssertEqual(entry.label, "2026-11-03（端末 zzzzzzzz）")
+    }
+}

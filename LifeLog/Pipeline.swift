@@ -12,7 +12,11 @@ final class Pipeline {
     private(set) var isRecording = false
     private(set) var pendingCount = 0
     private(set) var lastLines: [String] = []
-    private(set) var message = ""
+    private(set) var message = "" {
+        didSet { if message != oldValue { diagnostics.problem(message) } }
+    }
+    /// エラーと処理の時間の記録（自己点検・ドライブの「診断」）
+    let diagnostics = DiagnosticsLog()
     private(set) var email: String?
     private(set) var watchStatus = "接続を準備中"
     /// 直近の区切りをどのモデルで文字起こししたか
@@ -108,6 +112,8 @@ final class Pipeline {
     /// まだドライブに上げていない音声の数
     private(set) var backupPending = 0
     let archive: AudioArchive
+    /// 登録（覚えた声・言葉・場所など）の毎日の控え
+    let backups: BackupKeeper
     /// どこで話したか
     let places = PlaceLog()
     /// 聞き取ってほしい言葉（いつも・職場だけ・職場以外だけ）
@@ -188,7 +194,9 @@ final class Pipeline {
         let docs = GoogleDocs()
         self.docs = docs
         conversations = ConversationLog(docs: docs)
-        archive = AudioArchive(docs: docs)
+        let audio = AudioArchive(docs: docs)
+        archive = audio
+        backups = BackupKeeper(docs: docs, onWiFi: { audio.isOnWiFi })
         archive.enabled = { [weak self] in self?.audioBackupOn ?? false }
         conversations.apiKey = { [weak self] in
             guard let self, summariesOn else { return nil }
@@ -660,6 +668,27 @@ final class Pipeline {
         return index
     }
 
+    /// 声のひとこまを、その人から外す。target を渡すと、その声を target の声として覚え直す。結果の一文を返す。
+    func dropSample(_ sample: SpeakerLabeler.Sample, from id: String, moveTo target: String?) async -> String {
+        let url = await archive.playableURL(for: sample.audio)
+        do {
+            let removed = try await speakers.dropSample(sample, from: id, url: url, moveTo: target)
+            people = await speakers.people()
+            hasSelfVoice = await speakers.hasSelfVoice
+            let targetName = target.flatMap { t in people.first { $0.id == t }?.displayName }
+            var text = "ひとこまを外しました。"
+            if url == nil {
+                text += "録音が見つからなかったので、覚えている声はそのままです。"
+            } else {
+                text += removed > 0 ? "同じ声を \(removed) つ忘れました。" : "同じ声は覚えていませんでした。"
+                if let targetName { text += "「\(targetName)」の声として覚え直しました。" }
+            }
+            return text
+        } catch {
+            return "外せませんでした: \(error.localizedDescription)"
+        }
+    }
+
     func removePerson(_ id: String) async {
         await speakers.remove(id)
         people = await speakers.people()
@@ -904,6 +933,8 @@ final class Pipeline {
             email = docs.signedInEmail
         }
         guard email != nil, queueTask == nil else { return }
+        let started = Date.now
+        defer { diagnostics.ran(from: started) }
         // 裏にいても、iOS が許すあいだ（30秒ほど）は続けさせてもらう
         let background = UIApplication.shared.beginBackgroundTask(withName: "transcribe")
         let task = Task {
@@ -997,6 +1028,7 @@ final class Pipeline {
             await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
             await conversations.writePeopleNotes()
             await conversations.writeWeeklySummary(today: dayFormatter.string(from: .now))
+            await conversations.writeMonthlySummary(today: dayFormatter.string(from: .now))
             // ドライブを読む AI 向けの案内と索引を、中身が変わっていたら書き直す
             await updateDriveGuide()
         }
@@ -1012,7 +1044,33 @@ final class Pipeline {
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
         backupPending = archive.pendingCount
+        // 登録の毎日の控えと、動き具合の診断
+        await backups.runIfDue(signedIn: email != nil)
+        _ = await writeDiagnostics()
         return true
+    }
+
+    // MARK: - 自己点検
+
+    /// 記録の日数と、読み込みの回数・時間、覚えている記録（自己点検に出す）
+    var recordStats: (days: Int, loads: (files: Int, bytes: Int, seconds: Double), cache: (days: Int, bytes: Int)) {
+        (conversations.days().count, conversations.loadStats, conversations.cacheStats)
+    }
+
+    /// 自己点検の中身を、ドライブの「診断」（iPad は「診断（iPad）」）に書く。force でなければ1時間に1回まで。結果の一文を返す。
+    func writeDiagnostics(force: Bool = false) async -> String {
+        guard email != nil else { return "Google にログインしていないので書けません。" }
+        guard force || Date.now.timeIntervalSince(diagnostics.lastWritten ?? .distantPast) >= 3600 else { return "" }
+        let name = UIDevice.current.userInterfaceIdiom == .pad ? "診断（iPad）" : "診断"
+        let items = await diagnosticItems()
+        let paragraphs = Self.diagnosticParagraphs(items)
+        do {
+            try await docs.overwrite(paragraphs, name: name)
+            diagnostics.lastWritten = .now
+            return "ドライブの「\(name)」に書きました。"
+        } catch {
+            return "書けませんでした: \(error.localizedDescription)"
+        }
     }
 
     // MARK: - 記録の掃除

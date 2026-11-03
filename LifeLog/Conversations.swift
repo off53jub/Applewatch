@@ -1041,6 +1041,90 @@ final class ConversationLog {
         }
     }
 
+    // MARK: - 月のまとめ
+
+    /// 月が変わったら、先月のまとめを「月のまとめ 2026-10」というドキュメントに書く。
+    /// その月の1日のまとめがそろうまで待つ。よく話した人と数字は記録から数え、流れ・決まったこと・やること・話題は言語モデルにまとめてもらう。
+    func writeMonthlySummary(today: String) async {
+        guard let key = apiKey(), let todayDate = Self.dayFormatter.date(from: today) else { return }
+        let calendar = Calendar(identifier: .gregorian)
+        guard let thisMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: todayDate)),
+              let lastMonth = calendar.date(byAdding: .month, value: -1, to: thisMonth) else { return }
+        let monthFormatter = DateFormatter()
+        monthFormatter.locale = Locale(identifier: "en_US_POSIX")
+        monthFormatter.dateFormat = "yyyy-MM"
+        let month = monthFormatter.string(from: lastMonth)
+        let doneKey = "month-" + month
+        guard !UserDefaults.standard.bool(forKey: doneKey) else { return }
+        let present = days().filter { $0.hasPrefix(month + "-") }
+        guard !present.isEmpty else { return }
+        let logs = present.map { load($0) }
+        guard logs.allSatisfy({ $0.summaryWritten || $0.conversations.isEmpty }) else { return }
+
+        let label = DateFormatter()
+        label.locale = Locale(identifier: "ja_JP")
+        label.dateFormat = "M/d(E)"
+        let budget = max(150, 9_000 / present.count)
+        var material = ""
+        var marked: [String] = []
+        var talks: [String: (count: Int, days: Set<String>)] = [:]
+        var conversationCount = 0
+        var talkSeconds: TimeInterval = 0
+        for (day, log) in zip(present, logs) {
+            guard let date = Self.dayFormatter.date(from: day) else { continue }
+            var part = "## " + label.string(from: date) + "\n"
+            if let summary = log.summary {
+                part += "流れ: " + summary.flow.joined(separator: "／") + "\n"
+                if !summary.decisions.isEmpty { part += "決まったこと: " + summary.decisions.joined(separator: "／") + "\n" }
+                if !summary.todos.isEmpty { part += "やること: " + summary.todos.joined(separator: "／") + "\n" }
+            } else {
+                for c in log.conversations where c.title != nil {
+                    part += timeFormatter.string(from: c.start) + " " + (c.place ?? "") + " " + (c.title ?? "") + "\n"
+                }
+            }
+            let people = Array(NSOrderedSet(array: log.conversations.flatMap(\.people))) as? [String] ?? []
+            if !people.isEmpty { part += "会った人: " + people.joined(separator: "、") + "\n" }
+            material += String(part.prefix(budget)) + "\n"
+            for c in log.conversations where c.media == nil {
+                conversationCount += 1
+                talkSeconds += c.end.timeIntervalSince(c.start)
+                for name in c.people where !name.hasPrefix("人物") {
+                    var entry = talks[name] ?? (0, [])
+                    entry.count += 1
+                    entry.days.insert(day)
+                    talks[name] = entry
+                }
+                for line in c.lines where line.marked == true {
+                    marked.append(label.string(from: date) + " " + timeFormatter.string(from: line.time) + "　" + line.text)
+                }
+            }
+        }
+        guard let summary = try? await Summarizer.month(material, apiKey: key) else { return }
+
+        var body = ""
+        func section(_ name: String, _ items: [String]) {
+            guard !items.isEmpty else { return }
+            body += name + "\n" + items.map { "・" + $0 + "\n" }.joined()
+        }
+        section("数字", ["記録のある日 \(present.count) 日", "会話 \(conversationCount) 回",
+                         String(format: "話していた時間 約 %.0f 時間", talkSeconds / 3600)])
+        section("1か月の流れ", summary.flow)
+        section("よく話した人", talks.sorted { ($0.value.count, $0.key) > ($1.value.count, $1.key) }.prefix(10)
+            .map { "\($0.key)：会話 \($0.value.count) 回（\($0.value.days.count) 日）" })
+        section("決まったこと", summary.decisions)
+        section("やること（残っていそうなもの）", summary.todos)
+        section("話題", summary.topics)
+        section("★ 印を付けたところ", marked.prefix(15).map { $0.count > 100 ? String($0.prefix(100)) + "…" : $0 })
+        body += "\n"
+        let title = "月のまとめ（\(Calendar(identifier: .gregorian).component(.year, from: lastMonth))年\(Calendar(identifier: .gregorian).component(.month, from: lastMonth))月）"
+        do {
+            try await docs.insert(heading: title, body: body, at: 1, style: "HEADING_1", day: "月のまとめ " + month)
+            UserDefaults.standard.set(true, forKey: doneKey)
+        } catch {
+            // 通信できないときは次の機会にやり直す
+        }
+    }
+
     // MARK: - アプリで見る
 
     func recordedDays() -> [String] { days().reversed() }
@@ -1064,11 +1148,48 @@ final class ConversationLog {
             .sorted()
     }
 
+    /// 読んだ日の記録。ファイルを書いた時刻が同じなら読み直さない（5分ごとの処理で、全部の日を何度も読むため）。
+    /// 覚えるのはファイルの大きさで cacheLimit まで。超えたら、長く使っていない日から忘れる。
+    private var cache: [String: (modified: Date, bytes: Int, used: Int, log: Day)] = [:]
+    private var cacheUse = 0
+    private static let cacheLimit = 48 * 1024 * 1024
+
+    /// ファイルから読んだ回数と、かかった時間（診断に出す。覚えていた分は数えない）
+    private(set) var loadStats = (files: 0, bytes: 0, seconds: 0.0)
+
     private func load(_ day: String) -> Day {
-        guard let data = try? Data(contentsOf: Self.dir.appendingPathComponent(day + ".json")),
-              let log = try? JSONDecoder().decode(Day.self, from: data) else { return Day() }
+        let url = Self.dir.appendingPathComponent(day + ".json")
+        let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        cacheUse += 1
+        if let modified, let hit = cache[day], hit.modified == modified {
+            cache[day]?.used = cacheUse
+            return hit.log
+        }
+        let started = Date()
+        guard let data = try? Data(contentsOf: url),
+              let log = try? JSONDecoder().decode(Day.self, from: data) else {
+            cache[day] = nil
+            return Day()
+        }
+        loadStats.files += 1
+        loadStats.bytes += data.count
+        loadStats.seconds += Date().timeIntervalSince(started)
+        if let modified { remember(day, log, modified: modified, bytes: data.count) }
         return log
     }
+
+    private func remember(_ day: String, _ log: Day, modified: Date, bytes: Int) {
+        cache[day] = (modified, bytes, cacheUse, log)
+        var total = cache.values.reduce(0) { $0 + $1.bytes }
+        while total > Self.cacheLimit, cache.count > 1,
+              let oldest = cache.filter({ $0.key != day }).min(by: { $0.value.used < $1.value.used }) {
+            total -= oldest.value.bytes
+            cache[oldest.key] = nil
+        }
+    }
+
+    /// 覚えている日の数と大きさ（診断に出す）
+    var cacheStats: (days: Int, bytes: Int) { (cache.count, cache.values.reduce(0) { $0 + $1.bytes }) }
 
     /// この端末で記録を変えたときの書き込み。
     /// - 中身の変わった会話は番号（rev）を1つ増やす（端末間の同期で、新しいほうを残すため）。
@@ -1113,8 +1234,14 @@ final class ConversationLog {
     }
 
     private func write(_ log: Day, day: String) {
-        guard let data = try? JSONEncoder().encode(log) else { return }
-        try? data.write(to: Self.dir.appendingPathComponent(day + ".json"), options: .atomic)
+        let url = Self.dir.appendingPathComponent(day + ".json")
+        cache[day] = nil
+        guard let data = try? JSONEncoder().encode(log),
+              (try? data.write(to: url, options: .atomic)) != nil,
+              let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        else { return }
+        cacheUse += 1
+        remember(day, log, modified: modified, bytes: data.count)
     }
 
     /// 始まりの順に並べる（同じ時刻どうしは元の順のまま）

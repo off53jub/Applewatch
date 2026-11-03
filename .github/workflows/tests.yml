@@ -1,0 +1,64 @@
+name: Tests
+
+# 記録を壊しうる処理（同期の合わせ方・消す行の見つけ方）と名前の取り出しを、iPhone のシミュレーターで確かめる。
+# IPA を作る「TestFlight」とは別に動くので、ここが失敗しても IPA は作られる。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode を選ぶ
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      # TestFlight と同じ版の Haas-ja の Swift 部品（アプリをビルドするのに要る）
+      - name: Haas-ja の Swift 部品を取ってくる
+        run: |
+          set -e
+          rev=62f542657b454afa7873424e3dfb6d7a1d9c270d
+          base=https://huggingface.co/Sanami/haas-ja-coreml/resolve/$rev
+          mkdir -p Vendor/HaasCore/Sources/HaasCore LifeLog/Haas
+          for f in Audio Frontend HaasASR Tokenizer; do
+            curl -fsSL "$base/swift/Sources/HaasCore/$f.swift" -o "Vendor/HaasCore/Sources/HaasCore/$f.swift"
+          done
+          curl -fsSL "$base/swift/Resources/frontend.bin" -o LifeLog/Haas/frontend.bin
+          curl -fsSL "$base/swift/Resources/vocab.json" -o LifeLog/Haas/vocab.json
+          cat > Vendor/HaasCore/Package.swift <<'SWIFT'
+          // swift-tools-version:5.9
+          import PackageDescription
+
+          let package = Package(
+              name: "HaasCoreML",
+              platforms: [.macOS(.v14), .iOS(.v17)],
+              products: [.library(name: "HaasCore", targets: ["HaasCore"])],
+              targets: [.target(name: "HaasCore", path: "Sources/HaasCore")]
+          )
+          SWIFT
+
+      - name: テスト用のプロジェクトを生成
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec project-tests.yml
+
+      - name: テストする
+        run: |
+          udid=$(xcrun simctl list devices available | grep -m1 -E "^[[:space:]]+iPhone" | grep -oE "[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}")
+          echo "シミュレーター: $udid"
+          xcodebuild test \
+            -project LifeLog.xcodeproj -scheme LifeLogTests \
+            -destination "id=$udid" \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/test.log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -E "error:|failed|XCTAssert" "$RUNNER_TEMP/test.log" | sort -u | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
+          fi
+          exit $status

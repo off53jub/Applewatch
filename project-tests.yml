@@ -1,0 +1,23 @@
+# 自動テスト用のプロジェクト。project.yml（アプリ本体）にテストの部品を足したもの。
+# CI（.github/workflows/tests.yml）だけが使う。IPA を作るビルドは project.yml のまま。
+include:
+  - project.yml
+targets:
+  LifeLogTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [LifeLogTests]
+    dependencies:
+      - target: LifeLog
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog.tests
+schemes:
+  LifeLogTests:
+    build:
+      targets:
+        LifeLog: all
+        LifeLogTests: [test]
+    test:
+      targets: [LifeLogTests]

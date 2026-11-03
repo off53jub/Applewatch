@@ -356,6 +356,39 @@ actor SpeakerLabeler {
         save()
     }
 
+    /// 声のひとこまの音と同じ声とみなす近さ（同じ音から取った特徴なら、ほとんど0になる）
+    private static let sameClip: Float = 0.15
+
+    /// 声のひとこまを、この人から外す（ほかの人の声やテレビの声を拾っていたとき）。
+    /// url があれば、その音から声の特徴を取り直し、この人の覚えている声のうち、それと同じ声（登録・手直しの声も）を外す。
+    /// target を渡すと、その声を target の声として覚え直す（手直しと同じく、自動では消さない声）。外した声の数を返す。
+    func dropSample(_ sample: Sample, from id: String, url: URL?, moveTo target: String?) async throws -> Int {
+        guard let i = index(of: id) else { return 0 }
+        store.people[i].samples.removeAll { $0 == sample }
+        save()
+        guard let url else { return 0 }
+        try await prepare()
+        let audio = try AudioConverter().resampleAudioFile(url)
+        let from = max(0, Int(sample.start * 16_000))
+        let to = min(audio.count, Int(sample.end * 16_000), from + 160_000)
+        guard to - from >= 16_000, let embedding = try await voice(in: Array(audio[from..<to])),
+              let j = index(of: id) else { return 0 }
+        let before = store.people[j].voices.count
+        store.people[j].voices.removeAll { v in
+            v.model == Self.model && v.embedding.count == embedding.count
+                && 1 - zip(v.embedding, embedding).reduce(0) { $0 + $1.0 * $1.1 } < Self.sameClip
+        }
+        let removed = before - store.people[j].voices.count
+        store.people[j].updated = .now
+        if let target, target != id, let t = index(of: target) {
+            addVoice(embedding, pinned: true, to: t)
+            store.people[t].updated = .now
+            remember(sample, for: t)
+        }
+        save()
+        return removed
+    }
+
     /// 1人が話している音から、声の特徴を取る（いちばん長く話した声のまとまりの中心）。
     private func voice(in samples: [Float]) async throws -> [Float]? {
         guard let diarizer else { return nil }

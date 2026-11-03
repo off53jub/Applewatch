@@ -259,6 +259,28 @@ enum Summarizer {
                     todos: list("todos"), topics: list("topics"))
     }
 
+    struct Month {
+        let flow: [String]
+        let decisions: [String]
+        let todos: [String]
+        let topics: [String]
+    }
+
+    static func month(_ days: String, apiKey: String) async throws -> Month {
+        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+            次は、ある人の1か月の記録です（日ごとの流れ・決まったこと・やること・会った人）。1か月のまとめを次の JSON で返してください。
+            なければ空の配列にしてください。記録に無いことは書かないでください。
+            {"flow": ["週ごとに1行、その週の主なできごと"],
+             "decisions": ["この月に決まった大事なこと（10個まで）"],
+             "todos": ["本人がやること・約束で、まだ残っていそうなもの（期限があれば添える。10個まで）"],
+             "topics": ["この月の主な話題や関心ごと（8個まで）"]}
+
+            \(days)
+            """)
+        func list(_ key: String) -> [String] { (json[key] as? [String]) ?? [] }
+        return Month(flow: list("flow"), decisions: list("decisions"), todos: list("todos"), topics: list("topics"))
+    }
+
     /// 質問から、記録を探す手がかりを取り出す。
     struct Plan {
         let keywords: [String]

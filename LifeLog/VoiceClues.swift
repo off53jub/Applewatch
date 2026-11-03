@@ -176,6 +176,10 @@ extension Pipeline {
         let text: String
         /// その行の記録の名前（ひとこまの人と違えば、別の人の声を拾っているかもしれない）
         let speakers: [String]
+        /// その行の話者の番号（名前より確か）
+        let speakerIDs: [String]
+        /// テレビ・動画・放送などの声とされた行が重なっている
+        let media: Bool
         let place: String?
 
         /// 「11/2(日) 14:05・会社」
@@ -210,8 +214,50 @@ extension Pipeline {
             let text = hit.map(\.line.text).joined(separator: " ")
             var speakers: [String] = []
             for name in hit.compactMap(\.line.speaker) where !speakers.contains(name) { speakers.append(name) }
+            var ids: [String] = []
+            for id in hit.compactMap(\.line.speakerID) where !ids.contains(id) { ids.append(id) }
             result[sample] = SampleInfo(time: first.line.time, text: text.count > 80 ? String(text.prefix(80)) + "…" : text,
-                                        speakers: speakers, place: first.place)
+                                        speakers: speakers, speakerIDs: ids,
+                                        media: hit.contains { $0.line.media != nil }, place: first.place)
+        }
+        return result
+    }
+
+    /// 見直したい声のひとこま（記録ではほかの人の行や、テレビ・放送などの行と重なっているもの）
+    struct ReviewItem: Identifiable {
+        let person: SpeakerLabeler.Person
+        let sample: SpeakerLabeler.Sample
+        let info: SampleInfo
+        /// 重なっている行の、ほかの話者の番号（移す先の候補）
+        let others: [String]
+        var id: String { Pipeline.reviewKey(person.id, sample) }
+    }
+
+    nonisolated static func reviewKey(_ person: String, _ sample: SpeakerLabeler.Sample) -> String {
+        person + "|" + sample.audio + "|\(sample.start)"
+    }
+
+    /// 見直しで「このままでよい」にする（もう出さない）
+    func keepSample(_ item: ReviewItem) {
+        var kept = UserDefaults.standard.stringArray(forKey: Self.reviewKeptKey) ?? []
+        kept = Array((kept + [item.id]).suffix(500))
+        UserDefaults.standard.set(kept, forKey: Self.reviewKeptKey)
+    }
+
+    /// 「このままでよい」にしたひとこま
+    static let reviewKeptKey = "voiceReviewKept"
+
+    func voiceReview() -> [ReviewItem] {
+        let infos = sampleInfo(for: people.flatMap(\.samples))
+        let kept = Set(UserDefaults.standard.stringArray(forKey: Self.reviewKeptKey) ?? [])
+        var result: [ReviewItem] = []
+        for person in people {
+            for sample in person.samples {
+                guard let info = infos[sample], !kept.contains(Self.reviewKey(person.id, sample)) else { continue }
+                let others = info.speakerIDs.filter { $0 != person.id }
+                guard !others.isEmpty || info.media else { continue }
+                result.append(ReviewItem(person: person, sample: sample, info: info, others: others))
+            }
         }
         return result
     }

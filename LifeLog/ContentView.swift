@@ -456,6 +456,8 @@ private struct SettingsView: View {
                     NavigationLink("記録の掃除") { CleanupView() }
                     NavigationLink("周りの声と雑音") { NoiseSettingsView() }
                     NavigationLink("聞き取りの成績") { ListenQualityView() }
+                    NavigationLink("自己点検") { DiagnosticsView() }
+                    NavigationLink("登録の控え") { BackupView() }
                     NavigationLink("カレンダー・連絡先・移動・睡眠") { IntegrationsView() }
                     NavigationLink("夜の聞き直し") { NightlyView() }
                     NavigationLink("ロック画面・時計の文字盤から使う") { ShortcutsHelpView() }

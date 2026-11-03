@@ -109,6 +109,8 @@ struct PeopleView: View {
     @State private var clues: [String: Pipeline.VoiceClues] = [:]
     /// ▶︎で鳴らす声のひとこまの、その時に話していた文
     @State private var sampleInfo: [SpeakerLabeler.Sample: Pipeline.SampleInfo] = [:]
+    /// 見直したい声のひとこまの数
+    @State private var reviewCount = 0
 
     /// 名前を付けてほしい声の、はじめに出す数
     private static let waitingShown = 10
@@ -125,6 +127,17 @@ struct PeopleView: View {
             // 自分の声（声を足す・まとめた人を分け直す）
             if let me = pipeline.people.first(where: \.isSelf) {
                 Section { row(me) }
+            }
+            if reviewCount > 0 {
+                Section {
+                    NavigationLink {
+                        VoiceReviewView()
+                    } label: {
+                        LabeledContent("声の見直し", value: "\(reviewCount) 個")
+                    }
+                } footer: {
+                    Text("覚えている声のひとこまのうち、記録ではほかの人やテレビの行と重なっているものです。聞いて直すと、聞き分けの間違いが減ります。")
+                }
             }
             // 名前の無い声のうち、よく話した声から名前を付けてもらう
             if !waiting.isEmpty {
@@ -207,8 +220,9 @@ struct PeopleView: View {
             clues = await pipeline.voiceClues(for: Set(waiting.map(\.id)), talkLimit: 0,
                                               withCalendar: false, withVoice: false)
         }
-        .task(id: pipeline.people.compactMap(\.samples.last)) {
+        .task(id: pipeline.people.flatMap(\.samples)) {
             sampleInfo = pipeline.sampleInfo(for: pipeline.people.compactMap(\.samples.last))
+            reviewCount = pipeline.voiceReview().count
         }
     }
 
@@ -371,6 +385,10 @@ struct PersonView: View {
                                     if !elsewhere.isEmpty {
                                         Text("記録では「\(elsewhere.joined(separator: "」「"))」の行（ほかの人の声を拾っているかもしれません）")
                                             .font(.caption).foregroundStyle(.orange)
+                                    }
+                                    if !elsewhere.isEmpty || info.media {
+                                        NavigationLink("見直す") { VoiceReviewView(only: id) }
+                                            .font(.caption)
                                     }
                                 } else {
                                     Text("声のひとこま \(person.samples.count - i)")

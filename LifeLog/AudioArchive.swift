@@ -11,6 +11,8 @@ final class AudioArchive {
     private let docs: GoogleDocs
     private let monitor = NWPathMonitor()
     private var onWiFi = false
+    /// Wi-Fi につながっているか（モバイル通信・テザリングでは false）
+    var isOnWiFi: Bool { onWiFi }
     /// ファイル名 → ドライブ上の id
     private var uploaded: [String: String]
     /// ほかの端末が上げた音声（ファイル名 → ドライブ上の id）。端末間の同期で受け取る

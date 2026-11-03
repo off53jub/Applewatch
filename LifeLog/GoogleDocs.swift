@@ -400,6 +400,70 @@ final class GoogleDocs {
         return id
     }
 
+    // MARK: - 控え
+
+    private func backupFolder() async throws -> String {
+        if let id = defaults.string(forKey: "backupFolder") { return id }
+        let id = try await findOrCreate(name: "控え", mimeType: "application/vnd.google-apps.folder", parent: try await folderId())
+        defaults.set(id, forKey: "backupFolder")
+        return id
+    }
+
+    /// 「控え」フォルダに控えを1つ書き、名前が prefix で始まる古い控えは新しい keep 個を残してゴミ箱に入れる。
+    func uploadBackup(_ data: Data, name: String, prefix: String, keep: Int) async throws {
+        var folder = try await backupFolder()
+        do {
+            try await uploadFile(data, name: name, parent: folder)
+        } catch GoogleError.http(404, _) {
+            // フォルダが消されていたら作り直す
+            defaults.removeObject(forKey: "backupFolder")
+            folder = try await backupFolder()
+            try await uploadFile(data, name: name, parent: folder)
+        }
+        var comps = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
+        comps.queryItems = [URLQueryItem(name: "q", value: "'\(folder)' in parents and trashed = false"),
+                            URLQueryItem(name: "fields", value: "files(id,name)"),
+                            URLQueryItem(name: "pageSize", value: "1000")]
+        let page = try await request("GET", comps.url!.absoluteString)
+        let mine = (page["files"] as? [[String: Any]] ?? []).compactMap { file -> (id: String, name: String)? in
+            guard let id = file["id"] as? String, let name = file["name"] as? String, name.hasPrefix(prefix) else { return nil }
+            return (id, name)
+        }.sorted { $0.name > $1.name }
+        for old in mine.dropFirst(keep) {
+            _ = try? await request("PATCH", "https://www.googleapis.com/drive/v3/files/\(old.id)", json: ["trashed": true])
+        }
+    }
+
+    /// 「控え」フォルダのファイル（ほかの端末の分も）
+    func backupFiles() async throws -> [SyncFile] {
+        let folder = try await backupFolder()
+        var comps = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
+        comps.queryItems = [URLQueryItem(name: "q", value: "'\(folder)' in parents and trashed = false"),
+                            URLQueryItem(name: "fields", value: "files(id,name,modifiedTime)"),
+                            URLQueryItem(name: "pageSize", value: "1000")]
+        let page = try await request("GET", comps.url!.absoluteString)
+        return (page["files"] as? [[String: Any]] ?? []).compactMap { file in
+            guard let id = file["id"] as? String, let name = file["name"] as? String else { return nil }
+            return SyncFile(id: id, name: name, modified: file["modifiedTime"] as? String ?? "")
+        }
+    }
+
+    private func uploadFile(_ data: Data, name: String, parent: String) async throws {
+        let boundary = "lifelog-\(UUID().uuidString)"
+        var body = Data()
+        let meta = try JSONSerialization.data(withJSONObject: ["name": name, "parents": [parent], "mimeType": "application/json"])
+        body.append("--\(boundary)\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".data(using: .utf8)!)
+        body.append(meta)
+        body.append("\r\n--\(boundary)\r\nContent-Type: application/json\r\n\r\n".data(using: .utf8)!)
+        body.append(data)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        var req = try await authorized("POST", "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id")
+        req.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        req.timeoutInterval = 120
+        _ = try await send(req)
+    }
+
     private func folderId() async throws -> String {
         if let id = defaults.string(forKey: "folderId") { return id }
         let id = try await findOrCreate(name: Self.folderName, mimeType: "application/vnd.google-apps.folder", parent: nil)
