@@ -120,6 +120,53 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(log.conversations(on: day).map(\.title), ["先", "後"])
     }
 
+    // MARK: - 2人を分ける
+
+    /// 長さ1の声の特徴（2つの向きのまわりに少しずらしたもの）
+    private func voice(_ base: [Float], _ jitter: Float) -> [Float] {
+        let v = base.enumerated().map { $0.element + jitter * Float($0.offset % 3 == 0 ? 1 : -1) }
+        let norm = v.reduce(0) { $0 + $1 * $1 }.squareRoot()
+        return v.map { $0 / norm }
+    }
+
+    func testTwoGroupsSeparatesTwoVoices() {
+        let a: [Float] = [1, 0, 0, 0], b: [Float] = [0, 1, 0, 0]
+        let vectors = [voice(a, 0.05), voice(b, 0.04), voice(a, 0.02), voice(a, 0.08), voice(b, 0.07), voice(b, 0.01)]
+        guard let split = Pipeline.twoGroups(vectors) else { return XCTFail("分かれなかった") }
+        // a の仲間どうし、b の仲間どうしが同じ組になる
+        XCTAssertEqual(split.labels[0], split.labels[2])
+        XCTAssertEqual(split.labels[0], split.labels[3])
+        XCTAssertEqual(split.labels[1], split.labels[4])
+        XCTAssertEqual(split.labels[1], split.labels[5])
+        XCTAssertNotEqual(split.labels[0], split.labels[1])
+        XCTAssertGreaterThan(split.distance, Pipeline.splitApart)
+    }
+
+    func testTwoGroupsSameVoiceIsClose() {
+        let a: [Float] = [1, 0, 0, 0]
+        let vectors = [voice(a, 0.05), voice(a, 0.02), voice(a, 0.08), voice(a, 0.01)]
+        if let split = Pipeline.twoGroups(vectors) {
+            XCTAssertLessThan(split.distance, Pipeline.splitApart)
+        }
+    }
+
+    // MARK: - 聞き間違いかも
+
+    func testMisheardBoxMergesSameWord() {
+        let box = MisheardBox()
+        let ref1 = MisheardBox.Ref(day: day, time: Date(timeIntervalSince1970: 915_180_000), text: "テスト用の会義")
+        let ref2 = MisheardBox.Ref(day: day, time: Date(timeIntervalSince1970: 915_180_060), text: "また会義")
+        let before = box.open.filter { $0.wrong == "会義テスト" }.count
+        box.add(wrong: "会義テスト", guess: "会議", reason: "", ref: ref1)
+        box.add(wrong: "会義テスト", guess: "", reason: "", ref: ref2)
+        let found = box.open.filter { $0.wrong == "会義テスト" }
+        XCTAssertEqual(found.count, max(1, before))
+        XCTAssertEqual(found.first?.refs.count, 2)
+        XCTAssertEqual(found.first?.guess, "会議")
+        if let id = found.first?.id { box.settle(id, as: .kept) }
+        XCTAssertTrue(box.kept.contains("会義テスト"))
+    }
+
     // MARK: - 控え
 
     func testBackupLabel() {

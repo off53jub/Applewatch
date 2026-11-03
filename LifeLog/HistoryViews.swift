@@ -8,8 +8,19 @@ struct HistoryView: View {
     @State private var days: [String] = []
 
     var body: some View {
-        List(days, id: \.self) { day in
-            NavigationLink(day) { DayView(day: day) }
+        List {
+            Section {
+                NavigationLink {
+                    MisheardView()
+                } label: {
+                    LabeledContent("聞き間違いかも", value: "\(pipeline.misheardCount) 個")
+                }
+            }
+            Section {
+                ForEach(days, id: \.self) { day in
+                    NavigationLink(day) { DayView(day: day) }
+                }
+            }
         }
         .overlay {
             if days.isEmpty {

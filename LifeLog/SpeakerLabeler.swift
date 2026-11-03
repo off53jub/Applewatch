@@ -356,6 +356,40 @@ actor SpeakerLabeler {
         save()
     }
 
+    /// 1つの音声の中のいくつかの場面から、それぞれの声の特徴を取る（1秒より短い・取れなかった場面は nil）。
+    func embeddings(_ url: URL, clips: [(start: TimeInterval, end: TimeInterval)]) async throws -> [[Float]?] {
+        try await prepare()
+        let audio = try AudioConverter().resampleAudioFile(url)
+        var result: [[Float]?] = []
+        for clip in clips {
+            let from = max(0, Int(clip.start * 16_000))
+            let to = min(audio.count, Int(clip.end * 16_000), from + 160_000)
+            result.append(to - from >= 16_000 ? try await voice(in: Array(audio[from..<to])) : nil)
+        }
+        return result
+    }
+
+    /// 1人に混ざっていた2人を分ける。id の覚えている声のうち、moved の声のほうが keep の声より近いもの（近さ0.3未満）を外し、
+    /// moved の声を target の声として覚える（手直しと同じく、自動では消さない声。10個まで）。外した声の数を返す。
+    func split(_ id: String, keep: [[Float]], moved: [[Float]], to target: String) -> Int {
+        guard let i = index(of: id), let t = index(of: target), id != target else { return 0 }
+        func nearest(_ v: [Float], _ list: [[Float]]) -> Float {
+            list.filter { $0.count == v.count }.map { 1 - zip($0, v).reduce(0) { $0 + $1.0 * $1.1 } }.min() ?? 1
+        }
+        let before = store.people[i].voices.count
+        store.people[i].voices.removeAll { v in
+            guard v.model == Self.model else { return false }
+            let toMoved = nearest(v.embedding, moved)
+            return toMoved < 0.3 && toMoved < nearest(v.embedding, keep)
+        }
+        let removed = before - store.people[i].voices.count
+        store.people[i].updated = .now
+        for embedding in moved.prefix(10) { addVoice(embedding, pinned: true, to: t) }
+        store.people[t].updated = .now
+        save()
+        return removed
+    }
+
     /// 声のひとこまの音と同じ声とみなす近さ（同じ音から取った特徴なら、ほとんど0になる）
     private static let sameClip: Float = 0.15
 

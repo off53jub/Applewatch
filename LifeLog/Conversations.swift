@@ -94,6 +94,8 @@ final class ConversationLog {
         var rev: Int?
         /// あとから見出しを作ろうとして、作れる中身が無かった（もうやり直さない）
         var titleSkipped: Bool?
+        /// 手で文字を直したので、見出しと要点を作り直す
+        var resummarize: Bool?
 
         /// 話した相手。テレビや動画の声は相手に数えない。
         var people: [String] {
@@ -116,6 +118,8 @@ final class ConversationLog {
         var removed: [Removed]?
         /// まとめのあとで見出しが増えたので、まとめを書き足す
         var summaryStale: Bool?
+        /// 文字を直して会話の見出しを作り直したので、1日のまとめも作り直す（書き足しではなく置き換える）
+        var redoSummary: Bool?
     }
 
     struct Removed: Codable {
@@ -743,13 +747,118 @@ final class ConversationLog {
         try await docs.replaceAll(fixes, day: day)
         // 直しているあいだに書き足された分も残すよう、読み直してから当てる
         var log = load(day)
+        let manual = changes.contains(where: \.manual)
         for c in log.conversations.indices {
             for l in log.conversations[c].lines.indices {
-                if let new = edited[Junk.key(log.conversations[c].lines[l])] { log.conversations[c].lines[l] = new }
+                if let new = edited[Junk.key(log.conversations[c].lines[l])] {
+                    log.conversations[c].lines[l] = new
+                    // 手で直した閉じた会話は、見出しと要点をあとで作り直す
+                    if manual && log.conversations[c].closed { log.conversations[c].resummarize = true }
+                }
             }
         }
         save(log, day: day)
         return fixes.count
+    }
+
+    // MARK: - 直したあとのまとめ直し
+
+    /// 見出しと要点を作り直す会話の数と、1日のまとめを作り直す日の数
+    func resummarizeCounts() -> (conversations: Int, days: Int) {
+        var conversations = 0, days = 0
+        for day in self.days() {
+            let log = load(day)
+            let count = log.conversations.filter { $0.resummarize == true }.count
+            conversations += count
+            if count > 0 || log.redoSummary == true { days += 1 }
+        }
+        return (conversations, days)
+    }
+
+    /// 手で文字を直した会話の見出しと要点を作り直し、ドキュメントの見出しも置き換える。
+    /// その日の会話がそろったら、1日のまとめも作り直して置き換える（今日の分は日が変わってから）。
+    /// skipping の日（まだ直している途中の日）は飛ばす。作り直した会話の数を返す。
+    func resummarize(today: String, skipping: Set<String> = []) async -> Int {
+        guard let key = apiKey() else { return 0 }
+        var budget = Self.fillBudget
+        var done = 0
+        for day in days().reversed() where !skipping.contains(day) {
+            for c in load(day).conversations where c.resummarize == true {
+                guard budget > 0 else { return done }
+                let transcript = c.lines.filter { $0.media == nil }.map { line in
+                    (line.speaker.map { "[\($0)] " } ?? "") + line.text
+                }.joined(separator: "\n")
+                var summary: Summarizer.Conversation?
+                if c.closed && transcript.count >= Self.minimumCharacters {
+                    budget -= transcript.count
+                    let range = "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))"
+                    let event = await eventInfo(c.start, c.end)
+                    guard let made = try? await Summarizer.conversation(transcript, timeRange: range,
+                                                                        selfShare: Self.selfShare(c),
+                                                                        event: event?.detail, apiKey: key) else { return done }
+                    summary = made
+                }
+                guard await replaceTitle(summary, of: c, day: day) else { return done }
+                if summary != nil { done += 1 }
+            }
+            let log = load(day)
+            if log.redoSummary == true, day < today, log.conversations.allSatisfy(\.closed),
+               !log.conversations.contains(where: { $0.resummarize == true }) {
+                guard budget > 0, await redoDailySummary(day, key: key) else { return done }
+                budget -= 3_000
+            }
+        }
+        return done
+    }
+
+    /// 作り直した見出しと要点を当てる。summary が nil（短い会話など）なら印を外すだけ。
+    private func replaceTitle(_ summary: Summarizer.Conversation?, of c: Conversation, day: String) async -> Bool {
+        var updated = c
+        updated.resummarize = nil
+        if let summary, !summary.title.isEmpty {
+            updated.title = summary.title
+            updated.points = summary.points
+        }
+        let changed = updated.title != c.title || updated.points != c.points
+        if changed {
+            do {
+                // 前の見出しを要点ごと消して、新しい見出しを会話の最初の行の前に入れる
+                _ = try await docs.deleteParagraphs([], headings: [Self.headingText(c)], day: day)
+                try await docs.insert(heading: Self.headingText(updated), body: updated.points.map { "・" + $0 + "\n" }.joined(),
+                                      at: c.docIndex, before: c.lines.first.map(Self.docLine), style: "HEADING_2", day: day)
+            } catch {
+                return false
+            }
+        }
+        // 書いているあいだに記録が変わっていてもよいように、読み直してから置き換える
+        var log = load(day)
+        guard let i = log.conversations.firstIndex(where: { $0.start == c.start }) else { return true }
+        log.conversations[i].resummarize = nil
+        if changed {
+            log.conversations[i].title = updated.title
+            log.conversations[i].points = updated.points
+            if log.summaryWritten { log.redoSummary = true }
+        }
+        save(log, day: day)
+        return true
+    }
+
+    /// 1日のまとめを作り直し、ドキュメントの先頭のまとめ（あとから書き足した分も）を置き換える。
+    private func redoDailySummary(_ day: String, key: String) async -> Bool {
+        guard let made = await dailySummary(load(day), day: day, key: key) else { return false }
+        do {
+            _ = try await docs.deleteDaySummary(day: day)
+            try await docs.insert(heading: "1日のまとめ", body: made.body, at: 1, style: "HEADING_1", day: day)
+        } catch {
+            return false
+        }
+        var log = load(day)
+        log.summary = made.summary
+        log.summaryWritten = true
+        log.summaryStale = nil
+        log.redoSummary = nil
+        save(log, day: day)
+        return true
     }
 
     // MARK: - 話者の手直し
@@ -909,48 +1018,8 @@ final class ConversationLog {
                 }
                 continue
             }
-            // 1日の流れのために、見出しの無い短い会話も時刻と場所だけは渡す
-            let overview = log.conversations.map { c in
-                let place = c.place.map { "・" + $0 } ?? ""
-                let people = c.people.isEmpty ? "" : "（\(c.people.joined(separator: "、"))と）"
-                let media = c.media.map { "［\($0)\(c.program.map { "「\($0)」" } ?? "")を流していた］" } ?? ""
-                let head = "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))\(place)\(people)\(media) \(c.title ?? "（短い会話）")"
-                return ([head] + c.points.map { "  ・" + $0 }).joined(separator: "\n")
-            }.joined(separator: "\n")
-            guard var summary = try? await Summarizer.day(overview, apiKey: key) else { continue }
-            // 1日の流れは、アプリの「過ごし方」と同じ塊にする（何時から何時まで何をしていて、その中で何をしたか）
-            let activities = await dayActivities(day)
-            if !activities.isEmpty {
-                summary = Summarizer.Day(flow: activities.map(\.flowLine), decisions: summary.decisions,
-                                         todos: summary.todos, topics: summary.topics)
-            }
-
-            let people = Array(NSOrderedSet(array: log.conversations.flatMap(\.people))) as? [String] ?? []
-            var body = ""
-            func section(_ name: String, _ items: [String]) {
-                guard !items.isEmpty else { return }
-                body += name + "\n" + items.map { "・" + $0 + "\n" }.joined()
-            }
-            section("1日の流れ", summary.flow)
-            // 時計やアプリで印を付けたところ（会話ごとに、続いた行は1つにまとめる）
-            var marked: [String] = []
-            for c in log.conversations {
-                var last: Date?
-                for line in c.lines where line.marked == true {
-                    defer { last = line.time }
-                    if let last, line.time.timeIntervalSince(last) <= Self.markSpan * 2, !marked.isEmpty {
-                        marked[marked.count - 1] += " " + line.text
-                        continue
-                    }
-                    marked.append(timeFormatter.string(from: line.time) + "　" + (line.speaker.map { "[\($0)] " } ?? "") + line.text)
-                }
-            }
-            section("★ 印を付けたところ", marked.map { $0.count > 120 ? String($0.prefix(120)) + "…" : $0 })
-            body += "会った人: " + (people.isEmpty ? "なし" : people.joined(separator: "、")) + "\n"
-            section("決まったこと", summary.decisions)
-            section("やること", summary.todos)
-            section("話題", summary.topics)
-            body += "\n"
+            guard let made = await dailySummary(log, day: day, key: key) else { continue }
+            let summary = made.summary, body = made.body
             // ドキュメントにまとめがある日は、二重に書かない（見出しが増えた日だけ、書き足した分として入れる）
             var exists = false
             if again { exists = (try? await docs.hasParagraph("1日のまとめ", day: day)) ?? true }
@@ -967,6 +1036,53 @@ final class ConversationLog {
                 continue
             }
         }
+    }
+
+    /// 1日のまとめの中身と、ドキュメントに書く本文。作れなければ nil。
+    private func dailySummary(_ log: Day, day: String, key: String) async -> (summary: Summarizer.Day, body: String)? {
+        // 1日の流れのために、見出しの無い短い会話も時刻と場所だけは渡す
+        let overview = log.conversations.map { c in
+            let place = c.place.map { "・" + $0 } ?? ""
+            let people = c.people.isEmpty ? "" : "（\(c.people.joined(separator: "、"))と）"
+            let media = c.media.map { "［\($0)\(c.program.map { "「\($0)」" } ?? "")を流していた］" } ?? ""
+            let head = "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))\(place)\(people)\(media) \(c.title ?? "（短い会話）")"
+            return ([head] + c.points.map { "  ・" + $0 }).joined(separator: "\n")
+        }.joined(separator: "\n")
+        guard var summary = try? await Summarizer.day(overview, apiKey: key) else { return nil }
+        // 1日の流れは、アプリの「過ごし方」と同じ塊にする（何時から何時まで何をしていて、その中で何をしたか）
+        let activities = await dayActivities(day)
+        if !activities.isEmpty {
+            summary = Summarizer.Day(flow: activities.map(\.flowLine), decisions: summary.decisions,
+                                     todos: summary.todos, topics: summary.topics)
+        }
+
+        let people = Array(NSOrderedSet(array: log.conversations.flatMap(\.people))) as? [String] ?? []
+        var body = ""
+        func section(_ name: String, _ items: [String]) {
+            guard !items.isEmpty else { return }
+            body += name + "\n" + items.map { "・" + $0 + "\n" }.joined()
+        }
+        section("1日の流れ", summary.flow)
+        // 時計やアプリで印を付けたところ（会話ごとに、続いた行は1つにまとめる）
+        var marked: [String] = []
+        for c in log.conversations {
+            var last: Date?
+            for line in c.lines where line.marked == true {
+                defer { last = line.time }
+                if let last, line.time.timeIntervalSince(last) <= Self.markSpan * 2, !marked.isEmpty {
+                    marked[marked.count - 1] += " " + line.text
+                    continue
+                }
+                marked.append(timeFormatter.string(from: line.time) + "　" + (line.speaker.map { "[\($0)] " } ?? "") + line.text)
+            }
+        }
+        section("★ 印を付けたところ", marked.map { $0.count > 120 ? String($0.prefix(120)) + "…" : $0 })
+        body += "会った人: " + (people.isEmpty ? "なし" : people.joined(separator: "、")) + "\n"
+        section("決まったこと", summary.decisions)
+        section("やること", summary.todos)
+        section("話題", summary.topics)
+        body += "\n"
+        return (summary, body)
     }
 
     // MARK: - 週のまとめ

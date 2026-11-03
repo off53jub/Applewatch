@@ -119,6 +119,18 @@ private struct TodayView: View {
                     }
                 }
 
+                if pipeline.misheardCount > 0 {
+                    Section {
+                        NavigationLink {
+                            MisheardView()
+                        } label: {
+                            Label("聞き間違いかも（\(pipeline.misheardCount) 個）", systemImage: "text.badge.checkmark")
+                        }
+                    } footer: {
+                        Text("聞き間違いらしい言葉です。直し終わると、その日の見出しとまとめを作り直します。")
+                    }
+                }
+
                 if !pipeline.lastLines.isEmpty {
                     Section("最近の発言") {
                         ForEach(Array(pipeline.lastLines.suffix(8).reversed().enumerated()), id: \.offset) { _, line in

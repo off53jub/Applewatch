@@ -78,6 +78,175 @@ struct VoiceReviewView: View {
     }
 }
 
+/// 1人として扱われている2人を分ける。その人の行の声を取って近さで2つに分け、聞いて、別の人の声のほうを分ける。
+struct SplitPersonView: View {
+    @Environment(Pipeline.self) private var pipeline
+    let id: String
+    @State private var result: Pipeline.SplitResult?
+    @State private var limit = 60
+    @State private var working = false
+    @State private var progress = ""
+    @State private var player = ClipPlayer()
+    /// 別の人にする組（0 か 1）
+    @State private var picking: Pick?
+    @State private var naming: Pick?
+    @State private var newName = ""
+    @State private var done: String?
+    @State private var applied: (keep: [Pipeline.SplitClip], moved: [Pipeline.SplitClip], target: String)?
+
+    struct Pick: Identifiable { let id: Int }
+
+    private static let time: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = "M/d HH:mm"
+        return f
+    }()
+
+    private var person: SpeakerLabeler.Person? { pipeline.people.first { $0.id == id } }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("調べる行", selection: $limit) {
+                    Text("新しい 60 行").tag(60)
+                    Text("新しい 150 行").tag(150)
+                }
+                Button(working ? progress : (result == nil ? "声を2つに分けてみる" : "もう一度分けてみる")) { run() }
+                    .disabled(working)
+            } footer: {
+                Text("「\(person?.displayName ?? "")」とされた行（2秒以上話したもの）の声を取り、声の近さで2つに分けます。▶︎で聞いて、「\(person?.displayName ?? "")」ではないほうを「この声は別の人」にしてください。その行の名前が変わり、覚えている声も分け直すので、これからの聞き分けも分かれます。録音が手元に無い行はドライブから取ってくるので、Wi-Fi のときに。")
+            }
+            if let note = result?.note {
+                Section { Text(note).foregroundStyle(.orange) }
+            }
+            if let result, result.groups.count == 2 {
+                ForEach(0..<2, id: \.self) { g in
+                    Section {
+                        ForEach(result.groups[g].prefix(8)) { clip in clipRow(clip) }
+                        if result.groups[g].count > 8 {
+                            Text("ほか \(result.groups[g].count - 8) 行").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if done == nil {
+                            Button("この声は別の人（分ける）") { picking = Pick(id: g) }
+                        }
+                    } header: {
+                        Text("声\(g == 0 ? "A" : "B")（\(result.groups[g].count) 行）")
+                    }
+                }
+            }
+            if let done {
+                Section {
+                    Text(done)
+                    if let applied {
+                        Button(working ? progress : "残りの古い行も、声で振り分ける（300 行まで）") {
+                            working = true
+                            Task {
+                                let count = await pipeline.reassignRest(id, keep: applied.keep, moved: applied.moved,
+                                                                         to: applied.target) { text in
+                                    Task { @MainActor in progress = text }
+                                }
+                                self.done = (self.done ?? "") + "\n古い行のうち \(count) 行も直しました。"
+                                self.applied = nil
+                                working = false
+                            }
+                        }
+                        .disabled(working)
+                    }
+                }
+            }
+        }
+        .navigationTitle("2人を分ける")
+        .onDisappear { player.stop() }
+        .sheet(item: $picking) { pick in
+            NavigationStack {
+                PersonPicker(exclude: id, includeSelf: true) { target in
+                    picking = nil
+                    apply(pick.id, to: target)
+                }
+                .navigationTitle("だれの声ですか")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("キャンセル") { picking = nil } }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("新しい人") {
+                            picking = nil
+                            newName = ""
+                            naming = pick
+                        }
+                    }
+                }
+            }
+        }
+        .alert("新しい人の名前", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
+            TextField("名前", text: $newName)
+            Button("分ける") {
+                let name = newName.trimmingCharacters(in: .whitespaces)
+                if let pick = naming, !name.isEmpty {
+                    Task {
+                        let target = await pipeline.newPerson(name: name, context: person?.context)
+                        apply(pick.id, to: target)
+                    }
+                }
+                naming = nil
+            }
+            Button("キャンセル", role: .cancel) { naming = nil }
+        }
+    }
+
+    private func clipRow(_ clip: Pipeline.SplitClip) -> some View {
+        let key = "split-\(clip.line.time.timeIntervalSince1970)"
+        return Button {
+            Task {
+                await player.toggle(key, at: clip.line.offset ?? 0, until: clip.end) {
+                    guard let audio = clip.line.audio else { return nil }
+                    return await pipeline.archive.playableURL(for: audio)
+                }
+            }
+        } label: {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(Self.time.string(from: clip.line.time)).font(.caption).foregroundStyle(.secondary)
+                    Text(clip.line.text).lineLimit(3)
+                }
+                Spacer(minLength: 0)
+                if player.loading == key {
+                    ProgressView()
+                } else {
+                    Image(systemName: player.playing == key ? "stop.circle.fill" : "play.circle").foregroundStyle(Color.accentColor)
+                }
+            }
+        }
+        .tint(.primary)
+    }
+
+    private func run() {
+        player.stop()
+        working = true
+        done = nil
+        applied = nil
+        progress = "声を調べています…"
+        Task {
+            result = await pipeline.splitGroups(for: id, limit: limit) { text in
+                Task { @MainActor in progress = text }
+            }
+            working = false
+        }
+    }
+
+    private func apply(_ group: Int, to target: String) {
+        guard let result, result.groups.count == 2 else { return }
+        let moved = result.groups[group], keep = result.groups[1 - group]
+        player.stop()
+        working = true
+        progress = "分けています…"
+        Task {
+            done = await pipeline.applySplit(id, keep: keep, moved: moved, to: target)
+            applied = (keep, moved, target)
+            working = false
+        }
+    }
+}
+
 /// 登録の控え。毎日の控えの様子と、控えから戻す。
 struct BackupView: View {
     @Environment(Pipeline.self) private var pipeline

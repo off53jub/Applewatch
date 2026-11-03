@@ -165,6 +165,8 @@ final class Pipeline {
     let watchDelays = WatchDelayLog()
     /// 区切りごとの騒がしさ（しきい値を実際の録音で合わせるため）
     let noiseLog = NoiseLog()
+    /// 聞き間違いと思われる言葉の一覧
+    let misheard = MisheardBox()
     /// 時計が低電力モードか（時計が知らせてくる。まだ知らなければ nil）
     private(set) var watchLowPower: Bool?
     /// ほかの端末から記録が届くたびに増える（画面を出し直すため）
@@ -689,6 +691,148 @@ final class Pipeline {
         }
     }
 
+    // MARK: - 混ざった2人を分ける
+
+    /// 分けるために声を取った行
+    struct SplitClip: Identifiable {
+        let line: ConversationLog.Line
+        /// 再生を止める位置（同じ音声の次の行まで、最長10秒）
+        let end: TimeInterval
+        let embedding: [Float]
+        var id: Date { line.time }
+    }
+
+    struct SplitResult {
+        /// 声の近さで分けた2つ（行の多いほうが先）
+        var groups: [[SplitClip]] = []
+        /// 2つの声の中心どうしの近さ（大きいほど別の人らしい）
+        var distance: Float = 0
+        var note: String?
+    }
+
+    /// 2つの声がこれより離れていれば、別の人らしい
+    static let splitApart: Float = 0.25
+
+    /// その人の行（新しいものから limit 行まで。2秒以上のもの）の声を取り、声の近さで2つに分ける。記録はまだ変えない。
+    func splitGroups(for id: String, limit: Int = 60, progress: @escaping (String) -> Void) async -> SplitResult {
+        let candidates = splitCandidates(for: id, limit: limit)
+        guard candidates.count >= 4 else {
+            return SplitResult(note: "声を取れる行が少なすぎます（2秒以上話した行が4つ以上要ります）。")
+        }
+        do {
+            try await speakers.prepare()
+        } catch {
+            return SplitResult(note: "聞き分けを準備できませんでした: \(error.localizedDescription)")
+        }
+        let clips = await embed(candidates, progress: progress)
+        guard clips.count >= 4, let split = Self.twoGroups(clips.map(\.embedding)) else {
+            return SplitResult(note: "声を取れませんでした（録音が手元にもドライブにも残っていない行が多い）。")
+        }
+        let groups = [0, 1].map { g in zip(clips, split.labels).filter { $0.1 == g }.map(\.0).sorted { $0.line.time > $1.line.time } }
+            .sorted { $0.count > $1.count }
+        return SplitResult(groups: groups, distance: split.distance,
+                           note: split.distance < Self.splitApart ? "2つの声はかなり近いので、同じ人かもしれません。聞いて確かめてください。" : nil)
+    }
+
+    /// その人の行のうち、声を取れるもの（録音の位置があり、2秒以上）。新しい行から limit 行まで。skipping の時刻の行は除く。
+    private func splitCandidates(for id: String, limit: Int,
+                                 skipping: Set<Date> = []) -> [(line: ConversationLog.Line, end: TimeInterval)] {
+        var candidates: [(line: ConversationLog.Line, end: TimeInterval)] = []
+        for day in conversations.recordedDays() {
+            for c in conversations.conversations(on: day).reversed() where c.media == nil {
+                for (i, line) in c.lines.enumerated().reversed()
+                where line.speakerID == id && line.media == nil && !skipping.contains(line.time) {
+                    guard let offset = line.offset, let audio = line.audio else { continue }
+                    let next = c.lines[(i + 1)...].first { $0.audio == audio }?.offset
+                    let end = min(offset + 10, next ?? offset + 10)
+                    guard end - offset >= 2 else { continue }
+                    candidates.append((line, end))
+                    if candidates.count >= limit { return candidates }
+                }
+            }
+        }
+        return candidates
+    }
+
+    /// 行の声の特徴を取る（録音ごとにまとめて読む。録音が無い行は外す）
+    private func embed(_ candidates: [(line: ConversationLog.Line, end: TimeInterval)],
+                       progress: @escaping (String) -> Void) async -> [SplitClip] {
+        var clips: [SplitClip] = []
+        let byAudio = Dictionary(grouping: candidates) { $0.line.audio ?? "" }
+        for (n, (audio, list)) in byAudio.enumerated() {
+            progress("声を調べています… \(n + 1) / \(byAudio.count) 個の録音")
+            guard let url = await archive.playableURL(for: audio),
+                  let embeddings = try? await speakers.embeddings(url, clips: list.map { ($0.line.offset ?? 0, $0.end) })
+            else { continue }
+            for (item, embedding) in zip(list, embeddings) {
+                if let embedding { clips.append(SplitClip(line: item.line, end: item.end, embedding: embedding)) }
+            }
+        }
+        return clips
+    }
+
+    nonisolated static func voiceDistance(_ a: [Float], _ b: [Float]) -> Float { 1 - zip(a, b).reduce(0) { $0 + $1.0 * $1.1 } }
+
+    /// 声の特徴の中心（足して長さを1にしたもの）
+    nonisolated static func voiceCenter(_ list: [[Float]]) -> [Float] {
+        guard let first = list.first else { return [] }
+        var sum = [Float](repeating: 0, count: first.count)
+        for v in list { for k in sum.indices where k < v.count { sum[k] += v[k] } }
+        let norm = sum.reduce(0) { $0 + $1 * $1 }.squareRoot()
+        return norm > 0 ? sum.map { $0 / norm } : sum
+    }
+
+    /// 声の特徴を、近さで2つに分ける（いちばん離れた2つから始めて、中心を10回寄せ直す）。どちらかが空になれば nil。
+    nonisolated static func twoGroups(_ vectors: [[Float]]) -> (labels: [Int], distance: Float)? {
+        guard vectors.count >= 2 else { return nil }
+        let distance = voiceDistance, center = voiceCenter
+        func farthest(from v: [Float]) -> [Float] {
+            vectors.max { distance(v, $0) < distance(v, $1) } ?? v
+        }
+        var b = farthest(from: vectors[0])
+        var a = farthest(from: b)
+        var labels: [Int] = []
+        for _ in 0..<10 {
+            labels = vectors.map { distance($0, a) <= distance($0, b) ? 0 : 1 }
+            let first = zip(vectors, labels).filter { $0.1 == 0 }.map(\.0)
+            let second = zip(vectors, labels).filter { $0.1 == 1 }.map(\.0)
+            guard !first.isEmpty, !second.isEmpty else { return nil }
+            a = center(first)
+            b = center(second)
+        }
+        return (labels, distance(a, b))
+    }
+
+    /// 分けたうち moved の行を target の人にする。id の覚えている声から moved に近いものを外し、target の声として覚える。
+    func applySplit(_ id: String, keep: [SplitClip], moved: [SplitClip], to target: String) async -> String {
+        let removed = await speakers.split(id, keep: keep.map(\.embedding), moved: moved.map(\.embedding), to: target)
+        let times = Set(moved.map(\.line.time))
+        await relabel(to: target) { $0.speakerID == id && times.contains($0.time) }
+        hasSelfVoice = await speakers.hasSelfVoice
+        placeIndexBuilt = .distantPast
+        recordsVersion += 1
+        let name = await speakers.name(of: target) ?? ""
+        return "\(moved.count) 行を「\(name)」にしました。覚えていた声のうち \(removed) つを外し、「\(name)」の声として覚えました。"
+    }
+
+    /// 分けたあと、まだ id のままの行（調べた行より前のもの。多くても limit 行）の声を取り、
+    /// moved の声のほうがはっきり近い行（keep より0.05以上近い）を target にする。直した行の数を返す。
+    func reassignRest(_ id: String, keep: [SplitClip], moved: [SplitClip], to target: String, limit: Int = 300,
+                      progress: @escaping (String) -> Void) async -> Int {
+        let seen = Set((keep + moved).map(\.line.time))
+        let clips = await embed(splitCandidates(for: id, limit: limit, skipping: seen), progress: progress)
+        let keepCenter = Self.voiceCenter(keep.map(\.embedding))
+        let movedCenter = Self.voiceCenter(moved.map(\.embedding))
+        let times = Set(clips.filter {
+            Self.voiceDistance($0.embedding, movedCenter) + 0.05 < Self.voiceDistance($0.embedding, keepCenter)
+        }.map(\.line.time))
+        guard !times.isEmpty else { return 0 }
+        await relabel(to: target) { $0.speakerID == id && times.contains($0.time) }
+        placeIndexBuilt = .distantPast
+        recordsVersion += 1
+        return times.count
+    }
+
     func removePerson(_ id: String) async {
         await speakers.remove(id)
         people = await speakers.people()
@@ -1025,6 +1169,9 @@ final class Pipeline {
         if UIDevice.current.userInterfaceIdiom != .pad {
             // 無料枠が足りずに見出しを作れなかった会話を、少しずつ埋める
             await conversations.fillMissingTitles()
+            // 聞き間違いらしい言葉を探し、直し終わった日の見出しとまとめを作り直す
+            await findMisheard()
+            await resummarize()
             await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
             await conversations.writePeopleNotes()
             await conversations.writeWeeklySummary(today: dayFormatter.string(from: .now))
@@ -1393,6 +1540,55 @@ final class Pipeline {
             lastLines[i] = ConversationLog.docLine(edited)
         }
         return nil
+    }
+
+    // MARK: - 聞き間違いかも
+
+    /// 聞き間違いと思われる言葉の一覧
+    var misheardCount: Int { misheard.open.count }
+
+    /// 聞き間違いの言葉を直す。everywhere なら直近30日のその言葉を含む行すべて、でなければ見つけた行だけ。
+    /// 直した会話は、あとで見出しと要点・1日のまとめを作り直す。結果の一文を返す。
+    func fixMisheard(_ suspect: MisheardBox.Suspect, to right: String, everywhere: Bool, addFix: Bool) async -> String {
+        // 書き足しと重ならないよう、処理中ならそれを待つ
+        if let queueTask { await queueTask.value }
+        let refs = everywhere ? misheardOccurrences(of: suspect.wrong) : suspect.refs
+        var byDay: [String: [ConversationLog.TextChange]] = [:]
+        for ref in refs {
+            guard let line = currentLine(ref), line.text.contains(suspect.wrong) else { continue }
+            byDay[ref.day, default: []].append(.init(line: line, text: line.text.replacingOccurrences(of: suspect.wrong, with: right),
+                                                     confidence: 1, manual: true))
+        }
+        var fixed = 0
+        for (day, changes) in byDay.sorted(by: { $0.key < $1.key }) {
+            do {
+                fixed += try await conversations.editText(changes, day: day)
+            } catch {
+                recordsVersion += 1
+                return "途中で直せなくなりました（\(fixed) 行は直しました）: \(error.localizedDescription)"
+            }
+        }
+        if addFix, let first = refs.first {
+            let group: Vocabulary.Group = vocabularyContext(at: first.time) == .work ? .work : .other
+            vocabulary.addFix(wrong: suspect.wrong, right: right, group: group)
+        }
+        misheard.settle(suspect.id, as: .fixed)
+        recordsVersion += 1
+        return "\(fixed) 行を「\(right)」に直しました。" + (addFix ? "誤変換の一覧にも足しました。" : "")
+    }
+
+    /// 見出しと要点を作り直す会話の数と、1日のまとめを作り直す日の数
+    func resummarizeCounts() -> (conversations: Int, days: Int) { conversations.resummarizeCounts() }
+
+    /// 手で直した会話の見出しと要点、その日の1日のまとめを作り直す。force でなければ、聞き間違いの一覧に言葉が残っている日は飛ばす。
+    /// まとめを書くのは iPhone だけ（iPad で直した会話は、同期で iPhone に届いてから作り直す）。
+    @discardableResult
+    func resummarize(force: Bool = false) async -> Int {
+        guard UIDevice.current.userInterfaceIdiom != .pad else { return 0 }
+        let skipping = force ? [] : Set(misheard.open.flatMap { $0.refs.map(\.day) })
+        let done = await conversations.resummarize(today: dayFormatter.string(from: .now), skipping: skipping)
+        if done > 0 { recordsVersion += 1 }
+        return done
     }
 
     /// 直す前と後の文から、変わったところ（間違い→正しい）を取り出す。誤変換の一覧に足せそうなときだけ返す。

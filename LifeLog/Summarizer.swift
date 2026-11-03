@@ -259,6 +259,37 @@ enum Summarizer {
                     todos: list("todos"), topics: list("topics"))
     }
 
+    /// 聞き間違いと思われる言葉1つ
+    struct Misheard {
+        /// その言葉がある行の時刻（HH:MM:SS）
+        let time: String
+        let wrong: String
+        let guess: String
+        let reason: String
+    }
+
+    /// 自動の文字起こしで、聞き間違いと思われる言葉を探す。記録は変えない（見つけたものを持ち主に見せるだけ）。
+    static func misheard(_ transcript: String, hints: [String], apiKey: String) async throws -> [Misheard] {
+        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+            次は、自動の文字起こしで書いた会話です。各行の頭は時刻（HH:MM:SS）、角かっこは話した人です。
+            音を聞き間違えて書いたと思われる言葉を探して、次の JSON で返してください。
+            ・探すのは、同じ音や似た音の別の言葉になっているもの、前後と意味がつながらない言葉、人の名前・地名・会社名・専門用語の書き間違い。
+            ・話し言葉の崩れ、言いよどみ、方言、話した人の言い間違いそのものは入れないでください。
+            ・確かでないものは入れないでください。多くても10個。無ければ空の配列。
+            {"items": [{"time": "その言葉がある行の時刻", "wrong": "行の中にそのままある、聞き間違いと思われる部分（2〜12文字）", "guess": "本当はこう言っていたと思われる書き方（分からなければ空の文字列）", "reason": "そう思った理由（20文字くらい）"}]}
+            \(hints.isEmpty ? "" : "正しい書き方の候補（登録した言葉・人の名前）: " + hints.prefix(60).joined(separator: "、") + "\n")
+            会話:
+            \(transcript)
+            """)
+        let items = json["items"] as? [[String: Any]] ?? []
+        return items.compactMap { item in
+            guard let time = item["time"] as? String, let wrong = item["wrong"] as? String else { return nil }
+            return Misheard(time: time.trimmingCharacters(in: .whitespaces), wrong: wrong.trimmingCharacters(in: .whitespaces),
+                            guess: (item["guess"] as? String ?? "").trimmingCharacters(in: .whitespaces),
+                            reason: item["reason"] as? String ?? "")
+        }
+    }
+
     struct Month {
         let flow: [String]
         let decisions: [String]

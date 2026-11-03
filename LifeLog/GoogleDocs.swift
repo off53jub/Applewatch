@@ -211,6 +211,29 @@ final class GoogleDocs {
         return ranges
     }
 
+    /// 会話の見出し（「14:05〜14:40　…」）
+    private static let conversationHeading = try! NSRegularExpression(pattern: #"^\d{1,2}:\d{2}〜\d{1,2}:\d{2}"#)
+
+    /// 先頭の「1日のまとめ」（「あとから書き足した分」も）を消す。最初の会話の見出しか文字起こしの行の手前まで。
+    /// まとめが無ければ何もしない。消したら true。
+    func deleteDaySummary(day: String) async throws -> Bool {
+        let docId = try await documentId(for: day)
+        let paragraphs = try await paragraphs(docId: docId)
+        guard let first = paragraphs.firstIndex(where: { $0.text.hasPrefix("1日のまとめ") }) else { return false }
+        let stop = paragraphs.indices.dropFirst(first + 1).first { i in
+            let text = paragraphs[i].text
+            return Self.isTimeLine(text)
+                || Self.conversationHeading.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+        } ?? paragraphs.count - 1
+        guard stop > first else { return false }
+        let range = paragraphs[first].start..<paragraphs[stop].start
+        guard !range.isEmpty else { return false }
+        _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
+                              json: ["requests": [["deleteContentRange": ["range": ["startIndex": range.lowerBound,
+                                                                                     "endIndex": range.upperBound]]]]])
+        return true
+    }
+
     /// 行を1つ差し戻す。next の行があればその前に、無ければ previous の行のあとに、どちらも無ければ末尾に入れる。
     /// 差し込んだ位置と長さを返す。
     func insertLine(_ line: String, before next: String?, after previous: String?, day: String) async throws -> (at: Int, length: Int) {
