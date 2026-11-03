@@ -105,8 +105,10 @@ struct PeopleView: View {
     @State private var rebuildResult = ""
     @State private var places = Pipeline.PlaceIndex()
     @State private var showAllWaiting = false
-    /// 名前の無い声の、話した1行と名前の候補
+    /// 名前の無い声の、名前の候補
     @State private var clues: [String: Pipeline.VoiceClues] = [:]
+    /// ▶︎で鳴らす声のひとこまの、その時に話していた文
+    @State private var sampleInfo: [SpeakerLabeler.Sample: Pipeline.SampleInfo] = [:]
 
     /// 名前を付けてほしい声の、はじめに出す数
     private static let waitingShown = 10
@@ -202,8 +204,11 @@ struct PeopleView: View {
         .onDisappear { player.stop() }
         .onAppear { places = pipeline.placeIndex() }
         .task(id: waiting.map(\.id)) {
-            clues = await pipeline.voiceClues(for: Set(waiting.map(\.id)), talkLimit: 2,
+            clues = await pipeline.voiceClues(for: Set(waiting.map(\.id)), talkLimit: 0,
                                               withCalendar: false, withVoice: false)
+        }
+        .task(id: pipeline.people.compactMap(\.samples.last)) {
+            sampleInfo = pipeline.sampleInfo(for: pipeline.people.compactMap(\.samples.last))
         }
     }
 
@@ -226,14 +231,13 @@ struct PeopleView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
-                    // 名前の無い声は、話した1行と、呼ばれた名前を添える（声だけでは分かりにくいので）
-                    if let clue = clues[person.id] {
-                        if let sample = clue.sample {
-                            Text("「\(sample)」").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        if let top = clue.candidates.first {
-                            Text("もしかして: \(top.name)").font(.caption).foregroundStyle(Color.accentColor)
-                        }
+                    // ▶︎で鳴る声が、いつ何を話したところか（声だけでは分かりにくいので）
+                    if let sample = person.samples.last, let info = sampleInfo[sample] {
+                        Text("▶︎「\(info.text)」\(info.caption)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    // 名前の無い声は、呼ばれた名前を添える
+                    if let top = clues[person.id]?.candidates.first {
+                        Text("もしかして: \(top.name)").font(.caption).foregroundStyle(Color.accentColor)
                     }
                 }
             }
@@ -288,6 +292,8 @@ struct PersonView: View {
     /// この声が話したことと、名前の候補（声だけでは誰か分かりにくいので）
     @State private var clues = Pipeline.VoiceClues()
     @State private var naming = false
+    /// 声のひとこまごとの、その時に話していた文
+    @State private var sampleInfo: [SpeakerLabeler.Sample: Pipeline.SampleInfo] = [:]
 
     private var person: SpeakerLabeler.Person? { pipeline.people.first { $0.id == id } }
 
@@ -357,9 +363,20 @@ struct PersonView: View {
                         HStack {
                             SampleButton(player: player, sample: sample, key: "\(i)")
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("声のひとこま \(person.samples.count - i)")
-                                if let place = places.byAudio[sample.audio] {
-                                    Text(place).font(.caption).foregroundStyle(.secondary)
+                                // どの声を拾ったか分かるよう、その時に話していた文と、いつ・どこか・記録での名前を出す
+                                if let info = sampleInfo[sample] {
+                                    Text("「\(info.text)」").lineLimit(3)
+                                    Text(info.caption).font(.caption).foregroundStyle(.secondary)
+                                    let elsewhere = info.speakers.filter { $0 != person.displayName }
+                                    if !elsewhere.isEmpty {
+                                        Text("記録では「\(elsewhere.joined(separator: "」「"))」の行（ほかの人の声を拾っているかもしれません）")
+                                            .font(.caption).foregroundStyle(.orange)
+                                    }
+                                } else {
+                                    Text("声のひとこま \(person.samples.count - i)")
+                                    if let place = places.byAudio[sample.audio] {
+                                        Text(place).font(.caption).foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                         }
@@ -376,7 +393,7 @@ struct PersonView: View {
                 } header: {
                     Text("声")
                 } footer: {
-                    Text("その人だけが話しているときに録ってください（相手の了承を取ってから）。記録の行を長押しして「話者を直す」と、その行の声も覚えます。")
+                    Text("ひとこまごとに、その時に話していた文と、いつ・どこかを出します（登録で録った声には出ません）。記録で別の名前の行なら、ほかの人の声を拾っているかもしれません。声を足すときは、その人だけが話しているときに録ってください（相手の了承を取ってから）。記録の行を長押しして「話者を直す」と、その行の声も覚えます。")
                 }
                 if !person.isSelf {
                     Section {
@@ -425,6 +442,9 @@ struct PersonView: View {
             name = person?.name ?? ""
             merges = MergeLog.records(into: id)
             places = pipeline.placeIndex()
+        }
+        .task(id: person?.samples ?? []) {
+            sampleInfo = pipeline.sampleInfo(for: person?.samples ?? [])
         }
         .task(id: person?.name) {
             guard person?.isSelf == false else { return }
@@ -784,6 +804,7 @@ struct SelfMergeView: View {
     @State private var chosen: Set<String> = []
     @State private var confirming = false
     @State private var working = false
+    @State private var sampleInfo: [SpeakerLabeler.Sample: Pipeline.SampleInfo] = [:]
 
     private var others: [SpeakerLabeler.Person] {
         pipeline.people.filter { !$0.isSelf }.sorted { ($0.isNamed ? 1 : 0, $1.lastHeard) < ($1.isNamed ? 1 : 0, $0.lastHeard) }
@@ -805,6 +826,10 @@ struct SelfMergeView: View {
                                     Text(person.displayName)
                                     Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))")
                                         .font(.caption).foregroundStyle(.secondary)
+                                    if let sample = person.samples.last, let info = sampleInfo[sample] {
+                                        Text("▶︎「\(info.text)」\(info.caption)")
+                                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                    }
                                 }
                                 Spacer()
                                 Image(systemName: chosen.contains(person.id) ? "checkmark.circle.fill" : "circle")
@@ -835,6 +860,7 @@ struct SelfMergeView: View {
             }
         }
         .navigationTitle("自分の声をまとめる")
+        .onAppear { sampleInfo = pipeline.sampleInfo(for: others.compactMap(\.samples.last)) }
         .onDisappear { player.stop() }
     }
 }

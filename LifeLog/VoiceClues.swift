@@ -162,6 +162,52 @@ extension Pipeline {
         return result
     }
 
+    /// 声のひとこまが、記録のどの行の声か（その時に話していた文・時刻・場所・記録の名前）
+    struct SampleInfo {
+        let time: Date
+        let text: String
+        /// その行の記録の名前（ひとこまの人と違えば、別の人の声を拾っているかもしれない）
+        let speakers: [String]
+        let place: String?
+
+        /// 「11/2(日) 14:05・会社」
+        var caption: String {
+            ([VoiceTalk.date.string(from: time)] + (place.map { [$0] } ?? [])).joined(separator: "・")
+        }
+    }
+
+    /// 声のひとこまごとに、同じ音声でその時間に重なる行を探す。録音から取った声でなければ（登録で録った声など）入らない。
+    func sampleInfo(for samples: [SpeakerLabeler.Sample]) -> [SpeakerLabeler.Sample: SampleInfo] {
+        let audios = Set(samples.map(\.audio))
+        guard !audios.isEmpty else { return [:] }
+        var byAudio: [String: [(line: ConversationLog.Line, place: String?)]] = [:]
+        for day in recordedDays() {
+            for c in conversations(on: day) {
+                for line in c.lines where line.offset != nil {
+                    if let audio = line.audio, audios.contains(audio) { byAudio[audio, default: []].append((line, c.place)) }
+                }
+            }
+        }
+        var result: [SpeakerLabeler.Sample: SampleInfo] = [:]
+        for sample in samples {
+            let list = (byAudio[sample.audio] ?? []).sorted { ($0.line.offset ?? 0) < ($1.line.offset ?? 0) }
+            // 行は次の行の頭まで続くとみなし、ひとこまの時間と重なる行
+            var hit: [(line: ConversationLog.Line, place: String?)] = []
+            for (i, item) in list.enumerated() {
+                let start = item.line.offset ?? 0
+                let next = i + 1 < list.count ? (list[i + 1].line.offset ?? 0) : .infinity
+                if start < sample.end && next > sample.start { hit.append(item) }
+            }
+            guard let first = hit.first else { continue }
+            let text = hit.map(\.line.text).joined(separator: " ")
+            var speakers: [String] = []
+            for name in hit.compactMap(\.line.speaker) where !speakers.contains(name) { speakers.append(name) }
+            result[sample] = SampleInfo(time: first.line.time, text: text.count > 80 ? String(text.prefix(80)) + "…" : text,
+                                        speakers: speakers, place: first.place)
+        }
+        return result
+    }
+
     /// 候補を選んだとき：名前のある人に同じ名前の人がいればその人にまとめ、いなければその名前を付ける。
     func applyName(_ candidate: NameCandidate, to id: String) async {
         if let target = candidate.target {
