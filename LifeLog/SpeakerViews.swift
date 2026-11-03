@@ -111,15 +111,18 @@ struct PeopleView: View {
     @State private var sampleInfo: [SpeakerLabeler.Sample: Pipeline.SampleInfo] = [:]
     /// 見直したい声のひとこまの数
     @State private var reviewCount = 0
+    /// テレビ・動画らしい名前の無い声（名前を付けてほしい声には出さない）
+    @State private var broadcast: Set<String> = []
+    @State private var confirmForget = false
 
     /// 名前を付けてほしい声の、はじめに出す数
     private static let waitingShown = 10
 
     private var others: [SpeakerLabeler.Person] { pipeline.people.filter { !$0.isSelf && $0.hidden != true } }
 
-    /// 名前の無い声のうち、よく話した声（よく話した順）
+    /// 名前の無い声のうち、よく話した声（よく話した順。テレビ・動画らしい声は除く）
     private var waiting: [SpeakerLabeler.Person] {
-        others.filter { !$0.isNamed && $0.seconds >= 30 }.sorted { $0.seconds > $1.seconds }
+        others.filter { !$0.isNamed && $0.seconds >= 30 && !broadcast.contains($0.id) }.sorted { $0.seconds > $1.seconds }
     }
 
     var body: some View {
@@ -152,6 +155,17 @@ struct PeopleView: View {
                     Text("名前を付けてほしい声")
                 } footer: {
                     Text("よく話した順です。声だけで分からないときは、押すと、その声が話したこと・会話の時刻と場所・名前の候補（呼ばれた名前・予定の参加者・声の近い人）が出ます。名前を付けると、これまでの記録とドキュメントの「人物N」もその名前に変わります。")
+                }
+            }
+            let tv = others.filter { broadcast.contains($0.id) }.sorted { $0.seconds > $1.seconds }
+            if !tv.isEmpty {
+                Section {
+                    DisclosureGroup("テレビ・動画らしい声（\(tv.count) 人）") {
+                        ForEach(tv) { person in row(person) }
+                    }
+                    Button("テレビ・動画らしい声をまとめて忘れる", role: .destructive) { confirmForget = true }
+                } footer: {
+                    Text("名前の無い声のうち、行の7割以上が、テレビ・動画の会話や行・背景がテレビや音楽・前後3分に自分が話していない、のどれかの声です。「名前を付けてほしい声」と「人物Nを整理」には出しません。中に知っている人がいれば、押して名前を付けてください。忘れても記録の行はそのままです。")
                 }
             }
             ForEach([SpeakerLabeler.Context.work, .other], id: \.self) { context in
@@ -223,6 +237,18 @@ struct PeopleView: View {
         .task(id: pipeline.people.flatMap(\.samples)) {
             sampleInfo = pipeline.sampleInfo(for: pipeline.people.compactMap(\.samples.last))
             reviewCount = pipeline.voiceReview().count
+            broadcast = pipeline.broadcastLike()
+        }
+        .confirmationDialog("テレビ・動画らしい声を \(broadcast.count) 人まとめて忘れますか？", isPresented: $confirmForget,
+                            titleVisibility: .visible) {
+            Button("忘れる", role: .destructive) {
+                Task {
+                    _ = await pipeline.forgetBroadcastLike()
+                    broadcast = pipeline.broadcastLike()
+                }
+            }
+        } message: {
+            Text("名前の無い声だけです。記録とドキュメントの行はそのまま残ります。")
         }
     }
 
@@ -408,11 +434,11 @@ struct PersonView: View {
                             return "足せませんでした: \(error.localizedDescription)"
                         }
                     }
-                    NavigationLink("2人の声が混ざっている（分ける）") { SplitPersonView(id: id) }
+                    NavigationLink("ほかの人の声が混ざっている（分ける）") { SplitPersonView(id: id) }
                 } header: {
                     Text("声")
                 } footer: {
-                    Text("聞き分けを厳しくしても、ほかの人の行がこの人になってしまうときは「2人の声が混ざっている（分ける）」で、行の声を2つに分けて聞き比べ、ほかの人のほうを分けられます。ひとこまごとに、その時に話していた文と、いつ・どこかを出します（登録で録った声には出ません）。記録で別の名前の行なら、ほかの人の声を拾っているかもしれません。声を足すときは、その人だけが話しているときに録ってください（相手の了承を取ってから）。記録の行を長押しして「話者を直す」と、その行の声も覚えます。")
+                    Text("聞き分けを厳しくしても、ほかの人の行がこの人になってしまうときは「ほかの人の声が混ざっている（分ける）」で、行の声を近さで何組にでも分けて聞き比べ、組ごとに分けられます。ひとこまごとに、その時に話していた文と、いつ・どこかを出します（登録で録った声には出ません）。記録で別の名前の行なら、ほかの人の声を拾っているかもしれません。声を足すときは、その人だけが話しているときに録ってください（相手の了承を取ってから）。記録の行を長押しして「話者を直す」と、その行の声も覚えます。")
                 }
                 if !person.isSelf {
                     Section {
@@ -913,10 +939,11 @@ struct UnnamedVoicesView: View {
         return "この日 \(item.lines.count) 行" + (places.isEmpty ? "" : "・" + places.joined(separator: "、"))
     }
 
-    /// その日の行に出てくる、名前の無い声と、その行（多い順）
+    /// その日の行に出てくる、名前の無い声と、その行（多い順。テレビ・動画らしい声は除く）
     private var unnamed: [Item] {
         let lines = pipeline.conversations(on: day).flatMap(\.lines)
-        return pipeline.people.filter { !$0.isNamed }.compactMap { person in
+        let tv = pipeline.broadcastLike()
+        return pipeline.people.filter { !$0.isNamed && !tv.contains($0.id) }.compactMap { person in
             let mine = lines.filter { $0.speakerID == person.id }
             return mine.isEmpty ? nil : Item(person: person, lines: mine)
         }

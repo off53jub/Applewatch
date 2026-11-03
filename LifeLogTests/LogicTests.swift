@@ -142,6 +142,23 @@ final class LogicTests: XCTestCase {
         XCTAssertGreaterThan(split.distance, Pipeline.splitApart)
     }
 
+    func testVoiceGroupsFindsThreeVoices() {
+        let a: [Float] = [1, 0, 0, 0], b: [Float] = [0, 1, 0, 0], c: [Float] = [0, 0, 1, 0]
+        let vectors = [voice(a, 0.05), voice(b, 0.04), voice(c, 0.03), voice(a, 0.02), voice(b, 0.07), voice(c, 0.06), voice(a, 0.08)]
+        let labels = Pipeline.voiceGroups(vectors, limit: Pipeline.groupLimit)
+        XCTAssertEqual(Set(labels).count, 3)
+        XCTAssertEqual(labels[0], labels[3]); XCTAssertEqual(labels[0], labels[6])
+        XCTAssertEqual(labels[1], labels[4]); XCTAssertEqual(labels[2], labels[5])
+        // 行の多い組（a の3行）がいちばん小さい番号
+        XCTAssertEqual(labels[0], 0)
+    }
+
+    func testVoiceGroupsKeepsOneVoiceTogether() {
+        let a: [Float] = [1, 0, 0, 0]
+        let labels = Pipeline.voiceGroups([voice(a, 0.05), voice(a, 0.02), voice(a, 0.08), voice(a, 0.01)], limit: Pipeline.groupLimit)
+        XCTAssertEqual(Set(labels), [0])
+    }
+
     func testTwoGroupsSameVoiceIsClose() {
         let a: [Float] = [1, 0, 0, 0]
         let vectors = [voice(a, 0.05), voice(a, 0.02), voice(a, 0.08), voice(a, 0.01)]

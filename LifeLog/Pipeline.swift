@@ -716,17 +716,18 @@ final class Pipeline {
     }
 
     struct SplitResult {
-        /// 声の近さで分けた2つ（行の多いほうが先）
+        /// 声の近さで分けた組（行の多い順）。scattered があれば、それは1行ずつのばらばらの声を集めた組
         var groups: [[SplitClip]] = []
-        /// 2つの声の中心どうしの近さ（大きいほど別の人らしい）
-        var distance: Float = 0
+        var scattered: Int?
         var note: String?
     }
 
     /// 2つの声がこれより離れていれば、別の人らしい
     static let splitApart: Float = 0.25
+    /// 声をまとめていく近さの上限（組どうしの平均の近さがこれより近い間だけまとめる）
+    static let groupLimit: Float = 0.40
 
-    /// その人の行（新しいものから limit 行まで。2秒以上のもの）の声を取り、声の近さで2つに分ける。記録はまだ変えない。
+    /// その人の行（新しいものから limit 行まで。2秒以上のもの）の声を取り、声の近さで何人にでも分ける。記録はまだ変えない。
     func splitGroups(for id: String, limit: Int = 60, progress: @escaping (String) -> Void) async -> SplitResult {
         let candidates = splitCandidates(for: id, limit: limit)
         guard candidates.count >= 4 else {
@@ -738,13 +739,24 @@ final class Pipeline {
             return SplitResult(note: "聞き分けを準備できませんでした: \(error.localizedDescription)")
         }
         let clips = await embed(candidates, progress: progress)
-        guard clips.count >= 4, let split = Self.twoGroups(clips.map(\.embedding)) else {
+        guard clips.count >= 4 else {
             return SplitResult(note: "声を取れませんでした（録音が手元にもドライブにも残っていない行が多い）。")
         }
-        let groups = [0, 1].map { g in zip(clips, split.labels).filter { $0.1 == g }.map(\.0).sorted { $0.line.time > $1.line.time } }
+        let labels = Self.voiceGroups(clips.map(\.embedding), limit: Self.groupLimit)
+        var groups = Dictionary(grouping: zip(clips, labels), by: \.1).values
+            .map { $0.map(\.0).sorted { $0.line.time > $1.line.time } }
             .sorted { $0.count > $1.count }
-        return SplitResult(groups: groups, distance: split.distance,
-                           note: split.distance < Self.splitApart ? "2つの声はかなり近いので、同じ人かもしれません。聞いて確かめてください。" : nil)
+        // 1行だけの組は、まとめて「ばらばらの声」にする
+        let singles = groups.filter { $0.count == 1 }.flatMap { $0 }
+        groups = groups.filter { $0.count > 1 }
+        var scattered: Int?
+        if !singles.isEmpty {
+            groups.append(singles.sorted { $0.line.time > $1.line.time })
+            scattered = groups.count - 1
+        }
+        let real = groups.count - (scattered == nil ? 0 : 1)
+        return SplitResult(groups: groups, scattered: scattered,
+                           note: real <= 1 ? "はっきり分かれる声は見つかりませんでした（1人の声に聞こえます）。ばらばらの声があれば聞いて確かめてください。" : nil)
     }
 
     /// その人の行のうち、声を取れるもの（録音の位置があり、2秒以上）。新しい行から limit 行まで。skipping の時刻の行は除く。
@@ -816,6 +828,44 @@ final class Pipeline {
         return (labels, distance(a, b))
     }
 
+    /// 声の特徴を近さでまとめる（平均の近さでつなぐ方法。いちばん近い組どうしから順に、limit より近い間だけまとめる）。
+    /// 組の番号を返す（行の多い組ほど小さい番号）。
+    nonisolated static func voiceGroups(_ vectors: [[Float]], limit: Float) -> [Int] {
+        var groups: [[Int]] = vectors.indices.map { [$0] }
+        let d = vectors.map { a in vectors.map { b in voiceDistance(a, b) } }
+        func average(_ x: [Int], _ y: [Int]) -> Float {
+            var sum: Float = 0
+            for i in x { for j in y { sum += d[i][j] } }
+            return sum / Float(x.count * y.count)
+        }
+        while groups.count > 1 {
+            var best: (i: Int, j: Int, d: Float)?
+            for i in groups.indices {
+                for j in groups.indices where j > i {
+                    let v = average(groups[i], groups[j])
+                    if v < (best?.d ?? .infinity) { best = (i, j, v) }
+                }
+            }
+            guard let best, best.d < limit else { break }
+            groups[best.i] += groups[best.j]
+            groups.remove(at: best.j)
+        }
+        var labels = [Int](repeating: 0, count: vectors.count)
+        for (n, g) in groups.sorted(by: { $0.count > $1.count }).enumerated() { for i in g { labels[i] = n } }
+        return labels
+    }
+
+    /// 分けた組をまとめて直す。moves の組の行をそれぞれの人にし、覚えている声も移す。keep はこの人の声のまま残す組。
+    func applyGroups(_ id: String, keep: [SplitClip], moves: [(clips: [SplitClip], target: String)]) async -> String {
+        var parts: [String] = []
+        for move in moves where !move.clips.isEmpty && move.target != id {
+            let others = keep + moves.filter { $0.target != move.target }.flatMap(\.clips)
+            parts.append(await applySplit(id, keep: others.isEmpty ? keep : others, moved: move.clips, to: move.target))
+        }
+        return parts.isEmpty ? "移す組がありませんでした。" : parts.joined(separator: "
+")
+    }
+
     /// 分けたうち moved の行を target の人にする。id の覚えている声から moved に近いものを外し、target の声として覚える。
     func applySplit(_ id: String, keep: [SplitClip], moved: [SplitClip], to target: String) async -> String {
         let removed = await speakers.split(id, keep: keep.map(\.embedding), moved: moved.map(\.embedding), to: target)
@@ -829,21 +879,30 @@ final class Pipeline {
     }
 
     /// 分けたあと、まだ id のままの行（調べた行より前のもの。多くても limit 行）の声を取り、
-    /// moved の声のほうがはっきり近い行（keep より0.05以上近い）を target にする。直した行の数を返す。
-    func reassignRest(_ id: String, keep: [SplitClip], moved: [SplitClip], to target: String, limit: Int = 300,
+    /// いちばん近い組が移した組で、この人の声（keep）より0.05以上近い行を、その組の人にする。直した行の数を返す。
+    func reassignRest(_ id: String, keep: [SplitClip], moves: [(clips: [SplitClip], target: String)], limit: Int = 300,
                       progress: @escaping (String) -> Void) async -> Int {
-        let seen = Set((keep + moved).map(\.line.time))
+        let seen = Set((keep + moves.flatMap(\.clips)).map(\.line.time))
         let clips = await embed(splitCandidates(for: id, limit: limit, skipping: seen), progress: progress)
         let keepCenter = Self.voiceCenter(keep.map(\.embedding))
-        let movedCenter = Self.voiceCenter(moved.map(\.embedding))
-        let times = Set(clips.filter {
-            Self.voiceDistance($0.embedding, movedCenter) + 0.05 < Self.voiceDistance($0.embedding, keepCenter)
-        }.map(\.line.time))
-        guard !times.isEmpty else { return 0 }
-        await relabel(to: target) { $0.speakerID == id && times.contains($0.time) }
-        placeIndexBuilt = .distantPast
-        recordsVersion += 1
-        return times.count
+        let centers = moves.filter { !$0.clips.isEmpty }.map { (center: Self.voiceCenter($0.clips.map(\.embedding)), target: $0.target) }
+        var byTarget: [String: Set<Date>] = [:]
+        for clip in clips {
+            guard let near = centers.min(by: { Self.voiceDistance(clip.embedding, $0.center) < Self.voiceDistance(clip.embedding, $1.center) })
+            else { continue }
+            let toKeep = keep.isEmpty ? Float.infinity : Self.voiceDistance(clip.embedding, keepCenter)
+            if Self.voiceDistance(clip.embedding, near.center) + 0.05 < toKeep { byTarget[near.target, default: []].insert(clip.line.time) }
+        }
+        var count = 0
+        for (target, times) in byTarget {
+            await relabel(to: target) { $0.speakerID == id && times.contains($0.time) }
+            count += times.count
+        }
+        if count > 0 {
+            placeIndexBuilt = .distantPast
+            recordsVersion += 1
+        }
+        return count
     }
 
     func removePerson(_ id: String) async {

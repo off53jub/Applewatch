@@ -78,7 +78,8 @@ struct VoiceReviewView: View {
     }
 }
 
-/// 1人として扱われている2人を分ける。その人の行の声を取って近さで2つに分け、聞いて、別の人の声のほうを分ける。
+/// 1人として扱われている何人かを分ける。その人の行の声を取って近さで何組にでも分け、聞いて、組ごとに決める。
+/// 組ごとに「この人の声」「別の人に移す」「放っておく」。決めた組をまとめて直し、残りの古い行も、いちばん近い組に振り分ける。
 struct SplitPersonView: View {
     @Environment(Pipeline.self) private var pipeline
     let id: String
@@ -87,12 +88,18 @@ struct SplitPersonView: View {
     @State private var working = false
     @State private var progress = ""
     @State private var player = ClipPlayer()
-    /// 別の人にする組（0 か 1）
+    /// 組ごとの決め（無ければ放っておく）
+    @State private var choices: [Int: Choice] = [:]
     @State private var picking: Pick?
     @State private var naming: Pick?
     @State private var newName = ""
     @State private var done: String?
-    @State private var applied: (keep: [Pipeline.SplitClip], moved: [Pipeline.SplitClip], target: String)?
+    @State private var applied: (keep: [Pipeline.SplitClip], moves: [(clips: [Pipeline.SplitClip], target: String)])?
+
+    enum Choice: Equatable {
+        case keep
+        case move(String)
+    }
 
     struct Pick: Identifiable { let id: Int }
 
@@ -105,6 +112,21 @@ struct SplitPersonView: View {
 
     private var person: SpeakerLabeler.Person? { pipeline.people.first { $0.id == id } }
 
+    private func name(_ target: String) -> String { pipeline.people.first { $0.id == target }?.displayName ?? target }
+
+    private func isMove(_ choice: Choice?) -> Bool {
+        if case .move = choice { return true }
+        return false
+    }
+
+    private var moveCount: Int { choices.values.filter { isMove($0) }.count }
+
+    private func groupTitle(_ g: Int, _ result: Pipeline.SplitResult) -> String {
+        if g == result.scattered { return "ばらばらの声（\(result.groups[g].count) 行）" }
+        let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        return "声\(letters[min(g, letters.count - 1)])（\(result.groups[g].count) 行）"
+    }
+
     var body: some View {
         Form {
             Section {
@@ -112,27 +134,39 @@ struct SplitPersonView: View {
                     Text("新しい 60 行").tag(60)
                     Text("新しい 150 行").tag(150)
                 }
-                Button(working ? progress : (result == nil ? "声を2つに分けてみる" : "もう一度分けてみる")) { run() }
+                Button(working ? progress : (result == nil ? "声を分けてみる" : "もう一度分けてみる")) { run() }
                     .disabled(working)
             } footer: {
-                Text("「\(person?.displayName ?? "")」とされた行（2秒以上話したもの）の声を取り、声の近さで2つに分けます。▶︎で聞いて、「\(person?.displayName ?? "")」ではないほうを「この声は別の人」にしてください。その行の名前が変わり、覚えている声も分け直すので、これからの聞き分けも分かれます。録音が手元に無い行はドライブから取ってくるので、Wi-Fi のときに。")
+                Text("「\(person?.displayName ?? "")」とされた行（2秒以上話したもの）の声を取り、声の近さで何組にでも分けます（はっきり近い声だけをまとめるので、同じ人が2組に分かれることもあります）。▶︎で聞いて、組ごとに「この人の声」か「別の人に移す」を選び、最後に「分ける」を押してください。選ばなかった組は、そのままにします。録音が手元に無い行はドライブから取ってくるので、Wi-Fi のときに。")
             }
             if let note = result?.note {
                 Section { Text(note).foregroundStyle(.orange) }
             }
-            if let result, result.groups.count == 2 {
-                ForEach(0..<2, id: \.self) { g in
+            if let result, done == nil {
+                ForEach(result.groups.indices, id: \.self) { g in
                     Section {
-                        ForEach(result.groups[g].prefix(8)) { clip in clipRow(clip) }
-                        if result.groups[g].count > 8 {
-                            Text("ほか \(result.groups[g].count - 8) 行").font(.caption).foregroundStyle(.secondary)
+                        ForEach(result.groups[g].prefix(6)) { clip in clipRow(clip) }
+                        if result.groups[g].count > 6 {
+                            Text("ほか \(result.groups[g].count - 6) 行").font(.caption).foregroundStyle(.secondary)
                         }
-                        if done == nil {
-                            Button("この声は別の人（分ける）") { picking = Pick(id: g) }
+                        HStack {
+                            choiceButton("この人の声", selected: choices[g] == .keep) { choices[g] = .keep }
+                            choiceButton(movedLabel(g), selected: isMove(choices[g])) { picking = Pick(id: g) }
+                            choiceButton("放っておく", selected: choices[g] == nil) { choices[g] = nil }
                         }
                     } header: {
-                        Text("声\(g == 0 ? "A" : "B")（\(result.groups[g].count) 行）")
+                        Text(groupTitle(g, result))
+                    } footer: {
+                        if g == result.scattered {
+                            Text("どの組にも近くなかった、1行ずつの声です。いろいろな人やテレビの声が混ざっていることが多いです。")
+                        }
                     }
+                }
+                Section {
+                    Button(working ? progress : "分ける（\(moveCount) 組を移す）") { apply() }
+                        .disabled(working || moveCount == 0)
+                } footer: {
+                    Text("移す組の行の名前を変え、覚えている声も移すので、これからの聞き分けも分かれます。「この人の声」を選んだ組は、残す声の見本にします。")
                 }
             }
             if let done {
@@ -142,8 +176,7 @@ struct SplitPersonView: View {
                         Button(working ? progress : "残りの古い行も、声で振り分ける（300 行まで）") {
                             working = true
                             Task {
-                                let count = await pipeline.reassignRest(id, keep: applied.keep, moved: applied.moved,
-                                                                         to: applied.target) { text in
+                                let count = await pipeline.reassignRest(id, keep: applied.keep, moves: applied.moves) { text in
                                     Task { @MainActor in progress = text }
                                 }
                                 self.done = (self.done ?? "") + "\n古い行のうち \(count) 行も直しました。"
@@ -153,16 +186,20 @@ struct SplitPersonView: View {
                         }
                         .disabled(working)
                     }
+                    Button("もう一度分けてみる") { run() }
+                        .disabled(working)
+                } footer: {
+                    Text("まだ混ざっているときは、もう一度分けてみてください（直した行は外れているので、残った行だけで分け直します）。")
                 }
             }
         }
-        .navigationTitle("2人を分ける")
+        .navigationTitle("混ざった声を分ける")
         .onDisappear { player.stop() }
         .sheet(item: $picking) { pick in
             NavigationStack {
                 PersonPicker(exclude: id, includeSelf: true) { target in
                     picking = nil
-                    apply(pick.id, to: target)
+                    choices[pick.id] = .move(target)
                 }
                 .navigationTitle("だれの声ですか")
                 .toolbar {
@@ -179,18 +216,33 @@ struct SplitPersonView: View {
         }
         .alert("新しい人の名前", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
             TextField("名前", text: $newName)
-            Button("分ける") {
+            Button("決める") {
                 let name = newName.trimmingCharacters(in: .whitespaces)
                 if let pick = naming, !name.isEmpty {
                     Task {
                         let target = await pipeline.newPerson(name: name, context: person?.context)
-                        apply(pick.id, to: target)
+                        choices[pick.id] = .move(target)
                     }
                 }
                 naming = nil
             }
             Button("キャンセル", role: .cancel) { naming = nil }
         }
+    }
+
+    private func movedLabel(_ g: Int) -> String {
+        if case .move(let target) = choices[g] { return "→ \(name(target))" }
+        return "別の人に移す"
+    }
+
+    private func choiceButton(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.caption).lineLimit(1)
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .background(selected ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1), in: Capsule())
+        }
+        .buttonStyle(.borderless)
+        .tint(selected ? .accentColor : .primary)
     }
 
     private func clipRow(_ clip: Pipeline.SplitClip) -> some View {
@@ -224,24 +276,35 @@ struct SplitPersonView: View {
         working = true
         done = nil
         applied = nil
+        choices = [:]
         progress = "声を調べています…"
         Task {
-            result = await pipeline.splitGroups(for: id, limit: limit) { text in
+            let made = await pipeline.splitGroups(for: id, limit: limit) { text in
                 Task { @MainActor in progress = text }
             }
+            result = made
+            // いちばん大きい組（ばらばらの声でなければ）は、はじめから「この人の声」にしておく
+            if !made.groups.isEmpty, made.scattered != 0 { choices[0] = .keep }
             working = false
         }
     }
 
-    private func apply(_ group: Int, to target: String) {
-        guard let result, result.groups.count == 2 else { return }
-        let moved = result.groups[group], keep = result.groups[1 - group]
+    private func apply() {
+        guard let result else { return }
+        var keep: [Pipeline.SplitClip] = []
+        var moves: [(clips: [Pipeline.SplitClip], target: String)] = []
+        for (g, choice) in choices where g < result.groups.count {
+            switch choice {
+            case .keep: keep += result.groups[g]
+            case .move(let target): moves.append((result.groups[g], target))
+            }
+        }
         player.stop()
         working = true
         progress = "分けています…"
         Task {
-            done = await pipeline.applySplit(id, keep: keep, moved: moved, to: target)
-            applied = (keep, moved, target)
+            done = await pipeline.applyGroups(id, keep: keep, moves: moves)
+            applied = (keep, moves)
             working = false
         }
     }

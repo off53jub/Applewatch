@@ -108,7 +108,8 @@ private struct TodayView: View {
                             }
                         }
                         let unnamedIDs = Set(talks.flatMap(\.lines).compactMap(\.speakerID))
-                        let unnamed = pipeline.people.filter { !$0.isNamed && unnamedIDs.contains($0.id) }.count
+                        let tv = pipeline.broadcastLike()
+                        let unnamed = pipeline.people.filter { !$0.isNamed && unnamedIDs.contains($0.id) && !tv.contains($0.id) }.count
                         if unnamed > 0 {
                             NavigationLink {
                                 UnnamedVoicesView(day: today)
