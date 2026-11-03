@@ -28,6 +28,7 @@ struct NoiseSettingsView: View {
                 Toggle("騒がしい所はクラウドでも聞いて補う", isOn: Binding(
                     get: { pipeline.noisyAssistOn },
                     set: { pipeline.noisyAssistOn = $0 }))
+                NavigationLink("場所ごとの周りの音と聞き取りの成績") { ListenQualityView() }
             } header: {
                 Text("騒がしい所")
             } footer: {
@@ -47,6 +48,8 @@ struct NoiseSettingsView: View {
 /// カレンダー・連絡先・移動の様子・睡眠との連携。
 struct IntegrationsView: View {
     @Environment(Pipeline.self) private var pipeline
+    /// Pipeline.meetingBriefKey と同じ名前
+    @AppStorage("meetingBrief") private var meetingBrief = true
 
     var body: some View {
         @Bindable var calendar = pipeline.calendar
@@ -63,6 +66,8 @@ struct IntegrationsView: View {
                 if calendar.authorized && calendar.enabled {
                     LabeledContent("Google カレンダー", value: calendar.hasGoogle ? "読めています" : "まだ iPhone に入っていません")
                     NavigationLink("使うカレンダー・職場のカレンダー") { CalendarsView() }
+                    Toggle("会う前のおさらいを通知する", isOn: $meetingBrief)
+                        .onChange(of: meetingBrief) { Task { await pipeline.scheduleMeetingBriefs(force: true) } }
                 }
             } header: {
                 Text("カレンダー")
@@ -70,6 +75,7 @@ struct IntegrationsView: View {
                 Text("""
                     Google カレンダーは、iPhone の「設定」→「アプリ」→「カレンダー」→「カレンダーアカウント」→「アカウントを追加」→「Google」で、ふだんの Google アカウントを足して「カレンダー」をオンにすると読めるようになります（LifeLog の側で Google の設定を足す必要はありません）。
                     予定は、記録の「過ごし方」の区切りと名前（12:00〜16:00 ダンス、など）、会話の見出しの〔予定名〕、要約の参考に使います。予定名・場所・参加者の名前は、聞き取りと誤変換直しのヒントにもなります（そのときは Groq に送られます）。職場のカレンダーを選ぶと、その予定の時間は職場とみなします。
+                    「会う前のおさらい」は、予定の10分前に、その予定で会う名前を付けた人（参加者の名前か、予定名に入っている名前）と、前回話した会話の見出しと要点を通知します。前に話した会話が無い人は出しません。通知はロック画面にも出ます。
                     """)
             }
 

@@ -157,6 +157,8 @@ final class Pipeline {
     let suggestions = SuggestionBox()
     /// 時計の区切りが届くまでの遅れ
     let watchDelays = WatchDelayLog()
+    /// 区切りごとの騒がしさ（しきい値を実際の録音で合わせるため）
+    let noiseLog = NoiseLog()
     /// 時計が低電力モードか（時計が知らせてくる。まだ知らなければ nil）
     private(set) var watchLowPower: Bool?
     /// ほかの端末から記録が届くたびに増える（画面を出し直すため）
@@ -876,6 +878,7 @@ final class Pipeline {
     func appBecameActive() {
         updateHold()
         if email != nil { Task { await sync.run() } }
+        if UIDevice.current.userInterfaceIdiom != .pad { Task { await scheduleMeetingBriefs() } }
         liveAutoOff?.cancel()
         liveAutoOff = nil
         // ボタンで始めた録音の Live Activity は、古ければ出し直す（8時間で iOS に終わらせられるため）。
@@ -1004,6 +1007,8 @@ final class Pipeline {
             Self.notify(id: "suggestions", title: "こんなのあったけど、どう？",
                         body: added.count > 1 ? "\(first.text) ほか \(added.count - 1) 件" : first.text)
         }
+        // 予定の前に、会う人と前回話したことを知らせる（iPad と二重に出さないよう iPhone だけ）
+        if UIDevice.current.userInterfaceIdiom != .pad { await scheduleMeetingBriefs() }
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
         backupPending = archive.pendingCount
@@ -1300,7 +1305,7 @@ final class Pipeline {
         return names
     }
 
-    private static func isNameLike(_ s: String) -> Bool {
+    static func isNameLike(_ s: String) -> Bool {
         guard (1...6).contains(s.count), !notNames.contains(s) else { return false }
         return s.unicodeScalars.allSatisfy { $0.properties.isIdeographic || $0 == "々" || (0x30A1...0x30FC).contains($0.value) }
     }
@@ -1581,6 +1586,7 @@ final class Pipeline {
         // 騒がしさ（周りの音の底と、声との差）。騒がしい区切りは、聞き取りを補い、捨てる条件をゆるめる
         let noise = await Task.detached(priority: .utility) { NoiseMeter.measure(url, voice: voice) }.value
         let noisy = noise?.isNoisy == true
+        if let noise { noiseLog.add(url.lastPathComponent, at: start, watch: fromWatch, reading: noise) }
         /// 書かずに「消した行」に回す行（あとで戻せる）
         var unmatched: [Junk.TrashItem] = []
         // 声がほとんど無い区切り：重い文字起こしはしない（端末内で聞き取れた文は、確かめたほうがよい行として残す）

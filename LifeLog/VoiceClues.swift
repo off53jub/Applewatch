@@ -66,6 +66,8 @@ extension Pipeline {
         guard !ids.isEmpty else { return [:] }
         var talks: [String: [VoiceTalk]] = [:]
         var called: [String: [String: Int]] = [:]
+        /// 自分で名乗った名前（「田中と申します」「田中です、よろしく」）
+        var introduced: [String: [String: Int]] = [:]
         var attendees: [String: [String: (score: Int, count: Int, events: [String])]] = [:]
         var calendarChecked: [String: Int] = [:]
 
@@ -92,6 +94,9 @@ extension Pipeline {
                     let mine = lines.indices.filter { lines[$0].speakerID == id && lines[$0].media == nil }
                     let ownNames = Set(mine.compactMap { lines[$0].speaker })
                     let others = c.people.filter { !$0.hasPrefix("人物") && !ownNames.contains($0) }
+                    for i in mine {
+                        for name in Self.introducedNames(in: lines[i].text) { introduced[id, default: [:]][name, default: 0] += 1 }
+                    }
 
                     if talks[id, default: []].count < talkLimit {
                         // 長い行から3つ。再生は同じ音声の次の行まで（最長15秒）
@@ -142,6 +147,9 @@ extension Pipeline {
                 } else {
                     list.append(NameCandidate(name: shown, target: target, reasons: [reason], score: score))
                 }
+            }
+            for (name, count) in (introduced[id] ?? [:]).sorted(by: { $0.value > $1.value }) {
+                add(name, reason: "自分で「\(name)」と名乗っていた（\(count)回）", score: min(count, 3) * 3)
             }
             for (name, count) in (called[id] ?? [:]).sorted(by: { $0.value > $1.value }) {
                 add(name, reason: "「\(name)さん」と呼ばれたあとに話した（\(count)回）", score: min(count, 3) * 3)
@@ -222,6 +230,24 @@ extension Pipeline {
         people.first { $0.isNamed && !$0.isSelf && $0.hidden != true && $0.id != id && Self.sameName($0.displayName, name) }?.id
     }
 
+    /// 名乗り方。「田中と申します」「私は田中といいます」「〇〇社の田中です、よろしく…」の「田中」。
+    /// 「〇〇です」だけでは「大丈夫です」なども拾うので、すぐあとに「よろしく」が続くときだけにする。
+    private static let introduction = try! NSRegularExpression(
+        pattern: #"(?:^|[、。！？!?\s]|の|は)([\p{Han}\p{Katakana}ー々]{1,6})(?:と申します|ともうします|と申しま|といいます|と言います|っていいます|って言います|です[、。！!\s]*よろしく)"#)
+
+    /// 文の中で名乗った名前（漢字かカタカナだけのもの）
+    static func introducedNames(in text: String) -> [String] {
+        guard text.contains("申") || text.contains("もうし") || text.contains("いいます") || text.contains("言います")
+                || text.contains("よろしく") else { return [] }
+        var names: [String] = []
+        for m in introduction.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let r = Range(m.range(at: 1), in: text) else { continue }
+            let name = String(text[r])
+            if isNameLike(name), !names.contains(name) { names.append(name) }
+        }
+        return names
+    }
+
     /// 呼び方の違い（空白・「さん」など）を除いて、同じ人の名前か。2文字以上なら、片方がもう片方の頭（「田中」と「田中太郎」）でもよい。
     static func sameName(_ a: String, _ b: String) -> Bool {
         let x = nameKey(a), y = nameKey(b)
@@ -231,7 +257,7 @@ extension Pipeline {
         return x.hasPrefix(y) || y.hasPrefix(x)
     }
 
-    private static func nameKey(_ s: String) -> String {
+    static func nameKey(_ s: String) -> String {
         var key = s.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "　", with: "")
         for honorific in ContactsLink.honorifics where key.hasSuffix(honorific) && key.count > honorific.count {
             key = String(key.dropLast(honorific.count))
