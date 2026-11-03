@@ -17,6 +17,8 @@ struct ContentView: View {
 
 private struct TodayView: View {
     @Environment(Pipeline.self) private var pipeline
+    /// 見直したい声のひとこまの数（記録をひととおり見るので、開いてから数える）
+    @State private var reviewCount = 0
 
     private static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -79,6 +81,8 @@ private struct TodayView: View {
                     }
                 }
 
+                todo(today: today, talks: talks)
+
                 let box = pipeline.suggestions
                 if !box.waiting.isEmpty || !box.kept.isEmpty {
                     Section("こんなのあったけど、どう？") {
@@ -107,28 +111,6 @@ private struct TodayView: View {
                                 }
                             }
                         }
-                        let unnamedIDs = Set(talks.flatMap(\.lines).compactMap(\.speakerID))
-                        let tv = pipeline.broadcastLike()
-                        let unnamed = pipeline.people.filter { !$0.isNamed && unnamedIDs.contains($0.id) && !tv.contains($0.id) }.count
-                        if unnamed > 0 {
-                            NavigationLink {
-                                UnnamedVoicesView(day: today)
-                            } label: {
-                                Label("人物Nを整理（\(unnamed) 人）", systemImage: "person.crop.circle.badge.questionmark")
-                            }
-                        }
-                    }
-                }
-
-                if pipeline.misheardCount > 0 {
-                    Section {
-                        NavigationLink {
-                            MisheardView()
-                        } label: {
-                            Label("聞き間違いかも（\(pipeline.misheardCount) 個）", systemImage: "text.badge.checkmark")
-                        }
-                    } footer: {
-                        Text("聞き間違いらしい言葉です。直し終わると、その日の見出しとまとめを作り直します。")
                     }
                 }
 
@@ -141,6 +123,55 @@ private struct TodayView: View {
                 }
             }
             .navigationTitle("今日")
+            .task(id: pipeline.people.flatMap(\.samples)) {
+                reviewCount = pipeline.voiceReview().count
+            }
+        }
+    }
+
+    /// あとで見直すもの（今日の人物N・名前を付けてほしい声・声の見直し・聞き間違い）。無ければ出さない。
+    @ViewBuilder
+    private func todo(today: String, talks: [ConversationLog.Conversation]) -> some View {
+        let tv = pipeline.broadcastLike()
+        let todayIDs = Set(talks.flatMap(\.lines).compactMap(\.speakerID))
+        let unnamed = pipeline.people.filter { !$0.isNamed && !$0.isSelf && $0.hidden != true && !tv.contains($0.id) }
+        let todayCount = unnamed.filter { todayIDs.contains($0.id) }.count
+        let waiting = pipeline.speakerLabelsOn ? unnamed.filter { $0.seconds >= 30 }.count : 0
+        if todayCount > 0 || waiting > 0 || reviewCount > 0 || pipeline.misheardCount > 0 {
+            Section {
+                if todayCount > 0 {
+                    NavigationLink {
+                        UnnamedVoicesView(day: today)
+                    } label: {
+                        Label("今日の人物Nを整理（\(todayCount) 人）", systemImage: "person.crop.circle.badge.questionmark")
+                    }
+                }
+                if waiting > 0 {
+                    NavigationLink {
+                        PeopleView()
+                    } label: {
+                        Label("名前を付けてほしい声（\(waiting) 人）", systemImage: "person.badge.plus")
+                    }
+                }
+                if reviewCount > 0 {
+                    NavigationLink {
+                        VoiceReviewView()
+                    } label: {
+                        Label("声の見直し（\(reviewCount) 個）", systemImage: "waveform.badge.magnifyingglass")
+                    }
+                }
+                if pipeline.misheardCount > 0 {
+                    NavigationLink {
+                        MisheardView()
+                    } label: {
+                        Label("聞き間違いかも（\(pipeline.misheardCount) 個）", systemImage: "text.badge.checkmark")
+                    }
+                }
+            } header: {
+                Text("見直すもの")
+            } footer: {
+                Text("あいたときに少しずつで大丈夫です。直すほど、聞き分けと聞き取りが正確になります。聞き間違いを直し終わると、その日の見出しとまとめを作り直します（テレビ・動画らしい声は入れていません）。")
+            }
         }
     }
 }
@@ -243,6 +274,11 @@ private struct RecordsView: View {
                         } label: {
                             Label("記録に質問する", systemImage: "questionmark.bubble")
                         }
+                        NavigationLink {
+                            SpeakingView()
+                        } label: {
+                            Label("話し方の振り返り", systemImage: "person.wave.2")
+                        }
                     }
                     Section("日ごと") {
                         if days.isEmpty {
@@ -285,11 +321,6 @@ private struct PeoplePlacesView: View {
                             VoiceEnrollView()
                         } label: {
                             LabeledContent("自分の声", value: pipeline.hasSelfVoice ? "登録済み" : "未登録")
-                        }
-                        NavigationLink {
-                            SpeakingView()
-                        } label: {
-                            Label("話し方の振り返り", systemImage: "person.wave.2")
                         }
                     } else {
                         Toggle("話している人を聞き分ける", isOn: Binding(
@@ -483,21 +514,31 @@ private struct SettingsView: View {
                     if pipeline.audioBackupOn && pipeline.backupPending > 0 {
                         LabeledContent("ドライブに上げる前", value: "\(pipeline.backupPending) 件")
                     }
-                    NavigationLink("ほかのアプリの音声を取り込む") { ImportView() }
-                    NavigationLink("記録の掃除") { CleanupView() }
                     NavigationLink("周りの声と雑音") { NoiseSettingsView() }
-                    NavigationLink("聞き取りの成績") { ListenQualityView() }
-                    NavigationLink("自己点検") { DiagnosticsView() }
-                    NavigationLink("登録の控え") { BackupView() }
-                    NavigationLink("カレンダー・連絡先・移動・睡眠") { IntegrationsView() }
                     NavigationLink("夜の聞き直し") { NightlyView() }
-                    NavigationLink("ロック画面・時計の文字盤から使う") { ShortcutsHelpView() }
+                    NavigationLink("ほかのアプリの音声を取り込む") { ImportView() }
                 } header: {
-                    Text("音声と記録")
+                    Text("音声")
                 } footer: {
                     Text(pipeline.audioBackupOn
                          ? "音声は Wi-Fi のときにドライブの「LifeLog/音声」に上げ、古い行もそこから取ってきて聞き直せます。"
                          : "直近1日ぶんは、記録の行を押すとその場面の音声が流れます。")
+                }
+
+                Section("ほかのアプリとつなぐ") {
+                    NavigationLink("カレンダー・連絡先・移動・睡眠") { IntegrationsView() }
+                    NavigationLink("ロック画面・時計の文字盤から使う") { ShortcutsHelpView() }
+                }
+
+                Section {
+                    NavigationLink("自己点検") { DiagnosticsView() }
+                    NavigationLink("聞き取りの成績") { ListenQualityView() }
+                    NavigationLink("登録の控え") { BackupView() }
+                    NavigationLink("記録の掃除") { CleanupView() }
+                } header: {
+                    Text("点検と控え")
+                } footer: {
+                    Text("調子が悪いときは「自己点検」から。人・声・言葉の登録は毎日「登録の控え」に残しています。")
                 }
             }
             .navigationTitle("設定")
