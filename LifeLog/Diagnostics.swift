@@ -122,6 +122,7 @@ extension Pipeline {
             contacts.enabled ? contacts.authorized : nil)
         add("許可", "移動の様子", motion.enabled ? (motion.authorized ? "使う" : "未許可") : "オフ",
             motion.enabled ? motion.authorized : nil)
+        add("許可", "ヘルスケア", health.enabled ? (health.note.isEmpty ? "使う" : health.note) : "オフ")
 
         // 設定
         add("設定", "Google", email != nil ? "ログイン済み" : "ログインしていない", email != nil)

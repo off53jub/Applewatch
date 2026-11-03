@@ -388,6 +388,10 @@ struct ConversationsView: View {
         } else if let title = c.title, !title.isEmpty {
             parts.append(title)
         }
+        // ヘルスケアで、ふだんより心拍がはっきり上がっていた会話
+        if let max = group.filter({ $0.tense == true }).compactMap(\.heartRateMax).max() {
+            parts.append("♥︎\(max)")
+        }
         return parts.joined(separator: "　")
     }
 }

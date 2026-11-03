@@ -56,6 +56,7 @@ struct IntegrationsView: View {
         @Bindable var contacts = pipeline.contacts
         @Bindable var motion = pipeline.motion
         @Bindable var sleep = pipeline.sleep
+        @Bindable var health = pipeline.health
         Form {
             Section {
                 if calendar.authorized {
@@ -106,6 +107,19 @@ struct IntegrationsView: View {
                 Text("移動の様子")
             } footer: {
                 Text("iPhone の動きから、歩いている・電車や車に乗っている・止まっている、が分かります。会話の見出しに「（歩きながら）」「（電車・車で）」のように添えます。")
+            }
+
+            Section {
+                if health.enabled {
+                    Toggle("ヘルスケアを使う", isOn: $health.enabled)
+                } else {
+                    Button("ヘルスケアを使えるようにする") { Task { await health.requestAccess() } }
+                }
+                if !health.note.isEmpty { Text(health.note).font(.footnote).foregroundStyle(.secondary) }
+            } header: {
+                Text("ヘルスケア")
+            } footer: {
+                Text("Apple Watch の睡眠・心拍・歩数を読みます（書きません）。寝ているかを睡眠の記録で見分け、会話のあいだ心拍がふだん（安静時心拍）より平均で20以上か最大で30以上高ければ、記録の見出しに ♥︎ を付けます。1日のまとめに睡眠と歩数、心拍が上がっていた会話を入れ、「話し方の振り返り」にも数えます。署名にヘルスケアの許可が要るので、TestFlight で入れたときに使えます（署名なしの IPA を Sideloadly で入れたときは使えないことがあります）。")
             }
 
             Section {

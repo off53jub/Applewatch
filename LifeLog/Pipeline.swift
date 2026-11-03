@@ -125,6 +125,8 @@ final class Pipeline {
     let contacts = ContactsLink()
     let motion = MotionLink()
     let sleep = SleepGuess()
+    /// ヘルスケア（睡眠・心拍・歩数。署名に許可があるときだけ）
+    let health = HealthLink()
     let officeFilter = OfficeFilter()
     /// 会話に出てきた言葉の数え上げ（人ごとの言葉・言葉の登録の候補）
     let wordStats = WordStats()
@@ -207,6 +209,14 @@ final class Pipeline {
             return llmKey
         }
         conversations.isWork = { [weak self] time in self?.vocabularyContext(at: time) == .work }
+        conversations.heartInfo = { [weak self] start, end in
+            guard let self, let heart = await health.heartRate(from: start, to: end) else { return nil }
+            // ふだんの心拍より、平均で20以上か最大で30以上高ければ「心拍が上がっていた」
+            let resting = await health.restingHeartRate(before: start)
+            let tense = resting.map { Double(heart.average) >= $0 + 20 || Double(heart.max) >= $0 + 30 } ?? false
+            return (heart.average, heart.max, tense)
+        }
+        conversations.healthLine = { [weak self] dayStart in await self?.health.dayLine(dayStart) }
         conversations.placeName = { [weak self] time in await self?.places.name(at: time) }
         places.onChange = { [weak self] in self?.updateHold() }
         conversations.eventInfo = { [weak self] start, end in
@@ -1919,7 +1929,16 @@ final class Pipeline {
         let keywords = (contactWords + topics.flatMap(\.words) + personWords + eventWords + placeWords)
             .filter { seenWords.insert($0).inserted }
         // 寝ているあいだは、端末内の文字起こしだけで済ませる（電池を使わず、寝息に作られた文も出にくい）
-        let asleep = await sleep.isAsleep(from: start, to: start.addingTimeInterval(duration), motion: motion)
+        // ヘルスケアの睡眠の記録があればそれで、無ければ寝る時間帯に iPhone が止まっていたかで決める
+        var asleep = false
+        if sleep.enabled {
+            let healthAsleep = await health.asleep(from: start, to: start.addingTimeInterval(duration))
+            if let healthAsleep {
+                asleep = healthAsleep
+            } else {
+                asleep = await sleep.isAsleep(from: start, to: start.addingTimeInterval(duration), motion: motion)
+            }
+        }
         if asleep { lastEngine = "端末内（睡眠中）" }
         if silent, !asleep { lastEngine = "端末内（声がほとんど無い区切り）" }
         // Haas-ja に渡す区間：声のある区間（VAD が使えなければ、端末内で聞き取れた区間）

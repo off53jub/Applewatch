@@ -2,6 +2,7 @@ import Contacts
 import CoreMotion
 import EventKit
 import Foundation
+import HealthKit
 import Observation
 
 /// カレンダーの予定。会話の見出し、聞き取りのヒント（予定名・参加者・場所）、職場かどうかの判断、
@@ -238,6 +239,112 @@ final class SleepGuess {
         guard enabled, inWindow(start) else { return false }
         guard let still = await motion.stillness(from: start, to: end) else { return true }
         return still >= 0.9
+    }
+}
+
+/// ヘルスケア（Apple Watch の睡眠・心拍・歩数）。読むだけで、書かない。
+/// 署名にヘルスケアの許可（HealthKit）が要る。署名なしの IPA を Sideloadly で入れたときは使えない（TestFlight で入れると使える）。
+@MainActor
+@Observable
+final class HealthLink {
+    var enabled = UserDefaults.standard.bool(forKey: "healthOn") {
+        didSet { UserDefaults.standard.set(enabled, forKey: "healthOn") }
+    }
+    /// 許可を聞いたあとの様子（画面に出す）
+    private(set) var note = ""
+
+    @ObservationIgnored private let store = HKHealthStore()
+
+    var available: Bool { HKHealthStore.isHealthDataAvailable() }
+
+    private static let reads: Set<HKObjectType> = [
+        HKCategoryType(.sleepAnalysis), HKQuantityType(.heartRate), HKQuantityType(.restingHeartRate), HKQuantityType(.stepCount),
+    ]
+
+    func requestAccess() async {
+        guard available else {
+            note = "この端末ではヘルスケアを使えません。"
+            return
+        }
+        do {
+            try await store.requestAuthorization(toShare: [], read: Self.reads)
+            enabled = true
+            note = "許可を聞きました（読む許可は、iPhone の「ヘルスケア」アプリの「共有」で確かめられます）。"
+        } catch {
+            note = "ヘルスケアを使えませんでした（この入れ方では使えないことがあります。TestFlight で入れると使えます）: \(error.localizedDescription)"
+        }
+    }
+
+    /// その時間に寝ていたか（睡眠の記録が半分以上重なっていれば寝ていた）。記録が無ければ nil。
+    func asleep(from start: Date, to end: Date) async -> Bool? {
+        guard enabled, available, end > start else { return nil }
+        let samples = await categorySamples(.sleepAnalysis, from: start.addingTimeInterval(-3600), to: end)
+        guard !samples.isEmpty else { return nil }
+        let asleepValues: Set<Int> = [HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue, HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                                      HKCategoryValueSleepAnalysis.asleepDeep.rawValue, HKCategoryValueSleepAnalysis.asleepREM.rawValue]
+        let overlap = samples.filter { asleepValues.contains($0.value) }.reduce(0.0) { total, s in
+            total + max(0, min(s.endDate, end).timeIntervalSince(max(s.startDate, start)))
+        }
+        return overlap >= end.timeIntervalSince(start) / 2
+    }
+
+    /// その時間の心拍（平均と最大、1分あたり）。記録が無ければ nil。
+    func heartRate(from start: Date, to end: Date) async -> (average: Int, max: Int)? {
+        guard enabled, available else { return nil }
+        let unit = HKUnit.count().unitDivided(by: .minute())
+        let stats = await statistics(.heartRate, from: start, to: end, options: [.discreteAverage, .discreteMax])
+        guard let average = stats?.averageQuantity()?.doubleValue(for: unit),
+              let max = stats?.maximumQuantity()?.doubleValue(for: unit) else { return nil }
+        return (Int(average.rounded()), Int(max.rounded()))
+    }
+
+    /// ふだんの心拍（直近7日の安静時心拍の平均）。分からなければ nil。
+    func restingHeartRate(before date: Date) async -> Double? {
+        guard enabled, available else { return nil }
+        let stats = await statistics(.restingHeartRate, from: date.addingTimeInterval(-7 * 86400), to: date, options: .discreteAverage)
+        return stats?.averageQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+    }
+
+    /// 1日の体調の一文（前の晩からの睡眠と、その日の歩数）。どちらも分からなければ nil。
+    func dayLine(_ dayStart: Date) async -> String? {
+        guard enabled, available else { return nil }
+        var parts: [String] = []
+        // 前の日の18時から、その日の12時までの睡眠
+        let nightFrom = dayStart.addingTimeInterval(-6 * 3600), nightTo = dayStart.addingTimeInterval(12 * 3600)
+        let asleepValues: Set<Int> = [HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue, HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                                      HKCategoryValueSleepAnalysis.asleepDeep.rawValue, HKCategoryValueSleepAnalysis.asleepREM.rawValue]
+        let sleep = await categorySamples(.sleepAnalysis, from: nightFrom, to: nightTo)
+            .filter { asleepValues.contains($0.value) }
+            .reduce(0.0) { $0 + max(0, min($1.endDate, nightTo).timeIntervalSince(max($1.startDate, nightFrom))) }
+        if sleep > 0 { parts.append("睡眠 \(Int(sleep / 3600))時間\(Int(sleep.truncatingRemainder(dividingBy: 3600) / 60))分") }
+        if let steps = await statistics(.stepCount, from: dayStart, to: dayStart.addingTimeInterval(86400), options: .cumulativeSum)?
+            .sumQuantity()?.doubleValue(for: .count()), steps > 0 {
+            parts.append("歩数 \(Int(steps).formatted())歩")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "・")
+    }
+
+    private func categorySamples(_ id: HKCategoryTypeIdentifier, from start: Date, to end: Date) async -> [HKCategorySample] {
+        await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+            let query = HKSampleQuery(sampleType: HKCategoryType(id), predicate: predicate, limit: HKObjectQueryNoLimit,
+                                      sortDescriptors: nil) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKCategorySample]) ?? [])
+            }
+            store.execute(query)
+        }
+    }
+
+    private func statistics(_ id: HKQuantityTypeIdentifier, from start: Date, to end: Date,
+                            options: HKStatisticsOptions) async -> HKStatistics? {
+        await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+            let query = HKStatisticsQuery(quantityType: HKQuantityType(id), quantitySamplePredicate: predicate,
+                                          options: options) { _, stats, _ in
+                continuation.resume(returning: stats)
+            }
+            store.execute(query)
+        }
     }
 }
 

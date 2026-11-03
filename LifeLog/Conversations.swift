@@ -168,6 +168,10 @@ final class ConversationLog {
     var forgetVoices: @MainActor (Set<String>) async -> Void = { _ in }
     /// その時刻は職場か（職場の会話は、設定によって端末内の言語モデルだけでまとめる）
     var isWork: (Date) -> Bool = { _ in false }
+    /// その時間の心拍（平均・最大・ふだんよりはっきり高いか）。ヘルスケアが使えなければ nil
+    var heartInfo: (Date, Date) async -> (average: Int, max: Int, tense: Bool)? = { _, _ in nil }
+    /// その日の体調の一文（睡眠・歩数）。ヘルスケアが使えなければ nil
+    var healthLine: (Date) async -> String? = { _ in nil }
 
     /// 会話・日の中に職場の会話があるか
     private func sensitive(_ list: [Conversation]) -> Bool { list.contains { isWork($0.start) } }
@@ -262,6 +266,11 @@ final class ConversationLog {
         let event = await eventInfo(conversation.start, conversation.end)
         result.event = event?.name
         result.movement = await movementName(conversation.start, conversation.end)
+        if let heart = await heartInfo(conversation.start, conversation.end) {
+            result.heartRate = heart.average
+            result.heartRateMax = heart.max
+            result.tense = heart.tense ? true : nil
+        }
         // テレビ・CM・ドラマ・放送の声だった行を見分けて、[テレビ] などの名前にする（相手には数えない）
         if let key = apiKey() { result = await tagBroadcast(result, day: day, apiKey: key) }
         let transcript = result.lines.map { line in
@@ -1109,6 +1118,15 @@ final class ConversationLog {
         }
         section("★ 印を付けたところ", marked.map { $0.count > 120 ? String($0.prefix(120)) + "…" : $0 })
         body += "会った人: " + (people.isEmpty ? "なし" : people.joined(separator: "、")) + "\n"
+        if let dayStart = Self.dayFormatter.date(from: day), let health = await healthLine(dayStart) {
+            body += "体調: " + health + "\n"
+        }
+        let tense = log.conversations.filter { $0.tense == true }
+        if !tense.isEmpty {
+            section("心拍が上がっていた会話", tense.map { c in
+                "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))　\(c.title ?? "")（最大 \(c.heartRateMax ?? 0)）"
+            })
+        }
         section("決まったこと", summary.decisions)
         section("やること", summary.todos)
         section("話題", summary.topics)
