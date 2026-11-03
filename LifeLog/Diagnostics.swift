@@ -130,6 +130,9 @@ extension Pipeline {
             settings.useCloud ? settings.hasAPIKey : nil)
         add("設定", "今月のクラウドの文字起こし", "\(settings.usedMinutesThisMonth) 分")
         add("設定", "Groq のキー", settings.groqKey != nil ? "あり" : "なし")
+        let local = LocalModel.status
+        add("設定", "iPhone の中の言語モデル", LocalModel.mode.label + "・" + local.text,
+            LocalModel.mode == .off ? nil : local.usable)
         add("設定", "iPhone 内の Haas-ja", haas.enabled ? (haas.isUsable ? "使える" : "準備できていない") : "オフ",
             haas.enabled ? haas.isUsable : nil)
         add("設定", "家の PC", homePC.isConfigured ? (homePC.lastResult.isEmpty ? "設定済み" : homePC.lastResult) : "使わない")

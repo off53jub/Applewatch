@@ -335,6 +335,8 @@ private struct PeoplePlacesView: View {
 
 private struct SettingsView: View {
     @Environment(Pipeline.self) private var pipeline
+    /// LocalModel.modeKey と同じ名前
+    @AppStorage("localModelMode") private var localModelMode = LocalModel.Mode.fallback.rawValue
 
     var body: some View {
         @Bindable var settings = pipeline.settings
@@ -408,7 +410,7 @@ private struct SettingsView: View {
                     Toggle("誤変換を言語モデルで直す", isOn: Binding(
                         get: { pipeline.correctionOn },
                         set: { pipeline.correctionOn = $0 }))
-                        .disabled(settings.groqKey == nil)
+                        .disabled(pipeline.llmKey == nil)
                     NavigationLink("サービスと API キーの設定") {
                         TranscriptionSettingsView(settings: settings)
                     }
@@ -447,14 +449,25 @@ private struct SettingsView: View {
                     Toggle("会話ごとの見出しと1日のまとめ", isOn: Binding(
                         get: { pipeline.summariesOn },
                         set: { pipeline.summariesOn = $0 }))
-                        .disabled(settings.groqKey == nil)
+                        .disabled(pipeline.llmKey == nil)
                     Toggle("場所を記録する", isOn: Binding(
                         get: { pipeline.places.isOn },
                         set: { pipeline.places.isOn = $0 }))
                 } header: {
                     Text("会話のまとめ")
                 } footer: {
-                    Text("話が3分途切れるごとに、ドキュメントに「時刻・場所・相手・内容」の見出しと要点を付け、日が変わると前の日の先頭に「1日のまとめ」を入れます（Groq の無料枠）。")
+                    Text("話が3分途切れるごとに、ドキュメントに「時刻・場所・相手・内容」の見出しと要点を付け、日が変わると前の日の先頭に「1日のまとめ」を入れます（Groq の無料枠か、iPhone の中の言語モデル）。")
+                }
+
+                Section {
+                    Picker("iPhone の中の言語モデル", selection: $localModelMode) {
+                        ForEach(LocalModel.Mode.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
+                    LabeledContent("この iPhone", value: LocalModel.status.text)
+                } header: {
+                    Text("言語モデル")
+                } footer: {
+                    Text("見出し・要点・まとめ・誤変換直し・聞き間違い探し・記録への質問を、Apple の iPhone の中の言語モデル（Apple Intelligence）でも作ります。無料で上限が無く、中身を外に送りません。Groq の大きいモデルより賢くなく、長い会話は頭と終わりだけを読むことがあります。「Groq が使えないときだけ」は、キーが無い・無料枠を使い切った・混んでいる・通信できないときの代わり。「職場の会話は端末内で」は、職場にいた時間の会話を Groq に送りません。")
                 }
 
                 Section {

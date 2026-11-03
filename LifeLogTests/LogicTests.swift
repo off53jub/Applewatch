@@ -167,6 +167,22 @@ final class LogicTests: XCTestCase {
         XCTAssertTrue(box.kept.contains("会義テスト"))
     }
 
+    // MARK: - 端末内の言語モデル
+
+    func testLocalModelParsesJSONInsideText() {
+        let json = LocalModel.parse("はい、こちらです。\n{\"title\": \"打ち合わせ\", \"points\": [\"A案\"]}\nいかがでしょう")
+        XCTAssertEqual(json?["title"] as? String, "打ち合わせ")
+        XCTAssertEqual(json?["points"] as? [String], ["A案"])
+        XCTAssertNil(LocalModel.parse("JSON がありません"))
+    }
+
+    func testSensitiveWorkGoesLocalOnlyWhenWorkMode() {
+        // 端末内の言語モデルが使えない（シミュレーターなど）ときは、どの設定でも Groq を使う
+        if !LocalModel.isUsable {
+            XCTAssertFalse(Summarizer.$sensitive.withValue(true) { Summarizer.usesLocal(apiKey: "key") })
+        }
+    }
+
     // MARK: - 控え
 
     func testBackupLabel() {

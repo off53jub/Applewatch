@@ -29,14 +29,34 @@ enum Summarizer {
     /// 1回に渡す文字数の上限（1分あたりのトークン上限に収まるように）
     private static let pieceLength = 4_000
 
+    /// 職場の会話など、外に出したくない中身か。「職場の会話は端末内で」のとき、端末内の言語モデルで作る（Groq には送らない）。
+    @TaskLocal static var sensitive = false
+
+    /// この呼び出しを、はじめから端末内の言語モデルで作るか
+    static func usesLocal(apiKey: String) -> Bool {
+        guard LocalModel.isOn else { return false }
+        switch LocalModel.mode {
+        case .off: return false
+        case .fallback: return apiKey == LocalModel.keyless
+        case .work: return apiKey == LocalModel.keyless || sensitive
+        case .always: return true
+        }
+    }
+
+    /// 長い会話を区切る長さ（端末内で作るときは短く）
+    private static func pieceLimit(_ apiKey: String) -> Int { usesLocal(apiKey: apiKey) ? LocalModel.pieceLength : pieceLength }
+
+    private static let system = "あなたは日本語の会話ログを整理するアシスタントです。必ず日本語で、指定された JSON だけを返します。"
+
     /// selfShare は [自分] の発言の割合（0〜1）。テレビや動画を見ているときは低くなる。
     static func conversation(_ transcript: String, timeRange: String, selfShare: Double,
                              event: String? = nil, apiKey: String) async throws -> Conversation {
         var material = transcript
-        if transcript.count > pieceLength {
+        let limit = pieceLimit(apiKey)
+        if transcript.count > limit {
             // 長い会話は、区切りごとに要点メモにしてからまとめる
             var notes: [String] = []
-            for piece in pieces(of: transcript) {
+            for piece in pieces(of: transcript, length: limit) {
                 let json = try await chat(model: noteModel, apiKey: apiKey, prompt: """
                     次は会話の文字起こしの一部です（[自分] は記録している本人）。
                     要点を5つ以内の短い箇条書きにして、JSON {"notes": ["...", ...]} で返してください。
@@ -414,11 +434,11 @@ enum Summarizer {
         return row[b.count] <= max(2, a.count * 3 / 10)
     }
 
-    private static func pieces(of text: String) -> [String] {
+    private static func pieces(of text: String, length: Int = pieceLength) -> [String] {
         var result: [String] = []
         var current = ""
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            if current.count + line.count > pieceLength, !current.isEmpty {
+            if current.count + line.count > length, !current.isEmpty {
                 result.append(current)
                 current = ""
             }
@@ -428,8 +448,28 @@ enum Summarizer {
         return result
     }
 
-    /// JSON で答えさせる。混んでいる（429）ときは指示どおり待って3回まで試す。
+    /// JSON で答えさせる。端末内で作るときは端末内の言語モデル、それ以外は Groq。
+    /// Groq が使えなかったとき（混んでいる・無料枠を超えた・通信できない）は、端末内の言語モデルが使えればそちらで作る。
+    /// 端末内で作れなかったとき（読めない答え・断られた）は、外に出してよい中身なら Groq で作る。
     private static func chat(model: String, apiKey: String, maxWait: Double = 90, prompt: String) async throws -> [String: Any] {
+        if usesLocal(apiKey: apiKey) {
+            do {
+                return try await LocalModel.json(system: system, prompt: prompt)
+            } catch {
+                guard apiKey != LocalModel.keyless, !sensitive || LocalModel.mode != .work, LocalModel.mode != .always else { throw error }
+                return try await groq(model: model, apiKey: apiKey, maxWait: maxWait, prompt: prompt)
+            }
+        }
+        do {
+            return try await groq(model: model, apiKey: apiKey, maxWait: maxWait, prompt: prompt)
+        } catch {
+            guard LocalModel.isOn else { throw error }
+            return try await LocalModel.json(system: system, prompt: prompt)
+        }
+    }
+
+    /// Groq の言語モデルに JSON で答えさせる。混んでいる（429）ときは指示どおり待って3回まで試す。
+    private static func groq(model: String, apiKey: String, maxWait: Double, prompt: String) async throws -> [String: Any] {
         var request = URLRequest(url: URL(string: "https://api.groq.com/openai/v1/chat/completions")!)
         request.httpMethod = "POST"
         request.timeoutInterval = 120
@@ -438,7 +478,7 @@ enum Summarizer {
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "model": model,
             "messages": [
-                ["role": "system", "content": "あなたは日本語の会話ログを整理するアシスタントです。必ず日本語で、指定された JSON だけを返します。"],
+                ["role": "system", "content": system],
                 ["role": "user", "content": prompt],
             ],
             "response_format": ["type": "json_object"],

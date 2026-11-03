@@ -110,7 +110,7 @@ extension Pipeline {
     /// まだ調べていない閉じた会話から、聞き間違いと思われる言葉を探して一覧に足す。足した数を返す。
     @discardableResult
     func findMisheard(force: Bool = false) async -> Int {
-        guard summariesOn, let key = settings.groqKey,
+        guard summariesOn, let key = llmKey,
               force || Date.now.timeIntervalSince(Self.misheardChecked) >= 600 else { return 0 }
         Self.misheardChecked = .now
         misheard.prune()
@@ -137,11 +137,15 @@ extension Pipeline {
                     continue
                 }
                 guard budget > 0 else { return added }
+                // 職場の会話は、設定によって端末内の言語モデルだけで読む（そのときは短く区切る）
+                let work = isWorkTime(c.start)
+                let local = Summarizer.$sensitive.withValue(work) { Summarizer.usesLocal(apiKey: key) }
+                let pieceLength = local ? LocalModel.pieceLength : Self.misheardPiece
                 // 長い会話は区切って渡す
                 var pieces: [[ConversationLog.Line]] = [[]]
                 var length = 0
                 for line in lines {
-                    if length + line.text.count > Self.misheardPiece, !(pieces.last ?? []).isEmpty {
+                    if length + line.text.count > pieceLength, !(pieces.last ?? []).isEmpty {
                         pieces.append([])
                         length = 0
                     }
@@ -153,7 +157,9 @@ extension Pipeline {
                         Self.misheardClock.string(from: line.time) + " " + (line.speaker.map { "[\($0)] " } ?? "") + line.text
                     }.joined(separator: "\n")
                     budget -= transcript.count
-                    guard let found = try? await Summarizer.misheard(transcript, hints: hints, apiKey: key) else {
+                    guard let found = try? await Summarizer.$sensitive.withValue(work, operation: {
+                        try await Summarizer.misheard(transcript, hints: hints, apiKey: key)
+                    }) else {
                         // 混んでいる・無料枠を超えたときは、次の機会にやり直す
                         return added
                     }

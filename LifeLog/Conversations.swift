@@ -159,6 +159,11 @@ final class ConversationLog {
     var dayActivities: (String) async -> [Activity] = { _ in [] }
     /// テレビや動画だった会話で、名前の無い声として覚えてしまった番号（忘れてもらう）
     var forgetVoices: @MainActor (Set<String>) async -> Void = { _ in }
+    /// その時刻は職場か（職場の会話は、設定によって端末内の言語モデルだけでまとめる）
+    var isWork: (Date) -> Bool = { _ in false }
+
+    /// 会話・日の中に職場の会話があるか
+    private func sensitive(_ list: [Conversation]) -> Bool { list.contains { isWork($0.start) } }
 
     init(docs: GoogleDocs) {
         self.docs = docs
@@ -222,7 +227,8 @@ final class ConversationLog {
             let conversation = log.conversations[i]
             let sameDay = day == nil || day == openDay
             guard !sameDay || time.timeIntervalSince(conversation.end) > Self.gap else { continue }
-            if let closed = await close(conversation, day: openDay) {
+            let work = isWork(conversation.start)
+            if let closed = await Summarizer.$sensitive.withValue(work, operation: { await close(conversation, day: openDay) }) {
                 // 閉じているあいだに同期で増えた会話も残すよう、読み直してから置き換える
                 var fresh = load(openDay)
                 guard let j = fresh.conversations.firstIndex(where: { $0.start == conversation.start && !$0.closed })
@@ -234,7 +240,9 @@ final class ConversationLog {
                 save(fresh, day: openDay)
                 justClosed.append(closed)
                 // 会話全体を見て、同じ名前や言葉の書き方をそろえる
-                if let key = apiKey() { await unifySpelling(closed, day: openDay, apiKey: key) }
+                if let key = apiKey() {
+                    await Summarizer.$sensitive.withValue(work) { await unifySpelling(closed, day: openDay, apiKey: key) }
+                }
             }
         }
     }
@@ -322,9 +330,10 @@ final class ConversationLog {
                 budget -= transcript.count
                 let range = "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))"
                 let event = await eventInfo(c.start, c.end)
-                guard let summary = try? await Summarizer.conversation(transcript, timeRange: range,
-                                                                       selfShare: Self.selfShare(c),
-                                                                       event: event?.detail, apiKey: key) else { return }
+                guard let summary = try? await Summarizer.$sensitive.withValue(isWork(c.start), operation: {
+                    try await Summarizer.conversation(transcript, timeRange: range, selfShare: Self.selfShare(c),
+                                                      event: event?.detail, apiKey: key)
+                }) else { return }
                 await applyTitle(summary, to: c, day: day)
             }
         }
@@ -793,9 +802,10 @@ final class ConversationLog {
                     budget -= transcript.count
                     let range = "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))"
                     let event = await eventInfo(c.start, c.end)
-                    guard let made = try? await Summarizer.conversation(transcript, timeRange: range,
-                                                                        selfShare: Self.selfShare(c),
-                                                                        event: event?.detail, apiKey: key) else { return done }
+                    guard let made = try? await Summarizer.$sensitive.withValue(isWork(c.start), operation: {
+                        try await Summarizer.conversation(transcript, timeRange: range, selfShare: Self.selfShare(c),
+                                                          event: event?.detail, apiKey: key)
+                    }) else { return done }
                     summary = made
                 }
                 guard await replaceTitle(summary, of: c, day: day) else { return done }
@@ -1040,6 +1050,12 @@ final class ConversationLog {
 
     /// 1日のまとめの中身と、ドキュメントに書く本文。作れなければ nil。
     private func dailySummary(_ log: Day, day: String, key: String) async -> (summary: Summarizer.Day, body: String)? {
+        await Summarizer.$sensitive.withValue(sensitive(log.conversations)) {
+            await makeDailySummary(log, day: day, key: key)
+        }
+    }
+
+    private func makeDailySummary(_ log: Day, day: String, key: String) async -> (summary: Summarizer.Day, body: String)? {
         // 1日の流れのために、見出しの無い短い会話も時刻と場所だけは渡す
         let overview = log.conversations.map { c in
             let place = c.place.map { "・" + $0 } ?? ""
@@ -1133,7 +1149,10 @@ final class ConversationLog {
                 }
             }
         }
-        guard let summary = try? await Summarizer.week(material, apiKey: key) else { return }
+        let work = sensitive(logs.flatMap(\.conversations))
+        guard let summary = try? await Summarizer.$sensitive.withValue(work, operation: {
+            try await Summarizer.week(material, apiKey: key)
+        }) else { return }
 
         var body = ""
         func section(_ name: String, _ items: [String]) {
@@ -1215,7 +1234,10 @@ final class ConversationLog {
                 }
             }
         }
-        guard let summary = try? await Summarizer.month(material, apiKey: key) else { return }
+        let work = sensitive(logs.flatMap(\.conversations))
+        guard let summary = try? await Summarizer.$sensitive.withValue(work, operation: {
+            try await Summarizer.month(material, apiKey: key)
+        }) else { return }
 
         var body = ""
         func section(_ name: String, _ items: [String]) {

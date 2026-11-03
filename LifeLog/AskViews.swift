@@ -51,8 +51,8 @@ extension Pipeline {
     /// 2. その期間の会話を、言葉や人がよく出てくる順に、決まった量まで集める。
     /// 3. 大きいモデルで、集めた記録だけをもとに答える。
     func ask(_ question: String) async throws -> Answer {
-        guard let key = settings.groqKey else {
-            throw CloudTranscriber.Failure.rejected("「サービスと API キーの設定」で Groq の API キーを入れてください。")
+        guard let key = llmKey else {
+            throw CloudTranscriber.Failure.rejected("「サービスと API キーの設定」で Groq の API キーを入れるか、iPhone の中の言語モデルを使えるようにしてください。")
         }
         let label = DateFormatter()
         label.locale = Locale(identifier: "ja_JP")
@@ -80,8 +80,11 @@ extension Pipeline {
             a.score != b.score ? a.score > b.score : (a.day, a.conversation.start) > (b.day, b.conversation.start)
         }
 
-        // 1分あたりの上限に収まるよう、渡すのは6,000文字まで
-        let budget = 6_000
+        // 職場の会話が入るときは、設定によって端末内の言語モデルで答える（そのときは渡す量を減らす）
+        let work = scored.prefix(10).contains { isWorkTime($0.conversation.start) }
+        let local = Summarizer.$sensitive.withValue(work) { Summarizer.usesLocal(apiKey: key) }
+        // 1分あたりの上限に収まるよう、渡すのは6,000文字まで（端末内なら1,800文字）
+        let budget = local ? 1_800 : 6_000
         var material = ""
         for item in scored where material.count < budget {
             let c = item.conversation
@@ -108,7 +111,9 @@ extension Pipeline {
             return Answer(text: "その期間の記録に見つかりませんでした。", sources: [])
         }
 
-        let result = try await Summarizer.answer(question, material: material, apiKey: key)
+        let result = try await Summarizer.$sensitive.withValue(work) {
+            try await Summarizer.answer(question, material: material, apiKey: key)
+        }
         // 根拠の「yyyy-MM-dd HH:mm」を、記録の行に結びつける
         var sources: [Hit] = []
         for source in result.sources {

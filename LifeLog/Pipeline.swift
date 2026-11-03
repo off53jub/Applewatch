@@ -202,8 +202,9 @@ final class Pipeline {
         archive.enabled = { [weak self] in self?.audioBackupOn ?? false }
         conversations.apiKey = { [weak self] in
             guard let self, summariesOn else { return nil }
-            return settings.groqKey
+            return llmKey
         }
+        conversations.isWork = { [weak self] time in self?.vocabularyContext(at: time) == .work }
         conversations.placeName = { [weak self] time in await self?.places.name(at: time) }
         places.onChange = { [weak self] in self?.updateHold() }
         conversations.eventInfo = { [weak self] start, end in
@@ -1370,7 +1371,7 @@ final class Pipeline {
         let closed = conversations(on: day).filter { $0.closed && !$0.lines.isEmpty }
         let events = calendar.dayEvents(from: dayStart, to: dayEnd)
         let basis = ActivityBuilder.basis(closed, events: events)
-        let key = summariesOn ? settings.groqKey : nil
+        let key = summariesOn ? llmKey : nil
         let saved = ActivityStore.load(day)
         var recorded: [Activity]
         if !rebuild, let saved, saved.basis == basis, saved.smart || key == nil {
@@ -1542,6 +1543,16 @@ final class Pipeline {
         return nil
     }
 
+    // MARK: - 言語モデル
+
+    /// 言語モデルの呼び出しに渡すキー。Groq のキーが無くても、端末内の言語モデルが使えればその印を返す。
+    var llmKey: String? {
+        settings.groqKey ?? (LocalModel.isOn ? LocalModel.keyless : nil)
+    }
+
+    /// その時刻は職場か（「職場の会話は端末内で」のときに、外に出さない中身として扱う）
+    func isWorkTime(_ time: Date) -> Bool { vocabularyContext(at: time) == .work }
+
     // MARK: - 聞き間違いかも
 
     /// 聞き間違いと思われる言葉の一覧
@@ -1692,11 +1703,14 @@ final class Pipeline {
                 }
             }
             // 確からしさの低い行と、書き直した行は、その日の言葉をヒントに言語モデルで直す
-            if correctionOn, let key = settings.groqKey {
+            if correctionOn, let key = llmKey {
                 let picks = lines.indices.filter { texts[$0] != lines[$0].text || lines[$0].isUncertain }
+                let work = lines.first.map { vocabularyContext(at: $0.time) == .work } ?? false
                 if !picks.isEmpty,
-                   let fixed = try? await Summarizer.correct(picks.map { texts[$0] }, keywords: words, previous: nil,
-                                                             alternatives: picks.map { heard[$0] }, apiKey: key) {
+                   let fixed = try? await Summarizer.$sensitive.withValue(work, operation: {
+                       try await Summarizer.correct(picks.map { texts[$0] }, keywords: words, previous: nil,
+                                                    alternatives: picks.map { heard[$0] }, apiKey: key)
+                   }) {
                     for (k, i) in picks.enumerated() where !fixed[k].isEmpty { texts[i] = fixed[k] }
                 }
             }
@@ -1997,9 +2011,11 @@ final class Pipeline {
                 entries[i].text = entries[i].text.replacingOccurrences(of: fix.wrong, with: fix.right)
             }
         }
-        if correctionOn, !asleep, !silent, let key = settings.groqKey,
-           let fixed = try? await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
-                                                     previous: previous, alternatives: others, apiKey: key) {
+        if correctionOn, !asleep, !silent, let key = llmKey,
+           let fixed = try? await Summarizer.$sensitive.withValue(context == .work, operation: {
+               try await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
+                                            previous: previous, alternatives: others, apiKey: key)
+           }) {
             for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
                 if originals[i] == nil { originals[i] = entries[i].text }
                 entries[i].text = fixed[i]
