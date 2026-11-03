@@ -153,6 +153,14 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(labels[0], 0)
     }
 
+    func testIsHome() {
+        XCTAssertTrue(Pipeline.isHome("自宅"))
+        XCTAssertTrue(Pipeline.isHome("実家"))
+        XCTAssertFalse(Pipeline.isHome("渋谷駅近く"))
+        XCTAssertFalse(Pipeline.isHome("駅のホーム"))
+        XCTAssertFalse(Pipeline.isHome(nil))
+    }
+
     func testVoiceGroupsKeepsOneVoiceTogether() {
         let a: [Float] = [1, 0, 0, 0]
         let labels = Pipeline.voiceGroups([voice(a, 0.05), voice(a, 0.02), voice(a, 0.08), voice(a, 0.01)], limit: Pipeline.groupLimit)

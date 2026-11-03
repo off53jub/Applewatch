@@ -271,14 +271,16 @@ extension Pipeline {
     /// 「名前を付けてほしい声」と「人物Nを整理」には出さない（家でテレビや YouTube を流していると、名前の無い声がたくさんできるため）。
     func broadcastLike() -> Set<String> {
         if Date.now.timeIntervalSince(Self.broadcastCache.at) < 60 { return Self.broadcastCache.ids }
-        var total: [String: Int] = [:], tv: [String: Int] = [:]
+        var total: [String: Int] = [:], tv: [String: Int] = [:], home: [String: Int] = [:]
         for day in recordedDays().prefix(14) {
             for c in conversations(on: day) {
                 let selfTimes = c.lines.filter { $0.speakerID == SpeakerLabeler.selfID }.map(\.time)
+                let atHome = Self.isHome(c.place)
                 for line in c.lines {
                     // テレビの行に書き換えた行は、元の声の番号（heardSpeakerID）で数える
                     guard let id = line.speakerID ?? line.heardSpeakerID, id != SpeakerLabeler.selfID else { continue }
                     total[id, default: 0] += 1
+                    if atHome { home[id, default: 0] += 1 }
                     let sound = line.sound ?? ""
                     let media = line.media != nil || c.media != nil || sound.contains("テレビ") || sound.contains("音楽")
                     let lonely = !selfTimes.contains { abs($0.timeIntervalSince(line.time)) <= 180 }
@@ -287,11 +289,21 @@ extension Pipeline {
             }
         }
         let unnamed = Set(people.filter { !$0.isNamed && $0.hidden != true }.map(\.id))
+        // テレビや YouTube はほとんど家で流すので、行の半分以上が家の声は早めに（3行以上・半分以上で）みなす
         let ids = Set(total.filter { id, n in
-            unnamed.contains(id) && n >= 5 && Double(tv[id] ?? 0) / Double(n) >= 0.7
+            guard unnamed.contains(id) else { return false }
+            let share = Double(tv[id] ?? 0) / Double(n)
+            let mostlyHome = Double(home[id] ?? 0) / Double(n) >= 0.5
+            return mostlyHome ? (n >= 3 && share >= 0.5) : (n >= 5 && share >= 0.7)
         }.map(\.key))
         Self.broadcastCache = (.now, ids)
         return ids
+    }
+
+    /// 家の場所の名前か（「自宅」「家」「実家」を含む。「ホーム」は駅やホームセンターと紛れるので見ない）
+    nonisolated static func isHome(_ place: String?) -> Bool {
+        guard let place else { return false }
+        return ["自宅", "家", "実家", "home", "Home"].contains { place.contains($0) }
     }
 
     /// テレビ・動画らしい声をまとめて忘れる（名前の無い声だけ。記録の行はそのまま）。忘れた数を返す。
