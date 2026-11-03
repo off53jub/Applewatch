@@ -279,6 +279,68 @@ enum Summarizer {
                     todos: list("todos"), topics: list("topics"))
     }
 
+    /// 議事録の中身
+    struct Minutes {
+        struct Topic {
+            let title: String
+            let points: [String]
+        }
+        struct Todo {
+            let who: String
+            let what: String
+            let due: String
+        }
+        let purpose: String
+        let topics: [Topic]
+        let decisions: [String]
+        let todos: [Todo]
+        let next: String
+    }
+
+    /// 会議の文字起こしから議事録を作る。長い会議は区切りごとに要点メモにしてからまとめる。
+    static func minutes(_ transcript: String, timeRange: String, event: String?, attendees: [String],
+                        apiKey: String) async throws -> Minutes {
+        var material = transcript
+        let limit = pieceLimit(apiKey)
+        if transcript.count > limit {
+            var notes: [String] = []
+            for piece in pieces(of: transcript, length: limit) {
+                let json = try await chat(model: noteModel, apiKey: apiKey, prompt: """
+                    次は会議の文字起こしの一部です（[自分] は記録している本人、角かっこは話した人）。
+                    議題・発言・決まったこと・宿題（誰が・何を・いつまでに）を落とさず、話した人が分かるものは［名前］を頭に付けた短い箇条書きにして、
+                    JSON {"notes": ["...", ...]} で返してください（10個以内）。
+
+                    \(piece)
+                    """)
+                notes += (json["notes"] as? [String]) ?? []
+            }
+            material = "（長い会議のため、区切りごとの要点メモ）\n" + notes.map { "・" + $0 }.joined(separator: "\n")
+        }
+        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+            次は \(timeRange) の会議の文字起こしです。[自分] は記録している本人、角かっこは話した人です。
+            \(event.map { "予定: \($0)\n" } ?? "")\(attendees.isEmpty ? "" : "出席していた人: " + attendees.joined(separator: "、") + "\n")\
+            話し言葉は書き言葉に直し、文字起こしの誤変換は文脈から補ってかまいません。記録に無いことは書かないでください。
+            議事録を次の JSON で返してください。無いものは空にしてください。
+            {"purpose": "会議の目的・主な議題（1〜2文）",
+             "topics": [{"title": "議題", "points": ["議論の要点。話した人が分かれば［名前］を頭に付ける"]}],
+             "decisions": ["決まったこと"],
+             "todos": [{"who": "担当（分からなければ空）", "what": "やること", "due": "期限（分からなければ空）"}],
+             "next": "次回の予定や持ち越し（分からなければ空）"}
+
+            \(material)
+            """)
+        let topics = (json["topics"] as? [[String: Any]] ?? []).compactMap { item -> Minutes.Topic? in
+            guard let title = item["title"] as? String else { return nil }
+            return Minutes.Topic(title: title, points: item["points"] as? [String] ?? [])
+        }
+        let todos = (json["todos"] as? [[String: Any]] ?? []).compactMap { item -> Minutes.Todo? in
+            guard let what = item["what"] as? String, !what.isEmpty else { return nil }
+            return Minutes.Todo(who: item["who"] as? String ?? "", what: what, due: item["due"] as? String ?? "")
+        }
+        return Minutes(purpose: json["purpose"] as? String ?? "", topics: topics,
+                       decisions: json["decisions"] as? [String] ?? [], todos: todos, next: json["next"] as? String ?? "")
+    }
+
     /// 話し方の数字から、ひとことの振り返り（良かったところ・気をつけるとよいところ・次に試すこと）を作る。会話の中身は渡さない。
     static func speaking(_ numbers: String, apiKey: String) async throws -> [String] {
         let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """

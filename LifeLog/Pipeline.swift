@@ -1177,6 +1177,8 @@ final class Pipeline {
             await conversations.writePeopleNotes()
             await conversations.writeWeeklySummary(today: dayFormatter.string(from: .now))
             await conversations.writeMonthlySummary(today: dayFormatter.string(from: .now))
+            // 職場の会議の議事録（アプリを開いているか充電中のときだけ、1つずつ）
+            await writePendingMinutes()
             // ドライブを読む AI 向けの案内と索引を、中身が変わっていたら書き直す
             await updateDriveGuide()
         }
@@ -1541,6 +1543,19 @@ final class Pipeline {
             lastLines[i] = ConversationLog.docLine(edited)
         }
         return nil
+    }
+
+    // MARK: - ドキュメント
+
+    /// 名前のドキュメント（無ければ作る）の先頭に、見出しと本文を書く（議事録など）
+    func writeDocument(heading: String, body: String, name: String) async throws {
+        try await docs.insert(heading: heading, body: body, at: 1, style: "HEADING_1", day: name)
+    }
+
+    /// 議事録を作った会話に、そのドキュメントの名前を記す
+    func markMinutes(_ name: String, start: Date, day: String) {
+        conversations.setMinutes(name, start: start, day: day)
+        recordsVersion += 1
     }
 
     // MARK: - 言語モデル

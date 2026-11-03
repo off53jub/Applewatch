@@ -62,6 +62,11 @@ struct DayView: View {
         .navigationTitle(day)
         .toolbar {
             NavigationLink {
+                MinutesView(day: day)
+            } label: {
+                Image(systemName: "doc.text")
+            }
+            NavigationLink {
                 UnnamedVoicesView(day: day)
             } label: {
                 Image(systemName: "person.crop.circle.badge.questionmark")

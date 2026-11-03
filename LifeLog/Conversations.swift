@@ -777,6 +777,14 @@ final class ConversationLog {
         return fixes.count
     }
 
+    /// 議事録を作った会話に、そのドキュメントの名前を記す
+    func setMinutes(_ name: String, start: Date, day: String) {
+        var log = load(day)
+        guard let i = log.conversations.firstIndex(where: { $0.start == start }) else { return }
+        log.conversations[i].minutes = name
+        save(log, day: day)
+    }
+
     // MARK: - 直したあとのまとめ直し
 
     /// 見出しと要点を作り直す会話の数と、1日のまとめを作り直す日の数
