@@ -167,6 +167,8 @@ final class Pipeline {
     let noiseLog = NoiseLog()
     /// 聞き間違いと思われる言葉の一覧
     let misheard = MisheardBox()
+    /// 記録を探すための索引
+    let searchIndex = SearchIndex()
     /// 時計が低電力モードか（時計が知らせてくる。まだ知らなければ nil）
     private(set) var watchLowPower: Bool?
     /// ほかの端末から記録が届くたびに増える（画面を出し直すため）
@@ -1194,7 +1196,8 @@ final class Pipeline {
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
         backupPending = archive.pendingCount
-        // 登録の毎日の控えと、動き具合の診断
+        // 検索の索引（書き換わった日だけ）と、登録の毎日の控えと、動き具合の診断
+        refreshSearchIndex()
         await backups.runIfDue(signedIn: email != nil)
         _ = await writeDiagnostics()
         return true
@@ -1543,6 +1546,27 @@ final class Pipeline {
             lastLines[i] = ConversationLog.docLine(edited)
         }
         return nil
+    }
+
+    // MARK: - 検索の索引
+
+    /// 書き換わった日だけ、検索の索引を入れ直す（話した人・文・直す前の文）。入れ直した日の数を返す。
+    @discardableResult
+    func refreshSearchIndex() -> Int {
+        guard searchIndex.isReady else { return 0 }
+        let days = conversations.days()
+        var updated = 0
+        for day in days {
+            let stamp = conversations.modified(day)?.timeIntervalSince1970 ?? 0
+            guard searchIndex.needsUpdate(day, stamp: stamp) else { continue }
+            let texts = conversations.conversations(on: day).flatMap(\.lines).map { line in
+                (time: line.time, text: (line.speaker ?? "") + " " + line.text + " " + (line.original ?? ""))
+            }
+            searchIndex.replace(day: day, stamp: stamp, texts: texts)
+            updated += 1
+        }
+        searchIndex.remove(daysNotIn: Set(days))
+        return updated
     }
 
     // MARK: - ドキュメント

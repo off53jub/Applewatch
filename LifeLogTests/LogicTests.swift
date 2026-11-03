@@ -186,6 +186,27 @@ final class LogicTests: XCTestCase {
         XCTAssertFalse(SpeakStats.isQuestion("それでいいです"))
     }
 
+    // MARK: - 検索の索引
+
+    func testSearchIndexFindsTwoCharacterWords() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("search-test-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let index = SearchIndex(url: url)
+        XCTAssertTrue(index.isReady, "全文検索の表を作れなかった")
+        let t1 = Date(timeIntervalSince1970: 915_200_000), t2 = t1.addingTimeInterval(60)
+        index.replace(day: day, stamp: 1, texts: [(t1, "田中 来週の会議資料を作ります"), (t2, "自分 会議は木曜です")])
+        XCTAssertEqual(index.search(["会議"])?.count, 2)
+        XCTAssertEqual(index.search(["会議資料"])?.map(\.time), [t1])
+        XCTAssertEqual(index.search(["田中", "会議"])?.map(\.time), [t1])
+        XCTAssertEqual(index.search(["佐藤"])?.count, 0)
+        // 1文字の言葉は索引では探せない
+        XCTAssertNil(index.search(["会"]))
+        XCTAssertFalse(index.needsUpdate(day, stamp: 1))
+        XCTAssertTrue(index.needsUpdate(day, stamp: 2))
+        index.remove(daysNotIn: [])
+        XCTAssertEqual(index.search(["会議"])?.count, 0)
+    }
+
     // MARK: - 端末内の言語モデル
 
     func testLocalModelParsesJSONInsideText() {

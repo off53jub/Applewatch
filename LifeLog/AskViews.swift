@@ -32,6 +32,23 @@ extension Pipeline {
     func search(_ query: String) -> [Hit] {
         let terms = query.split(whereSeparator: { $0 == " " || $0 == "　" }).map(String.init)
         guard !terms.isEmpty else { return [] }
+        // 索引で探せる言葉（2文字以上）なら索引から。見つけた行が今の記録と合うか確かめる
+        refreshSearchIndex()
+        if let found = searchIndex.search(terms) {
+            var hits: [Hit] = []
+            var loaded: [String: [ConversationLog.Conversation]] = [:]
+            for item in found {
+                let list = loaded[item.day] ?? conversations(on: item.day)
+                loaded[item.day] = list
+                guard let c = list.first(where: { $0.lines.contains { $0.time == item.time } }),
+                      let line = c.lines.first(where: { $0.time == item.time }) else { continue }
+                let text = (line.speaker ?? "") + " " + line.text + " " + (line.original ?? "")
+                guard terms.allSatisfy({ text.localizedCaseInsensitiveContains($0) }),
+                      !hits.contains(where: { $0.line.time == line.time && $0.day == item.day }) else { continue }
+                hits.append(Hit(day: item.day, line: line, heading: c.title ?? ""))
+            }
+            return hits
+        }
         var hits: [Hit] = []
         for day in recordedDays() {
             for c in conversations(on: day).reversed() {
@@ -65,8 +82,16 @@ extension Pipeline {
         let to = plan.to ?? today
         let from = plan.from
             ?? Self.keyFormatter.string(from: .now.addingTimeInterval(-60 * 24 * 3600))
+        // 期間を言わなかったときは、直近60日に加えて、索引で言葉が見つかった前の日も探す
+        var found = Set<String>()
+        if plan.from == nil {
+            refreshSearchIndex()
+            for keyword in plan.keywords {
+                for hit in searchIndex.search([keyword], limit: 300) ?? [] { found.insert(hit.day) }
+            }
+        }
         var scored: [(score: Int, day: String, conversation: ConversationLog.Conversation)] = []
-        for day in days where day >= from && day <= to {
+        for day in days where (day >= from && day <= to) || found.contains(day) {
             for c in conversations(on: day) {
                 let text = ([c.title ?? ""] + c.points + c.lines.map { ($0.speaker ?? "") + $0.text })
                     .joined(separator: "\n")

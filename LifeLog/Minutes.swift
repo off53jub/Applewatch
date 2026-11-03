@@ -30,12 +30,19 @@ extension Pipeline {
         return f
     }()
 
-    /// 自動で議事録を作る会議か（職場の予定と重なる、15分以上の、文字の多い会話）
+    /// 自動で議事録を作る会議か。15分以上の、文字の多い会話で、次のどれか。
+    /// - 職場のカレンダーの予定と重なる
+    /// - 職場にいた時間で、参加者のいる予定と重なる
+    /// - 職場にいた時間で、自分のほかに2人以上の声がある（職場のカレンダーを iPhone に入れられないとき）
     func isMeeting(_ c: ConversationLog.Conversation) -> Bool {
         guard c.closed, c.media == nil, c.minutes == nil, c.end.timeIntervalSince(c.start) >= Self.minutesMinimum,
               c.lines.reduce(0, { $0 + $1.text.count }) >= Self.minutesCharacters else { return false }
-        guard let event = calendar.events(from: c.start, to: c.end).first else { return false }
-        return event.isWork || (isWorkTime(c.start) && !event.attendees.isEmpty)
+        if let event = calendar.events(from: c.start, to: c.end).first {
+            if event.isWork || (isWorkTime(c.start) && !event.attendees.isEmpty) { return true }
+        }
+        guard isWorkTime(c.start) else { return false }
+        let others = Set(c.lines.filter { $0.media == nil }.compactMap(\.speakerID)).subtracting([SpeakerLabeler.selfID])
+        return others.count >= 2
     }
 
     /// まだ議事録の無い会議を、1つだけ議事録にする（長い処理なので、アプリを開いているか充電中のときだけ）。
@@ -118,7 +125,7 @@ struct MinutesView: View {
             Section {
                 Toggle("職場の予定の会話は自動で作る", isOn: $auto)
             } footer: {
-                Text("職場のカレンダーの予定（または職場にいた時間の参加者のいる予定）と重なる、15分以上の会話を、アプリを開いたときか充電中に1つずつ議事録にします。ドライブの「LifeLog」に「議事録 日付 時刻 予定名」のドキュメントを作ります。「職場の会話は端末内で」にしていれば、iPhone の中の言語モデルで作り、外に送りません。")
+                Text("15分以上の会話のうち、職場のカレンダーの予定と重なるもの、職場にいた時間で参加者のいる予定と重なるもの、職場にいた時間で自分のほかに2人以上の声があるものを（職場のカレンダーが無くても、「場所」で会社を職場にしておけば見分けます）、アプリを開いたときか充電中に1つずつ議事録にします。ドライブの「LifeLog」に「議事録 日付 時刻 予定名」のドキュメントを作ります。「職場の会話は端末内で」にしていれば、iPhone の中の言語モデルで作り、外に送りません。")
             }
             Section("この日の会話（5分以上）") {
                 ForEach(list, id: \.start) { c in
