@@ -786,6 +786,14 @@ final class ConversationLog {
         return fixes.count
     }
 
+    /// 本人が AI の質問に答えた会話の見出しと要点を、あとで作り直す（閉じた会話だけ）
+    func markResummarize(start: Date, day: String) {
+        var log = load(day)
+        guard let i = log.conversations.firstIndex(where: { $0.start == start }), log.conversations[i].closed else { return }
+        log.conversations[i].resummarize = true
+        save(log, day: day)
+    }
+
     /// 議事録を作った会話に、そのドキュメントの名前を記す
     func setMinutes(_ name: String, start: Date, day: String) {
         var log = load(day)

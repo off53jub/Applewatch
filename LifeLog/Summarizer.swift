@@ -71,6 +71,7 @@ enum Summarizer {
             次は \(timeRange) の録音の文字起こしです。[自分] は記録している本人、[人物N] や名前は話し相手です。
             [自分] の発言は全体の \(Int(selfShare * 100))% です。
             \(event.map { "この時間のカレンダーの予定: \($0)（会話の中身と合うときだけ見出しの参考にしてください）\n" } ?? "")\
+            \(known(for: transcript))\
             文字起こしの誤変換は文脈から補ってかまいません。
 
             まず、これが本人のまわりの実際の会話か、本人がテレビ番組・YouTube などの動画・ラジオや音楽を流していた音かを見分けてください。
@@ -103,7 +104,7 @@ enum Summarizer {
             "flow" は1日の流れです。時間の近い会話や、同じ場所・同じ用事の会話をひとまとめにし、
             「9:00〜11:30　会社　企画会議と提案資料づくり（田中さん、佐藤さん）」の形で、時刻順に2〜8個にしてください。
             {"flow": ["..."], "decisions": ["決まったこと"], "todos": ["本人がやること・約束（期限があれば添える）"], "topics": ["話題や気になったこと"]}
-
+            \(known(for: conversations))
             \(conversations)
             """)
         func list(_ key: String) -> [String] { (json[key] as? [String]) ?? [] }
@@ -371,7 +372,7 @@ enum Summarizer {
                             "due_day": "期限が日付で分かれば yyyy-MM-dd（会話の日から数える。分からなければ空）",
                             "quote": "根拠になった発言をそのまま短く",
                             "time": "その発言の時刻 HH:mm"}]}
-
+                \(known(for: piece))
                 \(piece)
                 """)
             found += parseTasks(json)
@@ -577,6 +578,68 @@ enum Summarizer {
         return row[b.count] <= max(2, a.count * 3 / 10)
     }
 
+    // MARK: - AI からの質問（2026-11-05）
+
+    /// 本人に聞く質問の下書き
+    struct AskDraft {
+        let kind: AskBook.Kind
+        let question: String
+        /// 質問の対象の言葉（記録の書き方のまま）
+        let subject: String
+        let choices: [String]
+        let quote: String
+        /// HH:mm（分からなければ空）
+        let time: String
+    }
+
+    /// 1日の記録から、本人に聞くと記録が正しくなりそうなことを count 個まで作る。asked はもう聞いた質問。
+    static func questions(_ material: String, day: String, asked: [String], count: Int, apiKey: String) async throws -> [AskDraft] {
+        let askedText = asked.isEmpty ? "" : "もう聞いたこと（同じことは聞かない）:\n" + asked.suffix(40).map { "・" + $0 }.joined(separator: "\n") + "\n"
+        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+            次は \(day) の、ある人の記録です。[自分] は記録している本人で、会話ごとに時刻・場所・相手・見出し・要点と、文字起こしの頭があります。
+            音声認識と AI が作ったものなので、聞き間違えた言葉・人の名前の取り違え・何の集まりかの取り違え・決まっていないことを決まったことにしている、などの間違いや、中身が分からないあいまいなところがあります。
+            記録を正しくするために、本人に聞くと効きそうな質問を \(count) 個まで作ってください。
+            答えると、その日の見出しやまとめが正しくなり、次からの記録にも役に立つものを優先してください。
+            記録を読めば分かること・答えても役に立たないこと・テレビや動画の中身・本人のこころの中のことは聞かないでください。
+            聞くことが無ければ空の配列にしてください。数を埋めるために作らないでください。
+            種類は次の4つです。
+            what: 何をしていたか・何の集まりか・何の話か（見出しや要点があいまい・ずれていそうなとき）
+            word: 聞き間違いらしい言葉（とくに人の名前・店や場所・固有名詞）
+            who: 話に出た人や、話していた人がだれか
+            decision: 「決まったこと」「やること」が本当にそうか
+            次の JSON で返してください。
+            {"questions": [{"kind": "what・word・who・decision のどれか",
+                            "question": "本人への短い質問。いつの・どの話かが分かるように書く",
+                            "subject": "質問の対象の言葉を、記録の書き方のまま（無ければ空）",
+                            "choices": ["答えの候補（考えられれば2〜4個。無ければ空の配列）"],
+                            "quote": "根拠になった記録の文をそのまま短く",
+                            "time": "その時刻 HH:mm"}]}
+            \(askedText)\
+            \(known(for: material))
+            \(material)
+            """)
+        return (json["questions"] as? [[String: Any]] ?? []).compactMap { item in
+            func text(_ key: String) -> String { ((item[key] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+            let question = text("question")
+            guard !question.isEmpty else { return nil }
+            let kindText = text("kind").lowercased()
+            let kind = AskBook.Kind.allCases.first { kindText.contains($0.rawValue) } ?? .what
+            let choices = ((item["choices"] as? [String]) ?? [])
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            return AskDraft(kind: kind, question: question, subject: text("subject"), choices: Array(choices.prefix(4)),
+                            quote: text("quote"), time: text("time"))
+        }
+    }
+
+    /// 本人が前に質問に答えて教えてくれたことのうち、この中身に関係するもの（無ければ空）。
+    /// 直す文の見本ではなく、確かな事実として渡す。
+    static func known(for material: String) -> String {
+        let facts = KnownFacts.shared.relevant(to: material)
+        guard !facts.isEmpty else { return "" }
+        return "本人が前に質問に答えて教えてくれたこと（確かな事実です。この記録に関係するときだけ使い、関係なければ無視してください）:\n"
+            + facts.map { "・" + $0 }.joined(separator: "\n") + "\n"
+    }
+
     private static func pieces(of text: String, length: Int = pieceLength) -> [String] {
         var result: [String] = []
         var current = ""
@@ -649,5 +712,39 @@ enum Summarizer {
             return result
         }
         throw CloudTranscriber.Failure.limited("要約の無料枠の上限に達しました")
+    }
+}
+
+/// わかったこと帳の中身を、言語モデルに渡すために持っておく（どのスレッドからも読めるように）。
+final class KnownFacts: @unchecked Sendable {
+    static let shared = KnownFacts()
+
+    struct Entry: Sendable {
+        let text: String
+        let words: [String]
+    }
+
+    private let lock = NSLock()
+    private var entries: [Entry] = []
+
+    func set(_ new: [Entry]) {
+        lock.lock()
+        entries = new
+        lock.unlock()
+    }
+
+    /// 手がかりの言葉が material に出てくるもの（新しいものから、limit 個・1,500字まで）
+    func relevant(to material: String, limit: Int = 12) -> [String] {
+        lock.lock()
+        let list = entries
+        lock.unlock()
+        var out: [String] = []
+        var size = 0
+        for e in list.reversed() where e.words.contains(where: { $0.count >= 2 && material.contains($0) }) {
+            guard out.count < limit, size + e.text.count <= 1_500 else { break }
+            out.append(e.text)
+            size += e.text.count
+        }
+        return out
     }
 }

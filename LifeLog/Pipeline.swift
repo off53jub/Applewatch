@@ -165,6 +165,8 @@ final class Pipeline {
     let suggestions = SuggestionBox()
     /// 頼まれごと帳（会話・議事録・手書き・写真から）
     let tasks = TaskBook()
+    /// AI からの質問と、わかったこと帳
+    let asks = AskBook()
     /// 時計の区切りが届くまでの遅れ
     let watchDelays = WatchDelayLog()
     /// 区切りごとの騒がしさ（しきい値を実際の録音で合わせるため）
@@ -1348,6 +1350,8 @@ final class Pipeline {
             await writePendingMinutes()
             // 仕事中と★を付けた会話から、頼まれごとを拾う
             await findTasks()
+            // 夜になったら、その日の記録で合っているか分からないところを、AI が本人に聞く
+            await makeQuestions()
             // ドライブを読む AI 向けの案内と索引を、中身が変わっていたら書き直す
             await updateDriveGuide()
         }
@@ -1364,6 +1368,7 @@ final class Pipeline {
             // 頼まれごとを朝と夕方に知らせ、ドライブ（と PC）に写す
             await scheduleTaskReminders()
             await writeTaskBook()
+            await writeAskBook()
         }
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
@@ -1400,6 +1405,20 @@ final class Pipeline {
 
     /// 頼まれごと帳を、ドライブの「頼まれごと帳」ドキュメント（読む用）と、
     /// 同期フォルダの「頼まれごと帳.json」（家の PC が読む用。同期では読まない名前）に書く。
+    func writeAskBookFiles(_ paragraphs: [(text: String, style: String?)], json: Data) async throws {
+        try await docs.overwrite(paragraphs, name: "わかったこと帳")
+        let key = "askBookFileID"
+        if let id = try await docs.uploadSync(json, name: "わかったこと帳.json", id: UserDefaults.standard.string(forKey: key)) {
+            UserDefaults.standard.set(id, forKey: key)
+        }
+    }
+
+    /// その日の1日のまとめ（まだ無ければ nil）
+    func daySummary(_ day: String) -> Summarizer.Day? { conversations.summary(on: day) }
+
+    /// 本人が質問に答えた会話の見出しと要点を、あとで作り直す（答えを手がかりに）
+    func markResummarize(start: Date, day: String) { conversations.markResummarize(start: start, day: day) }
+
     func writeTaskBookFiles(_ paragraphs: [(text: String, style: String?)], json: Data) async throws {
         try await docs.overwrite(paragraphs, name: "頼まれごと帳")
         let key = "taskBookFileID"

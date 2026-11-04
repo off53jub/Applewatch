@@ -306,4 +306,36 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(back.first?.voices.first?.pinned, false)
         XCTAssertEqual(back.first?.reason, "「まぐだ」の行")
     }
+
+    // MARK: - AI からの質問・わかったこと帳
+
+    func testAskKeywords() {
+        let words = AskBook.keywords("今日はダンスの練習のあと、Splatoon の話をした")
+        XCTAssertTrue(words.contains("ダンス"))
+        XCTAssertTrue(words.contains("練習"))
+        XCTAssertTrue(words.contains("Splatoon"))
+        XCTAssertFalse(words.contains("今日"))
+    }
+
+    /// 答えは「いつ・どこ・質問 → 答え」の1行になり、質問の対象の言葉で引ける
+    func testFactTextAndWords() {
+        let time = Date(timeIntervalSince1970: 1_793_700_000)
+        let q = AskBook.Question(day: "2026-11-03", kind: .word, question: "「さまいまい」はだれのこと？", subject: "さまいまい",
+                                 quote: "理由はさまいまいが出るから", time: time, place: "大久保駅近く")
+        let text = AskBook.factText(q, answer: "まいさん（佐藤真衣）")
+        XCTAssertTrue(text.contains("大久保駅近く"))
+        XCTAssertTrue(text.hasSuffix("→ まいさん（佐藤真衣）"))
+        let words = AskBook.words(of: q, answer: "まいさん（佐藤真衣）")
+        XCTAssertEqual(words.first, "さまいまい")
+        XCTAssertTrue(words.contains("佐藤真衣"))
+    }
+
+    /// AI に渡すのは、記録に手がかりの言葉が出てくるものだけ
+    func testKnownFactsRelevant() {
+        let box = KnownFacts()
+        box.set([.init(text: "「ひさおど」はダンスイベントの名前", words: ["ひさおど"]),
+                 .init(text: "スプラ部は Splatoon の仲間", words: ["スプラ部"])])
+        XCTAssertEqual(box.relevant(to: "来週のひさおどの練習"), ["「ひさおど」はダンスイベントの名前"])
+        XCTAssertEqual(box.relevant(to: "会議の資料を作る"), [])
+    }
 }

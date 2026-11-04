@@ -83,6 +83,8 @@ private struct TodayView: View {
 
                 taskBook()
 
+                questions()
+
                 todo(today: today, talks: talks)
 
                 let box = pipeline.suggestions
@@ -160,6 +162,26 @@ private struct TodayView: View {
                             .foregroundStyle(text.hasSuffix("過ぎ") || text == "今日まで" ? Color.red : Color.secondary)
                     }
                 }
+            }
+        }
+    }
+
+    /// AI からの質問（まだ答えていないものがあるときだけ）。いちばん新しい質問を1つ見せる。
+    @ViewBuilder
+    private func questions() -> some View {
+        let open = pipeline.asks.open
+        if let first = open.first {
+            Section {
+                NavigationLink {
+                    QuestionsView()
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("AI からの質問（\(open.count) つ）", systemImage: "questionmark.bubble")
+                        Text(first.question).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+            } footer: {
+                Text("記録で合っているか分からないところです。答えると見出しやまとめが正しくなり、次からも覚えておきます。")
             }
         }
     }
@@ -313,6 +335,11 @@ private struct RecordsView: View {
                             SpeakingView()
                         } label: {
                             Label("話し方の振り返り", systemImage: "person.wave.2")
+                        }
+                        NavigationLink {
+                            QuestionsView()
+                        } label: {
+                            Label("AI からの質問・わかったこと帳", systemImage: "lightbulb")
                         }
                     }
                     Section("日ごと") {
