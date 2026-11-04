@@ -409,6 +409,7 @@ private struct SettingsView: View {
     @Environment(Pipeline.self) private var pipeline
     /// LocalModel.modeKey と同じ名前
     @AppStorage("localModelMode") private var localModelMode = LocalModel.Mode.fallback.rawValue
+    @AppStorage(Pipeline.autoAsideKey) private var autoAside = true
 
     var body: some View {
         @Bindable var settings = pipeline.settings
@@ -510,11 +511,12 @@ private struct SettingsView: View {
                             set: { pipeline.speakerStrictness = $0 })) {
                             ForEach(SpeakerLabeler.Strictness.allCases) { Text($0.label).tag($0) }
                         }
+                        Toggle("食い違った声を自動で外す", isOn: $autoAside)
                     }
                 } header: {
                     Text("話者")
                 } footer: {
-                    Text("iPhone の中だけで声の特徴を比べ、行に「[自分]」「[人物1]」などを付けます（無料）。別の人が同じ名前になるときは「厳しめ」、同じ人が何人にも分かれるときは「ゆるめ」にしてください。")
+                    Text("iPhone の中だけで声の特徴を比べ、行に「[自分]」「[人物1]」などを付けます（無料）。別の人が同じ名前になるときは「厳しめ」、同じ人が何人にも分かれるときは「ゆるめ」にしてください。「食い違った声を自動で外す」は、覚えた声のひとこまが記録ではほかの人やテレビの行だったとき、見直しを待たずに聞き分けに使わないようにします（消さずに、人の画面から戻せます）。")
                 }
 
                 Section {

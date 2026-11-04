@@ -707,6 +707,53 @@ final class Pipeline {
         }
     }
 
+    // MARK: - 食い違った声のひとこまを自動で外す（2026-11-05 本人決定）
+
+    /// 「食い違った声を自動で外す」（設定。既定はオン）
+    nonisolated static let autoAsideKey = "voiceAutoAside"
+    /// 外そうとして外さなかった（登録・手直しの声と同じ・声が取れない）ひとこま。毎回やり直さない
+    private static let asideTriedKey = "voiceAsideTried"
+
+    /// 声のひとこまが、記録ではほかの人の行やテレビの行と重なっていたら、見直しを待たずに聞き分けから外す。
+    /// 外すのは自動で覚えた声だけで、消さずに取っておく（人の画面の「聞き分けから外した声」から戻せる）。
+    /// 登録・手直しの声と同じひとこまは、本人が決めた声なので触らず、見直しに残す。外した数を返す。
+    @discardableResult
+    func setAsideMismatched(limit: Int = 6) async -> Int {
+        guard UserDefaults.standard.object(forKey: Self.autoAsideKey) as? Bool ?? true else { return 0 }
+        var tried = UserDefaults.standard.stringArray(forKey: Self.asideTriedKey) ?? []
+        var count = 0, attempts = 0
+        for item in voiceReview() where !tried.contains(item.id) {
+            guard attempts < limit else { break }
+            guard let url = await archive.playableURL(for: item.sample.audio) else { continue }
+            attempts += 1
+            let names = item.others.map { id in people.first { $0.id == id }?.displayName ?? "人物\(id)" }
+            let reason = names.isEmpty ? "テレビ・放送の行" : "「\(names.joined(separator: "」「"))」の行"
+            let done = (try? await speakers.setAside(item.sample, from: item.person.id, url: url, reason: reason)) ?? false
+            if done { count += 1 } else { tried.append(item.id) }
+        }
+        UserDefaults.standard.set(Array(tried.suffix(500)), forKey: Self.asideTriedKey)
+        if count > 0 {
+            people = await speakers.people()
+            hasSelfVoice = await speakers.hasSelfVoice
+        }
+        return count
+    }
+
+    func setAsideItems(of person: String) async -> [SpeakerLabeler.SetAside] {
+        await speakers.setAsideItems(of: person)
+    }
+
+    /// 脇に置いたひとこまを戻す。戻したものは「このままでよい」にして、もう自動では外さない。
+    func restoreAside(_ item: SpeakerLabeler.SetAside) async -> Bool {
+        guard await speakers.restoreAside(item.id) else { return false }
+        var kept = UserDefaults.standard.stringArray(forKey: Self.reviewKeptKey) ?? []
+        kept = Array((kept + [Self.reviewKey(item.person, item.sample)]).suffix(500))
+        UserDefaults.standard.set(kept, forKey: Self.reviewKeptKey)
+        people = await speakers.people()
+        hasSelfVoice = await speakers.hasSelfVoice
+        return true
+    }
+
     // MARK: - 混ざった2人を分ける
 
     /// 分けるために声を取った行
@@ -1283,6 +1330,8 @@ final class Pipeline {
         wordStats.count(days: recentDays.map { ($0, conversations.conversations(on: $0)) })
         // iPad と記録・登録を合わせる（まとめを書く前に、ほかの端末の会話も入れておく）
         await sync.run()
+        // 声のひとこまが記録のほかの人の行と食い違っていたら、聞き分けから外す（戻せる形で）
+        await setAsideMismatched()
         // 1日のまとめ・人物ノート・週のまとめ・AI 向けの案内と索引は、iPhone だけが書く
         // （iPad の会話は同期で iPhone に届くので、iPhone が両方の分をまとめて書く。二重にならないように）
         if UIDevice.current.userInterfaceIdiom != .pad {

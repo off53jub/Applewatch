@@ -286,4 +286,24 @@ final class LogicTests: XCTestCase {
         book.delete(item.id)
         XCTAssertEqual(book.items.count, before)
     }
+
+    // MARK: - 聞き分けから外した声
+
+    /// 外したひとこまの印は、見直しの印と同じ形（戻したときに「このままでよい」にするため）
+    func testSetAsideKeyMatchesReviewKey() {
+        let sample = SpeakerLabeler.Sample(audio: "rec-2026-11-03.m4a", start: 12.5, end: 20)
+        XCTAssertEqual(SpeakerLabeler.SetAside.key("42", sample), Pipeline.reviewKey("42", sample))
+    }
+
+    /// 外した声は消さずに取っておくので、書いて読んでも同じになる
+    func testSetAsideRoundTrip() throws {
+        let sample = SpeakerLabeler.Sample(audio: "a.m4a", start: 1, end: 4)
+        let voice = SpeakerLabeler.Voice(embedding: [0.6, 0.8], pinned: false, added: Date(timeIntervalSince1970: 1_000), model: SpeakerLabeler.model)
+        let item = SpeakerLabeler.SetAside(person: "7", sample: sample, voices: [voice], at: Date(timeIntervalSince1970: 2_000), reason: "「まぐだ」の行")
+        let back = try JSONDecoder().decode([SpeakerLabeler.SetAside].self, from: JSONEncoder().encode([item]))
+        XCTAssertEqual(back.first?.id, item.id)
+        XCTAssertEqual(back.first?.voices.first?.embedding, [0.6, 0.8])
+        XCTAssertEqual(back.first?.voices.first?.pinned, false)
+        XCTAssertEqual(back.first?.reason, "「まぐだ」の行")
+    }
 }

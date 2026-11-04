@@ -336,8 +336,16 @@ struct PersonView: View {
     @State private var sampleInfo: [SpeakerLabeler.Sample: Pipeline.SampleInfo] = [:]
     @State private var askingMedia = false
     @State private var markingMedia = false
+    /// 記録と食い違って、聞き分けから外したひとこま（戻せる）
+    @State private var aside: [SpeakerLabeler.SetAside] = []
+    @State private var asideInfo: [SpeakerLabeler.Sample: Pipeline.SampleInfo] = [:]
 
     private var person: SpeakerLabeler.Person? { pipeline.people.first { $0.id == id } }
+
+    private func loadAside() async {
+        aside = await pipeline.setAsideItems(of: id)
+        asideInfo = pipeline.sampleInfo(for: aside.map(\.sample))
+    }
 
     private static let mergeDate: DateFormatter = {
         let f = DateFormatter()
@@ -445,6 +453,33 @@ struct PersonView: View {
                 } footer: {
                     Text("聞き分けを厳しくしても、ほかの人の行がこの人になってしまうときは「ほかの人の声が混ざっている（分ける）」で、行の声を近さで何組にでも分けて聞き比べ、組ごとに分けられます。ひとこまごとに、その時に話していた文と、いつ・どこかを出します（登録で録った声には出ません）。記録で別の名前の行なら、ほかの人の声を拾っているかもしれません。声を足すときは、その人だけが話しているときに録ってください（相手の了承を取ってから）。記録の行を長押しして「話者を直す」と、その行の声も覚えます。")
                 }
+                if !aside.isEmpty {
+                    Section {
+                        ForEach(aside) { item in
+                            HStack {
+                                SampleButton(player: player, sample: item.sample, key: "aside-" + item.id)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    if let info = asideInfo[item.sample] {
+                                        Text("「\(info.text)」").lineLimit(3)
+                                        Text(info.caption).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Text("記録では\(item.reason)だった").font(.caption).foregroundStyle(.secondary)
+                                    Button("この人の声だった（戻す）") {
+                                        Task {
+                                            _ = await pipeline.restoreAside(item)
+                                            await loadAside()
+                                        }
+                                    }
+                                    .font(.caption)
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("聞き分けから外した声（\(aside.count)）")
+                    } footer: {
+                        Text("記録ではほかの人の行やテレビの行と重なっていた声のひとこまは、見直しを待たずに、この人の聞き分けに使わないようにしています。消してはいないので、この人の声だったら戻せます。登録や手直しで覚えた声は外しません。設定の「食い違った声を自動で外す」で止められます。")
+                    }
+                }
                 if !person.isSelf {
                     Section {
                         Toggle("この人の声を記録に出さない", isOn: Binding(
@@ -503,6 +538,7 @@ struct PersonView: View {
         }
         .task(id: person?.samples ?? []) {
             sampleInfo = pipeline.sampleInfo(for: person?.samples ?? [])
+            await loadAside()
         }
         .task(id: person?.name) {
             guard person?.isSelf == false else { return }

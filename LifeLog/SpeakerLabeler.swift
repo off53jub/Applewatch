@@ -428,6 +428,93 @@ actor SpeakerLabeler {
         return removed
     }
 
+    // MARK: - 食い違った声のひとこまを脇に置く（2026-11-05 本人決定）
+
+    /// 脇に置いた声のひとこまと、そのとき聞き分けから外した声。消さずに取っておき、戻せるようにする。
+    /// people.json の形は変えず、別のファイル（voices-set-aside.json）に置く。
+    struct SetAside: Codable, Sendable, Identifiable {
+        let person: String
+        let sample: Sample
+        /// 聞き分けから外した、自動で覚えた声
+        let voices: [Voice]
+        let at: Date
+        /// 記録ではだれの行だったか（画面に出す）
+        let reason: String
+        var id: String { Self.key(person, sample) }
+        static func key(_ person: String, _ sample: Sample) -> String { person + "|" + sample.audio + "|\(sample.start)" }
+    }
+
+    private static let asideURL = URL.applicationSupportDirectory.appendingPathComponent("voices-set-aside.json")
+    private var asideCache: [SetAside]?
+
+    private func asideList() -> [SetAside] {
+        if let asideCache { return asideCache }
+        var list: [SetAside] = []
+        if let data = try? Data(contentsOf: Self.asideURL) {
+            if let saved = try? JSONDecoder().decode([SetAside].self, from: data) {
+                list = saved
+            } else {
+                // 読めないファイルは消さずに取っておく（上書きで失わないように）
+                let backup = Self.asideURL.deletingPathExtension().appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970)).json")
+                try? FileManager.default.copyItem(at: Self.asideURL, to: backup)
+            }
+        }
+        asideCache = list
+        return list
+    }
+
+    private func saveAside(_ list: [SetAside]) {
+        asideCache = list
+        if let data = try? JSONEncoder().encode(list) { try? data.write(to: Self.asideURL, options: .atomic) }
+    }
+
+    func setAsideItems(of person: String? = nil) -> [SetAside] {
+        asideList().filter { person == nil || $0.person == person }.sorted { $0.at > $1.at }
+    }
+
+    /// 声のひとこまを脇に置く。その音から声の特徴を取り直し、この人の**自動で覚えた声**のうち同じ声を外して取っておく。
+    /// 登録・手直しの声（本人が決めた声）と同じなら、触らずに false を返す（見直しに残す）。
+    func setAside(_ sample: Sample, from id: String, url: URL, reason: String) async throws -> Bool {
+        guard let i0 = index(of: id), store.people[i0].samples.contains(sample) else { return false }
+        try await prepare()
+        let audio = try AudioConverter().resampleAudioFile(url)
+        let from = max(0, Int(sample.start * 16_000))
+        let to = min(audio.count, Int(sample.end * 16_000), from + 160_000)
+        guard to - from >= 16_000, let embedding = try await voice(in: Array(audio[from..<to])) else { return false }
+        // 待っているあいだに変わっているかもしれないので、もう一度探す
+        guard let i = index(of: id), store.people[i].samples.contains(sample) else { return false }
+        func same(_ v: Voice) -> Bool {
+            v.model == Self.model && v.embedding.count == embedding.count
+                && 1 - zip(v.embedding, embedding).reduce(0) { $0 + $1.0 * $1.1 } < Self.sameClip
+        }
+        if store.people[i].voices.contains(where: { $0.pinned && same($0) }) { return false }
+        let removed = store.people[i].voices.filter { !$0.pinned && same($0) }
+        store.people[i].voices.removeAll { !$0.pinned && same($0) }
+        store.people[i].samples.removeAll { $0 == sample }
+        save()
+        var list = asideList()
+        let item = SetAside(person: id, sample: sample, voices: removed, at: .now, reason: reason)
+        list.removeAll { $0.id == item.id }
+        list.append(item)
+        saveAside(Array(list.suffix(300)))
+        return true
+    }
+
+    /// 脇に置いたひとこまを戻す（外した声も聞き分けに戻す）。
+    func restoreAside(_ key: String) -> Bool {
+        var list = asideList()
+        guard let item = list.first(where: { $0.id == key }) else { return false }
+        list.removeAll { $0.id == key }
+        guard let i = index(of: item.person) else { saveAside(list); return false }
+        let known = Set(store.people[i].voices.map(\.embedding))
+        store.people[i].voices += item.voices.filter { !known.contains($0.embedding) }
+        trimVoices(i)
+        remember(item.sample, for: i)
+        save()
+        saveAside(list)
+        return true
+    }
+
     /// 1人が話している音から、声の特徴を取る（いちばん長く話した声のまとまりの中心）。
     private func voice(in samples: [Float]) async throws -> [Float]? {
         guard let diarizer else { return nil }
@@ -678,6 +765,8 @@ actor SpeakerLabeler {
     func mergeRemote(_ remote: SyncPeople) -> Bool {
         var changed = false
         var removed = store.removed ?? [:]
+        // 脇に置いたひとこまは、ほかの端末から戻ってこないようにする
+        let aside = Set(asideList().map(\.id))
         for rp in remote.people {
             let voices = rp.voices.map { Voice(embedding: Self.unpack($0.embedding), pinned: true, added: $0.added, model: $0.model) }
             let remoteTouched = max(rp.updated ?? .distantPast, rp.lastHeard)
@@ -695,7 +784,9 @@ actor SpeakerLabeler {
                 if !added.isEmpty { p.voices += added }
                 p.seconds = max(p.seconds, rp.seconds)
                 p.lastHeard = max(p.lastHeard, rp.lastHeard)
-                for sample in rp.samples where !p.samples.contains(sample) { p.samples.append(sample) }
+                for sample in rp.samples where !p.samples.contains(sample) && !aside.contains(SetAside.key(rp.id, sample)) {
+                    p.samples.append(sample)
+                }
                 p.samples = Array(p.samples.suffix(3))
                 if !added.isEmpty || p.name != before.name || p.context != before.context || p.hidden != before.hidden
                     || p.seconds != before.seconds || p.lastHeard != before.lastHeard || p.samples != before.samples {
