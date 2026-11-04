@@ -270,28 +270,34 @@ extension Pipeline {
         return (c.hour ?? 0) * 60 + (c.minute ?? 0)
     }
 
-    /// 夜（既定21時）を過ぎたら、その日の記録から AI に質問を作らせる（1日1回・5つまで）。
-    /// 夜にアプリが動いていなかった日は、次の日に前の日の分を作り、夜に知らせる。言語モデルが使えなければ次の機会にやり直す。
-    func makeQuestions() async {
-        guard Self.askOn, let key = llmKey, asks.open.count < 10 else { return }
+    /// さかのぼって聞く日数（昨日・一昨日…の分も聞く。2026-11-05 本人の希望）
+    static let askBackDays = 7
+
+    /// 夜（既定21時）を過ぎたら、その日の記録から AI に質問を作らせる（1日ぶん5つまで）。
+    /// まだ聞いていない前の日（7日前まで）も、新しい日から1回に1日ずつ作る。夜より前に作った分は、夜に知らせる。
+    /// 言語モデルが使えなければ次の機会にやり直す。now は「前の日の分も聞く」を押したとき（知らせない・まだの質問が多くても作る）。
+    /// 作った日と数を返す（作る日が無ければ nil）。
+    @discardableResult
+    func makeQuestions(now pressed: Bool = false) async -> (day: String, count: Int)? {
+        guard Self.askOn || pressed, let key = llmKey, asks.open.count < (pressed ? 25 : 10) else { return nil }
         var done = UserDefaults.standard.stringArray(forKey: Self.askedDaysKey) ?? []
         let now = Date.now
         let today = TaskBook.dayFormat.string(from: now)
-        let yesterday = TaskBook.dayFormat.string(from: Calendar.current.date(byAdding: .day, value: -1, to: now) ?? now)
-        let day: String
-        if Self.minuteOfDay(now) >= Self.askTime, !done.contains(today) {
-            day = today
-        } else if !done.contains(yesterday), recordedDays().contains(yesterday) {
-            day = yesterday
-        } else {
-            return
+        let recorded = Set(recordedDays())
+        var candidates: [String] = Self.minuteOfDay(now) >= Self.askTime ? [today] : []
+        for back in 1...Self.askBackDays {
+            if let d = Calendar.current.date(byAdding: .day, value: -back, to: now) { candidates.append(TaskBook.dayFormat.string(from: d)) }
         }
-        func finish() { UserDefaults.standard.set(Array((done + [day]).suffix(60)), forKey: Self.askedDaysKey) }
+        var picked: String?
+        for day in candidates where !done.contains(day) && recorded.contains(day) {
+            let convs = conversations(on: day).filter { $0.closed && $0.media == nil && !$0.lines.isEmpty }
+            if convs.contains(where: { $0.title != nil }) { picked = day; break }
+            // 聞けるものが無い前の日は、もう見ない
+            if day != today { done.append(day) }
+        }
+        UserDefaults.standard.set(Array(done.suffix(60)), forKey: Self.askedDaysKey)
+        guard let day = picked else { return nil }
         let convs = conversations(on: day).filter { $0.closed && $0.media == nil && !$0.lines.isEmpty }
-        guard convs.contains(where: { $0.title != nil }) else {
-            if day != today { finish() }
-            return
-        }
         let material = questionMaterial(convs, summary: daySummary(day))
         let asked = asks.questions.suffix(80).map(\.question)
         let work = convs.contains { isWorkTime($0.start) }
@@ -301,14 +307,15 @@ extension Pipeline {
                 try await Summarizer.questions(material, day: day, asked: asked, count: Self.askPerDay, apiKey: key)
             }
         } catch {
-            return
+            return nil
         }
         done.append(day)
         UserDefaults.standard.set(Array(done.suffix(60)), forKey: Self.askedDaysKey)
         let added = asks.add(drafts.prefix(Self.askPerDay).map { question(from: $0, day: day, in: convs) })
-        guard !added.isEmpty else { return }
-        notifyQuestions(added.count, label: day == today ? "今日" : "昨日")
+        guard !added.isEmpty else { return (day, 0) }
+        if !pressed { notifyQuestions(asks.open.count, label: day == today ? "今日まで" : "これまで") }
         asksChanged()
+        return (day, added.count)
     }
 
     /// 質問を作るために渡す、その日の記録（会話ごとの見出し・要点と、文字起こしの頭）
@@ -444,6 +451,8 @@ struct QuestionsView: View {
     @Environment(Pipeline.self) private var pipeline
     @State private var player = ClipPlayer()
     @State private var showRecent = false
+    @State private var making = false
+    @State private var madeNote: String?
     @AppStorage("askOn") private var askOn = true
     @AppStorage("askTime") private var askTime = 21 * 60
 
@@ -463,6 +472,21 @@ struct QuestionsView: View {
                 } header: {
                     Label("\(q.day.suffix(5).replacingOccurrences(of: "-", with: "/"))・\(q.kind.label)", systemImage: q.kind.icon)
                 }
+            }
+            Section {
+                Button {
+                    Task { await makePast() }
+                } label: {
+                    if making {
+                        HStack { ProgressView(); Text("記録を読んで質問を作っています…") }
+                    } else {
+                        Label("前の日の分も聞く（\(Pipeline.askBackDays)日前まで）", systemImage: "calendar.badge.clock")
+                    }
+                }
+                .disabled(making)
+                if let madeNote { Text(madeNote).font(.footnote).foregroundStyle(.secondary) }
+            } footer: {
+                Text("押すたびに、まだ聞いていない日を新しい日から1日ずつ読み、\(Pipeline.askPerDay)つまで質問を作ります。押さなくても、処理のたびに少しずつ作ります。")
             }
             if !book.recent.isEmpty {
                 Section {
@@ -501,6 +525,23 @@ struct QuestionsView: View {
         .navigationTitle("AI からの質問")
         .onDisappear { player.stop() }
         .onChange(of: book.version) { pipeline.asksChanged() }
+    }
+
+    private func makePast() async {
+        making = true
+        defer { making = false }
+        guard pipeline.llmKey != nil else {
+            madeNote = "言語モデルが使えないので作れません（設定の Groq のキーか、iPhone の中の言語モデル）。"
+            return
+        }
+        if let made = await pipeline.makeQuestions(now: true) {
+            let day = made.day.suffix(5).replacingOccurrences(of: "-", with: "/")
+            madeNote = made.count > 0 ? "\(day) の分を \(made.count) つ作りました。" : "\(day) の分は、聞きたいことがありませんでした。もう一度押すと、その前の日を読みます。"
+        } else if pipeline.asks.open.count >= 25 {
+            madeNote = "まだ答えていない質問が多いので、先に答えてください。"
+        } else {
+            madeNote = "\(Pipeline.askBackDays)日前までの分は、もう聞き終わっているか、記録がありません。読めなかったときは、少し待ってからもう一度押してください。"
+        }
     }
 }
 
