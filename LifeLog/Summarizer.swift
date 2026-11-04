@@ -341,6 +341,74 @@ enum Summarizer {
                        decisions: json["decisions"] as? [String] ?? [], todos: todos, next: json["next"] as? String ?? "")
     }
 
+    /// 頼まれごと（本人が頼まれた・引き受けたこと）
+    struct FoundTask {
+        let what: String
+        /// 頼んだ人（分からなければ空）
+        let from: String
+        /// 期限の言い方（分からなければ空）
+        let dueText: String
+        /// 期限の日付（yyyy-MM-dd。分からなければ空）
+        let dueDay: String
+        /// 根拠の発言
+        let quote: String
+        /// 言われた時刻（HH:mm。分からなければ空）
+        let time: String
+    }
+
+    /// 会話の文字起こし（[自分] は本人）から、本人が頼まれた・引き受けたことを拾う。長い会話は区切りごとに見る。
+    static func tasks(_ transcript: String, day: String, apiKey: String) async throws -> [FoundTask] {
+        var found: [FoundTask] = []
+        for piece in pieces(of: transcript, length: pieceLimit(apiKey)) {
+            let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+                次は \(day) の会話の文字起こしです。行の頭は時刻、角かっこは話した人で、[自分] は記録している本人です。
+                本人がほかの人から頼まれたこと・指示されたこと・本人が「やります」と引き受けたことだけを拾ってください。
+                ほかの人どうしの頼みごと・雑談・テレビの話・もう終わったことは入れないでください。記録に無いことは書かないでください。
+                次の JSON で返してください。無ければ空の配列にしてください。
+                {"tasks": [{"what": "本人がやること（何を・どうする、を短く）",
+                            "from": "頼んだ人の名前（分からなければ空）",
+                            "due": "期限の言い方（分からなければ空）",
+                            "due_day": "期限が日付で分かれば yyyy-MM-dd（会話の日から数える。分からなければ空）",
+                            "quote": "根拠になった発言をそのまま短く",
+                            "time": "その発言の時刻 HH:mm"}]}
+
+                \(piece)
+                """)
+            found += parseTasks(json)
+        }
+        return found
+    }
+
+    /// 写真から読み取った文字（メモ・ホワイトボード・紙の指示など）から、やることを拾う。
+    static func tasks(fromText text: String, today: String, apiKey: String) async throws -> [FoundTask] {
+        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+            次は、本人が撮った写真（メモ・ホワイトボード・紙の資料など）から読み取った文字です（今日は \(today)）。
+            読み取りの間違いは文脈から補ってかまいませんが、書いていないことは足さないでください。
+            その中の、やること・頼まれたこと・期限のあることを拾い、次の JSON で返してください。無ければ空の配列にしてください。
+            {"tasks": [{"what": "やること（何を・どうする、を短く）",
+                        "from": "頼んだ人の名前（書いてあれば。無ければ空）",
+                        "due": "期限の書き方（無ければ空）",
+                        "due_day": "期限が日付で分かれば yyyy-MM-dd（無ければ空）",
+                        "quote": "もとの文字をそのまま短く",
+                        "time": ""}]}
+
+            \(String(text.prefix(4000)))
+            """)
+        return parseTasks(json)
+    }
+
+    private static func parseTasks(_ json: [String: Any]) -> [FoundTask] {
+        (json["tasks"] as? [[String: Any]] ?? []).compactMap { item in
+            func text(_ key: String) -> String {
+                ((item[key] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            let what = text("what")
+            guard !what.isEmpty else { return nil }
+            return FoundTask(what: what, from: text("from"), dueText: text("due"), dueDay: text("due_day"),
+                             quote: text("quote"), time: text("time"))
+        }
+    }
+
     /// 話し方の数字から、ひとことの振り返り（良かったところ・気をつけるとよいところ・次に試すこと）を作る。会話の中身は渡さない。
     static func speaking(_ numbers: String, apiKey: String) async throws -> [String] {
         let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """

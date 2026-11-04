@@ -81,6 +81,8 @@ private struct TodayView: View {
                     }
                 }
 
+                taskBook()
+
                 todo(today: today, talks: talks)
 
                 let box = pipeline.suggestions
@@ -125,6 +127,39 @@ private struct TodayView: View {
             .navigationTitle("今日")
             .task(id: pipeline.people.flatMap(\.samples)) {
                 reviewCount = pipeline.voiceReview().count
+            }
+        }
+    }
+
+    /// 頼まれごと帳の入口。期限の近いものを3つまで出す。
+    private func taskBook() -> some View {
+        let book = pipeline.tasks
+        let open = book.open
+        let end = Calendar.current.startOfDay(for: .now).addingTimeInterval(86400)
+        let late = open.filter { ($0.due ?? .distantFuture) < end }.count
+        var summary = "まだ \(open.count) 件"
+        if late > 0 { summary += "・今日まで \(late)" }
+        if !book.candidates.isEmpty { summary += "・確かめ待ち \(book.candidates.count)" }
+        return Section {
+            NavigationLink {
+                TaskBookView()
+            } label: {
+                LabeledContent {
+                    Text(summary)
+                } label: {
+                    Label("頼まれごと帳", systemImage: "checklist")
+                }
+            }
+            ForEach(open.prefix(3)) { item in
+                HStack {
+                    Text(item.what).font(.callout).lineLimit(2)
+                    Spacer(minLength: 8)
+                    if let due = item.due {
+                        let text = Pipeline.taskDueText(due)
+                        Text(text).font(.caption)
+                            .foregroundStyle(text.hasSuffix("過ぎ") || text == "今日まで" ? Color.red : Color.secondary)
+                    }
+                }
             }
         }
     }

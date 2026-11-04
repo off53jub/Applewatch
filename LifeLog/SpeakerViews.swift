@@ -373,6 +373,9 @@ struct PersonView: View {
                             Text("この声が自分で名乗った名前（「〇〇と申します」など）、「〇〇さん」と呼ばれたすぐあとに話していた名前、その会話の時間のカレンダーの予定の参加者、声の近い人から。下の「この声が話したこと」で確かめてから押してください。名前を付けた人に同じ名前の人がいれば、その人にまとめます。")
                         }
                     }
+                    if !person.isSelf {
+                        PersonHistorySection(person: person)
+                    }
                     if !clues.talks.isEmpty {
                         VoiceTalksSection(talks: clues.talks, player: player)
                     }

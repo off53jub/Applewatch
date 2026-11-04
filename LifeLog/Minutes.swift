@@ -107,6 +107,8 @@ extension Pipeline {
             return .failure(error)
         }
         markMinutes(name, start: c.start, day: day)
+        // 自分の宿題は、頼まれごと帳の確かめ待ちに入れる
+        addMinuteTasks(made.todos, of: c, day: day, title: title)
         return .success(name)
     }
 }

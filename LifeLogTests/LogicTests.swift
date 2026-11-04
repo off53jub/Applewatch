@@ -254,4 +254,36 @@ final class LogicTests: XCTestCase {
         let entry = BackupKeeper.Entry(name: "控え-zzzzzzzz-2026-11-03.json", local: nil, driveID: "x")
         XCTAssertEqual(entry.label, "2026-11-03（端末 zzzzzzzz）")
     }
+
+    // MARK: - 頼まれごと帳
+
+    func testTaskSimilar() {
+        XCTAssertTrue(TaskBook.similar("見積書を送る", "見積書を送ります。"))
+        XCTAssertTrue(TaskBook.similar("A社に見積書を送る", "見積書を送る"))
+        XCTAssertFalse(TaskBook.similar("見積書を送る", "会議室を予約する"))
+        XCTAssertFalse(TaskBook.similar("", "見積書を送る"))
+    }
+
+    func testTaskDueDateAndOrder() {
+        XCTAssertNotNil(TaskBook.dueDate("2026-11-07"))
+        XCTAssertNil(TaskBook.dueDate("来週まで"))
+        XCTAssertNil(TaskBook.dueDate(""))
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let soon = TaskBook.Item(what: "a", due: now, said: now, source: .manual, state: .open)
+        let later = TaskBook.Item(what: "b", due: now.addingTimeInterval(86400), said: now, source: .manual, state: .open)
+        let none = TaskBook.Item(what: "c", said: now.addingTimeInterval(-60), source: .manual, state: .open)
+        XCTAssertEqual([none, later, soon].sorted(by: TaskBook.dueOrder).map(\.what), ["a", "b", "c"])
+    }
+
+    func testTaskAddSkipsDuplicates() {
+        let book = TaskBook()
+        let before = book.items.count
+        let item = TaskBook.Item(what: "テスト用の頼まれごと\(UUID().uuidString.prefix(6))", said: .now, source: .manual, state: .candidate)
+        XCTAssertEqual(book.add([item]).count, 1)
+        var again = item
+        again.id = UUID().uuidString
+        XCTAssertEqual(book.add([again]).count, 0)
+        book.delete(item.id)
+        XCTAssertEqual(book.items.count, before)
+    }
 }

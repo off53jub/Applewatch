@@ -163,6 +163,8 @@ final class Pipeline {
     @ObservationIgnored private(set) var sync: DeviceSync!
     /// 「こんなのあったけど、どう？」の候補
     let suggestions = SuggestionBox()
+    /// 頼まれごと帳（会話・議事録・手書き・写真から）
+    let tasks = TaskBook()
     /// 時計の区切りが届くまでの遅れ
     let watchDelays = WatchDelayLog()
     /// 区切りごとの騒がしさ（しきい値を実際の録音で合わせるため）
@@ -1295,6 +1297,8 @@ final class Pipeline {
             await conversations.writeMonthlySummary(today: dayFormatter.string(from: .now))
             // 職場の会議の議事録（アプリを開いているか充電中のときだけ、1つずつ）
             await writePendingMinutes()
+            // 仕事中と★を付けた会話から、頼まれごとを拾う
+            await findTasks()
             // ドライブを読む AI 向けの案内と索引を、中身が変わっていたら書き直す
             await updateDriveGuide()
         }
@@ -1306,7 +1310,12 @@ final class Pipeline {
                         body: added.count > 1 ? "\(first.text) ほか \(added.count - 1) 件" : first.text)
         }
         // 予定の前に、会う人と前回話したことを知らせる（iPad と二重に出さないよう iPhone だけ）
-        if UIDevice.current.userInterfaceIdiom != .pad { await scheduleMeetingBriefs() }
+        if UIDevice.current.userInterfaceIdiom != .pad {
+            await scheduleMeetingBriefs()
+            // 頼まれごとを朝と夕方に知らせ、ドライブ（と PC）に写す
+            await scheduleTaskReminders()
+            await writeTaskBook()
+        }
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
         backupPending = archive.pendingCount
@@ -1337,6 +1346,16 @@ final class Pipeline {
             return "ドライブの「\(name)」に書きました。"
         } catch {
             return "書けませんでした: \(error.localizedDescription)"
+        }
+    }
+
+    /// 頼まれごと帳を、ドライブの「頼まれごと帳」ドキュメント（読む用）と、
+    /// 同期フォルダの「頼まれごと帳.json」（家の PC が読む用。同期では読まない名前）に書く。
+    func writeTaskBookFiles(_ paragraphs: [(text: String, style: String?)], json: Data) async throws {
+        try await docs.overwrite(paragraphs, name: "頼まれごと帳")
+        let key = "taskBookFileID"
+        if let id = try await docs.uploadSync(json, name: "頼まれごと帳.json", id: UserDefaults.standard.string(forKey: key)) {
+            UserDefaults.standard.set(id, forKey: key)
         }
     }
 

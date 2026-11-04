@@ -84,6 +84,12 @@ struct SuggestionRow: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(item.text)
             HStack(spacing: 20) {
+                Button("帳に入れる", systemImage: "checklist") {
+                    pipeline.tasks.add([TaskBook.Item(what: item.text, said: .now, day: item.day,
+                                                      source: .summary, state: .open)])
+                    pipeline.suggestions.remove(item)
+                    pipeline.tasksChanged()
+                }
                 if item.kept != true {
                     Button("残す", systemImage: "bookmark") { pipeline.suggestions.keep(item) }
                 }

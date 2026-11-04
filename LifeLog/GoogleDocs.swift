@@ -384,15 +384,16 @@ final class GoogleDocs {
         return try await send(req).0
     }
 
-    /// 同期のファイルを書く。id があれば中身を置き換え、無ければ（または消えていれば）作る。
-    func uploadSync(_ data: Data, name: String, id: String?) async throws {
+    /// 同期のファイルを書く。id があれば中身を置き換え、無ければ（または消えていれば）作る。書いたファイルの id を返す。
+    @discardableResult
+    func uploadSync(_ data: Data, name: String, id: String?) async throws -> String? {
         if let id {
             var req = try await authorized("PATCH", "https://www.googleapis.com/upload/drive/v3/files/\(id)?uploadType=media&fields=id")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = data
             do {
                 _ = try await send(req)
-                return
+                return id
             } catch GoogleError.http(404, _) {
                 // 消されていたら作り直す
             }
@@ -410,7 +411,8 @@ final class GoogleDocs {
         req.setValue("multipart/related; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
         req.timeoutInterval = 120
-        _ = try await send(req)
+        let (data, _) = try await send(req)
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String
     }
 
     // MARK: - Drive
