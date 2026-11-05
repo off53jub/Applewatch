@@ -1,10 +1,15 @@
-LifeLog PC — 家の PC で Haas-ja を動かして、iPhone の録音を文字にする
+LifeLog PC — 家の PC で3つの音声モデルを動かして、iPhone の録音を多数決で文字にする
 =====================================================================
+
+Haas-ja・ReazonSpeech・Whisper large-v3 の3つで同じ声の区間を文字にし、読みがいちばん合う文を選びます。
+NVIDIA の GPU があれば、Whisper は GPU で動きます（無ければ CPU で large-v3-turbo を使います）。
 
 ■ はじめて使うとき
 1. このフォルダごと、好きな場所（例: ドキュメント\LifeLogPC）に置きます。
 2. LifeLogPC.exe をダブルクリックします。
-   - 初回だけ、Haas-ja のモデル（約2.4GB）をダウンロードします。
+   - 初回だけ、モデルをダウンロードします（Haas-ja 約2.4GB・ReazonSpeech 約600MB・Whisper 1.5〜3GB、
+     GPU があれば GPU の部品 約1.3GB も）。合わせて 5〜7GB ほどの空きが要ります。時間がかかるので、そのまま待ちます。
+   - 起動のたびに3つのモデルを読み込むので、使えるようになるまで1〜2分かかります。
    - 「Windows セキュリティの重要な警告」が出たら「アクセスを許可する」を押します。
    - 最後に「宛先」と「合言葉」が表示されます。
 3. iPhone の LifeLog → 設定 → 家の PC に、宛先と合言葉を入れて「つながるか試す」を押します。
@@ -37,12 +42,21 @@ LifeLog PC — 家の PC で Haas-ja を動かして、iPhone の録音を文字
 
 ■ 試す
     LifeLogPC.exe --test 音声ファイル
-音声を文字にして、かかった時間を表示します。
+音声を文字にして、モデルごとの文と、選んだ文と、かかった時間を表示します。
+「使ったモデル」の最後に（cuda）と出ていれば GPU で動いています。
+
+■ モデルを減らす・選ぶ
+    LifeLogPC.exe --engines haas,reazon        Whisper を使わない
+    LifeLogPC.exe --whisper large-v3-turbo     Whisper を軽いものにする（GPU のメモリが足りないときなど）
+    LifeLogPC.exe --device cpu                 GPU を使わない
+読み込めなかったモデルは飛ばして、残りで動きます（ログに理由が出ます）。
 
 ■ 置き場所
-モデル・合言葉・記録: %LOCALAPPDATA%\LifeLogPC
+モデル・合言葉・記録: %LOCALAPPDATA%\LifeLogPC（model・reazon・whisper・cuda のフォルダ）
 合言葉を変えたいときは、そこにある config.json を消して起動し直します（iPhone 側も入れ直してください）。
 
 ■ モデル
 Haas-ja-v1.0（Third Intelligence、Apache License 2.0）の ONNX 版
 oboroge0/Haas-ja-v1.0-onnx（非公式の変換、Apache License 2.0）を sherpa-onnx で動かしています。
+ReazonSpeech k2 v2（Reazon Research、Apache License 2.0）を sherpa-onnx で動かしています。
+Whisper large-v3 / large-v3-turbo（OpenAI、MIT License）の CTranslate2 版を faster-whisper で動かしています。

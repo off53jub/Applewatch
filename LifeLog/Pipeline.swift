@@ -2102,9 +2102,31 @@ final class Pipeline {
             }
             var texts = lines.map(\.text)
             var confidence = lines.map(\.confidence)
-            if !NightlyRecheck.isHaasDone(target.audio) {
+            // 家の PC の多数決で書けていない区切り（外にいて PC に届かなかった・iPhone の Haas-ja で書いたなど）は、
+            // PC の3つのモデルでその日の言葉をヒントに書き直す。ほぼ同じ読みのモデルが多い（確からしさ 0.66 以上）行だけ差し替える。
+            // 端末内で何も聞き取れていなかった行は、もっと確かなとき（0.85 以上）だけ
+            var ensembleDone = NightlyRecheck.isEnsembleDone(target.audio)
+            if !ensembleDone, homePC.shouldTry,
+               let pc = try? await homePC.transcribe(url, local: local, hints: words), homePC.engineCount > 1 {
+                ensembleDone = true
+                NightlyRecheck.markEnsembleDone(target.audio)
+                for i in lines.indices {
+                    let inSpan = pc.filter { $0.offset >= spans[i].start - 0.5 && $0.offset < spans[i].end - 0.2 }
+                    let text = inSpan.map(\.text).joined()
+                    guard !text.isEmpty, text != texts[i] else { continue }
+                    let sure = inSpan.compactMap(\.confidence).min() ?? 0
+                    guard sure >= (heard[i].isEmpty ? 0.85 : 0.66) else { continue }
+                    var fixed = text
+                    for fix in vocabulary.fixes(for: context) {
+                        fixed = fixed.replacingOccurrences(of: fix.wrong, with: fix.right)
+                    }
+                    texts[i] = fixed
+                    confidence[i] = (sure * 100).rounded() / 100
+                }
+            }
+            if !ensembleDone, !NightlyRecheck.isHaasDone(target.audio) {
                 var redo: [CloudTranscriber.Line]?
-                if homePC.shouldTry { redo = try? await homePC.transcribe(url, local: local) }
+                if homePC.shouldTry { redo = (try? await homePC.transcribe(url, local: local))?.map(\.cloudLine) }
                 if redo == nil, haas.isUsable { redo = try? await haas.transcribe(url, local: local) }
                 if let redo {
                     for i in lines.indices {
@@ -2321,13 +2343,39 @@ final class Pipeline {
         var usedHaas = asleep || silent
         /// 端末内とは別の聞き取りの結果（2つの食い違いを見比べるのに使う）
         var second: [CloudTranscriber.Line]?
+        /// 家の PC の多数決の行（行ごとの確からしさと候補つき）。PC を使わなかったら nil
+        var pcLines: [HomePC.Line]?
+        /// クラウドの Whisper の結果は、多数決の票と騒がしい所の補いで1回だけ取る
+        var cloudFetched = false
+        var cloudResult: CloudTranscriber.Transcript?
+        func fetchCloud(_ key: String) async -> CloudTranscriber.Transcript? {
+            if cloudFetched { return cloudResult }
+            cloudFetched = true
+            cloudResult = try? await CloudTranscriber.transcribe(url, provider: settings.provider, apiKey: key,
+                                                                 keywords: keywords, previous: previous)
+            if cloudResult != nil { settings.addUsage(seconds: duration) }
+            return cloudResult
+        }
         if !usedHaas, homePC.shouldTry {
-            // 家の PC の Haas-ja（無料）。PC が切れているときや届かないときは、この区切りはほかの方法で
-            if let lines = try? await homePC.transcribe(url, segments: haasSegments) {
+            // 家の PC（無料）。Haas-ja・ReazonSpeech・Whisper の多数決（古い PC は Haas-ja だけ）。
+            // PC が切れているときや届かないときは、この区切りはほかの方法で
+            if var lines = try? await homePC.transcribe(url, segments: haasSegments, hints: keywords, previous: previous) {
+                let ensemble = homePC.engineCount > 1
+                lastEngine = ensemble ? "家の PC（\(homePC.engineCount) つのモデルの多数決）" : "Haas-ja（家の PC）"
+                // 食い違った行は、クラウドの Whisper にも聞いてもう1票にする（設定「クラウドの票も足す」）
+                if ensemble, homePC.cloudVote, !asleep, !silent, settings.shouldUseCloud, let key = settings.apiKey,
+                   lines.contains(where: { ($0.confidence ?? 1) < HomePC.cloudVoteBelow }),
+                   let cloud = await fetchCloud(key) {
+                    let before = lines.map(\.text)
+                    lines = HomePC.addCloudVote(lines, cloud: cloud.lines)
+                    let changed = zip(before, lines).filter { $0 != $1.text }.count
+                    lastEngine += "＋クラウドの票" + (changed > 0 ? "（\(changed) 行を選び直した）" : "")
+                }
+                pcLines = ensemble ? lines : nil
                 entries = lines.map { ($0.offset, $0.text, nil) }
-                second = lines
-                lastEngine = "Haas-ja（家の PC）"
+                second = lines.map(\.cloudLine)
                 usedHaas = true
+                if ensemble { NightlyRecheck.markEnsembleDone(url.lastPathComponent) }
             }
         }
         if !usedHaas, haas.isUsable, !saving {
@@ -2387,9 +2435,7 @@ final class Pipeline {
         // （どちらかが雑音に負けても、もう片方が拾えることがある。補った行は確かめたほうがよい行になる）
         var supplemented = 0
         if noisy, noisyAssistOn, usedHaas, !asleep, !silent, settings.shouldUseCloud, let key = settings.apiKey, let primary = second,
-           let cloud = try? await CloudTranscriber.transcribe(url, provider: settings.provider, apiKey: key,
-                                                               keywords: keywords, previous: previous) {
-            settings.addUsage(seconds: duration)
+           let cloud = await fetchCloud(key) {
             // Haas-ja が文を書いた区間
             let covered = haasSegments.filter { span in
                 primary.contains { line in
@@ -2408,6 +2454,8 @@ final class Pipeline {
                 second = merged
                 entries = merged.map { ($0.offset, $0.text, nil) }
                 supplemented = extra.count
+                // 補った行は PC の多数決を通っていないので、行ごとの確からしさは端末内との見比べに戻す
+                pcLines = nil
             }
         }
         if noisy {
@@ -2424,7 +2472,11 @@ final class Pipeline {
         // 大きく食い違う行（読みが半分も合わない行）は、言語モデルに見比べてもらう
         var agreement = [Double?](repeating: nil, count: entries.count)
         var others: [String]?
-        if let second, second.count == entries.count {
+        if let pcLines, pcLines.count == entries.count {
+            // 家の PC の多数決：合い方をそのまま確からしさにし、食い違った行はほかのモデルの文を候補として見比べてもらう
+            agreement = pcLines.map(\.confidence)
+            others = pcLines.map { ($0.confidence ?? 1) < 0.5 ? $0.alternatives.joined(separator: " ／ ") : "" }
+        } else if let second, second.count == entries.count {
             agreement = TranscriptCheck.agreement(second, with: local, duration: duration)
             let alternatives = TranscriptCheck.alternatives(second, with: local, duration: duration)
             others = alternatives.indices.map { (agreement[$0] ?? 1) < 0.5 ? alternatives[$0] : "" }

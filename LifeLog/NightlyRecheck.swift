@@ -12,6 +12,11 @@ enum NightlyRecheck {
     static func markHaasDone(_ name: String) { add(name, to: haasKey) }
     static func isHaasDone(_ name: String) -> Bool { list(haasKey).contains(name) }
 
+    /// 家の PC の多数決（2つ以上のモデル）で文字起こしできた区切り。夜の聞き直しで PC にもう一度送らない
+    private static let ensembleKey = "ensembleDoneAudio"
+    static func markEnsembleDone(_ name: String) { add(name, to: ensembleKey) }
+    static func isEnsembleDone(_ name: String) -> Bool { list(ensembleKey).contains(name) }
+
     /// 夜の聞き直しを済ませた区切り
     static func markNightDone(_ name: String) { add(name, to: nightKey) }
     static func isNightDone(_ name: String) -> Bool { list(nightKey).contains(name) }

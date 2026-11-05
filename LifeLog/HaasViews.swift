@@ -56,7 +56,7 @@ struct HaasView: View {
     }
 }
 
-/// 家の PC の Haas-ja（LifeLog PC）：宛先と合言葉、モバイル通信、つながるか試す。
+/// 家の PC（LifeLog PC）：宛先と合言葉、モバイル通信、多数決、つながるか試す。
 struct HomePCView: View {
     @Environment(Pipeline.self) private var pipeline
     @State private var key = ""
@@ -82,6 +82,14 @@ struct HomePCView: View {
                 Toggle("モバイル通信でも送る", isOn: $pc.useCellular)
             } footer: {
                 Text("PC で LifeLogPC.exe を起動すると、宛先（〜.ts.net の名前）と合言葉が表示されます。Tailscale の名前なので、外にいるときもモバイル通信で届きます。送るのは声のあった区切りだけで、1つ約1.2MB です。PC が切れているときは、iPhone 内の Haas-ja かいつもの方法で文字にします。")
+            }
+
+            Section {
+                Toggle("食い違った行はクラウドにも聞く", isOn: $pc.cloudVote)
+            } header: {
+                Text("多数決")
+            } footer: {
+                Text("新しい LifeLog PC は、Haas-ja・ReazonSpeech・Whisper large-v3 の3つで声の区間ごとに文字にし、読みがいちばん合う文を選びます。3つが食い違った行は、オンにすると「高精度で文字起こし」のクラウド（Groq など）にも聞いてもう1票にします（その区切りの分だけ無料枠を使います）。それでも食い違う行は、ほかのモデルの文を候補にして言語モデルに見比べてもらい、記録では「？」付きになります。外にいて PC に届かなかった区切りは、夜の聞き直しで PC の3つのモデルで書き直します。")
             }
 
             Section {

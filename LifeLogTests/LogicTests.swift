@@ -7,6 +7,36 @@ import XCTest
 final class LogicTests: XCTestCase {
     // MARK: - 名前
 
+    // MARK: - 家の PC の多数決にクラウドの票を足す
+
+    private func pcLine(_ votes: [String: String], text: String, confidence: Double) -> HomePC.Line {
+        HomePC.Line(offset: 10, end: 14, text: text, confidence: confidence, alternatives: [], votes: votes)
+    }
+
+    func testCloudVoteBreaksTie() {
+        // 3つが食い違っていた行に、クラウドが reazon と同じ文を書けば、reazon の文を選び直す
+        let line = pcLine(["haas": "明日の洋服の話をした", "reazon": "明日の予算の話をした", "whisper": "飛鳥の羊羹の話をした"],
+                          text: "明日の洋服の話をした", confidence: 0.4)
+        let cloud = [CloudTranscriber.Line(offset: 10.2, text: "明日の予算の話をした")]
+        let result = HomePC.addCloudVote([line], cloud: cloud)[0]
+        XCTAssertEqual(result.text, "明日の予算の話をした")
+        XCTAssertEqual(result.votes["cloud"], "明日の予算の話をした")
+        XCTAssertFalse(result.alternatives.isEmpty)
+    }
+
+    func testCloudVoteLeavesSureLinesAndOtherTimes() {
+        // 確かな行と、クラウドが別の時間に書いた文は変えない
+        let sure = pcLine(["haas": "今日は会議です", "reazon": "今日は会議です", "whisper": "今日は会議です"],
+                          text: "今日は会議です", confidence: 1)
+        let unsure = pcLine(["haas": "明日の洋服の話をした", "reazon": "明日の予算の話をした", "whisper": ""],
+                            text: "明日の洋服の話をした", confidence: 0.4)
+        let cloud = [CloudTranscriber.Line(offset: 40, text: "明日の予算の話をした")]
+        let result = HomePC.addCloudVote([sure, unsure], cloud: cloud)
+        XCTAssertEqual(result[0].text, "今日は会議です")
+        XCTAssertEqual(result[1].text, "明日の洋服の話をした")
+        XCTAssertNil(result[1].votes["cloud"])
+    }
+
     func testIntroducedNames() {
         XCTAssertEqual(Pipeline.introducedNames(in: "田中と申します"), ["田中"])
         XCTAssertEqual(Pipeline.introducedNames(in: "私は田中といいます。"), ["田中"])

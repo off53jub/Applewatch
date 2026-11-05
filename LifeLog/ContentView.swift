@@ -504,7 +504,7 @@ private struct SettingsView: View {
                     NavigationLink {
                         HomePCView()
                     } label: {
-                        LabeledContent("家の PC の Haas-ja", value: pipeline.homePC.isConfigured ? "使用中" : "オフ")
+                        LabeledContent("家の PC（多数決）", value: pipeline.homePC.isConfigured ? "使用中" : "オフ")
                     }
                     NavigationLink {
                         HaasView()

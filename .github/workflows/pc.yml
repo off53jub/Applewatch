@@ -1,6 +1,6 @@
 name: PC
 
-# 家の PC（Windows）で Haas-ja を動かす LifeLog PC を作る。
+# 家の PC（Windows）で Haas-ja・ReazonSpeech・Whisper を動かして多数決する LifeLog PC を作る。
 # 成果物（Artifacts）の LifeLogPC を展開して LifeLogPC.exe を起動する。
 on:
   push:
@@ -54,19 +54,27 @@ jobs:
           import traceback
           try:
               from huggingface_hub import HfApi
-              info = HfApi().model_info("oboroge0/Haas-ja-v1.0-onnx", files_metadata=True)
-              print(f"::notice::Haas-ja ONNX の版 {info.sha}")
-              print("::notice::" + ", ".join(f"{s.rfilename} {(s.size or 0) // 1_000_000}MB" for s in (info.siblings or [])))
+              for repo in ["oboroge0/Haas-ja-v1.0-onnx", "reazon-research/reazonspeech-k2-v2",
+                           "mobiuslabsgmbh/faster-whisper-large-v3-turbo", "Systran/faster-whisper-large-v3"]:
+                  info = HfApi().model_info(repo, files_metadata=True)
+                  print(f"::notice::{repo} の版 {info.sha}")
+                  print("::notice::" + ", ".join(f"{s.rfilename} {(s.size or 0) // 1_000_000}MB" for s in (info.siblings or [])))
           except Exception:
               print("::error::" + traceback.format_exc().replace("\n", " | ")[-3000:])
               raise
           PY
 
+      - name: 多数決の決まりを確かめる
+        run: python pc/lifelog_pc.py --check-vote
+
       - uses: actions/cache@v4
         with:
-          path: ~/AppData/Local/LifeLogPC/model
-          key: haas-ja-onnx-${{ hashFiles('pc/lifelog_pc.py') }}
-          restore-keys: haas-ja-onnx-
+          path: |
+            ~/AppData/Local/LifeLogPC/model
+            ~/AppData/Local/LifeLogPC/reazon
+            ~/AppData/Local/LifeLogPC/whisper
+          key: lifelog-pc-models-${{ hashFiles('pc/lifelog_pc.py') }}
+          restore-keys: lifelog-pc-models-
 
       - name: モデルを取ってくる
         run: |
@@ -82,7 +90,8 @@ jobs:
       - name: exe にする
         run: |
           pyinstaller --noconfirm --onedir --console --name LifeLogPC \
-            --collect-all sherpa_onnx --collect-all av pc/lifelog_pc.py
+            --collect-all sherpa_onnx --collect-all av --collect-all faster_whisper \
+            --collect-all ctranslate2 --collect-all pykakasi --collect-all tokenizers pc/lifelog_pc.py
           cp pc/README.txt dist/LifeLogPC/
 
       - name: exe で試す

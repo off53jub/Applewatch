@@ -392,13 +392,21 @@ Whisper は日本語と決めて渡すと、小さな雑音・寝息・外国語
 
 オンのあいだは、端末内の文字起こし（SpeechAnalyzer）が声を聞き取った区間を、間が1秒未満なら14秒まで1つにまとめ、その区間ごとに Haas-ja で文字にする（1区間＝1行）。動かせなかった区切りは、いつもの方法（Groq など）で文字にする。
 
-## 家の PC の Haas-ja
+## 家の PC の多数決（Haas-ja・ReazonSpeech・Whisper）
 
-家の Windows PC で `pc/lifelog_pc.py`（LifeLog PC）を動かし、iPhone から区切りを送って Haas-ja で文字にしてもらう。モデルは [Haas-ja-v1.0](https://huggingface.co/third-intelligence/Haas-ja-v1.0) の ONNX 版 [oboroge0/Haas-ja-v1.0-onnx](https://huggingface.co/oboroge0/Haas-ja-v1.0-onnx)（非公式の変換、Apache-2.0）を sherpa-onnx で CPU で動かす（初回に約2.4GB を取ってくる）。
+家の Windows PC で `pc/lifelog_pc.py`（LifeLog PC）を動かし、iPhone から区切りを送って文字にしてもらう（2026-11-05 に3つのモデルの多数決にした）。
 
-- PC 用の実行ファイルは CI（`.github/workflows/pc.yml`）が Windows で作り、成果物 `LifeLogPC` に置く。使い方は `pc/README.txt`。
-- 送るのは声のあった区切り（AAC、約1.2MB）と、端末内の文字起こしで声があった区間。合言葉（Bearer）が合わない相手には返さない。
-- 外からは Tailscale の住所（100.…）で届く。モバイル通信で送るかは設定で選べる。
+- **3つのモデル**（どれも初回に PC が取ってきて `%LOCALAPPDATA%\LifeLogPC` に置く）
+  - [Haas-ja-v1.0](https://huggingface.co/third-intelligence/Haas-ja-v1.0) の ONNX 版 [oboroge0/Haas-ja-v1.0-onnx](https://huggingface.co/oboroge0/Haas-ja-v1.0-onnx)（非公式の変換、Apache-2.0）。sherpa-onnx で CPU（約2.4GB）。
+  - [ReazonSpeech k2 v2](https://huggingface.co/reazon-research/reazonspeech-k2-v2)（Apache-2.0）。sherpa-onnx で CPU（約600MB）。
+  - Whisper large-v3（MIT）の CTranslate2 版を faster-whisper で。NVIDIA の GPU があれば GPU で動かす（GPU の部品 cuBLAS・cuDNN 約1.3GB は初回に PyPI から取ってくる）。GPU が無ければ CPU で large-v3-turbo。Whisper にだけ、聞き取ってほしい言葉（名前・登録した言葉・話題・予定）と前の区切りの終わりの文をヒントに渡す。
+- **多数決**: 声の区間ごとに3つで文字にし、読み（ひらがな）がほかのモデルといちばん近い文を選ぶ（何も書かなかったモデルは 0 として数える）。読みがほぼ同じ（0.85 以上）なら、ヒントを渡した Whisper の書き方を使う（名前の漢字に強いため）。Whisper だけが書いてほかが何も聞き取っていない区間は、作り話とみなして書かない。
+- **確からしさと候補**: 選んだ文とほぼ同じ読みのモデルの割合（違うモデルは近さの半分を足す）を行の確からしさにし、ほかのモデルの違う文を候補として iPhone に返す。0.5 未満の行は、候補と一緒に言語モデルで見比べて直し、記録では「？」付きになる。
+- **クラウドの票**（「家の PC」の「食い違った行はクラウドにも聞く」、既定オン）: 確からしさが 0.67 未満の行があれば、その区切りを「高精度で文字起こし」のクラウド（Groq など）にも1回だけ送り、その行の区間の文をもう1票にして選び直す（`HomePC.addCloudVote`）。騒がしい所の補いと同じ結果を使い回すので、二重には送らない。
+- **夜の聞き直し**: 外にいて PC に届かなかった区切り（iPhone の Haas-ja やクラウドで書いた分）は、夜の聞き直しで PC の3つのモデルにその日の言葉をヒントに送り直し、確からしさ 0.66 以上の行だけ差し替える（端末内で何も聞こえていなかった行は 0.85 以上）。手で直した行は変えない。多数決で書けた区切りは送り直さない（`NightlyRecheck.ensembleDone`）。
+- 送るのは声のあった区切り（AAC、約1.2MB）と、声のあった区間と、ヒントの言葉（1,500 文字まで）。合言葉（Bearer）が合わない相手には返さない。古い LifeLog PC（Haas-ja だけ）にもそのまま送れる（そのときは今までどおり端末内と見比べる）。
+- PC 用の実行ファイルは CI（`.github/workflows/pc.yml`）が Windows で作り、成果物 `LifeLogPC` に置く。CI では多数決の決まりを確かめ（`--check-vote`）、3つのモデルを CPU で動かして試す。使い方は `pc/README.txt`。
+- 外からは Tailscale の名前（〜.ts.net）で届く。モバイル通信で送るかは設定で選べる。
 - 順番は 家の PC → iPhone 内の Haas-ja → クラウドの高精度 → 端末内。PC に届かなかったら2分間は試さない。
 
 ## 人物Nの整理と、自分の声をまとめる
