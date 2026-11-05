@@ -246,7 +246,9 @@ extension Pipeline {
         let today = Self.dayKey.string(from: .now)
         guard UserDefaults.standard.string(forKey: "batteryAlertDay") != today else { return }
         let night = Calendar.current.date(bySettingHour: 21, minute: 0, second: 0, of: .now) ?? .now
-        guard empty < night, empty > .now.addingTimeInterval(20 * 60), empty < .now.addingTimeInterval(6 * 3600) else { return }
+        let soonest = Date.now.addingTimeInterval(20 * 60)
+        let latest = min(night, Date.now.addingTimeInterval(6 * 3600))
+        guard empty >= soonest && empty <= latest else { return }
         UserDefaults.standard.set(today, forKey: "batteryAlertDay")
         Self.post(id: "watch-battery", title: "時計の電池が \(empty.formatted(date: .omitted, time: .shortened)) ごろ切れそうです",
                   body: "いまの減り方だと、その時刻に 10% を切ります。録音を続けるなら、それまでに少し充電してください（家で iPad や iPhone が録っているあいだなど）。")
