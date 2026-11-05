@@ -167,6 +167,8 @@ final class Pipeline {
     let tasks = TaskBook()
     /// AI からの質問と、わかったこと帳
     let asks = AskBook()
+    /// 正解帳（週に1回の答え合わせ）
+    let answerKey = AnswerKey()
     /// 時計の区切りが届くまでの遅れ
     let watchDelays = WatchDelayLog()
     /// 区切りごとの騒がしさ（しきい値を実際の録音で合わせるため）

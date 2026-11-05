@@ -360,6 +360,54 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(people.first?.items.count, 2)
     }
 
+    // MARK: - 正解帳
+
+    func testAnswerKeyScore() {
+        XCTAssertEqual(AnswerKey.editDistance(Array("みつもり"), Array("みつもり")), 0)
+        XCTAssertEqual(AnswerKey.editDistance(Array("見積書を送る"), Array("見積もりを送る")), 2)
+        XCTAssertEqual(AnswerKey.editDistance([], Array("abc")), 3)
+        func sample(_ id: String, text: String, right: String?, speaker: Bool?, scene: Bool?, skipped: Bool = false) -> AnswerKey.Sample {
+            AnswerKey.Sample(id: id, week: "2026-11-02", day: "2026-11-05", time: .now, text: text, speaker: nil,
+                             speakerID: nil, place: nil, title: nil, audio: "a.m4a", offset: 0, confidence: nil, noisy: nil,
+                             rightText: right, speakerOK: speaker, sceneOK: scene, skipped: skipped ? true : nil,
+                             answered: .now)
+        }
+        let score = AnswerKey.score("2026-11-02", [
+            sample("1", text: "あいうえお", right: "あいうえお", speaker: true, scene: true),
+            sample("2", text: "かきくけこ", right: "かきくけさ、", speaker: false, scene: nil),
+            sample("3", text: "x", right: nil, speaker: nil, scene: nil, skipped: true),
+        ])
+        XCTAssertEqual(score.answered, 2)
+        XCTAssertEqual(score.speaker, 0.5)
+        XCTAssertEqual(score.scene, 1)
+        XCTAssertEqual(score.textError ?? 0, 0.1, accuracy: 0.0001)
+    }
+
+    func testAnswerKeyWeekAndPick() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let thursday = cal.date(from: DateComponents(year: 2026, month: 11, day: 5, hour: 10))!
+        XCTAssertEqual(AnswerKey.weekKey(thursday, calendar: cal), "2026-11-02")
+        let sunday = cal.date(from: DateComponents(year: 2026, month: 11, day: 8, hour: 23))!
+        XCTAssertEqual(AnswerKey.weekKey(sunday, calendar: cal), "2026-11-02")
+
+        var candidates: [AnswerKey.Sample] = []
+        for i in 0..<40 {
+            candidates.append(AnswerKey.Sample(
+                id: "d|\(i)", week: "w", day: "2026-11-05", time: thursday.addingTimeInterval(Double(i) * 300),
+                text: "行\(i)", speaker: nil, speakerID: i % 2 == 0 ? SpeakerLabeler.selfID : "3",
+                place: i < 30 ? "職場" : "家", title: "会話\(i / 4)", audio: "a", offset: 0, confidence: nil, noisy: nil))
+        }
+        let picked = AnswerKey.pick(candidates, count: 10, seed: "2026-11-02")
+        XCTAssertEqual(picked.count, 10)
+        XCTAssertEqual(picked.map(\.id), AnswerKey.pick(candidates, count: 10, seed: "2026-11-02").map(\.id))
+        XCTAssertTrue(picked.contains { $0.place == "家" })
+        XCTAssertTrue(picked.contains { $0.speakerID == SpeakerLabeler.selfID })
+        XCTAssertTrue(picked.contains { $0.speakerID == "3" })
+        let perTalk = Dictionary(grouping: picked, by: { $0.title ?? "" }).values.map(\.count).max() ?? 0
+        XCTAssertLessThanOrEqual(perTalk, 2)
+    }
+
     func testTaskAddSkipsDuplicates() {
         let book = TaskBook()
         let before = book.items.count

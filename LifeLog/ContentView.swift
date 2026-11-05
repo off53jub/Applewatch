@@ -99,6 +99,8 @@ private struct TodayView: View {
 
                 taskBook()
 
+                answerNudge()
+
                 questions()
 
                 todo(today: today, talks: talks)
@@ -151,6 +153,25 @@ private struct TodayView: View {
             }
             .task(id: pipeline.people.flatMap(\.samples)) {
                 reviewCount = pipeline.voiceReview().count
+            }
+        }
+    }
+
+    /// 土日に、今週の答え合わせがまだなら入口を出す
+    @ViewBuilder
+    private func answerNudge() -> some View {
+        let week = AnswerKey.weekKey(.now)
+        let samples = pipeline.answerKey.samples(of: week)
+        let left = samples.isEmpty ? AnswerKey.perWeek : samples.filter { !$0.isAnswered }.count
+        if Calendar.current.isDateInWeekend(.now), left > 0 {
+            Section {
+                NavigationLink {
+                    AnswerKeyView()
+                } label: {
+                    Label("今週の答え合わせ（あと \(left) 問・5分ほど）", systemImage: "checkmark.seal")
+                }
+            } footer: {
+                Text("場面を聞いて「だれが・何を・どこで」が合っているかを答えると、聞き取りの数字が週ごとにたまります。")
             }
         }
     }
@@ -362,6 +383,11 @@ private struct RecordsView: View {
                             QuestionsView()
                         } label: {
                             Label("AI からの質問・わかったこと帳", systemImage: "lightbulb")
+                        }
+                        NavigationLink {
+                            AnswerKeyView()
+                        } label: {
+                            Label("答え合わせ（週5分）・聞き取りの数字", systemImage: "checkmark.seal")
                         }
                     }
                     Section("日ごと") {
