@@ -360,6 +360,30 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(people.first?.items.count, 2)
     }
 
+    // MARK: - 場面
+
+    func testCarAudioAndTrainOrCar() {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let periods = [CarAudioLog.Period(start: t0, end: t0.addingTimeInterval(600))]
+        XCTAssertTrue(CarAudioLog.overlaps(periods, from: t0.addingTimeInterval(60), to: t0.addingTimeInterval(1200)))
+        XCTAssertFalse(CarAudioLog.overlaps(periods, from: t0.addingTimeInterval(590), to: t0.addingTimeInterval(1200)))
+        XCTAssertTrue(CarAudioLog.looksLikeCar("My Car"))
+        XCTAssertTrue(CarAudioLog.looksLikeCar("TOYOTA Multimedia"))
+        XCTAssertFalse(CarAudioLog.looksLikeCar("Oscar's AirPods"))
+        XCTAssertFalse(CarAudioLog.looksLikeCar("WH-1000XM5"))
+
+        func line(_ sound: String?) -> ConversationLog.Line {
+            var l = ConversationLog.Line(time: t0, speaker: nil, text: "a")
+            l.sound = sound
+            return l
+        }
+        let vehicle = MotionLink.Movement.vehicle.label
+        XCTAssertEqual(ConversationLog.refinedMovement(vehicle, lines: [line("電車"), line(nil), line(nil)]), "電車で")
+        XCTAssertEqual(ConversationLog.refinedMovement(vehicle, lines: [line("車"), line(nil)]), "車で")
+        XCTAssertEqual(ConversationLog.refinedMovement(vehicle, lines: [line(nil), line(nil)]), vehicle)
+        XCTAssertEqual(ConversationLog.refinedMovement("歩きながら", lines: [line("電車")]), "歩きながら")
+    }
+
     // MARK: - 正解帳
 
     func testAnswerKeyScore() {

@@ -124,6 +124,8 @@ final class Pipeline {
     let calendar = CalendarLink()
     let contacts = ContactsLink()
     let motion = MotionLink()
+    /// 車（CarPlay・車の Bluetooth）につないでいた時間
+    let carAudio = CarAudioLog()
     let sleep = SleepGuess()
     /// ヘルスケア（睡眠・心拍・歩数。署名に許可があるときだけ）
     let health = HealthLink()
@@ -237,8 +239,15 @@ final class Pipeline {
             return wordStats.hints(for: c.people, limit: 15) + keywords(for: vocabularyContext(at: c.start))
         }
         conversations.movementName = { [weak self] start, end in
-            await self?.motion.movement(from: start, to: end)?.label
+            guard let self else { return nil }
+            let move = await motion.movement(from: start, to: end)
+            // 車につないでいたなら、電車ではなく車（歩いていた・走っていたときはそちら）
+            if carAudio.connected(from: start, to: end), move != .walking, move != .running, move != .cycling {
+                return "車で"
+            }
+            return move?.label
         }
+        carAudio.start()
         conversations.forgetVoices = { [weak self] ids in
             guard let self else { return }
             await speakers.forgetUnnamed(ids)

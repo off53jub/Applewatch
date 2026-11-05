@@ -1,7 +1,7 @@
 import AVFoundation
 import SoundAnalysis
 
-/// 録音の中の、声以外の背景の音（音楽・電車・拍手や笑い・テレビ）を、iOS に入っている音の聞き分け（SoundAnalysis）で調べる。
+/// 録音の中の、声以外の背景の音（音楽・電車・拍手や笑い・テレビ・車・食器・キーボードなど）を、iOS に入っている音の聞き分け（SoundAnalysis）で調べる。
 /// 端末の中だけで動く。結果は行の「背景の音」として残し、放送やテレビの行を見分ける手がかりにする。
 enum SoundScene {
     struct Window: Sendable {
@@ -17,6 +17,16 @@ enum SoundScene {
         if id.contains("television") || id.contains("radio") { return "テレビ" }
         if id == "music" || id.contains("singing") || id.contains("musical") || id.contains("jingle") { return "音楽" }
         if id.contains("applause") || id.contains("laughter") || id.contains("cheering") { return "拍手・笑い" }
+        // ここから下は場面の手がかり（見出し・要点を作るときに「背景」として渡す）
+        if id == "car" || id.hasPrefix("car_") || id.contains("vehicle") || id.contains("engine") || id.contains("traffic") {
+            return "車"
+        }
+        if id.contains("dishes") || id.contains("cutlery") || id.contains("chopping") || id.contains("frying") { return "食器・料理" }
+        if id.contains("typing") || id.contains("keyboard") { return "キーボード" }
+        if id.contains("rain") { return "雨" }
+        if id.contains("baby") || id.contains("children") { return "子ども" }
+        if id.contains("dog") || id.contains("bark") { return "犬" }
+        if id.contains("water_tap") || id.contains("sink") || id.contains("shower") { return "水回り" }
         return nil
     }
 

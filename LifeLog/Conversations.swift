@@ -265,7 +265,7 @@ final class ConversationLog {
         result.place = await placeName(conversation.start)
         let event = await eventInfo(conversation.start, conversation.end)
         result.event = event?.name
-        result.movement = await movementName(conversation.start, conversation.end)
+        result.movement = Self.refinedMovement(await movementName(conversation.start, conversation.end), lines: conversation.lines)
         if let heart = await heartInfo(conversation.start, conversation.end) {
             result.heartRate = heart.average
             result.heartRateMax = heart.max
@@ -584,6 +584,17 @@ final class ConversationLog {
     }
 
     // MARK: - 記録の掃除
+
+    /// 乗り物に乗っていたとき、背景の音で電車か車かを見分ける（行の2割以上で聞こえていた音）
+    static func refinedMovement(_ movement: String?, lines: [Line]) -> String? {
+        guard movement == MotionLink.Movement.vehicle.label, !lines.isEmpty else { return movement }
+        let train = lines.filter { $0.sound == "電車" }.count
+        let car = lines.filter { $0.sound == "車" }.count
+        let enough = max(1, lines.count / 5)
+        if train >= enough && train > car { return "電車で" }
+        if car >= enough && car > train { return "車で" }
+        return movement
+    }
 
     /// ドキュメントに書く会話の見出し（例: 「14:05〜14:40　会社　田中と　来週の段取り」）
     static func headingText(_ c: Conversation) -> String {
