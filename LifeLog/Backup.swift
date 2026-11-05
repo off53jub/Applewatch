@@ -136,7 +136,9 @@ final class BackupKeeper {
 
     /// ドライブの控え（新しい順。ほかの端末の分も）
     func driveEntries() async throws -> [Entry] {
-        try await docs.backupFiles().map { Entry(name: $0.name, local: nil, driveID: $0.id) }.sorted { $0.name > $1.name }
+        // 「控え」フォルダには書き出し（書き出し-年-…）も置くので、控えだけを出す
+        try await docs.backupFiles().filter { $0.name.hasPrefix("控え-") }
+            .map { Entry(name: $0.name, local: nil, driveID: $0.id) }.sorted { $0.name > $1.name }
     }
 
     /// 選んだ控えを「戻す待ち」に置く。次にアプリを開いたときに入れ替わる。

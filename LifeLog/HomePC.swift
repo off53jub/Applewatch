@@ -103,8 +103,9 @@ final class HomePC {
         defer { session.finishTasksAndInvalidate() }
         let (data, response) = try await session.data(for: try request("hello"))
         try Self.check(response, data: data)
-        struct Hello: Decodable { let model: String; let provider: String }
+        struct Hello: Decodable { let model: String; let provider: String; let version: Int? }
         let hello = try JSONDecoder().decode(Hello.self, from: data)
+        version = hello.version ?? 1
         return "\(hello.model)（\(hello.provider == "cuda" ? "GPU" : "CPU")）"
     }
 
@@ -127,6 +128,15 @@ final class HomePC {
     func transcribe(_ url: URL, local: [Transcriber.Line], hints: [String] = []) async throws -> [Line] {
         try await transcribe(url, segments: HaasEngine.segments(from: local), hints: hints)
     }
+
+    /// つながらなくなった時刻（つながったら nil。家の PC の見張り。2026-11-06）
+    var downSince: Date? = UserDefaults.standard.object(forKey: "homePCDown") as? Date {
+        didSet { UserDefaults.standard.set(downSince, forKey: "homePCDown") }
+    }
+    /// PC の LifeLog PC の版（hello で分かる。古い PC は 1）
+    var version: Int?
+    /// このアプリが前提にしている PC の版（多数決・ヒント・重み）
+    nonisolated static let expectedVersion = 2
 
     /// 声の区間の長さに対する処理の時間（直近をならした値。1 より大きいと録音に追いつかない）。2026-11-06
     var speed: Double? = UserDefaults.standard.object(forKey: "homePCSpeed") as? Double {
@@ -188,6 +198,7 @@ final class HomePC {
             }
             let reply = try JSONDecoder().decode(Reply.self, from: data)
             failedAt = nil
+            downSince = nil
             engineCount = reply.engines?.count ?? 1
             // 声の区間の長さに対して、処理に何倍かかったか（直近をならす）
             let voiced = segments.reduce(0) { $0 + max(0, $1.end - $1.start) }
@@ -205,6 +216,7 @@ final class HomePC {
             }
         } catch {
             failedAt = .now
+            if downSince == nil { downSince = .now }
             lastResult = "つながりませんでした（\(Date().formatted(date: .omitted, time: .shortened))）: \(Self.describe(error))"
             throw error
         }

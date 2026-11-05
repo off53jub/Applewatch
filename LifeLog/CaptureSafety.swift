@@ -465,3 +465,89 @@ extension Pipeline {
         return "直近90日の記録に、\(name)さんとの会話は見つかりませんでした。"
     }
 }
+
+// MARK: - 全部を自分の形で書き出す（2026-11-06）
+
+extension Pipeline {
+    /// 書き出しの形式の版（中身の形を変えたら上げる）
+    static let exportFormat = 1
+
+    /// その年の記録（会話と行）・人・タスクを、読みやすい Markdown と、プログラムで読める JSON にして、
+    /// ドライブの「控え」に「書き出し-年-作った日」の名前で置く（同じ年の分は新しい2つだけ残す）。
+    /// アプリが動かなくなっても読めるよう、JSON の頭に中身の説明を入れる。書いたファイルの名前を返す。
+    @discardableResult
+    func exportYear(_ year: Int) async throws -> [String] {
+        let days = recordedDays().filter { $0.hasPrefix(String(year) + "-") }.sorted()
+        let made = Self.dayKey.string(from: .now)
+        var json: [String: Any] = [
+            "形式": Self.exportFormat,
+            "説明": "LifeLog の \(year) 年の書き出し。「日ごと」は日付（yyyy-MM-dd）ごとの会話の配列。会話は start・end（2001-01-01 からの秒）・title（見出し）・points（要点）・place（場所）・lines（行）を持つ。行は time・speaker（話した人。「自分」は本人、「人物N」は名前の無い声）・text（文字）・original（直す前の文字）・confidence（確からしさ 0〜1）。「人」は聞き分けている人の番号と名前。「タスク」は頼まれごと帳。",
+            "作った日": made,
+        ]
+        let encoder = JSONEncoder()
+        var daysJSON: [String: Any] = [:]
+        var markdown = "# LifeLog \(year) 年の書き出し（\(made) 作成・形式 \(Self.exportFormat)）\n\n"
+            + "日ごとの会話と行です。「自分」は本人、「人物N」は名前の無い声です。\n"
+        let clock = Date.FormatStyle(date: .omitted, time: .shortened)
+        for day in days {
+            let talks = conversations(on: day)
+            if let data = try? encoder.encode(talks), let value = try? JSONSerialization.jsonObject(with: data) {
+                daysJSON[day] = value
+            }
+            markdown += "\n## \(day)\n"
+            for c in talks {
+                markdown += "\n### \(c.start.formatted(clock))〜\(c.end.formatted(clock))"
+                    + (c.place.map { "　\($0)" } ?? "") + (c.title.map { "　\($0)" } ?? "") + "\n"
+                for point in c.points { markdown += "- \(point)\n" }
+                if !c.points.isEmpty { markdown += "\n" }
+                for line in c.lines {
+                    markdown += "\(line.time.formatted(clock)) " + (line.speaker.map { "[\($0)] " } ?? "") + line.text + "\n"
+                }
+            }
+        }
+        json["日ごと"] = daysJSON
+        json["人"] = people.map { ["番号": $0.id, "名前": $0.displayName] }
+        if let data = try? encoder.encode(tasks.items), let value = try? JSONSerialization.jsonObject(with: data) {
+            json["タスク"] = value
+        }
+        markdown += "\n## タスク\n"
+        for item in tasks.items {
+            markdown += "- [\(item.state == .done ? "x" : " ")] \(item.what)" + (item.from.map { "（\($0)）" } ?? "")
+                + (item.due.map { "　期限 \(Self.dayKey.string(from: $0))" } ?? "") + "\n"
+        }
+        let jsonData = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
+        let prefix = "書き出し-\(year)-"
+        let names = [prefix + "json-" + made + ".json", prefix + "md-" + made + ".md"]
+        try await uploadExport(jsonData, name: names[0], prefix: prefix + "json-")
+        try await uploadExport(Data(markdown.utf8), name: names[1], prefix: prefix + "md-")
+        UserDefaults.standard.set(year, forKey: "exportedYear")
+        return names
+    }
+
+    /// 年が変わったら、前の年の分を1回だけ書き出す（Wi-Fi のときだけ）
+    func exportIfNewYear() async {
+        let year = Calendar.current.component(.year, from: .now)
+        guard email != nil, archive.isOnWiFi, UserDefaults.standard.integer(forKey: "exportedYear") < year - 1 else { return }
+        _ = try? await exportYear(year - 1)
+    }
+}
+
+// MARK: - 家の PC の見張り（2026-11-06）
+
+extension Pipeline {
+    /// 家の PC に2時間つながらない（家の Wi-Fi か、録音を休む場所にいるとき）・PC の版が古い、を知らせる（12時間に1回まで）
+    func checkHomePC() {
+        guard homePC.isConfigured else { return }
+        let last = UserDefaults.standard.object(forKey: "homePCAlert") as? Date ?? .distantPast
+        guard Date.now.timeIntervalSince(last) > 12 * 3600 else { return }
+        if let since = homePC.downSince, Date.now.timeIntervalSince(since) > 2 * 3600, archive.isOnWiFi || recordingHeld {
+            UserDefaults.standard.set(Date.now, forKey: "homePCAlert")
+            Self.post(id: "home-pc", title: "家の PC につながりません",
+                      body: "\(since.formatted(date: .omitted, time: .shortened)) からつながっていません。PC が止まっていないか、LifeLog PC が動いているかを確かめてください（そのあいだは iPhone とクラウドで文字にしています）。")
+        } else if let version = homePC.version, version < HomePC.expectedVersion {
+            UserDefaults.standard.set(Date.now, forKey: "homePCAlert")
+            Self.post(id: "home-pc", title: "家の PC の LifeLog PC が古い版です",
+                      body: "PC は版 \(version)、アプリは版 \(HomePC.expectedVersion) を前提にしています。GitHub の成果物 LifeLogPC から新しいものに入れ替えてください。")
+        }
+    }
+}

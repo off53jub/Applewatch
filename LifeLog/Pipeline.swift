@@ -1405,6 +1405,8 @@ final class Pipeline {
         pendingCount = Storage.pendingChunks().count
         // 文字起こし待ちが2時間より長く溜まっていたら、理由と一緒に知らせる
         checkStall()
+        // 家の PC が長くつながらない・版が古いなら知らせる
+        checkHomePC()
         if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
         Self.scheduleBackgroundWork()
         // 夜に充電していれば、1日分を聞き直す
@@ -1538,8 +1540,15 @@ final class Pipeline {
         if UIDevice.current.userInterfaceIdiom != .pad { scheduleMorningCheck() }
         // 毎月1日に、前の月にクラウドへ送った件数を知らせる
         CloudLog.notifyMonthlyIfDue()
+        // 年が変わったら、前の年の分を Markdown と JSON に書き出す
+        if UIDevice.current.userInterfaceIdiom != .pad { await exportIfNewYear() }
         _ = await writeDiagnostics()
         return true
+    }
+
+    /// 書き出しをドライブの「控え」に置く（同じ名前の頭のものは新しい2つだけ残す）
+    func uploadExport(_ data: Data, name: String, prefix: String) async throws {
+        try await docs.uploadBackup(data, name: name, prefix: prefix, keep: 2)
     }
 
     // MARK: - 自己点検

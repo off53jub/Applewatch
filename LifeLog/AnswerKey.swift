@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Observation
 import SwiftUI
@@ -29,6 +30,8 @@ final class AnswerKey {
         var votes: [String: String]? = nil
         /// 週の数字には入れない、モデルの当たりやすさを学ぶための追加の問い（食い違った行から選ぶ）
         var extra: Bool? = nil
+        /// ★を付けた行（★の後押し。週に2つまで追加の問いにする。2026-11-06）
+        var starred: Bool? = nil
         /// 本当の文字（合っていれば text と同じ）
         var rightText: String? = nil
         /// 話した人が合っていたか（分からないときは nil のまま）
@@ -276,6 +279,14 @@ extension Pipeline {
                 copy.extra = true
                 return copy
             }
+            // ★を付けた行も、追加の問いにする（週に2つまで）
+            let takenNow = Set(picked.map(\.id))
+            let stars = candidates.filter { $0.starred == true && !takenNow.contains($0.id) }
+            picked += AnswerKey.pick(stars, count: 2, seed: week + "star").map { s in
+                var copy = s
+                copy.extra = true
+                return copy
+            }
             answerKey.fill(week, with: picked.sorted { $0.time < $1.time })
         }
         return answerKey.samples(of: week)
@@ -292,7 +303,8 @@ extension Pipeline {
                         id: day + "|" + String(Int(line.time.timeIntervalSince1970)), week: week, day: day,
                         time: line.time, text: line.text, speaker: line.speaker, speakerID: line.speakerID,
                         place: c.place, title: c.title, audio: audio, offset: offset,
-                        confidence: line.confidence, noisy: line.noisy, votes: line.votes))
+                        confidence: line.confidence, noisy: line.noisy, votes: line.votes,
+                        starred: line.marked == true ? true : nil))
                 }
             }
         }
@@ -376,7 +388,12 @@ struct AnswerKeyView: View {
             }
         }
         .navigationTitle("答え合わせ")
-        .onAppear { week = pipeline.answerKeyThisWeek() }
+        .onAppear {
+            week = pipeline.answerKeyThisWeek()
+            // その週の場面を端末に切り出しておく（次からネットが無くても聞ける）
+            let samples = week
+            Task { await AnswerClips.prepare(samples) { await pipeline.archive.playableURL(for: $0) } }
+        }
         .onDisappear { player.stop() }
         .sheet(item: $editing) { sample in
             NavigationStack {
@@ -442,9 +459,14 @@ private struct AnswerSheet: View {
                 let key = "answer-" + sample.id
                 Button {
                     Task {
-                        let start = max(0, sample.offset - 2)
-                        await player.toggle(key, at: start, until: start + 20) {
-                            await pipeline.archive.playableURL(for: sample.audio)
+                        // 端末に切り出してあれば、それを聞く（ネットが無くても聞ける）
+                        if let clip = AnswerClips.local(for: sample) {
+                            await player.toggle(key, at: 0, until: 20) { clip }
+                        } else {
+                            let start = AnswerClips.start(of: sample)
+                            await player.toggle(key, at: start, until: start + 20) {
+                                await pipeline.archive.playableURL(for: sample.audio)
+                            }
                         }
                     }
                 } label: {
@@ -539,5 +561,53 @@ private struct AnswerSheet: View {
     private var names: [String] {
         let named = pipeline.people.filter(\.isNamed)
         return named.filter(\.isSelf).map(\.displayName) + named.filter { !$0.isSelf }.map(\.displayName).sorted()
+    }
+}
+
+// MARK: - ネットが無くても聞けるように（2026-11-06）
+
+/// その週の答え合わせの場面（20秒）を、端末に残しておく。26時間より前の音声はドライブから取るので、
+/// 電車の中などネットが無いところでも答えられるように、選んだときに切り出しておく。古い週の分は消す。
+enum AnswerClips {
+    static let dir: URL = {
+        let dir = URL.applicationSupportDirectory.appendingPathComponent("answer-clips", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    static func url(for sample: AnswerKey.Sample) -> URL {
+        let safe = sample.id.replacingOccurrences(of: "|", with: "_").replacingOccurrences(of: "/", with: "_")
+        return dir.appendingPathComponent(safe + ".m4a")
+    }
+
+    static func local(for sample: AnswerKey.Sample) -> URL? {
+        let url = url(for: sample)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// 場面の始まり（行の2秒前）。切り出した音声では 0 秒から
+    static func start(of sample: AnswerKey.Sample) -> TimeInterval { max(0, sample.offset - 2) }
+
+    /// まだ切り出していない場面を切り出す。その週ではないものは消す
+    @MainActor
+    static func prepare(_ samples: [AnswerKey.Sample], source: (String) async -> URL?) async {
+        let keep = Set(samples.map { url(for: $0).lastPathComponent })
+        for file in (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        where !keep.contains(file.lastPathComponent) {
+            try? FileManager.default.removeItem(at: file)
+        }
+        for sample in samples where local(for: sample) == nil && !sample.isAnswered {
+            guard let from = await source(sample.audio) else { continue }
+            await export(from, start: start(of: sample), to: url(for: sample))
+        }
+    }
+
+    private static func export(_ source: URL, start: TimeInterval, to dest: URL) async {
+        let asset = AVURLAsset(url: source)
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else { return }
+        session.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600),
+                                        duration: CMTime(seconds: 20, preferredTimescale: 600))
+        try? FileManager.default.removeItem(at: dest)
+        try? await session.export(to: dest, as: .m4a)
     }
 }

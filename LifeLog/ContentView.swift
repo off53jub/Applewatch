@@ -348,7 +348,10 @@ private struct LiveView: View {
                                     Text(line.time.formatted(date: .omitted, time: .shortened))
                                         .font(.caption.monospacedDigit())
                                         .foregroundStyle(.secondary)
-                                    Text(line.text).font(.title3)
+                                    // ライブの文は仮（2026-11-06）。タスク・要約・記録には使わず、記録には多数決のあとの確定した文が入る
+                                    Text("仮").font(.caption2).padding(.horizontal, 4)
+                                        .background(Color.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
+                                    Text(line.text).font(.title3).foregroundStyle(.primary.opacity(0.8))
                                 }
                                 .id(line.id)
                             }
@@ -559,6 +562,7 @@ private struct SettingsView: View {
     }
     @AppStorage(AppLock.key) private var appLock = false
     @AppStorage("morningCheck") private var morningCheck = true
+    @State private var exportNote: String?
     /// LocalModel.modeKey と同じ名前
     @AppStorage("localModelMode") private var localModelMode = LocalModel.Mode.fallback.rawValue
     @AppStorage(Pipeline.autoAsideKey) private var autoAside = true
@@ -573,10 +577,23 @@ private struct SettingsView: View {
                     Toggle("毎朝、前の日の点検を知らせる", isOn: $morningCheck)
                     NavigationLink("クラウドに送ったもの") { CloudLogView() }
                     NavigationLink("録音の抜けと数の照合") { RecordingMapView() }
+                    Button("今年の分を書き出す") {
+                        exportNote = "書き出しています…"
+                        Task {
+                            do {
+                                let names = try await pipeline.exportYear(Calendar.current.component(.year, from: .now))
+                                exportNote = "ドライブの「控え」に置きました: " + names.joined(separator: "、")
+                            } catch {
+                                exportNote = "書き出せませんでした: \(error.localizedDescription)"
+                            }
+                        }
+                    }
+                    .disabled(pipeline.email == nil)
+                    if let exportNote { Text(exportNote).font(.caption).foregroundStyle(.secondary) }
                 } header: {
                     Text("守り")
                 } footer: {
-                    Text("Face ID をオンにすると、アプリが前に出るたびに確かめるまで記録を隠します（録音と文字起こしは続きます）。")
+                    Text("Face ID をオンにすると、アプリが前に出るたびに確かめるまで記録を隠します（録音と文字起こしは続きます）。書き出しは、その年の会話・人・タスクを Markdown（読む用）と JSON（プログラム用・中身の説明つき）にします。年が変わると前の年の分を自動で書き出します。")
                 }
 
                 Section("Google ドライブ") {
