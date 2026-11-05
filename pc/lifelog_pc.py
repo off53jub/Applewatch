@@ -332,6 +332,9 @@ WHISPER_JUNK = re.compile(
     r"お疲れ様でした|字幕.*|ありがとうございました)[。！!]*$")
 
 
+KOTOBA_REPO = "kotoba-tech/kotoba-whisper-v2.0-faster"
+
+
 class WhisperEngine:
     """faster-whisper で Whisper を動かす。登録した言葉をヒントとして渡せる（ほかの2つにはできない）。"""
 
@@ -341,13 +344,18 @@ class WhisperEngine:
         from faster_whisper import WhisperModel
 
         use_gpu = device == "cuda" or (device == "auto" and has_nvidia_gpu())
+        if self.name == "kotoba" and not use_gpu:
+            # 日本語で学び直した Whisper は4票目。CPU では遅すぎるので GPU のときだけ使う
+            raise RuntimeError("GPU が無いので使いません")
         if use_gpu:
             try:
                 prepare_cuda()
             except Exception as error:  # noqa: BLE001 — GPU が使えなければ CPU で続ける
                 log(f"GPU の部品を用意できませんでした。CPU で動かします: {error!r}")
                 use_gpu = False
-        if model == "auto":
+        if self.name == "kotoba":
+            model = KOTOBA_REPO
+        elif model == "auto":
             model = "large-v3" if use_gpu else "large-v3-turbo"
         log(f"Whisper（{model}）を読み込んでいます…（初回は 1.5〜3GB を取ってきます）")
         started = time.time()
@@ -366,7 +374,7 @@ class WhisperEngine:
             self.model = WhisperModel(model, device="cpu", compute_type="int8", cpu_threads=threads,
                                       download_root=str(WHISPER_DIR))
             self.provider = "cpu"
-        self.label = f"Whisper {model}"
+        self.label = "kotoba-whisper" if self.name == "kotoba" else f"Whisper {model}"
         self.lock = threading.Lock()
         log(f"Whisper を読み込みました（{time.time() - started:.1f} 秒、{self.provider}）")
 
@@ -399,6 +407,12 @@ class WhisperEngine:
                     kept.append(text)
                 texts.append("".join(kept))
         return texts
+
+
+class KotobaEngine(WhisperEngine):
+    """日本語の話し言葉で学び直した Whisper（kotoba-whisper v2.0、MIT）。GPU があるときの4票目。"""
+
+    name = "kotoba"
 
 
 # MARK: - 多数決
@@ -546,11 +560,11 @@ def rover(text: str, others: dict[str, str]) -> str:
 
 
 # 同じくらい合っているときに先に選ぶ順（日本語の話し言葉に強く、作り話をしにくいものから）
-PRIORITY = ["haas", "reazon", "whisper", "cloud"]
+PRIORITY = ["haas", "reazon", "whisper", "kotoba", "cloud"]
 # Whisper の書き方を使ってよい近さ（読みがほぼ同じなら、ヒントを渡した Whisper の漢字の書き方のほうが名前に強い）
 SURFACE_SIMILAR = 0.85
 # Whisper だけが書いた文は、ほかが何も聞き取っていなければ作り話とみなす
-INVENTING = {"whisper", "cloud"}
+INVENTING = {"whisper", "kotoba", "cloud"}
 
 
 def parse_weights(text: str | None) -> dict[str, float]:
@@ -574,6 +588,9 @@ def vote(hypotheses: dict[str, str], weights: dict[str, float] | None = None) ->
     names = sorted(hypotheses, key=lambda k: PRIORITY.index(k) if k in PRIORITY else len(PRIORITY))
     heard = [k for k in names if hypotheses[k].strip()]
     if not heard:
+        return None
+    # Whisper の仲間（Whisper・kotoba・クラウド）だけが書き、ほかのモデルが何も聞いていなければ作り話とみなす
+    if all(k in INVENTING for k in heard) and any(k not in INVENTING for k in names):
         return None
     if len(heard) == 1:
         only = heard[0]
@@ -668,6 +685,8 @@ def load_engines(names: list[str], threads: int, provider: str, whisper: str, de
                 engines.append(ReazonEngine(max(1, threads // 2), provider))
             elif name == "whisper" and whisper != "off":
                 engines.append(WhisperEngine(whisper, device, threads))
+            elif name == "kotoba" and whisper != "off":
+                engines.append(KotobaEngine(whisper, device, threads))
         except Exception as error:  # noqa: BLE001
             log(f"{name} を読み込めませんでした（このモデル抜きで続けます）: {error!r}")
     return Ensemble(engines)
@@ -974,6 +993,9 @@ def check_vote() -> None:
           "whisper": "明日の予算の件で田中さんと話した"}, "明日の予算の件で田中さんと話す", None),
         # 選んだ文の書き足し・書き落としも、ほかの2つがそろっていれば直す
         ({"haas": "来週の会議の資料", "reazon": "来週の会議の資料ね", "whisper": "来週の会議の資料ね"}, "来週の会議の資料ね", 0.8),
+        # Whisper の仲間だけが書いた文も同じ
+        ({"haas": "", "reazon": "", "whisper": "ご視聴ありがとうございました", "kotoba": "ご視聴ありがとうございました"},
+         None, None),
         # 1つだけ聞き取れた（Whisper 以外）は、確からしさを低くして残す
         ({"haas": "はい", "reazon": "", "whisper": ""}, "はい", None),
     ]
@@ -1019,8 +1041,8 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=max(1, min(8, (os.cpu_count() or 4) // 2)))
     parser.add_argument("--port", type=int, default=PORT, help=f"待ち受ける番号（既定 {PORT}）")
     parser.add_argument("--provider", default="cpu", help="Haas-ja・ReazonSpeech を動かす場所: cpu（既定）または cuda")
-    parser.add_argument("--engines", default="haas,reazon,whisper",
-                        help="使うモデル（haas,reazon,whisper のうち。既定は3つとも）")
+    parser.add_argument("--engines", default="haas,reazon,whisper,kotoba",
+                        help="使うモデル（haas,reazon,whisper,kotoba のうち。kotoba は GPU のときだけ動く）")
     parser.add_argument("--whisper", default="auto",
                         help="Whisper の大きさ: auto（GPU なら large-v3、無ければ large-v3-turbo）・large-v3・large-v3-turbo・small・off")
     parser.add_argument("--device", default="auto", help="Whisper を動かす場所: auto（既定）・cuda・cpu")
@@ -1045,7 +1067,8 @@ def main() -> None:
     if args.download:
         engine = factory()
         print(f"用意できたモデル: {engine.label}（{engine.provider}）")
-        if len(engine.engines) < len(names) - (1 if args.whisper == "off" else 0):
+        wanted = [n for n in names if n != "kotoba" and not (n == "whisper" and args.whisper == "off")]
+        if len(engine.engines) < len(wanted):
             sys.exit(1)
         return
     if args.test:

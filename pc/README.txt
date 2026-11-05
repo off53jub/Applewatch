@@ -48,6 +48,10 @@ NVIDIA の GPU があれば、Whisper は GPU で動きます（無ければ CPU
 ■ モデルを減らす・選ぶ
     LifeLogPC.exe --engines haas,reazon        Whisper を使わない
     LifeLogPC.exe --whisper large-v3-turbo     Whisper を軽いものにする（GPU のメモリが足りないときなど）
+    LifeLogPC.exe --engines haas,reazon,whisper  4票目の kotoba-whisper を使わない
+
+NVIDIA の GPU があると、日本語の話し言葉で学び直した kotoba-whisper（kotoba-tech/kotoba-whisper-v2.0-faster、MIT、約1.5GB）も
+4票目として動かします（GPU が無いときは遅すぎるので使いません）。
     LifeLogPC.exe --no-clean                   聞く前の音そろえ（80Hz より下を削る・小さい声を最大 +18dB 持ち上げる）をしない
     LifeLogPC.exe --no-hotwords                Haas-ja・ReazonSpeech に登録語を効かせない（前の速い聞き方に戻す）
 

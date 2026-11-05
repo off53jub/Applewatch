@@ -55,7 +55,8 @@ jobs:
           try:
               from huggingface_hub import HfApi
               for repo in ["oboroge0/Haas-ja-v1.0-onnx", "reazon-research/reazonspeech-k2-v2",
-                           "mobiuslabsgmbh/faster-whisper-large-v3-turbo", "Systran/faster-whisper-large-v3"]:
+                           "mobiuslabsgmbh/faster-whisper-large-v3-turbo", "Systran/faster-whisper-large-v3",
+                           "kotoba-tech/kotoba-whisper-v2.0-faster"]:
                   info = HfApi().model_info(repo, files_metadata=True)
                   print(f"::notice::{repo} の版 {info.sha}")
                   print("::notice::" + ", ".join(f"{s.rfilename} {(s.size or 0) // 1_000_000}MB" for s in (info.siblings or [])))
