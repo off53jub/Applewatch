@@ -611,6 +611,8 @@ class Ensemble:
 
     def transcribe(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str] | None = None,
                    prompt: str | None = None, votes: bool = False) -> list[dict]:
+        if CLEAN_AUDIO:
+            audio = clean_audio(audio, segments)
         jobs = {e.name: self.pool.submit(e.run, audio, segments, hints or [], prompt) for e in self.engines}
         results: dict[str, list[str]] = {}
         for name, job in jobs.items():
@@ -654,6 +656,39 @@ def load_engines(names: list[str], threads: int, provider: str, whisper: str, de
 
 
 # MARK: - 音声
+
+
+# 聞く前に音をそろえる（低いうなり・服のこすれを削り、小さい声を持ち上げる）
+CLEAN_AUDIO = True
+TARGET_RMS = 0.05  # おおよそ -26 dBFS
+MAX_GAIN = 8.0     # 持ち上げすぎて雑音まで大きくしない（+18 dB まで）
+
+
+def clean_audio(audio: np.ndarray, segments: list[tuple[float, float]]) -> np.ndarray:
+    """80Hz より下を削り、声の区間ごとに音量をそろえる。大きすぎる声は下げない。"""
+    if len(audio) == 0:
+        return audio
+    # 12.5ms の移動平均（80Hz より下の、ゆっくりした揺れ）を引く。numpy だけで速く動く
+    width = RATE // 80
+    if len(audio) > width:
+        kernel = np.ones(width, dtype=np.float32) / width
+        out = (audio - np.convolve(audio, kernel, mode="same")).astype(np.float32)
+    else:
+        out = audio.copy()
+    for start, end in segments:
+        a = max(0, int(start * RATE))
+        b = min(len(out), int(end * RATE))
+        if b - a < int(0.3 * RATE):
+            continue
+        piece = out[a:b]
+        rms = float(np.sqrt(np.mean(piece * piece))) if len(piece) else 0.0
+        if rms <= 1e-5 or rms >= TARGET_RMS:
+            continue
+        peak = float(np.max(np.abs(piece)))
+        gain = min(TARGET_RMS / rms, MAX_GAIN, 0.95 / peak if peak > 0 else MAX_GAIN)
+        if gain > 1.05:
+            out[a:b] = piece * np.float32(gain)
+    return out
 
 
 def load_audio(data: bytes) -> np.ndarray:
@@ -943,6 +978,8 @@ def main() -> None:
     parser.add_argument("--hints", default="", help="--test で Whisper に渡す言葉（、区切り）")
     parser.add_argument("--no-hotwords", action="store_true",
                         help="Haas-ja・ReazonSpeech に登録語を効かせない（前と同じ速い聞き方にする）")
+    parser.add_argument("--no-clean", action="store_true",
+                        help="聞く前に音をそろえない（低いうなりを削る・小さい声を持ち上げる処理をしない）")
     parser.add_argument("--download", action="store_true", help="モデルを取ってくるだけ")
     parser.add_argument("--check-vote", action="store_true", help="多数決の決まりを確かめる")
     parser.add_argument("--startup", action="store_true", help="Windows の起動時に自動で始める")
@@ -963,9 +1000,11 @@ def main() -> None:
     if args.check_vote:
         check_vote()
         return
+    global USE_HOTWORDS, CLEAN_AUDIO
     if args.no_hotwords:
-        global USE_HOTWORDS
         USE_HOTWORDS = False
+    if args.no_clean:
+        CLEAN_AUDIO = False
     names = [n.strip() for n in args.engines.split(",") if n.strip()]
 
     def factory() -> Ensemble:
