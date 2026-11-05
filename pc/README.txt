@@ -48,6 +48,10 @@ NVIDIA の GPU があれば、Whisper は GPU で動きます（無ければ CPU
 ■ モデルを減らす・選ぶ
     LifeLogPC.exe --engines haas,reazon        Whisper を使わない
     LifeLogPC.exe --whisper large-v3-turbo     Whisper を軽いものにする（GPU のメモリが足りないときなど）
+    LifeLogPC.exe --no-hotwords                Haas-ja・ReazonSpeech に登録語を効かせない（前の速い聞き方に戻す）
+
+iPhone から届いた「聞き取ってほしい言葉」（名前・言葉の登録・話題の言葉）は、Whisper のヒントに加えて、
+Haas-ja と ReazonSpeech にも「ホットワード」として効かせます（モデルが知っている文字だけでできた、2〜15文字の言葉を60個まで）。
     LifeLogPC.exe --device cpu                 GPU を使わない
 読み込めなかったモデルは飛ばして、残りで動きます（ログに理由が出ます）。
 

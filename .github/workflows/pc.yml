@@ -83,7 +83,7 @@ jobs:
 
       - name: Python のまま試す
         run: |
-          python pc/lifelog_pc.py --test sample.m4a > test.txt 2>&1 || { tail -c 3000 test.txt | tr '\n' '|' | sed 's/^/::error::/'; echo; exit 1; }
+          python pc/lifelog_pc.py --test sample.m4a --hints "今日、会議、東京" > test.txt 2>&1 || { tail -c 3000 test.txt | tr '\n' '|' | sed 's/^/::error::/'; echo; exit 1; }
           cat test.txt
           while IFS= read -r line; do echo "::notice::$line"; done < <(grep -v '^20' test.txt)
 
@@ -96,7 +96,7 @@ jobs:
 
       - name: exe で試す
         run: |
-          dist/LifeLogPC/LifeLogPC.exe --test sample.m4a > test-exe.txt 2>&1 || { tail -c 3000 test-exe.txt | tr '\n' '|' | sed 's/^/::error::/'; echo; exit 1; }
+          dist/LifeLogPC/LifeLogPC.exe --test sample.m4a --hints "今日、会議、東京" > test-exe.txt 2>&1 || { tail -c 3000 test-exe.txt | tr '\n' '|' | sed 's/^/::error::/'; echo; exit 1; }
           cat test-exe.txt
           while IFS= read -r line; do echo "::notice::exe: $line"; done < <(grep -v '^20' test-exe.txt)
 

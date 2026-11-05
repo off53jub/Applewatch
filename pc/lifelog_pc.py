@@ -161,6 +161,37 @@ def download_reazon() -> dict[str, Path]:
     return files
 
 
+# 登録語（ホットワード）の効かせ方。sherpa-onnx は modified_beam_search のときだけ効く。
+HOTWORD_SCORE = 1.5
+HOTWORD_LIMIT = 60
+USE_HOTWORDS = True
+
+
+def token_chars(tokens: Path) -> set[str]:
+    """tokens.txt にある1文字のトークン。sherpa-onnx は登録語を1文字ずつのトークンにするので、
+    ここに無い文字を含む登録語を渡すと、その回の登録語がまるごと捨てられる。"""
+    chars: set[str] = set()
+    for row in tokens.read_text(encoding="utf-8").splitlines():
+        token = row.rsplit(" ", 1)[0] if " " in row else row
+        if len(token) == 1 and not token.isspace():
+            chars.add(token)
+    return chars
+
+
+def hotword_string(hints: list[str], chars: set[str]) -> str:
+    """sherpa-onnx に渡す登録語（"/" 区切り）。どの文字もモデルが知っているもの・2〜15文字のものだけ。"""
+    words: list[str] = []
+    for hint in hints:
+        word = re.sub(r"\s+", "", unicodedata.normalize("NFKC", hint))
+        if not 2 <= len(word) <= 15 or "/" in word or ":" in word or word in words:
+            continue
+        if all(c in chars for c in word):
+            words.append(word)
+        if len(words) >= HOTWORD_LIMIT:
+            break
+    return "/".join(words)
+
+
 class Engine:
     """sherpa-onnx で Haas-ja を動かす。一度に1つずつ。"""
 
@@ -181,10 +212,14 @@ class Engine:
             num_threads=threads,
             sample_rate=RATE,
             feature_dim=128,
-            decoding_method="greedy_search",
+            decoding_method="modified_beam_search" if USE_HOTWORDS else "greedy_search",
+            max_active_paths=4,
+            hotwords_score=HOTWORD_SCORE,
+            modeling_unit="cjkchar",
             model_type="nemo_transducer",
             provider=provider,
         )
+        self.chars = token_chars(files["tokens"])
         self.lock = threading.Lock()
         self.provider = provider
         log(f"Haas-ja を読み込みました（{time.time() - started:.1f} 秒、{provider}、{threads} スレッド）")
@@ -193,6 +228,7 @@ class Engine:
             prompt: str | None) -> list[str]:
         """区間ごとの文（聞き取れなければ空）。"""
         texts = []
+        hotwords = hotword_string(hints, self.chars) if USE_HOTWORDS else ""
         with self.lock:
             for start, end in segments:
                 a = max(0, int(start * RATE))
@@ -200,7 +236,7 @@ class Engine:
                 if b - a < int(0.3 * RATE):
                     texts.append("")
                     continue
-                stream = self.recognizer.create_stream()
+                stream = self.recognizer.create_stream(hotwords=hotwords) if hotwords else self.recognizer.create_stream()
                 stream.accept_waveform(RATE, audio[a:b])
                 self.recognizer.decode_stream(stream)
                 texts.append(stream.result.text.strip())
@@ -234,9 +270,13 @@ class ReazonEngine(Engine):
             num_threads=threads,
             sample_rate=RATE,
             feature_dim=80,
-            decoding_method="greedy_search",
+            decoding_method="modified_beam_search" if USE_HOTWORDS else "greedy_search",
+            max_active_paths=4,
+            hotwords_score=HOTWORD_SCORE,
+            modeling_unit="cjkchar",
             provider=provider,
         )
+        self.chars = token_chars(files["tokens"])
         self.lock = threading.Lock()
         self.provider = provider
         log(f"ReazonSpeech を読み込みました（{time.time() - started:.1f} 秒、{provider}）")
@@ -734,6 +774,10 @@ def test(path: str, engine: Ensemble, segments: str | None, hints: list[str]) ->
     lines = engine.transcribe(audio, parse_segments(segments, duration), hints=hints, votes=True)
     took = time.time() - started
     print(f"使ったモデル: {engine.label}（{engine.provider}）")
+    for e in engine.engines:
+        if hasattr(e, "chars"):
+            print(f"    {e.label} の登録語: {hotword_string(hints, e.chars) or '（なし）'}"
+                  f"（知っている1文字のトークン {len(e.chars)} 個）")
     for line in lines:
         print(f"[{line['start']:.1f}-{line['end']:.1f}] {line['text']}"
               + (f"  （確からしさ {line['confidence']:.2f}）" if "confidence" in line else ""))
@@ -779,6 +823,8 @@ def main() -> None:
     parser.add_argument("--test", metavar="音声", help="音声を文字にして、モデルごとの文とかかった時間を表示する")
     parser.add_argument("--segments", help="--test で使う区間（例 0-3.5,4-9）")
     parser.add_argument("--hints", default="", help="--test で Whisper に渡す言葉（、区切り）")
+    parser.add_argument("--no-hotwords", action="store_true",
+                        help="Haas-ja・ReazonSpeech に登録語を効かせない（前と同じ速い聞き方にする）")
     parser.add_argument("--download", action="store_true", help="モデルを取ってくるだけ")
     parser.add_argument("--check-vote", action="store_true", help="多数決の決まりを確かめる")
     parser.add_argument("--startup", action="store_true", help="Windows の起動時に自動で始める")
@@ -799,6 +845,9 @@ def main() -> None:
     if args.check_vote:
         check_vote()
         return
+    if args.no_hotwords:
+        global USE_HOTWORDS
+        USE_HOTWORDS = False
     names = [n.strip() for n in args.engines.split(",") if n.strip()]
 
     def factory() -> Ensemble:
