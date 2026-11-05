@@ -926,4 +926,38 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(CloudLog.quotaText((used: 3 * 1_073_741_824, limit: 15 * 1_073_741_824)), "3.0GB / 15.0GB（20%）")
         XCTAssertEqual(CloudLog.quotaText((used: 1_073_741_824, limit: nil)), "1.0GB 使用")
     }
+
+    // MARK: - 通しテスト: 文字にした行 → 良いほうを選ぶ → 書き出し待ち → 記録の行（2026-11-06）
+
+    func testThroughMergerToRecord() throws {
+        let mergeFile = URL.applicationSupportDirectory.appendingPathComponent("merge.json")
+        let saved = try? Data(contentsOf: mergeFile)
+        try? FileManager.default.removeItem(at: mergeFile)
+        defer {
+            try? FileManager.default.removeItem(at: mergeFile)
+            if let saved { try? saved.write(to: mergeFile) }
+        }
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        func heard(_ text: String, at offset: TimeInterval, watch: Bool, weight: Double, audio: String) -> Merger.Heard {
+            let line = ConversationLog.Line(time: start.addingTimeInterval(offset), speaker: "自分", text: text,
+                                            audio: audio, offset: offset, speakerID: SpeakerLabeler.selfID, confidence: 0.9)
+            return Merger.Heard(line: line, end: start.addingTimeInterval(offset + 4), fromWatch: watch, weight: weight)
+        }
+        let merger = Merger()
+        // 同じ発言を iPhone と時計の両方で聞いた。時計のほうがよく聞き取れている
+        merger.add([heard("きょうはかいぎ", at: 1, watch: false, weight: 4, audio: "20270115-080000.m4a")])
+        merger.add([heard("今日は会議があります", at: 1, watch: true, weight: 10, audio: "20270115-080000-w.m4a"),
+                    heard("資料は3000円です", at: 6, watch: true, weight: 9, audio: "20270115-080000-w.m4a")])
+        _ = merger.release(before: start.addingTimeInterval(600))
+        let texts = merger.outbox.map(\.text)
+        XCTAssertTrue(texts.contains("今日は会議があります"), "よく聞き取れた時計の文を選ぶ: \(texts)")
+        XCTAssertFalse(texts.contains("きょうはかいぎ"), "同じ発言を二度書かない: \(texts)")
+        XCTAssertTrue(texts.contains("資料は3000円です"))
+        // 記録の行の形
+        let doc = ConversationLog.docLine(merger.outbox[0])
+        XCTAssertTrue(doc.contains("今日は会議があります"))
+        // 書き終えたら書き出し待ちから消える
+        merger.sent(merger.outbox.count)
+        XCTAssertTrue(merger.outbox.isEmpty)
+    }
 }
