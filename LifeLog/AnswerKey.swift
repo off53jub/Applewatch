@@ -62,6 +62,11 @@ final class AnswerKey {
     static let perWeek = 10
     /// 食い違った行から足す問いの数（モデルの重みを学ぶため）
     static let extraPerWeek = 3
+    /// 始めて2週のあいだは多めに足す（重みが早く効くように。2026-11-06）
+    static let extraFirstWeeks = 8
+
+    /// 足す問いの数。それまでに答え合わせをした週が2つより少なければ多め
+    static func extraCount(weeksSoFar: Int) -> Int { weeksSoFar < 2 ? extraFirstWeeks : extraPerWeek }
     /// 学んだ重み（"haas:1.10,reazon:0.80" の形）。家の PC に送る
     static let weightsKey = "homePCWeights"
     /// 重みを決めるのに要る、答えた食い違いの行の数
@@ -265,7 +270,8 @@ extension Pipeline {
             // 食い違った行（モデルごとの文が残っている行）から、重みを学ぶための問いを足す
             let taken = Set(picked.map(\.id))
             let split = candidates.filter { $0.votes != nil && !taken.contains($0.id) }
-            picked += AnswerKey.pick(split, count: AnswerKey.extraPerWeek, seed: week + "extra").map { s in
+            let weeksSoFar = Set(answerKey.samples.map(\.week)).count
+            picked += AnswerKey.pick(split, count: AnswerKey.extraCount(weeksSoFar: weeksSoFar), seed: week + "extra").map { s in
                 var copy = s
                 copy.extra = true
                 return copy

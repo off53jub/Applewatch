@@ -128,6 +128,20 @@ final class HomePC {
         try await transcribe(url, segments: HaasEngine.segments(from: local), hints: hints)
     }
 
+    /// 声の区間の長さに対する処理の時間（直近をならした値。1 より大きいと録音に追いつかない）。2026-11-06
+    var speed: Double? = UserDefaults.standard.object(forKey: "homePCSpeed") as? Double {
+        didSet { UserDefaults.standard.set(speed, forKey: "homePCSpeed") }
+    }
+    nonisolated static let tooSlow = 0.8
+
+    /// 送る言葉の数。遅いときは減らす（PC は登録語をホットワードにも使うので、減らすと速くなる）
+    nonisolated static func hintLimit(speed: Double?) -> Int {
+        guard let speed else { return 80 }
+        if speed > tooSlow { return 25 }
+        if speed > 0.6 { return 45 }
+        return 80
+    }
+
     /// hints は聞き取ってほしい言葉（PC の Whisper のヒントになる）、previous は前の区切りの終わりの文。
     func transcribe(_ url: URL, segments: [(start: TimeInterval, end: TimeInterval)],
                     hints: [String] = [], previous: String? = nil) async throws -> [Line] {
@@ -139,12 +153,14 @@ final class HomePC {
             let list = segments.map { String(format: "%.2f-%.2f", $0.start, $0.end) }.joined(separator: ",")
             var components = URLComponents(url: upload.url!, resolvingAgainstBaseURL: false)
             var items = [URLQueryItem(name: "segments", value: list)]
-            // 宛先の長さに収まるよう、言葉は先頭（具体的なもの）から 1,500 文字まで
+            // 宛先の長さに収まるよう、言葉は先頭（具体的なもの）から 1,500 文字まで。
+            // PC が録音に追いつかない（実時間の 0.8 倍より遅い）ときは、登録語を減らして軽くする（2026-11-06）
             var words: [String] = []
             var length = 0
+            let limit = Self.hintLimit(speed: speed)
             for word in hints where !word.isEmpty && !word.contains("\n") {
                 length += word.count + 1
-                if length > 1500 || words.count >= 80 { break }
+                if length > 1500 || words.count >= limit { break }
                 words.append(word)
             }
             if !words.isEmpty { items.append(URLQueryItem(name: "hints", value: words.joined(separator: "\n"))) }
@@ -173,8 +189,16 @@ final class HomePC {
             let reply = try JSONDecoder().decode(Reply.self, from: data)
             failedAt = nil
             engineCount = reply.engines?.count ?? 1
+            // 声の区間の長さに対して、処理に何倍かかったか（直近をならす）
+            let voiced = segments.reduce(0) { $0 + max(0, $1.end - $1.start) }
+            if voiced >= 5 {
+                let ratio = reply.seconds / voiced
+                speed = speed.map { $0 * 0.7 + ratio * 0.3 } ?? ratio
+            }
             lastResult = "最後に使った時刻: \(Date().formatted(date: .omitted, time: .shortened))（\(String(format: "%.1f", reply.seconds)) 秒"
-                + (engineCount > 1 ? "・\(engineCount) つのモデルの多数決）" : "）")
+                + (engineCount > 1 ? "・\(engineCount) つのモデルの多数決" : "")
+                + (speed.map { "・実時間の \(String(format: "%.2f", $0)) 倍" + ($0 > Self.tooSlow ? "（追いつかないので登録語を減らしています）" : "") } ?? "")
+                + "）"
             return reply.lines.map {
                 Line(offset: $0.start, end: $0.end, text: $0.text, confidence: $0.confidence,
                      alternatives: $0.alternatives ?? [], votes: $0.votes ?? [:])

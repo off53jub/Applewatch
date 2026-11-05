@@ -33,12 +33,39 @@ final class CarAudioLog {
         check()
     }
 
+    // MARK: - 自分で選ぶ車の機器（2026-11-06）
+
+    nonisolated private static let chosenKey = "carDevices"
+    nonisolated private static let seenKey = "seenBluetooth"
+
+    /// 「この機器は車」と選んだ Bluetooth の名前と、「車ではない」と選んだ名前
+    nonisolated static var chosen: [String: Bool] {
+        get { UserDefaults.standard.dictionary(forKey: chosenKey) as? [String: Bool] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: chosenKey) }
+    }
+
+    /// これまでにつないだ Bluetooth の機器の名前（選ぶ画面に出す。30個まで）
+    nonisolated static var seen: [String] { UserDefaults.standard.stringArray(forKey: seenKey) ?? [] }
+
+    private static func noteSeen(_ name: String) {
+        var list = seen.filter { $0 != name }
+        list.insert(name, at: 0)
+        UserDefaults.standard.set(Array(list.prefix(30)), forKey: seenKey)
+    }
+
+    /// その機器を車とみなすか。自分で選んだものはそれに従い、選んでいなければ名前で決める
+    nonisolated static func isCar(_ name: String, chosen: [String: Bool]) -> Bool {
+        chosen[name] ?? looksLikeCar(name)
+    }
+
     /// 今の音の出口が車かを見て、つながった・離れた時刻を記録する
     func check(now: Date = .now) {
-        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType)
-        let inCar = outputs.contains(.carAudio)
-            || (outputs.contains(.bluetoothHFP) || outputs.contains(.bluetoothA2DP))
-            && AVAudioSession.sharedInstance().currentRoute.outputs.contains { Self.looksLikeCar($0.portName) }
+        let route = AVAudioSession.sharedInstance().currentRoute.outputs
+        let outputs = route.map(\.portType)
+        let bluetooth = route.filter { [.bluetoothHFP, .bluetoothA2DP, .bluetoothLE].contains($0.portType) }
+        for port in bluetooth { Self.noteSeen(port.portName) }
+        let chosen = Self.chosen
+        let inCar = outputs.contains(.carAudio) || bluetooth.contains { Self.isCar($0.portName, chosen: chosen) }
         let open = periods.last.map { $0.end == nil } ?? false
         if inCar && !open {
             periods.append(Period(start: now))

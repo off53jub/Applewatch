@@ -234,8 +234,9 @@ final class WatchSender: NSObject, WCSessionDelegate {
 
     /// 時計の空き（バイト）。分からなければ nil
     static func freeSpace() -> Int64? {
-        (try? URL.documentsDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
-            .volumeAvailableCapacityForImportantUsage
+        // watchOS には「大事な用途の空き」が無いので、ふつうの空き
+        (try? URL.documentsDirectory.resourceValues(forKeys: [.volumeAvailableCapacityKey]))?
+            .volumeAvailableCapacity.map(Int64.init)
     }
 
     /// 「印」を iPhone に送る。つながっていなければ、つながったときに送る。

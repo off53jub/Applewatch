@@ -74,6 +74,18 @@ final class TaskBook {
         var urgent: Bool? = nil
         /// 期限を延ばした回数
         var postponed: Int? = nil
+        /// 期限の時刻（0時からの分。無ければ日付だけ。2026-11-06）
+        var dueTime: Int? = nil
+        /// 繰り返し（済みにしたら、次の回を作る。2026-11-06）
+        var repeats: Repeat? = nil
+        /// iPhone のリマインダーに送ったときの、その項目の id
+        var reminderID: String? = nil
+
+        /// 時刻まで入れた期限
+        var dueMoment: Date? {
+            guard let due else { return nil }
+            return dueTime.map { due.addingTimeInterval(TimeInterval($0 * 60)) } ?? due
+        }
 
         var kindOrDefault: Kind {
             if let kind { return kind }
@@ -82,6 +94,37 @@ final class TaskBook {
 
         /// 相手を待っているもの（人に頼んだもの・「待ち」にしたもの）
         var isWaiting: Bool { progress == .waiting || (kindOrDefault == .delegated && progress != .started) }
+    }
+
+    /// 繰り返し
+    enum Repeat: String, Codable, CaseIterable, Identifiable {
+        case daily, weekdays, weekly, monthly
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .daily: "毎日"
+            case .weekdays: "平日"
+            case .weekly: "毎週"
+            case .monthly: "毎月"
+            }
+        }
+
+        /// 次の回の期限の日（from はいまの期限の日か、無ければ今日）
+        func next(after from: Date, calendar: Calendar = .current) -> Date {
+            let day = calendar.startOfDay(for: from)
+            switch self {
+            case .daily:
+                return calendar.date(byAdding: .day, value: 1, to: day) ?? day
+            case .weekdays:
+                var next = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+                while calendar.isDateInWeekend(next) { next = calendar.date(byAdding: .day, value: 1, to: next) ?? next }
+                return next
+            case .weekly:
+                return calendar.date(byAdding: .day, value: 7, to: day) ?? day
+            case .monthly:
+                return calendar.date(byAdding: .month, value: 1, to: day) ?? day
+            }
+        }
     }
 
     enum Kind: String, Codable, CaseIterable, Identifiable {
@@ -281,10 +324,31 @@ final class TaskBook {
 
     func set(_ id: String, _ state: State) {
         guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        let wasDone = items[i].state == .done
         items[i].state = state
         items[i].doneAt = state == .done ? .now : nil
         items[i].updated = .now
+        // 繰り返しのものは、済みにしたら次の回を作る
+        if state == .done, !wasDone, let next = Self.nextRepeat(of: items[i]) { items.append(next) }
         save()
+    }
+
+    /// 繰り返しのものの、次の回（期限は次の日付・時刻は同じ・済みや延期は消す）
+    static func nextRepeat(of item: Item, now: Date = .now) -> Item? {
+        guard let rule = item.repeats else { return nil }
+        var next = item
+        next.id = UUID().uuidString
+        next.state = .open
+        next.doneAt = nil
+        next.postponed = nil
+        next.progress = nil
+        next.reminderID = nil
+        next.said = now
+        next.updated = now
+        // 前の期限が過ぎていたら、今日から数える
+        let base = max(item.due ?? now, Calendar.current.startOfDay(for: now))
+        next.due = rule.next(after: base)
+        return next
     }
 
     /// 期限を今日から days 日後に延ばす
@@ -382,6 +446,11 @@ extension Pipeline {
     private static let taskBookHashKey = "taskBookWritten"
 
     static var taskRemindOn: Bool { UserDefaults.standard.object(forKey: taskRemindKey) as? Bool ?? true }
+    /// 土日は知らせない（2026-11-06）
+    static let taskWeekendOffKey = "taskWeekendOff"
+    static var taskWeekendOff: Bool { UserDefaults.standard.bool(forKey: taskWeekendOffKey) }
+    /// タスクタブの数字を、期限切れ（今日までを含む）だけにする（2026-11-06。既定は確かめ待ちも足す）
+    static let taskBadgeLateOnlyKey = "taskBadgeLateOnly"
     static var taskMorning: Int { UserDefaults.standard.object(forKey: taskMorningKey) as? Int ?? 8 * 60 }
     static var taskEvening: Int { UserDefaults.standard.object(forKey: taskEveningKey) as? Int ?? 18 * 60 }
 
@@ -570,6 +639,7 @@ extension Pipeline {
         let now = Date.now
         for offset in 0..<7 {
             guard let day = cal.date(byAdding: .day, value: offset, to: cal.startOfDay(for: now)) else { continue }
+            if Self.taskWeekendOff, cal.isDateInWeekend(day) { continue }
             for (minutes, morning) in [(Self.taskMorning, true), (Self.taskEvening, false)] {
                 let at = day.addingTimeInterval(TimeInterval(minutes * 60))
                 guard at > now.addingTimeInterval(30) else { continue }
@@ -734,6 +804,8 @@ struct TaskBookView: View {
     @AppStorage("taskRemind") private var remindOn = true
     @AppStorage("taskMorning") private var morning = 8 * 60
     @AppStorage("taskEvening") private var evening = 18 * 60
+    @AppStorage("taskWeekendOff") private var weekendOff = false
+    @AppStorage("taskBadgeLateOnly") private var badgeLateOnly = false
 
     var body: some View {
         let book = pipeline.tasks
@@ -786,6 +858,7 @@ struct TaskBookView: View {
         .onChange(of: remindOn) { pipeline.tasksChanged() }
         .onChange(of: morning) { pipeline.tasksChanged() }
         .onChange(of: evening) { pipeline.tasksChanged() }
+        .onChange(of: weekendOff) { pipeline.tasksChanged() }
         .sheet(item: $editing) { item in
             NavigationStack {
                 TaskEditView(item: item) { saved in
@@ -813,7 +886,9 @@ struct TaskBookView: View {
                         if remindOn {
                             DatePicker("朝", selection: timeBinding($morning), displayedComponents: .hourAndMinute)
                             DatePicker("夕方", selection: timeBinding($evening), displayedComponents: .hourAndMinute)
+                            Toggle("土日は知らせない", isOn: $weekendOff)
                         }
+                        Toggle("タブの数字は期限切れだけ", isOn: $badgeLateOnly)
                     } footer: {
                         Text("まだ済んでいないものの数と、期限の近いもの、期限を過ぎた「人に頼んだこと」を知らせます。仕事中（職場にいた時間か平日の8〜19時）の会話と、時計の★を付けた会話から拾います。頼まれた瞬間に★を押すと、確実に入ります。ドライブの「頼まれごと帳」にも写します。")
                     }
@@ -1141,6 +1216,9 @@ struct TaskEditView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var hasDue = false
     @State private var due = Date.now
+    @State private var hasTime = false
+    @State private var time = Date.now
+    @State private var reminderNote: String?
 
     var body: some View {
         Form {
@@ -1162,10 +1240,35 @@ struct TaskEditView: View {
                 Toggle("期限がある", isOn: $hasDue)
                 if hasDue {
                     DatePicker("期限の日", selection: $due, displayedComponents: .date)
+                    Toggle("時刻もある", isOn: $hasTime)
+                    if hasTime {
+                        DatePicker("期限の時刻", selection: $time, displayedComponents: .hourAndMinute)
+                    }
+                }
+                Picker("繰り返し", selection: Binding(get: { item.repeats?.rawValue ?? "" },
+                                                 set: { item.repeats = TaskBook.Repeat(rawValue: $0) })) {
+                    Text("しない").tag("")
+                    ForEach(TaskBook.Repeat.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 if let dueText = item.dueText {
                     Text("聞いた言い方: \(dueText)").font(.caption).foregroundStyle(.secondary)
                 }
+            }
+            Section {
+                Button(item.reminderID == nil ? "iPhone のリマインダーに送る" : "リマインダーに送り直す") {
+                    applyDue()
+                    Task {
+                        do {
+                            item.reminderID = try await RemindersExport.send(item)
+                            reminderNote = "リマインダーに入れました。"
+                        } catch {
+                            reminderNote = "入れられませんでした: \(error.localizedDescription)"
+                        }
+                    }
+                }
+                if let reminderNote { Text(reminderNote).font(.caption).foregroundStyle(.secondary) }
+            } footer: {
+                Text("リマインダーでは、期限の時刻に知らせが来ます。場所で知らせるのは、リマインダーの側で設定してください。")
             }
             Section("メモ") {
                 TextField("自分用のメモ", text: Binding(get: { item.memo ?? "" },
@@ -1186,7 +1289,7 @@ struct TaskEditView: View {
             ToolbarItem(placement: .cancellationAction) { Button("キャンセル") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) {
                 Button("決める") {
-                    item.due = hasDue ? Calendar.current.startOfDay(for: due) : nil
+                    applyDue()
                     onSave(item)
                 }
                 .disabled(item.what.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -1195,6 +1298,19 @@ struct TaskEditView: View {
         .onAppear {
             hasDue = item.due != nil
             due = item.due ?? .now
+            hasTime = item.dueTime != nil
+            time = item.dueMoment ?? .now
+        }
+    }
+
+    /// 画面の期限（日と時刻）を項目に入れる
+    private func applyDue() {
+        item.due = hasDue ? Calendar.current.startOfDay(for: due) : nil
+        if hasDue && hasTime {
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: time)
+            item.dueTime = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        } else {
+            item.dueTime = nil
         }
     }
 }

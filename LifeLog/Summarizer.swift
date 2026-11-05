@@ -683,6 +683,8 @@ enum Summarizer {
 
     /// Groq の言語モデルに JSON で答えさせる。混んでいる（429）ときは指示どおり待って3回まで試す。
     private static func groq(model: String, apiKey: String, maxWait: Double, prompt: String) async throws -> [String: Any] {
+        // クラウドに送ったものの一覧に残す（中身は残さない）
+        CloudLog.add(service: "Groq（言語モデル）", what: "言語モデル（\(model)）", work: sensitive, size: prompt.count)
         var request = URLRequest(url: URL(string: "https://api.groq.com/openai/v1/chat/completions")!)
         request.httpMethod = "POST"
         request.timeoutInterval = 120

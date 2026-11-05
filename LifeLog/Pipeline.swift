@@ -350,6 +350,8 @@ final class Pipeline {
         sync.recordsChanged = { [weak self] in self?.recordsVersion += 1 }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         Power.start()
+        // アプリが落ちた・固まった記録を受け取る（MetricKit）
+        CrashWatch.shared.start()
         receiver.activate()
     }
 
@@ -1534,6 +1536,8 @@ final class Pipeline {
         await Provisioning.scheduleRemindersOnce()
         // 前の日の抜け・壊れた区切り・自信の低い行などを、朝の通知に1行で出す
         if UIDevice.current.userInterfaceIdiom != .pad { scheduleMorningCheck() }
+        // 毎月1日に、前の月にクラウドへ送った件数を知らせる
+        CloudLog.notifyMonthlyIfDue()
         _ = await writeDiagnostics()
         return true
     }

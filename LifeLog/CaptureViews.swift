@@ -173,3 +173,35 @@ enum UncertainMarks {
         return result
     }
 }
+
+/// 車の Bluetooth を自分で選ぶ画面（2026-11-06）。選んでいない機器は、名前で車かどうかを決める
+struct CarDevicesView: View {
+    @State private var chosen = CarAudioLog.chosen
+    private let seen = CarAudioLog.seen
+
+    var body: some View {
+        List {
+            Section {
+                if seen.isEmpty {
+                    Text("まだ Bluetooth の機器につないだことがありません。車につないでから開いてください。")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(seen, id: \.self) { name in
+                    Toggle(isOn: Binding(
+                        get: { CarAudioLog.isCar(name, chosen: chosen) },
+                        set: { chosen[name] = $0; CarAudioLog.chosen = chosen }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(name)
+                            Text(chosen[name] == nil ? "名前で決めています" : "自分で選びました")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } footer: {
+                Text("オンにした機器につないでいた時間は、乗り物を「車で」にします（CarPlay はいつも車）。これまでにつないだ機器が出ます。")
+            }
+        }
+        .navigationTitle("車の機器")
+    }
+}

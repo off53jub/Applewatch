@@ -776,4 +776,85 @@ final class LogicTests: XCTestCase {
         let marked = UncertainMarks.ranges(in: text).map { String(text[$0]) }
         XCTAssertEqual(marked, ["田中さん", "3000円", "15時"])
     }
+
+    // MARK: - タスクの繰り返し・時刻・PC の速さ・車の機器（2026-11-06）
+
+    func testRepeatNext() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let friday = cal.date(from: DateComponents(year: 2026, month: 11, day: 6))!
+        XCTAssertEqual(cal.component(.weekday, from: TaskBook.Repeat.weekdays.next(after: friday, calendar: cal)), 2) // 月曜
+        XCTAssertEqual(TaskBook.Repeat.weekly.next(after: friday, calendar: cal), cal.date(byAdding: .day, value: 7, to: friday))
+        XCTAssertEqual(cal.component(.month, from: TaskBook.Repeat.monthly.next(after: friday, calendar: cal)), 12)
+    }
+
+    func testNextRepeatMakesFreshItem() {
+        var item = TaskBook.Item(what: "週の報告", said: .now, source: .manual, state: .done, work: true)
+        XCTAssertNil(TaskBook.nextRepeat(of: item))
+        item.repeats = .weekly
+        item.postponed = 2
+        item.dueTime = 15 * 60
+        item.due = Calendar.current.startOfDay(for: .now)
+        let next = TaskBook.nextRepeat(of: item)
+        XCTAssertNotNil(next)
+        XCTAssertNotEqual(next?.id, item.id)
+        XCTAssertEqual(next?.state, .open)
+        XCTAssertNil(next?.postponed)
+        XCTAssertEqual(next?.dueTime, 15 * 60)
+        XCTAssertGreaterThan(next?.due ?? .distantPast, item.due ?? .distantFuture)
+    }
+
+    func testDueMoment() {
+        var item = TaskBook.Item(what: "提出", said: .now, source: .manual, state: .open, work: true)
+        let day = Calendar.current.startOfDay(for: .now)
+        item.due = day
+        XCTAssertEqual(item.dueMoment, day)
+        item.dueTime = 15 * 60
+        XCTAssertEqual(item.dueMoment, day.addingTimeInterval(15 * 3600))
+    }
+
+    func testOldTaskWithoutNewFieldsStillReads() throws {
+        let item = TaskBook.Item(what: "古い", said: Date(timeIntervalSince1970: 0), source: .manual, state: .open, work: true)
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as! [String: Any]
+        json["dueTime"] = nil
+        json["repeats"] = nil
+        json["reminderID"] = nil
+        let back = try JSONDecoder().decode(TaskBook.Item.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(back.repeats)
+        XCTAssertNil(back.dueTime)
+    }
+
+    func testHintLimitFollowsSpeed() {
+        XCTAssertEqual(HomePC.hintLimit(speed: nil), 80)
+        XCTAssertEqual(HomePC.hintLimit(speed: 0.3), 80)
+        XCTAssertEqual(HomePC.hintLimit(speed: 0.7), 45)
+        XCTAssertEqual(HomePC.hintLimit(speed: 1.9), 25)
+    }
+
+    func testExtraQuestionsEarly() {
+        XCTAssertEqual(AnswerKey.extraCount(weeksSoFar: 0), 8)
+        XCTAssertEqual(AnswerKey.extraCount(weeksSoFar: 1), 8)
+        XCTAssertEqual(AnswerKey.extraCount(weeksSoFar: 2), 3)
+    }
+
+    func testChosenCarDevice() {
+        XCTAssertTrue(CarAudioLog.isCar("TOYOTA Audio", chosen: [:]))
+        XCTAssertFalse(CarAudioLog.isCar("Pioneer DEH", chosen: [:]))
+        XCTAssertTrue(CarAudioLog.isCar("Pioneer DEH", chosen: ["Pioneer DEH": true]))
+        XCTAssertFalse(CarAudioLog.isCar("TOYOTA Audio", chosen: ["TOYOTA Audio": false]))
+    }
+
+    func testCloudLogCounts() {
+        let now = Date.now
+        let entries = [
+            CloudLog.Entry(at: now, service: "Groq（文字起こし）", what: "a", work: nil, size: 1),
+            CloudLog.Entry(at: now, service: "Groq（言語モデル）", what: "b", work: true, size: 1),
+            CloudLog.Entry(at: now, service: "Groq（言語モデル）", what: "c", work: false, size: 1),
+            CloudLog.Entry(at: now.addingTimeInterval(-62 * 24 * 3600), service: "OpenAI（文字起こし）", what: "d", work: nil, size: 1),
+        ]
+        let counts = CloudLog.counts(entries, month: now)
+        XCTAssertEqual(counts.count, 2)
+        XCTAssertEqual(counts.first { $0.service == "Groq（言語モデル）" }?.count, 2)
+        XCTAssertEqual(counts.first { $0.service == "Groq（言語モデル）" }?.work, 1)
+    }
 }

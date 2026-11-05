@@ -423,3 +423,45 @@ enum AudioCheck {
         return result
     }
 }
+
+// MARK: - Siri や時計から聞く（2026-11-06）
+
+/// アプリの外（Siri・ショートカット・時計の Siri）から聞かれたときに答える。LifeLogApp が起動時に入れる
+@MainActor
+enum Recall {
+    static var recent: (() -> String)?
+    static var lastTalk: ((String) -> String)?
+}
+
+extension Pipeline {
+    /// 「さっき何て言った？」: 直近10分（無ければ今日の最後）の3行
+    func recentWords(minutes: Double = 10) -> String {
+        let today = Self.dayKey.string(from: .now)
+        let lines = conversations(on: today).flatMap(\.lines).filter { $0.media == nil }
+        guard !lines.isEmpty else { return "今日の記録はまだありません。" }
+        let recent = lines.filter { Date.now.timeIntervalSince($0.time) <= minutes * 60 }
+        let picked = (recent.isEmpty ? lines : recent).suffix(3)
+        let head = recent.isEmpty ? "直近10分の記録はありません。今日の最後の発言です。" : ""
+        return head + picked.map { line in
+            line.time.formatted(date: .omitted, time: .shortened) + " " + (line.speaker.map { $0 + "「" } ?? "「") + line.text + "」"
+        }.joined(separator: "\n")
+    }
+
+    /// 「この人と前回何を話した？」: 名前が合う人と話した、いちばん新しい閉じた会話の見出しと要点
+    func lastTalk(with name: String) -> String {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return "誰との会話かを教えてください。" }
+        for day in recordedDays().prefix(90) {
+            let talks = conversations(on: day).filter { c in
+                c.media == nil && c.people.contains { Self.sameName($0, name) }
+            }
+            if let c = talks.max(by: { $0.start < $1.start }) {
+                let when = c.start.formatted(date: .abbreviated, time: .shortened)
+                let points = c.points.prefix(3).map { "・" + $0 }.joined(separator: "\n")
+                return "\(when)" + (c.place.map { "（\($0)）" } ?? "") + " の会話" + (c.title.map { "「\($0)」" } ?? "")
+                    + (points.isEmpty ? "。要点はまだありません。" : "\n" + points)
+            }
+        }
+        return "直近90日の記録に、\(name)さんとの会話は見つかりませんでした。"
+    }
+}

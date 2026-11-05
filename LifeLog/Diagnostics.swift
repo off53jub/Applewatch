@@ -102,6 +102,8 @@ extension Pipeline {
             add("端末", "署名の期限", "分からない（TestFlight など）")
         }
         add("端末", "機種・iOS", UIDevice.current.model + "・iOS " + UIDevice.current.systemVersion)
+        let crashes = CrashWatch.summary()
+        add("端末", "落ちた・固まった", crashes.text, crashes.ok)
         let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
         add("端末", "低電力モード", onOff(lowPower), !lowPower)
         let free = (try? URL.applicationSupportDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?

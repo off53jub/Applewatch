@@ -20,6 +20,9 @@ struct LifeLogApp: App {
         }
         // ロック画面・コントロールセンター・アクションボタンからの操作を受け取る
         LifeLogActions.handler = { action in await pipeline.handle(action) }
+        // Siri・ショートカットから記録を聞く（2026-11-06）
+        Recall.recent = { pipeline.recentWords() }
+        Recall.lastTalk = { pipeline.lastTalk(with: $0) }
         _pipeline = State(initialValue: pipeline)
     }
 
@@ -30,6 +33,8 @@ struct LifeLogApp: App {
             } else {
                 ContentView()
                     .environment(pipeline)
+                    // 開くときに Face ID（設定でオンにしたときだけ。録音と裏の処理は止めない）
+                    .modifier(AppLock())
                     .onOpenURL { GIDSignIn.sharedInstance.handle($0) }
                     .task {
                         if let action = LifeLogActions.pending {

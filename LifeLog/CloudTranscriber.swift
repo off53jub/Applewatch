@@ -94,6 +94,10 @@ enum CloudTranscriber {
             do {
                 let lines = try await send(url, provider: provider, model: model, apiKey: apiKey,
                                            keywords: keywords, previous: previous)
+                // クラウドに送ったものの一覧に残す（中身は残さない）
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                CloudLog.add(service: provider == .groq ? "Groq（文字起こし）" : "OpenAI（文字起こし）",
+                             what: url.lastPathComponent, work: nil, size: size)
                 return Transcript(model: model, lines: lines)
             } catch let limit as RateLimited {
                 limitedUntil[model] = .now.addingTimeInterval(limit.retryAfter)

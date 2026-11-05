@@ -3,6 +3,7 @@ import SwiftUI
 /// 画面の下の5つのタブ。録っている間に触るものは「今日」、やることは「タスク」。ふだん触らない設定は「今日」の右上の歯車から開く。
 struct ContentView: View {
     @Environment(Pipeline.self) private var pipeline
+    @AppStorage("taskBadgeLateOnly") private var badgeLateOnly = false
 
     /// 今日までのもの・過ぎたもの（待っているものは除く）
     private var lateTasks: Int {
@@ -14,7 +15,7 @@ struct ContentView: View {
         TabView {
             Tab("今日", systemImage: "waveform") { TodayView() }
             Tab("タスク", systemImage: "checklist") { TasksTab() }
-                .badge(pipeline.tasks.candidates.count + lateTasks)
+                .badge((badgeLateOnly ? 0 : pipeline.tasks.candidates.count) + lateTasks)
             Tab("ライブ", systemImage: "captions.bubble") { LiveView() }
             Tab("記録", systemImage: "books.vertical") { RecordsView() }
             Tab("人と場所", systemImage: "person.2") { PeoplePlacesView() }
@@ -65,6 +66,8 @@ private struct TodayView: View {
                 } footer: {
                     Text("時計で録音中は、時計の「★ 印」ボタン（またはダブルタップ）でも印を付けられます。会議モードは時計の「会議」ボタンでも始められます（予定の参加者と題名を聞き取りのヒントにし、時計の音質を上げ、終わったらすぐ議事録にします）。")
                 }
+
+                confirmBox()
 
                 Section("いまの様子") {
                     if Provisioning.isNear(), let expiry = Provisioning.expiryText() {
@@ -162,6 +165,38 @@ private struct TodayView: View {
             }
             .task(id: pipeline.people.flatMap(\.samples)) {
                 reviewCount = pipeline.voiceReview().count
+            }
+        }
+    }
+
+    /// 確認箱（2026-11-06）: 確かめ待ちの数を1か所に。中身はこの下の、大事な順に並べた各欄から開く
+    @ViewBuilder
+    private func confirmBox() -> some View {
+        let week = AnswerKey.weekKey(.now)
+        let samples = pipeline.answerKey.samples(of: week)
+        let answers = samples.isEmpty ? AnswerKey.perWeek : samples.filter { !$0.isAnswered }.count
+        let parts: [(String, Int)] = [
+            ("タスクの候補", pipeline.tasks.candidates.count),
+            ("AI からの質問", pipeline.asks.open.count),
+            ("名前を付ける候補の声", pipeline.newVoices.open.count),
+            ("見直したい声", reviewCount),
+            ("聞き間違いかも", pipeline.misheardCount),
+            ("今週の答え合わせ", answers),
+        ]
+        let total = parts.reduce(0) { $0 + $1.1 }
+        if total > 0 {
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("確かめ待ち 合計 \(total)", systemImage: "tray.full")
+                        .font(.headline)
+                    Text(parts.filter { $0.1 > 0 }.map { "\($0.0) \($0.1)" }.joined(separator: "・"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("確認箱")
+            } footer: {
+                Text("大事な順に、タスクの候補 → AI からの質問 → 声 → 聞き間違い → 答え合わせ。1日5分で、上から片付けてください。それぞれ、この下の欄から開けます。")
             }
         }
     }
@@ -366,12 +401,31 @@ private struct RecordsView: View {
     @State private var days: [String] = []
     @State private var query = ""
     @State private var hits: [Pipeline.Hit] = []
+    @State private var showSettings = false
 
     var body: some View {
         NavigationStack {
             List {
                 if query.count >= 2 {
-                    if hits.isEmpty {
+                    // タスクも探す（2026-11-06）
+                    let tasks = pipeline.tasks.items.filter { item in
+                        item.what.localizedCaseInsensitiveContains(query)
+                            || (item.quote ?? "").localizedCaseInsensitiveContains(query)
+                            || (item.from ?? "").localizedCaseInsensitiveContains(query)
+                    }
+                    if !tasks.isEmpty {
+                        Section("タスク") {
+                            ForEach(tasks.prefix(10)) { item in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.what)
+                                    Text([item.from, item.due.map { Pipeline.taskDueText($0) }, item.state == .done ? "済み" : nil]
+                                        .compactMap { $0 }.joined(separator: "・"))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    if hits.isEmpty && tasks.isEmpty {
                         ContentUnavailableView.search(text: query)
                     } else {
                         ForEach(hits) { HitRow(hit: $0) }
@@ -412,6 +466,13 @@ private struct RecordsView: View {
             .searchable(text: $query, prompt: "言葉や名前で探す")
             .onChange(of: query) { hits = query.count >= 2 ? pipeline.search(query) : [] }
             .navigationTitle("記録")
+            // 設定は「記録」からも開ける（2026-11-06）
+            .toolbar {
+                Button("設定", systemImage: "gearshape") { showSettings = true }
+            }
+            .sheet(isPresented: $showSettings) {
+                SettingsView { showSettings = false }
+            }
             .onAppear { days = pipeline.recordedDays() }
             .refreshable { days = pipeline.recordedDays() }
         }
@@ -496,6 +557,8 @@ private struct SettingsView: View {
     init(onClose: (() -> Void)? = nil) {
         self.onClose = onClose
     }
+    @AppStorage(AppLock.key) private var appLock = false
+    @AppStorage("morningCheck") private var morningCheck = true
     /// LocalModel.modeKey と同じ名前
     @AppStorage("localModelMode") private var localModelMode = LocalModel.Mode.fallback.rawValue
     @AppStorage(Pipeline.autoAsideKey) private var autoAside = true
@@ -504,6 +567,18 @@ private struct SettingsView: View {
         @Bindable var settings = pipeline.settings
         NavigationStack {
             List {
+                // 守り（2026-11-06）
+                Section {
+                    Toggle("開くときに Face ID", isOn: $appLock)
+                    Toggle("毎朝、前の日の点検を知らせる", isOn: $morningCheck)
+                    NavigationLink("クラウドに送ったもの") { CloudLogView() }
+                    NavigationLink("録音の抜けと数の照合") { RecordingMapView() }
+                } header: {
+                    Text("守り")
+                } footer: {
+                    Text("Face ID をオンにすると、アプリが前に出るたびに確かめるまで記録を隠します（録音と文字起こしは続きます）。")
+                }
+
                 Section("Google ドライブ") {
                     if let email = pipeline.email {
                         LabeledContent("ログイン中", value: email)
@@ -641,6 +716,7 @@ private struct SettingsView: View {
                         LabeledContent("ドライブに上げる前", value: "\(pipeline.backupPending) 件")
                     }
                     NavigationLink("周りの声と雑音") { NoiseSettingsView() }
+                    NavigationLink("車の Bluetooth の機器") { CarDevicesView() }
                     NavigationLink("夜の聞き直し") { NightlyView() }
                     NavigationLink("ほかのアプリの音声を取り込む") { ImportView() }
                 } header: {

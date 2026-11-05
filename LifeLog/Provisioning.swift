@@ -58,15 +58,16 @@ enum Provisioning {
 
     @MainActor private static var scheduled = false
 
-    /// 期限の1日前と3時間前の知らせを iOS に頼む（起動ごとに1回。過ぎた時刻は頼まない）
+    /// 期限の30日前・7日前・1日前・3時間前の知らせを iOS に頼む（起動ごとに1回。過ぎた時刻は頼まない）。
+    /// 30日前と7日前は、1年の署名（有料の個人チーム）のため（2026-11-06）
     @MainActor static func scheduleRemindersOnce() async {
         guard !scheduled else { return }
         scheduled = true
         let center = UNUserNotificationCenter.current()
-        let ids = ["signExpiry-24h", "signExpiry-3h"]
+        let ids = ["signExpiry-30d", "signExpiry-7d", "signExpiry-24h", "signExpiry-3h"]
         center.removePendingNotificationRequests(withIdentifiers: ids)
         guard let expiry else { return }
-        for (id, hours) in zip(ids, [24.0, 3.0]) {
+        for (id, hours) in zip(ids, [30 * 24.0, 7 * 24.0, 24.0, 3.0]) {
             let at = expiry.addingTimeInterval(-hours * 3600)
             guard at.timeIntervalSinceNow > 60 else { continue }
             let content = UNMutableNotificationContent()
