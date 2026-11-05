@@ -76,6 +76,8 @@ struct NewVoiceBox: Codable {
         let claimed: String?
         let quote: String
         var dismissed: Bool?
+        /// 名前のある人の声が、ふだん話さない場所で聞こえた（取り違えかも）なら、その場所（2026-11-06）
+        var unusualPlace: String? = nil
     }
 
     var notes: [Note] = []
@@ -218,10 +220,36 @@ extension Pipeline {
                 changed = true
             }
         }
+        // 名前のある人の声が、ふだん話さない場所で少しだけ聞こえた（取り違えかも）
+        let index = placeIndex()
+        let named = Dictionary(uniqueKeysWithValues: people.filter { $0.isNamed && !$0.isSelf }.map { ($0.id, $0.displayName) })
+        for day in days {
+            for c in conversations(on: day) where c.closed && c.media == nil {
+                guard let place = c.place else { continue }
+                for (id, lines) in Dictionary(grouping: c.lines.filter { $0.speakerID != nil }, by: { $0.speakerID ?? "" }) {
+                    guard named[id] != nil, let history = index.byPerson[id] else { continue }
+                    let noteID = "odd-\(id)-\(Int(c.start.timeIntervalSince1970))"
+                    guard !known.contains(noteID),
+                          Self.looksMisheardPlace(history: history.map { (WordStats.placeKey($0.place), $0.count) },
+                                                  place: WordStats.placeKey(place), lines: lines.count),
+                          let first = lines.first else { continue }
+                    box.notes.append(.init(id: noteID, time: first.time, personID: id, claimed: nil, quote: first.text,
+                                           unusualPlace: place))
+                    changed = true
+                }
+            }
+        }
         if changed {
             box.save()
             newVoices = box
         }
+    }
+
+    /// ふだん話さない場所での、少しだけの声か。その人と10回以上の会話があり、この場所はこの1回だけで、行が3つ以下
+    nonisolated static func looksMisheardPlace(history: [(place: String, count: Int)], place: String, lines: Int) -> Bool {
+        let total = history.reduce(0) { $0 + $1.count }
+        let here = history.filter { $0.place == place }.reduce(0) { $0 + $1.count }
+        return total >= 10 && here <= 1 && lines <= 3
     }
 
     func dismissNewVoice(_ id: String) {

@@ -16,6 +16,33 @@ enum Storage {
         return f
     }()
 
+    /// 別の時間帯で付けた区切りの名前（頭15文字が時刻）を、この端末の時間帯の名前に直す。
+    /// 同じ時間帯か、読めない名前ならそのまま（2026-11-06）
+    static func convertedName(_ name: String, from zone: TimeZone?) -> String {
+        guard let zone, zone.secondsFromGMT() != TimeZone.current.secondsFromGMT() else { return name }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = zone
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        let head = String(name.prefix(15))
+        guard let date = f.date(from: head) else { return name }
+        return nameFormatter.string(from: date) + String(name.dropFirst(15))
+    }
+
+    /// 日付と時刻を日本時間で扱う（海外にいるとき。アプリを開き直すと変わる）
+    static let japanTimeKey = "japanTime"
+
+    /// アプリの起動のいちばん初めに呼ぶ。日本時間にする設定なら、アプリの中の時間帯を日本にする
+    static func applyTimeZoneSetting() {
+        japanTimeApplied = UserDefaults.standard.bool(forKey: japanTimeKey)
+        if japanTimeApplied, let tokyo = TimeZone(identifier: "Asia/Tokyo") {
+            NSTimeZone.default = tokyo
+        }
+    }
+
+    /// 起動したときに日本時間にしたか（設定を変えたら、開き直すまで変わらない）
+    nonisolated(unsafe) static var japanTimeApplied = false
+
     static func chunkName(for date: Date) -> String {
         nameFormatter.string(from: date) + ".m4a"
     }

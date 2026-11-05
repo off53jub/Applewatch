@@ -611,3 +611,43 @@ enum AnswerClips {
         try? await session.export(to: dest, as: .m4a)
     }
 }
+
+// MARK: - 答え合わせからしきい値を合わせる（2026-11-06）
+
+extension AnswerKey {
+    /// 答えた問いから、「確かめたほうがよい行」の線（確からしさがこれより低い行）を決める。
+    /// 文字が1割より違っていた行を、その線でどれだけ当てられるか（F1）が最もよい線を 0.30〜0.70 から選ぶ。
+    /// 文字を答えた問いが30より少なければ決めない（nil）。
+    nonisolated static func bestUncertainLine(_ samples: [Sample]) -> Double? {
+        let judged = samples.compactMap { s -> (confidence: Double, wrong: Bool)? in
+            guard s.isAnswered, s.skipped != true, let right = s.rightText, let confidence = s.confidence else { return nil }
+            let r = normalized(right), t = normalized(s.text)
+            return (confidence, Double(editDistance(t, r)) > Double(max(r.count, 1)) * 0.1)
+        }
+        guard judged.count >= 30, judged.contains(where: \.wrong) else { return nil }
+        var best: (line: Double, f1: Double)?
+        for step in 6...14 {
+            let line = Double(step) * 0.05
+            let flagged = judged.filter { $0.confidence < line }
+            let hit = flagged.filter(\.wrong).count
+            let wrong = judged.filter(\.wrong).count
+            guard !flagged.isEmpty, hit > 0 else { continue }
+            let precision = Double(hit) / Double(flagged.count), recall = Double(hit) / Double(wrong)
+            let f1 = 2 * precision * recall / (precision + recall)
+            if f1 > (best?.f1 ?? 0) + 0.001 { best = (line, f1) }
+        }
+        return best?.line
+    }
+}
+
+extension Pipeline {
+    /// 答え合わせがたまったら、「確かめたほうがよい行」の線を当たる値に寄せる（本人の希望でお任せ。2026-11-06）。
+    /// 一度に動かすのは 0.05 まで（急に変わらないように）。
+    func tuneFromAnswers() {
+        guard let best = AnswerKey.bestUncertainLine(answerKey.samples) else { return }
+        let now = ConversationLog.Line.uncertainBelow
+        let next = now + max(-0.05, min(0.05, best - now))
+        guard abs(next - now) >= 0.01 else { return }
+        UserDefaults.standard.set((next * 100).rounded() / 100, forKey: "uncertainBelow")
+    }
+}

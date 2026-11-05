@@ -20,6 +20,8 @@ final class WordStats {
         var dayList: [String] = []
         /// ここまでに閉じた会話は数えた（会話の始まりの時刻）
         var countedUntil: Date = .distantPast
+        /// 場所ごと・言葉ごとの、その場所の会話のうち出てきた数（2026-11-06。前のファイルには無い）
+        var byPlace: [String: [String: Int]]? = nil
     }
 
     private static let url = URL.applicationSupportDirectory.appendingPathComponent("wordstats.json")
@@ -76,6 +78,12 @@ final class WordStats {
         for person in people {
             for word in words { store.byPerson[person, default: [:]][word, default: 0] += 1 }
         }
+        // 場所ごとの言葉（「たぶん〇〇」も〇〇として数える）
+        if let place = c.place.map(Self.placeKey), !place.isEmpty {
+            var byPlace = store.byPlace ?? [:]
+            for word in words { byPlace[place, default: [:]][word, default: 0] += 1 }
+            store.byPlace = byPlace
+        }
         // 手で直した行の、直したところ
         for line in c.lines where line.checked == true {
             guard let original = line.original,
@@ -96,6 +104,27 @@ final class WordStats {
         for (person, words) in store.byPerson where words.count > 800 {
             store.byPerson[person] = words.filter { $0.value > 1 }
         }
+        for (place, words) in store.byPlace ?? [:] where words.count > 800 {
+            store.byPlace?[place] = words.filter { $0.value > 1 }
+        }
+    }
+
+    // MARK: - 場所ごとの言葉（2026-11-06）
+
+    static func placeKey(_ place: String) -> String {
+        place.hasPrefix("たぶん") ? String(place.dropFirst(3)) : place
+    }
+
+    /// その場所でよく出て、ほかではあまり出ない言葉（多い順に limit 個まで）。その場所にいるあいだの聞き取りのヒントにする
+    func hints(forPlace place: String, limit: Int = 8) -> [String] {
+        guard let words = store.byPlace?[Self.placeKey(place)] else { return [] }
+        let scored = words.compactMap { word, n -> (String, Double)? in
+            let all = store.total[word] ?? n
+            let share = Double(n) / Double(max(all, 1))
+            guard n >= 3, share >= 0.4 else { return nil }
+            return (word, Double(n) * share)
+        }
+        return scored.sorted { $0.1 > $1.1 }.prefix(limit).map(\.0)
     }
 
     // MARK: - 人ごとの言葉

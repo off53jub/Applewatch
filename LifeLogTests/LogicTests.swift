@@ -857,4 +857,73 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(counts.first { $0.service == "Groq（言語モデル）" }?.count, 2)
         XCTAssertEqual(counts.first { $0.service == "Groq（言語モデル）" }?.work, 1)
     }
+
+    // MARK: - 時間帯・場所・取り違え・しきい値・費用（2026-11-06）
+
+    func testConvertedNameAcrossTimeZones() {
+        let honolulu = TimeZone(identifier: "Pacific/Honolulu")!
+        let converted = Storage.convertedName("20261106-080000.m4a", from: honolulu)
+        // ホノルルの 8:00 は、この端末の時間帯の同じ瞬間になる
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        f.timeZone = honolulu
+        let moment = f.date(from: "20261106-080000")!
+        XCTAssertEqual(Storage.startDate(of: URL(fileURLWithPath: "/tmp/" + converted)), moment)
+        XCTAssertTrue(converted.hasSuffix(".m4a"))
+        // 同じ時間帯・時間帯が分からないときはそのまま
+        XCTAssertEqual(Storage.convertedName("20261106-080000.m4a", from: nil), "20261106-080000.m4a")
+        XCTAssertEqual(Storage.convertedName("20261106-080000.m4a", from: TimeZone.current), "20261106-080000.m4a")
+    }
+
+    func testUnsurePlace() {
+        XCTAssertFalse(PlaceLog.isUnsure(accuracy: 30, age: 60))
+        XCTAssertTrue(PlaceLog.isUnsure(accuracy: 400, age: 60))
+        XCTAssertTrue(PlaceLog.isUnsure(accuracy: 30, age: 3600))
+        XCTAssertEqual(WordStats.placeKey("たぶん渋谷駅近く"), "渋谷駅近く")
+    }
+
+    func testMisheardPlace() {
+        let history = [(place: "職場", count: 14), (place: "家", count: 1)]
+        XCTAssertTrue(Pipeline.looksMisheardPlace(history: history, place: "家", lines: 2))
+        XCTAssertFalse(Pipeline.looksMisheardPlace(history: history, place: "職場", lines: 2))
+        XCTAssertFalse(Pipeline.looksMisheardPlace(history: history, place: "家", lines: 8))
+        XCTAssertFalse(Pipeline.looksMisheardPlace(history: [(place: "家", count: 1)], place: "家", lines: 1))
+    }
+
+    func testBestUncertainLine() {
+        func sample(_ i: Int, confidence: Double, wrong: Bool) -> AnswerKey.Sample {
+            var s = AnswerKey.Sample(id: "\(i)", week: "w", day: "d", time: .now, text: "今日は会議があります",
+                                     speaker: nil, speakerID: nil, place: nil, title: nil, audio: "a", offset: 0,
+                                     confidence: confidence, noisy: nil)
+            s.rightText = wrong ? "今日は飲み会があります" : s.text
+            s.answered = .now
+            return s
+        }
+        // 0.5 より低い行はだいたい間違い、高い行は合っている
+        var samples: [AnswerKey.Sample] = []
+        for i in 0..<20 { samples.append(sample(i, confidence: 0.3 + Double(i % 4) * 0.04, wrong: true)) }
+        for i in 20..<40 { samples.append(sample(i, confidence: 0.6 + Double(i % 4) * 0.08, wrong: false)) }
+        let line = AnswerKey.bestUncertainLine(samples)
+        XCTAssertNotNil(line)
+        XCTAssertGreaterThanOrEqual(line ?? 0, 0.45)
+        XCTAssertLessThanOrEqual(line ?? 1, 0.6)
+        // 30問より少なければ決めない
+        XCTAssertNil(AnswerKey.bestUncertainLine(Array(samples.prefix(20))))
+    }
+
+    func testLiveNoiseFloor() {
+        let quiet = [Float](repeating: 0.001, count: 16_000)
+        let loud = [Float](repeating: 0.1, count: 16_000)
+        XCTAssertLessThan(LiveTranscriber.noiseFloor(quiet), -40)
+        XCTAssertGreaterThan(LiveTranscriber.noiseFloor(loud), -40)
+    }
+
+    func testCostAndQuotaText() {
+        // 32kbps で1分 = 240,000 バイト → 0.006 ドル
+        let entries = [CloudLog.Entry(at: .now, service: "OpenAI（文字起こし）", what: "a", work: nil, size: 240_000)]
+        XCTAssertEqual(CloudLog.openAICost(entries), 0.006, accuracy: 0.0001)
+        XCTAssertEqual(CloudLog.quotaText((used: 3 * 1_073_741_824, limit: 15 * 1_073_741_824)), "3.0GB / 15.0GB（20%）")
+        XCTAssertEqual(CloudLog.quotaText((used: 1_073_741_824, limit: nil)), "1.0GB 使用")
+    }
 }

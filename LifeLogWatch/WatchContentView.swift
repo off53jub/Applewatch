@@ -43,6 +43,22 @@ struct WatchContentView: View {
                         .tint(recorder.meetingOn ? .orange : nil)
                     }
                 }
+                // さっき何て言った？（iPhone の記録の直近の3行。2026-11-06）
+                Button {
+                    recorder.askRecent()
+                } label: {
+                    if recorder.asking {
+                        ProgressView()
+                    } else {
+                        Label("さっき何て言った？", systemImage: "text.bubble").font(.caption2)
+                    }
+                }
+                if let answer = recorder.recentAnswer {
+                    Text(answer)
+                        .font(.caption2)
+                        .multilineTextAlignment(.leading)
+                        .onTapGesture { recorder.clearAnswer() }
+                }
                 if !recorder.message.isEmpty {
                     Text(recorder.message)
                         .font(.footnote)

@@ -134,8 +134,12 @@ struct NewVoicesSection: View {
                         PersonView(id: note.personID)
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(note.claimed.map { "人物\(note.personID) が「\($0)」と名乗りました" }
-                                 ?? "初めての人の印のころに話した 人物\(note.personID)")
+                            if let place = note.unusualPlace {
+                                Text("\(pipeline.people.first { $0.id == note.personID }?.displayName ?? "人物\(note.personID)") の声が、ふだん話さない「\(place)」で聞こえました。合っていますか？")
+                            } else {
+                                Text(note.claimed.map { "人物\(note.personID) が「\($0)」と名乗りました" }
+                                     ?? "初めての人の印のころに話した 人物\(note.personID)")
+                            }
                             Text("\(note.time.formatted(date: .abbreviated, time: .shortened))「\(note.quote.prefix(40))」")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
@@ -145,9 +149,9 @@ struct NewVoicesSection: View {
                     }
                 }
             } header: {
-                Text("名前を付ける候補の声")
+                Text("名前を付ける・確かめる声")
             } footer: {
-                Text("押すと、その声を聞いて名前を付けられます。名前は自動では付けません。違うものは左へ払って消せます。名前を付ける人には、声を覚えることの了承をもらってください。")
+                Text("押すと、その声を聞いて名前を付けたり直したりできます。名前は自動では付けも変えもしません。違うもの・合っているものは左へ払って消せます。名前を付ける人には、声を覚えることの了承をもらってください。")
             }
         }
     }
@@ -203,5 +207,60 @@ struct CarDevicesView: View {
             }
         }
         .navigationTitle("車の機器")
+    }
+}
+
+/// 確認箱（2026-11-06）: 確かめ待ちを1つの画面に、大事な順に並べる。1日5分で終わるよう、上から片付ける
+struct ConfirmBoxView: View {
+    @Environment(Pipeline.self) private var pipeline
+    @State private var reviewCount = 0
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    var body: some View {
+        let day = Self.dayFormatter.string(from: .now)
+        let week = AnswerKey.weekKey(.now)
+        let samples = pipeline.answerKey.samples(of: week)
+        let answers = samples.isEmpty ? AnswerKey.perWeek : samples.filter { !$0.isAnswered }.count
+        List {
+            Section {
+                Text("上から順に片付けると、1日5分ほどで終わります。終わったものは消えます。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if !pipeline.tasks.candidates.isEmpty {
+                Section("1. タスクの候補（\(pipeline.tasks.candidates.count)）") {
+                    NavigationLink("頼まれごと帳で入れる・捨てる") { TaskBookView() }
+                }
+            }
+            if !pipeline.asks.open.isEmpty {
+                Section("2. AI からの質問（\(pipeline.asks.open.count)）") {
+                    NavigationLink("答える") { QuestionsView() }
+                }
+            }
+            NewVoicesSection()
+            if reviewCount > 0 {
+                Section("4. 見直したい声（\(reviewCount)）") {
+                    NavigationLink("声を聞いて直す") { VoiceReviewView() }
+                    NavigationLink("今日の人物Nを整理") { UnnamedVoicesView(day: day) }
+                }
+            }
+            if pipeline.misheardCount > 0 {
+                Section("5. 聞き間違いかも（\(pipeline.misheardCount)）") {
+                    NavigationLink("直す・そのまま") { MisheardView() }
+                }
+            }
+            if answers > 0 {
+                Section("6. 今週の答え合わせ（あと \(answers) 問）") {
+                    NavigationLink("答える（5分ほど）") { AnswerKeyView() }
+                }
+            }
+        }
+        .navigationTitle("確認箱")
+        .onAppear { reviewCount = pipeline.voiceReview().count }
     }
 }

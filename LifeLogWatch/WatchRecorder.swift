@@ -20,6 +20,23 @@ final class WatchRecorder: NSObject {
     private(set) var link = ""
     /// 時計が低電力モードか（送るのを15分ごとにまとめる）
     private(set) var lowPower = false
+    /// 「さっき何て言った？」の答え（iPhone の記録の直近の行）
+    private(set) var recentAnswer: String?
+    private(set) var asking = false
+
+    /// iPhone に直近の記録を聞く
+    func askRecent() {
+        asking = true
+        sender.askRecent { [weak self] answer in
+            Task { @MainActor in
+                self?.asking = false
+                self?.recentAnswer = answer
+            }
+        }
+    }
+
+    func clearAnswer() { recentAnswer = nil }
+
     /// 会議モードか（iPhone と同じ。会議のあいだは録音の音質を上げる）
     private(set) var meetingOn = UserDefaults.standard.bool(forKey: "meetingOn")
     /// 時計の空きが少ないと知らせたか（12時間に1回まで）

@@ -313,6 +313,7 @@ final class Pipeline {
         receiver.onWatchState = { [weak self] state in self?.noteWatchState(state) }
         receiver.onNewPerson = { [weak self] time in self?.markNewPerson(at: time) }
         receiver.onMeeting = { [weak self] on in self?.setMeeting(on) }
+        receiver.onAsk = { [weak self] _ in self?.recentWords() ?? "" }
         receiver.onWatchLowPower = { [weak self] in self?.watchLowPower = $0 }
         receiver.onWatchRecording = { [weak self] recording, at in
             guard let self else { return }
@@ -1538,12 +1539,20 @@ final class Pipeline {
         await Provisioning.scheduleRemindersOnce()
         // 前の日の抜け・壊れた区切り・自信の低い行などを、朝の通知に1行で出す
         if UIDevice.current.userInterfaceIdiom != .pad { scheduleMorningCheck() }
-        // 毎月1日に、前の月にクラウドへ送った件数を知らせる
-        CloudLog.notifyMonthlyIfDue()
+        // 答え合わせがたまったら、確かめたほうがよい行の線を当たる値に寄せる
+        tuneFromAnswers()
+        // 毎月1日に、前の月にクラウドへ送った件数・費用の目安・ドライブの使っている量を知らせる
+        await CloudLog.notifyMonthlyIfDue(quota: { await self.driveQuota() })
         // 年が変わったら、前の年の分を Markdown と JSON に書き出す
         if UIDevice.current.userInterfaceIdiom != .pad { await exportIfNewYear() }
         _ = await writeDiagnostics()
         return true
+    }
+
+    /// ドライブの使っている量と上限（分からなければ nil）
+    func driveQuota() async -> (used: Int64, limit: Int64?)? {
+        guard email != nil else { return nil }
+        return try? await docs.storageQuota()
     }
 
     /// 書き出しをドライブの「控え」に置く（同じ名前の頭のものは新しい2つだけ残す）
@@ -2422,6 +2431,8 @@ final class Pipeline {
         // 会議モードの会議の題名と参加者（いちばん先に置く）と、その日の予定に出た言葉（その日だけのヒント）
         let meetingWords = MeetingMode.session(at: start).map { MeetingMode.words(title: $0.title) + $0.attendees } ?? []
         let todayWords = dayWords(at: start)
+        // その場所でよく出る言葉（場所ごとの言葉。2026-11-06）
+        let placeTalkWords = places.quickName(at: start).map { wordStats.hints(forPlace: $0) } ?? []
         // 「さいとうさん」のように呼ばれた名前は、読みが同じ連絡先の人の書き方（「齋藤」など）をヒントにする
         let contactWords = await contacts.mentioned(in: local.map(\.text) + [previous ?? ""])
         // 直前の区切りで聞こえた人と、よく話す言葉（「人ごとの言葉」）
@@ -2429,7 +2440,8 @@ final class Pipeline {
             .map { wordStats.hints(for: $0) } ?? []
         // 呼ばれた名前と話題の言葉は場所の言葉より具体的なので先に置く（Whisper のヒントは先頭の30語まで）
         var seenWords = Set<String>()
-        let keywords = (meetingWords + contactWords + topics.flatMap(\.words) + personWords + eventWords + todayWords + placeWords)
+        let keywords = (meetingWords + contactWords + topics.flatMap(\.words) + personWords + eventWords + todayWords
+                        + placeTalkWords + placeWords)
             .filter { seenWords.insert($0).inserted }
         // ★を付けた前後と会議モードの区切りは、家の PC とクラウドの両方に聞く（★の後押し）
         let starred = marks.contains { $0 >= start.addingTimeInterval(-60) && $0 <= start.addingTimeInterval(duration + 60) }

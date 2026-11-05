@@ -22,6 +22,19 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     var onNewPerson: (@MainActor (Date) -> Void)?
     /// 時計で会議モードを始めた・終えた
     var onMeeting: (@MainActor (Bool) -> Void)?
+    /// 時計から「さっき何て言った？」と聞かれた（答えの文を返す）
+    var onAsk: (@MainActor (String) -> String)?
+
+    /// 時計からの問い（返事を待っている）
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
+        guard let ask = message["ask"] as? String else {
+            replyHandler([:])
+            return
+        }
+        Task { @MainActor in
+            replyHandler(["answer": self.onAsk?(ask) ?? "iPhone の LifeLog の準備ができていません。"])
+        }
+    }
 
     /// 時計が知らせてきた様子
     struct WatchState {
@@ -125,7 +138,9 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         // iPhone で録った区切りと見分けられるよう、名前に「-w」を付ける。
         let received = Date.now
         let sentName = file.fileURL.lastPathComponent
-        let name = Storage.watchChunkName(from: sentName)
+        // 時計の時間帯で付けた名前を、iPhone の時間帯の名前に直す（時差があるとき・日本時間で区切るとき）
+        let local = Storage.convertedName(sentName, from: (file.metadata?["tz"] as? String).flatMap(TimeZone.init(identifier:)))
+        let name = Storage.watchChunkName(from: local)
         let dest = Storage.pendingDir.appendingPathComponent(name)
         // 送り直されてきた区切り（返事が届かなかった）で、もう受け取っていれば、返事だけして捨てる
         if Storage.alreadyReceived(name) {

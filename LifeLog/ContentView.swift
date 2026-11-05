@@ -186,17 +186,21 @@ private struct TodayView: View {
         let total = parts.reduce(0) { $0 + $1.1 }
         if total > 0 {
             Section {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("確かめ待ち 合計 \(total)", systemImage: "tray.full")
-                        .font(.headline)
-                    Text(parts.filter { $0.1 > 0 }.map { "\($0.0) \($0.1)" }.joined(separator: "・"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                NavigationLink {
+                    ConfirmBoxView()
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("確かめ待ち 合計 \(total)", systemImage: "tray.full")
+                            .font(.headline)
+                        Text(parts.filter { $0.1 > 0 }.map { "\($0.0) \($0.1)" }.joined(separator: "・"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             } header: {
                 Text("確認箱")
             } footer: {
-                Text("大事な順に、タスクの候補 → AI からの質問 → 声 → 聞き間違い → 答え合わせ。1日5分で、上から片付けてください。それぞれ、この下の欄から開けます。")
+                Text("押すと、確かめ待ちを大事な順に1つの画面に並べます（タスクの候補 → AI からの質問 → 声 → 聞き間違い → 答え合わせ）。1日5分で、上から片付けてください。")
             }
         }
     }
@@ -563,6 +567,7 @@ private struct SettingsView: View {
     @AppStorage(AppLock.key) private var appLock = false
     @AppStorage("morningCheck") private var morningCheck = true
     @State private var exportNote: String?
+    @AppStorage(Storage.japanTimeKey) private var japanTime = false
     /// LocalModel.modeKey と同じ名前
     @AppStorage("localModelMode") private var localModelMode = LocalModel.Mode.fallback.rawValue
     @AppStorage(Pipeline.autoAsideKey) private var autoAside = true
@@ -575,6 +580,10 @@ private struct SettingsView: View {
                 Section {
                     Toggle("開くときに Face ID", isOn: $appLock)
                     Toggle("毎朝、前の日の点検を知らせる", isOn: $morningCheck)
+                    Toggle("日付と時刻を日本時間で（海外にいるとき）", isOn: $japanTime)
+                    if japanTime != Storage.japanTimeApplied {
+                        Text("アプリを一度終えて開き直すと変わります。").font(.caption).foregroundStyle(.orange)
+                    }
                     NavigationLink("クラウドに送ったもの") { CloudLogView() }
                     NavigationLink("録音の抜けと数の照合") { RecordingMapView() }
                     Button("今年の分を書き出す") {

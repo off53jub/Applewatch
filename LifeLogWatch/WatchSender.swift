@@ -128,6 +128,19 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// 「初めての人と話している」の印を iPhone に送る（その前後の知らない声を、確かめ待ちに出す）
     func newPerson(_ time: Date) { queueInfo(["newPerson": time.timeIntervalSince1970]) }
 
+    /// iPhone に「さっき何て言った？」と聞く（iPhone が近くにあるときだけ）
+    func askRecent(_ done: @escaping @Sendable (String) -> Void) {
+        guard WCSession.default.activationState == .activated, WCSession.default.isReachable else {
+            done("iPhone とつながっていません。iPhone を近くに置いてください。")
+            return
+        }
+        WCSession.default.sendMessage(["ask": "recent"], replyHandler: { reply in
+            done(reply["answer"] as? String ?? "答えがありませんでした。")
+        }, errorHandler: { error in
+            done("聞けませんでした: \(error.localizedDescription)")
+        })
+    }
+
     /// 会議モードを始める・終える（iPhone が予定の参加者と議題をヒントにする）
     func meeting(_ on: Bool) { queueInfo(["meeting": on, "at": Date.now.timeIntervalSince1970]) }
 
@@ -210,7 +223,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
             let sent = stored.sentAt[name].map { Date(timeIntervalSince1970: $0) } ?? .distantPast
             guard Date.now.timeIntervalSince(sent) >= Self.resendAfter else { continue }
             counts[name, default: 0] += 1
-            WCSession.default.transferFile(url, metadata: ["resend": counts[name] ?? 1])
+            WCSession.default.transferFile(url, metadata: ["resend": counts[name] ?? 1, "tz": TimeZone.current.identifier])
         }
         if counts != stored.resent {
             lock.withLock { UserDefaults.standard.set(counts, forKey: Self.resentKey) }
@@ -272,7 +285,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
     func send(_ url: URL) {
         guard WCSession.default.activationState == .activated else { return }
         let queued = WCSession.default.outstandingFileTransfers.contains { $0.file.fileURL == url }
-        if !queued { WCSession.default.transferFile(url, metadata: nil) }
+        // 名前の時刻は時計の時間帯。iPhone が自分の時間帯に直せるよう、時間帯も送る（2026-11-06）
+        if !queued { WCSession.default.transferFile(url, metadata: ["tz": TimeZone.current.identifier]) }
     }
 
     /// 前回送れなかった区切りを送り直す。書き込み中のファイルは送らない。
