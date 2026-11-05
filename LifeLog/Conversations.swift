@@ -35,6 +35,26 @@ final class ConversationLog {
         var noisy: Bool? = nil
         /// 家の PC の多数決で食い違った行の、モデルごとの文（答え合わせでモデルの当たりやすさを学ぶため）
         var votes: [String: String]? = nil
+        /// 書き換えた履歴（古い順・5つまで）。前の文・書き換えた仕組み・時刻。直す画面から前の文に戻せる（2026-11-06）
+        var history: [Edit]? = nil
+        /// 時計のこすれ・風の音が強かった行（聞き取りの重みを下げる。2026-11-06）
+        var rubbed: Bool? = nil
+
+        /// 書き換え1回分
+        struct Edit: Codable, Hashable {
+            let at: Date
+            /// 書き換えた仕組み（「言語モデルの直し」「夜の聞き直し」「手で直した」など）
+            let by: String
+            /// 書き換える前の文
+            let from: String
+        }
+
+        static let historyLimit = 5
+
+        /// 履歴に1回分を足す（古いものから捨てて、historyLimit つまで）
+        static func adding(_ edit: Edit, to history: [Edit]?) -> [Edit] {
+            Array(((history ?? []) + [edit]).suffix(historyLimit))
+        }
 
         /// 確からしさが低く、聞き直して確かめたほうがよい行
         var isUncertain: Bool { checked != true && (confidence ?? 1) < 0.45 }
@@ -48,6 +68,8 @@ final class ConversationLog {
         let confidence: Double?
         /// 手で直したか
         let manual: Bool
+        /// 書き換えた仕組み（履歴に残す。nil なら「手で直した」か「自動の直し」）
+        var by: String? = nil
     }
 
     private static let clock: DateFormatter = {
@@ -481,8 +503,10 @@ final class ConversationLog {
         for line in lines {
             var text = line.text
             for pair in safe { text = text.replacingOccurrences(of: pair.wrong, with: pair.right) }
-            if text != line.text {
-                changes.append(TextChange(line: line, text: text, confidence: line.confidence, manual: false))
+            // 書き換えすぎ（3割より多く変わる）行は使わない
+            if text != line.text, Summarizer.isSmallFix(line.text, text) {
+                changes.append(TextChange(line: line, text: text, confidence: line.confidence, manual: false,
+                                          by: "表記のそろえ"))
             }
         }
         _ = try? await editText(changes, day: day)
@@ -776,6 +800,8 @@ final class ConversationLog {
             var new = old
             new.text = change.text
             if new.original == nil { new.original = old.text }
+            new.history = Line.adding(.init(at: .now, by: change.by ?? (change.manual ? "手で直した" : "自動の直し"),
+                                            from: old.text), to: old.history)
             new.confidence = change.confidence
             if change.manual { new.checked = true }
             edited[key] = new

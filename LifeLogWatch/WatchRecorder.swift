@@ -20,6 +20,10 @@ final class WatchRecorder: NSObject {
     private(set) var link = ""
     /// 時計が低電力モードか（送るのを15分ごとにまとめる）
     private(set) var lowPower = false
+    /// 会議モードか（iPhone と同じ。会議のあいだは録音の音質を上げる）
+    private(set) var meetingOn = UserDefaults.standard.bool(forKey: "meetingOn")
+    /// 時計の空きが少ないと知らせたか（12時間に1回まで）
+    @ObservationIgnored private var lowSpaceAlerted = Date.distantPast
 
     private let sender: WatchSender
     private let engine = AVAudioEngine()
@@ -42,6 +46,10 @@ final class WatchRecorder: NSObject {
         sender.onChange = { [weak self] in
             Task { @MainActor in self?.refreshStatus() }
         }
+        // iPhone が音を調べて見つけたこと（マイクが隠れている・音が割れている）を、震わせて知らせる
+        sender.onAlert = { [weak self] text in
+            Task { @MainActor in self?.alert(text) }
+        }
         writer.setOnCut { [weak self] url, peak, error in
             Task { @MainActor in self?.cut(url, peakDB: peak, error: error) }
         }
@@ -49,6 +57,7 @@ final class WatchRecorder: NSObject {
         writer.setOnRestTick { [weak self] in
             Task { @MainActor in
                 guard let self, self.isRecording else { return }
+                self.sender.readBattery()
                 self.sender.heartbeat()
                 self.armWatchdog()
             }
@@ -182,7 +191,10 @@ final class WatchRecorder: NSObject {
             sender.deliver(url)
         }
         // 無音で捨てた区切りでも、録音が続いていることは知らせる
-        if isRecording { sender.heartbeat() }
+        if isRecording {
+            sender.readBattery()
+            sender.heartbeat()
+        }
         refreshStatus()
     }
 
@@ -191,7 +203,18 @@ final class WatchRecorder: NSObject {
         unsent = sender.unsentCount()
         link = sender.linkText()
         lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        meetingOn = UserDefaults.standard.bool(forKey: "meetingOn")
         let center = UNUserNotificationCenter.current()
+        // 時計の空きが少なくなったら知らせる（録音と控えが置けなくなる前に）
+        if let free = WatchSender.freeSpace(), free < 300 * 1024 * 1024,
+           Date.now.timeIntervalSince(lowSpaceAlerted) > 12 * 3600 {
+            lowSpaceAlerted = .now
+            let content = UNMutableNotificationContent()
+            content.title = "時計の空きが少なくなっています"
+            content.body = "残り \(free / 1024 / 1024)MB です。iPhone を近くに置いて、iPhone の LifeLog を開いてください（届いた録音の控えが消えて空きます）。"
+            content.sound = .default
+            center.add(UNNotificationRequest(identifier: "low-space", content: content, trigger: nil))
+        }
         if unsent >= (lowPower ? Self.unsentAlertLowPower : Self.unsentAlert) {
             guard !unsentAlerted else { return }
             unsentAlerted = true
@@ -211,6 +234,28 @@ final class WatchRecorder: NSObject {
         sender.mark(.now)
         WKInterfaceDevice.current().play(.success)
         message = "\(Date.now.formatted(date: .omitted, time: .shortened)) に印を付けました"
+    }
+
+    /// 「いま初めての人と話している」の印（その前後の知らない声を、iPhone の確かめ待ちに出す）
+    func markNewPerson() {
+        sender.newPerson(.now)
+        WKInterfaceDevice.current().play(.success)
+        message = "\(Date.now.formatted(date: .omitted, time: .shortened)) 初めての人の印を付けました"
+    }
+
+    /// 会議モードを始める・終える（iPhone が予定の参加者と議題をヒントにし、終わったらすぐまとめる）
+    func toggleMeeting() {
+        meetingOn.toggle()
+        UserDefaults.standard.set(meetingOn, forKey: "meetingOn")
+        sender.meeting(meetingOn)
+        WKInterfaceDevice.current().play(meetingOn ? .start : .stop)
+        message = meetingOn ? "会議モードを始めました（音質を上げて録ります）" : "会議モードを終えました"
+    }
+
+    /// iPhone からの知らせを、震わせて画面に出す
+    private func alert(_ text: String) {
+        WKInterfaceDevice.current().play(.notification)
+        message = text
     }
 
     /// 割り込みなどで止まったマイクを流し直す。
@@ -267,12 +312,15 @@ final class WatchRecorder: NSObject {
 /// 1分続けて静かなら区切りを閉じて休み、音がしたらその1秒前から次の区切りを書き始める（SilenceGate）。
 final class ChunkWriter: @unchecked Sendable {
     static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
-    static let fileSettings: [String: Any] = [
-        AVFormatIDKey: kAudioFormatMPEG4AAC,
-        AVSampleRateKey: 16_000,
-        AVNumberOfChannelsKey: 1,
-        AVEncoderBitRateKey: 32_000,
-    ]
+    /// 会議モードのあいだは 48kbps、ふだんは 32kbps（2026-11-06。次の区切りから変わる）
+    static var fileSettings: [String: Any] {
+        [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 16_000,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRateKey: UserDefaults.standard.bool(forKey: "meetingOn") ? 48_000 : 32_000,
+        ]
+    }
     /// 休んでいるあいだ、これだけごとに「録音は続いている」と知らせる
     static let restTick: TimeInterval = 300
 

@@ -1,16 +1,36 @@
 import AVFoundation
 import Foundation
 import WatchConnectivity
+import WatchKit
 
-/// 録音した区切りを iPhone に送る。送り終わったら時計側のファイルは消す。
+/// 録音した区切りを iPhone に送る。
 /// iPhone が近くに無いときは WatchConnectivity が溜めておき、つながったときに送る。
 /// 時計が低電力モードのときは、無線を起こす回数を減らすため、3つ（15分ほど）溜まってからまとめて送る。
+/// 送り終わった区切りは「送った」フォルダに控えとして残し、iPhone が「受け取った」と返事したら消す（2026-11-06）。
+/// 30分たっても返事が無ければ送り直す（3回まで）。控えは3日・300MB まで。
+/// 返事をしない古い iPhone のアプリには、今までどおり送り終わったら消す。
 final class WatchSender: NSObject, WCSessionDelegate {
     static let pendingDir: URL = {
         let dir = URL.documentsDirectory.appendingPathComponent("pending", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
+
+    /// 送り終わったが、iPhone から「受け取った」の返事がまだの区切り
+    static let sentDir: URL = {
+        let dir = URL.documentsDirectory.appendingPathComponent("sent", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+    /// 返事が無ければ、これだけたってから送り直す
+    static let resendAfter: TimeInterval = 30 * 60
+    static let maxResends = 3
+    /// 控えを残す長さと大きさ
+    static let keepSentFor: TimeInterval = 72 * 3600
+    static let keepSentBytes = 300 * 1024 * 1024
+    /// 送り終わった時刻と、送り直した回数（ファイル名ごと）
+    private static let sentAtKey = "sentAt"
+    private static let resentKey = "resent"
 
     private static let nameFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -31,11 +51,31 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// 送れた・つながりが変わったときに呼ぶ（画面の数を出し直す）
     var onChange: (@Sendable () -> Void)?
 
+    /// iPhone から届いた知らせ（こもり・音割れなど）。時計を震わせて画面に出す
+    var onAlert: (@Sendable (String) -> Void)?
+
+    @MainActor
     func activate() {
+        WKInterfaceDevice.current().isBatteryMonitoringEnabled = true
+        readBattery()
         guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
         WCSession.default.activate()
     }
+
+    private var batteryInfo: (level: Double, charging: Bool)?
+
+    /// 時計の電池を読み直す（画面の糸から呼ぶ）
+    @MainActor
+    func readBattery() {
+        let device = WKInterfaceDevice.current()
+        guard device.batteryLevel >= 0 else { return }
+        let info = (level: Double(device.batteryLevel), charging: device.batteryState == .charging || device.batteryState == .full)
+        lock.withLock { batteryInfo = info }
+    }
+
+    /// iPhone のアプリが「受け取った」と返事をする版か（返事をしない版には、送り終わったら消す）
+    private static var phoneAcks: Bool { UserDefaults.standard.bool(forKey: "phoneAcks") }
 
     private let lock = NSLock()
     private var writing: URL?
@@ -70,11 +110,133 @@ final class WatchSender: NSObject, WCSessionDelegate {
         var context: [String: Any] = ["recording": isRecording, "at": Date.now.timeIntervalSince1970,
                                       "lowPower": ProcessInfo.processInfo.isLowPowerModeEnabled]
         if let since = restingSince { context["resting"] = since.timeIntervalSince1970 }
+        // 電池の残りと充電中か（iPhone が抜けの理由と、電池が切れそうな時刻を出すのに使う）
+        if let battery = lock.withLock({ batteryInfo }) {
+            context["battery"] = battery.level
+            context["charging"] = battery.charging
+        }
+        context["kept"] = sentFiles().count
         try? WCSession.default.updateApplicationContext(context)
     }
 
     /// 区切るたびに呼ぶ。iPhone は、しばらく知らせが無いと「止まっているかも」と通知する。
-    func heartbeat() { publish() }
+    func heartbeat() {
+        publish()
+        resendUnacknowledged()
+    }
+
+    /// 「初めての人と話している」の印を iPhone に送る（その前後の知らない声を、確かめ待ちに出す）
+    func newPerson(_ time: Date) { queueInfo(["newPerson": time.timeIntervalSince1970]) }
+
+    /// 会議モードを始める・終える（iPhone が予定の参加者と議題をヒントにする）
+    func meeting(_ on: Bool) { queueInfo(["meeting": on, "at": Date.now.timeIntervalSince1970]) }
+
+    /// つながっていなければ溜めておき、つながったときに送る
+    private func queueInfo(_ info: [String: Any]) {
+        guard WCSession.default.activationState == .activated else {
+            var list = UserDefaults.standard.array(forKey: "queuedInfo") as? [[String: Any]] ?? []
+            list.append(info)
+            UserDefaults.standard.set(list, forKey: "queuedInfo")
+            return
+        }
+        WCSession.default.transferUserInfo(info)
+    }
+
+    private func flushQueuedInfo() {
+        let list = UserDefaults.standard.array(forKey: "queuedInfo") as? [[String: Any]] ?? []
+        guard !list.isEmpty, WCSession.default.activationState == .activated else { return }
+        UserDefaults.standard.removeObject(forKey: "queuedInfo")
+        for info in list { WCSession.default.transferUserInfo(info) }
+    }
+
+    // MARK: - 送った区切りの控え（2026-11-06）
+
+    private func sentFiles() -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(at: Self.sentDir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "m4a" }
+    }
+
+    private func isInSentDir(_ url: URL) -> Bool {
+        url.deletingLastPathComponent().standardizedFileURL.path == Self.sentDir.standardizedFileURL.path
+    }
+
+    /// 送り終わった区切りを控えに移す（返事をしない古い iPhone のアプリなら消す）
+    private func keepSent(_ url: URL) {
+        guard Self.phoneAcks else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        // 送り直した控えは、もう控えの中にある
+        guard !isInSentDir(url) else { return }
+        let dest = Self.sentDir.appendingPathComponent(url.lastPathComponent)
+        try? FileManager.default.removeItem(at: dest)
+        guard (try? FileManager.default.moveItem(at: url, to: dest)) != nil else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        lock.withLock {
+            var sentAt = UserDefaults.standard.dictionary(forKey: Self.sentAtKey) as? [String: Double] ?? [:]
+            sentAt[url.lastPathComponent] = Date.now.timeIntervalSince1970
+            UserDefaults.standard.set(sentAt, forKey: Self.sentAtKey)
+        }
+        pruneSent()
+    }
+
+    /// iPhone が受け取ったので、控えを消す
+    private func acknowledged(_ name: String) {
+        try? FileManager.default.removeItem(at: Self.sentDir.appendingPathComponent(name))
+        lock.withLock {
+            var sentAt = UserDefaults.standard.dictionary(forKey: Self.sentAtKey) as? [String: Double] ?? [:]
+            var resent = UserDefaults.standard.dictionary(forKey: Self.resentKey) as? [String: Int] ?? [:]
+            sentAt[name] = nil
+            resent[name] = nil
+            UserDefaults.standard.set(sentAt, forKey: Self.sentAtKey)
+            UserDefaults.standard.set(resent, forKey: Self.resentKey)
+        }
+    }
+
+    /// 送ってから30分たっても返事の無い区切りを、送り直す（3回まで）
+    func resendUnacknowledged() {
+        guard Self.phoneAcks, WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
+        let outstanding = Set(WCSession.default.outstandingFileTransfers.map { $0.file.fileURL.lastPathComponent })
+        let stored = lock.withLock {
+            (sentAt: UserDefaults.standard.dictionary(forKey: Self.sentAtKey) as? [String: Double] ?? [:],
+             resent: UserDefaults.standard.dictionary(forKey: Self.resentKey) as? [String: Int] ?? [:])
+        }
+        var counts = stored.resent
+        for url in sentFiles() {
+            let name = url.lastPathComponent
+            guard !outstanding.contains(name), (counts[name] ?? 0) < Self.maxResends else { continue }
+            let sent = stored.sentAt[name].map { Date(timeIntervalSince1970: $0) } ?? .distantPast
+            guard Date.now.timeIntervalSince(sent) >= Self.resendAfter else { continue }
+            counts[name, default: 0] += 1
+            WCSession.default.transferFile(url, metadata: ["resend": counts[name] ?? 1])
+        }
+        if counts != stored.resent {
+            lock.withLock { UserDefaults.standard.set(counts, forKey: Self.resentKey) }
+        }
+    }
+
+    /// 古い控え（3日より前）と、300MB を超えた分（古いものから）を消す
+    private func pruneSent() {
+        let files = sentFiles().map { url -> (url: URL, date: Date, size: Int) in
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            return (url, values?.contentModificationDate ?? .distantPast, values?.fileSize ?? 0)
+        }.sorted { $0.date > $1.date }
+        var total = 0
+        for file in files {
+            total += file.size
+            if total > Self.keepSentBytes || Date.now.timeIntervalSince(file.date) > Self.keepSentFor {
+                try? FileManager.default.removeItem(at: file.url)
+            }
+        }
+    }
+
+    /// 時計の空き（バイト）。分からなければ nil
+    static func freeSpace() -> Int64? {
+        (try? URL.documentsDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage
+    }
 
     /// 「印」を iPhone に送る。つながっていなければ、つながったときに送る。
     func mark(_ time: Date) {
@@ -151,7 +313,16 @@ final class WatchSender: NSObject, WCSessionDelegate {
             if !ProcessInfo.processInfo.isLowPowerModeEnabled || unsentCount() >= Self.batch { resendPending() }
             publish()
             flushMarks()
+            flushQueuedInfo()
+            resendUnacknowledged()
         }
+        onChange?()
+    }
+
+    /// iPhone からの返事（受け取った区切り）と知らせ
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        if let got = userInfo["got"] as? String { acknowledged(got) }
+        if let alert = userInfo["alert"] as? String { onAlert?(alert) }
         onChange?()
     }
 
@@ -163,10 +334,13 @@ final class WatchSender: NSObject, WCSessionDelegate {
     static func readSettings(_ context: [String: Any]) {
         if let skip = context["skipSilence"] as? Bool { UserDefaults.standard.set(skip, forKey: "skipSilence") }
         if let held = context["held"] as? Bool { SilenceGate.held = held }
+        if let acks = context["acks"] as? Bool { UserDefaults.standard.set(acks, forKey: "phoneAcks") }
+        // 会議モードのあいだは、録音の音質を上げる（次の区切りから）
+        if let meeting = context["meeting"] as? Bool { UserDefaults.standard.set(meeting, forKey: "meetingOn") }
     }
 
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
-        if error == nil { try? FileManager.default.removeItem(at: fileTransfer.file.fileURL) }
+        if error == nil { keepSent(fileTransfer.file.fileURL) }
         onChange?()
     }
 

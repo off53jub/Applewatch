@@ -26,6 +26,22 @@ struct WatchContentView: View {
                     }
                     .tint(.yellow)
                     .handGestureShortcut(.primaryAction)
+                    // 初めての人と話しているときの印と、会議モード（2026-11-06）
+                    HStack(spacing: 6) {
+                        Button {
+                            recorder.markNewPerson()
+                        } label: {
+                            Label("初めての人", systemImage: "person.badge.plus")
+                                .font(.caption2)
+                        }
+                        Button {
+                            recorder.toggleMeeting()
+                        } label: {
+                            Label(recorder.meetingOn ? "会議を終える" : "会議", systemImage: "person.3")
+                                .font(.caption2)
+                        }
+                        .tint(recorder.meetingOn ? .orange : nil)
+                    }
                 }
                 if !recorder.message.isEmpty {
                     Text(recorder.message)

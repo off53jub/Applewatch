@@ -340,7 +340,9 @@ struct ConversationsView: View {
                     if line.isUncertain {
                         Image(systemName: "questionmark.circle").font(.caption).foregroundStyle(.orange)
                     }
-                    Text(line.text).opacity(line.isUncertain ? 0.55 : 1)
+                    // 自信の低い行は、名前・数字・日時・金額に下線（要確認。2026-11-06）
+                    Text(line.isUncertain ? UncertainMarks.underlined(line.text) : AttributedString(line.text))
+                        .opacity(line.isUncertain ? 0.55 : 1)
                 }
                 if let original = line.original {
                     Text("直す前: " + original)
@@ -423,6 +425,30 @@ struct EditLineView: View {
                         Toggle("「\(part.wrong)」→「\(part.right)」を誤変換の一覧に足す", isOn: $addFix)
                     } footer: {
                         Text("足すと、これからの文字起こしでも同じ書き間違いを自動で直します。あとから「言葉」の画面で消せます。")
+                    }
+                }
+                // 変更の履歴（2026-11-06）: 自動や手で書き換えた前の文に戻せる
+                if let history = line.history, !history.isEmpty {
+                    Section {
+                        ForEach(Array(history.enumerated().reversed()), id: \.offset) { _, edit in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(edit.at.formatted(date: .abbreviated, time: .shortened))　\(edit.by)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text("前の文: " + edit.from)
+                                Button("この文に戻す") {
+                                    text = edit.from
+                                    // 戻すときは、誤変換の一覧には足さない
+                                    addFix = false
+                                }
+                                .font(.callout)
+                                .disabled(text == edit.from)
+                            }
+                        }
+                    } header: {
+                        Text("変更の履歴")
+                    } footer: {
+                        Text("「この文に戻す」を押してから「直す」を押すと、その文に戻ります。戻した行は手で直した行として扱い、夜の聞き直しでも変えません。")
                     }
                 }
                 if let failure {

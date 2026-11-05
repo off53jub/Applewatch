@@ -35,6 +35,14 @@ extension Pipeline {
     /// - 職場にいた時間で、参加者のいる予定と重なる
     /// - 職場にいた時間で、自分のほかに2人以上の声がある（職場のカレンダーを iPhone に入れられないとき）
     func isMeeting(_ c: ConversationLog.Conversation) -> Bool {
+        // 会議モードで録った会話は、短くても会議（5分以上・300文字以上。2026-11-06）
+        if c.closed, c.media == nil, c.minutes == nil, c.end.timeIntervalSince(c.start) >= 5 * 60,
+           c.lines.reduce(0, { $0 + $1.text.count }) >= 300,
+           MeetingMode.sessions.contains(where: { s in
+               min(c.end, s.end ?? .now).timeIntervalSince(max(c.start, s.start)) >= c.end.timeIntervalSince(c.start) / 2
+           }) {
+            return true
+        }
         guard c.closed, c.media == nil, c.minutes == nil, c.end.timeIntervalSince(c.start) >= Self.minutesMinimum,
               c.lines.reduce(0, { $0 + $1.text.count }) >= Self.minutesCharacters else { return false }
         if let event = calendar.events(from: c.start, to: c.end).first {

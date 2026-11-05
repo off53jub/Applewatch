@@ -75,6 +75,12 @@ final class Pipeline {
         recordingHeld = held
         SilenceGate.held = held
         receiver.sendSettings(skipSilence: skipSilence, held: held)
+        if let last = ledger.lastState {
+            var state = RecordingLedger.State(at: .now, recording: last.recording, resting: last.resting,
+                                              charging: last.charging, battery: last.battery, lowPower: last.lowPower)
+            state.held = held
+            ledger.note(state)
+        }
     }
 
     var skipSilence = SilenceGate.enabled {
@@ -181,9 +187,19 @@ final class Pipeline {
     let searchIndex = SearchIndex()
     /// 時計が低電力モードか（時計が知らせてくる。まだ知らなければ nil）
     private(set) var watchLowPower: Bool?
+    /// 録音の帳簿（抜けの地図・数の照合・毎朝の点検・電池の先回り。2026-11-06）
+    let ledger = RecordingLedger()
+    /// 会議モード（いま会議中なら、その会議。2026-11-06）
+    var meeting: MeetingMode.Session? = MeetingMode.active
+    /// 初めての人の印と、名乗った声（名前を付けるのは本人。2026-11-06）
+    var newVoices = NewVoiceBox.load()
+    /// 音の見張り（こもり・音割れ）を時計に知らせた時刻
+    @ObservationIgnored var lastSoundAlert: [String: Date] = [:]
+    /// 続けてこもっていた・割れていた区切りの数（時計の分）
+    @ObservationIgnored var soundStreak: [String: Int] = [:]
     /// ほかの端末から記録が届くたびに増える（画面を出し直すため）
     private(set) var recordsVersion = 0
-    private let receiver = PhoneReceiver()
+    let receiver = PhoneReceiver()
     /// 処理中の列。二重に走らせないよう、走っていればそれを待つ。
     private var queueTask: Task<Void, Never>?
 
@@ -285,9 +301,18 @@ final class Pipeline {
         receiver.onStateChange = { [weak self] in self?.watchStatus = $0 }
         receiver.onArrival = { [weak self] url, time in
             guard let self, let start = Storage.startDate(of: url) else { return }
+            // もう文字にした区切りが送り直されてきたら、二重に書かないよう捨てる
+            if ledger.isTranscribed(url.lastPathComponent) {
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
             watchDelays.received(url.lastPathComponent, ended: start.addingTimeInterval(Self.duration(of: url)),
                                  at: time, lowPower: watchLowPower)
+            ledger.received(url, at: time)
         }
+        receiver.onWatchState = { [weak self] state in self?.noteWatchState(state) }
+        receiver.onNewPerson = { [weak self] time in self?.markNewPerson(at: time) }
+        receiver.onMeeting = { [weak self] on in self?.setMeeting(on) }
         receiver.onWatchLowPower = { [weak self] in self?.watchLowPower = $0 }
         receiver.onWatchRecording = { [weak self] recording, at in
             guard let self else { return }
@@ -1376,6 +1401,8 @@ final class Pipeline {
         await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         queueTask = nil
         pendingCount = Storage.pendingChunks().count
+        // 文字起こし待ちが2時間より長く溜まっていたら、理由と一緒に知らせる
+        checkStall()
         if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
         Self.scheduleBackgroundWork()
         // 夜に充電していれば、1日分を聞き直す
@@ -1410,11 +1437,14 @@ final class Pipeline {
             // 書いている途中で録音が終わった区切りは開けない。何度やっても同じなので脇によけて先へ進む
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             guard (try? AVAudioFile(forReading: url)) != nil else {
+                ledger.broken(url)
                 Storage.setAside(url)
                 continue
             }
             do {
-                merger.add(try await transcribe(url))
+                let heard = try await transcribe(url)
+                ledger.transcribed(url, duration: Self.duration(of: url), lines: heard.count)
+                merger.add(heard)
                 if Storage.isFromWatch(url), let start = Storage.startDate(of: url) {
                     lastWatchEnd = max(lastWatchEnd, start.addingTimeInterval(Self.duration(of: url)))
                     watchDelays.processed(url.lastPathComponent)
@@ -1423,6 +1453,7 @@ final class Pipeline {
                 Storage.keep(url)
             } catch where Self.isBrokenAudio(error) {
                 // 開けても中身が途中で切れている区切り
+                ledger.broken(url)
                 Storage.setAside(url)
             } catch {
                 message = "処理に失敗しました（あとで再試行します）: \(error.localizedDescription)"
@@ -1444,6 +1475,8 @@ final class Pipeline {
         await conversations.closeIdle(now: settled, waiting: ConversationLog.gap)
         // 閉じた会話の中で、同じ人が別の「人物N」に分かれていたらまとめる
         await consolidateSpeakers(conversations.takeClosed())
+        // 初めての人の印の前後と、名乗った声を、名前を付ける候補に出す
+        collectNewVoices()
         // 閉じた会話の言葉を数える（はじめは、これまでの記録を全部）
         let recentDays = wordStats.isEmpty ? conversations.days() : Array(conversations.days().suffix(2))
         wordStats.count(days: recentDays.map { ($0, conversations.conversations(on: $0)) })
@@ -1465,6 +1498,8 @@ final class Pipeline {
             await conversations.writePeopleNotes()
             await conversations.writeWeeklySummary(today: dayFormatter.string(from: .now))
             await conversations.writeMonthlySummary(today: dayFormatter.string(from: .now))
+            // 会議モードで録った会議は、終わったらすぐ議事録にする（充電していなくても）
+            await writeMeetingMinutesNow()
             // 職場の会議の議事録（アプリを開いているか充電中のときだけ、1つずつ）
             await writePendingMinutes()
             // 仕事中と★を付けた会話から、頼まれごとを拾う
@@ -1497,6 +1532,8 @@ final class Pipeline {
         await backups.runIfDue(signedIn: email != nil)
         // 署名の期限の前に知らせる（起動ごとに1回頼む）
         await Provisioning.scheduleRemindersOnce()
+        // 前の日の抜け・壊れた区切り・自信の低い行などを、朝の通知に1行で出す
+        if UIDevice.current.userInterfaceIdiom != .pad { scheduleMorningCheck() }
         _ = await writeDiagnostics()
         return true
     }
@@ -2132,6 +2169,7 @@ final class Pipeline {
                     for fix in vocabulary.fixes(for: context) {
                         fixed = fixed.replacingOccurrences(of: fix.wrong, with: fix.right)
                     }
+                    guard Self.mayRewrite(lines[i].text, fixed, sure: sure) else { continue }
                     texts[i] = fixed
                     confidence[i] = (sure * 100).rounded() / 100
                 }
@@ -2159,6 +2197,7 @@ final class Pipeline {
                             for fix in vocabulary.fixes(for: context) {
                                 fixed = fixed.replacingOccurrences(of: fix.wrong, with: fix.right)
                             }
+                            guard Self.mayRewrite(lines[i].text, fixed, sure: sure) else { continue }
                             texts[i] = fixed
                             confidence[i] = (sure * 100).rounded() / 100
                         }
@@ -2181,6 +2220,7 @@ final class Pipeline {
                             for fix in vocabulary.fixes(for: context) {
                                 fixed = fixed.replacingOccurrences(of: fix.wrong, with: fix.right)
                             }
+                            guard Self.mayRewrite(lines[i].text, fixed, sure: newScore) else { continue }
                             texts[i] = fixed
                             confidence[i] = (newScore * 100).rounded() / 100
                         }
@@ -2200,7 +2240,8 @@ final class Pipeline {
                 }
             }
             let changes = lines.indices.filter { texts[$0] != lines[$0].text }.map {
-                ConversationLog.TextChange(line: lines[$0], text: texts[$0], confidence: confidence[$0], manual: false)
+                ConversationLog.TextChange(line: lines[$0], text: texts[$0], confidence: confidence[$0], manual: false,
+                                           by: "夜の聞き直し")
             }
             if !changes.isEmpty {
                 // 書き足しと重ならないよう、処理中ならそれを待つ
@@ -2216,6 +2257,12 @@ final class Pipeline {
         }
         nightlyResult = "\(Date.now.formatted(date: .abbreviated, time: .shortened)) に \(processed) 区切りを聞き直し、\(changedLines) 行を直しました。"
             + (processed < targets.count ? "（残りは次の充電中に続けます）" : "")
+    }
+
+    /// 自動の書き換え（夜の聞き直しなど）で使ってよいか（2026-11-06）。
+    /// 3割より多く変わる書き換えは、前の文がほとんど無い（3文字以下）か、新しい聞き取りがとても確か（0.85 以上）なときだけ。
+    nonisolated static func mayRewrite(_ old: String, _ new: String, sure: Double) -> Bool {
+        old.count <= 3 || sure >= 0.85 || Summarizer.isSmallFix(old, new)
     }
 
     /// その日に出た名前・話題・予定の言葉（夜の聞き直しのヒント）
@@ -2340,6 +2387,10 @@ final class Pipeline {
         let noise = await Task.detached(priority: .utility) { NoiseMeter.measure(url, voice: voice) }.value
         let noisy = noise?.isNoisy == true
         if let noise { noiseLog.add(url.lastPathComponent, at: start, watch: fromWatch, reading: noise) }
+        // こもり・音割れ・こすれ（時計に知らせ、こすれた区間の行は重みを下げる）
+        var soundCheck: AudioCheck.Result?
+        if !Power.isSaving { soundCheck = await Task.detached(priority: .utility) { AudioCheck.measure(url) }.value }
+        if let soundCheck { handleSoundCheck(soundCheck, fromWatch: fromWatch) }
         /// 書かずに「消した行」に回す行（あとで戻せる）
         var unmatched: [Junk.TrashItem] = []
         // 声がほとんど無い区切り：重い文字起こしはしない（端末内で聞き取れた文は、確かめたほうがよい行として残す）
@@ -2355,6 +2406,9 @@ final class Pipeline {
         // その時間の予定の名前と参加者も、聞き取りのヒントにする
         let event = calendar.events(from: start, to: start.addingTimeInterval(duration)).first
         let eventWords = event.map { [$0.title] + $0.attendees + ($0.location.map { [$0] } ?? []) }?.filter { !$0.isEmpty } ?? []
+        // 会議モードの会議の題名と参加者（いちばん先に置く）と、その日の予定に出た言葉（その日だけのヒント）
+        let meetingWords = MeetingMode.session(at: start).map { MeetingMode.words(title: $0.title) + $0.attendees } ?? []
+        let todayWords = dayWords(at: start)
         // 「さいとうさん」のように呼ばれた名前は、読みが同じ連絡先の人の書き方（「齋藤」など）をヒントにする
         let contactWords = await contacts.mentioned(in: local.map(\.text) + [previous ?? ""])
         // 直前の区切りで聞こえた人と、よく話す言葉（「人ごとの言葉」）
@@ -2362,8 +2416,11 @@ final class Pipeline {
             .map { wordStats.hints(for: $0) } ?? []
         // 呼ばれた名前と話題の言葉は場所の言葉より具体的なので先に置く（Whisper のヒントは先頭の30語まで）
         var seenWords = Set<String>()
-        let keywords = (contactWords + topics.flatMap(\.words) + personWords + eventWords + placeWords)
+        let keywords = (meetingWords + contactWords + topics.flatMap(\.words) + personWords + eventWords + todayWords + placeWords)
             .filter { seenWords.insert($0).inserted }
+        // ★を付けた前後と会議モードの区切りは、家の PC とクラウドの両方に聞く（★の後押し）
+        let starred = marks.contains { $0 >= start.addingTimeInterval(-60) && $0 <= start.addingTimeInterval(duration + 60) }
+            || MeetingMode.session(at: start) != nil
         // 寝ているあいだは、端末内の文字起こしだけで済ませる（電池を使わず、寝息に作られた文も出にくい）
         // ヘルスケアの睡眠の記録があればそれで、無ければ寝る時間帯に iPhone が止まっていたかで決める
         var asleep = false
@@ -2405,7 +2462,7 @@ final class Pipeline {
                 lastEngine = ensemble ? "家の PC（\(homePC.engineCount) つのモデルの多数決）" : "Haas-ja（家の PC）"
                 // 食い違った行は、クラウドの Whisper にも聞いてもう1票にする（設定「クラウドの票も足す」）
                 if ensemble, homePC.cloudVote, !asleep, !silent, settings.shouldUseCloud, let key = settings.apiKey,
-                   lines.contains(where: { ($0.confidence ?? 1) < HomePC.cloudVoteBelow }),
+                   starred || lines.contains(where: { ($0.confidence ?? 1) < HomePC.cloudVoteBelow }),
                    let cloud = await fetchCloud(key) {
                     let before = lines.map(\.text)
                     lines = HomePC.addCloudVote(lines, cloud: cloud.lines)
@@ -2528,11 +2585,14 @@ final class Pipeline {
         let correctionWords = (heardNames + heardTopics.flatMap(\.words)).filter { seenWords.insert($0).inserted } + keywords
         // 同音の誤変換などを言語モデルで直す。直せなかったら（混雑・上限など）そのまま使う。
         var originals = [String?](repeating: nil, count: entries.count)
+        // 行ごとに、文を書き換えた仕組み（変更の履歴に残す）
+        var rewrittenBy = [[String]](repeating: [], count: entries.count)
         // 登録した「間違えやすい書き方」は、そのまま正しい書き方に置き換える
         for fix in vocabulary.fixes(for: context) {
             for i in entries.indices where entries[i].text.contains(fix.wrong) {
                 if originals[i] == nil { originals[i] = entries[i].text }
                 entries[i].text = entries[i].text.replacingOccurrences(of: fix.wrong, with: fix.right)
+                if !rewrittenBy[i].contains("登録した書き方") { rewrittenBy[i].append("登録した書き方") }
             }
         }
         if correctionOn, !asleep, !silent, let key = llmKey,
@@ -2543,6 +2603,7 @@ final class Pipeline {
             for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
                 if originals[i] == nil { originals[i] = entries[i].text }
                 entries[i].text = fixed[i]
+                rewrittenBy[i].append("言語モデルの直し")
             }
             lastEngine += "＋補正"
             if let others, others.contains(where: { !$0.isEmpty }) { lastEngine += "・見比べ" }
@@ -2603,8 +2664,19 @@ final class Pipeline {
                                             original: originals[i] ?? (text != entries[i].text ? entries[i].text : nil),
                                             speakerID: names[i]?.personID,
                                             confidence: confidence[i].map { ($0 * 100).rounded() / 100 })
+            // 書き換えた行には、元の文と書き換えた仕組みを履歴に残す（直す画面から戻せる）
+            var by = rewrittenBy[i]
+            if text != entries[i].text { by.append("数字そろえ") }
+            if let first = line.original, !by.isEmpty {
+                line.history = [.init(at: .now, by: by.joined(separator: "・"), from: first)]
+            }
             line.sound = SoundScene.label(from: offsets[i], to: end, in: scene)
             if noisy { line.noisy = true }
+            // 時計のこすれ・風の音が強かった行は、確からしさを下げる（確かめたほうがよい行に入りやすくなる）
+            if let soundCheck, soundCheck.rubbed(from: offsets[i], to: end) {
+                line.rubbed = true
+                line.confidence = ((line.confidence ?? 0.8) * 0.85 * 100).rounded() / 100
+            }
             if let pcLines, pcLines.count == entries.count, (pcLines[i].confidence ?? 1) < HomePC.cloudVoteBelow,
                pcLines[i].votes.values.filter({ !$0.isEmpty }).count >= 2 {
                 line.votes = pcLines[i].votes
@@ -2694,6 +2766,8 @@ final class Pipeline {
         var names: [String] = []
         if let recent = recentPeople[fromWatch], start.timeIntervalSince(recent.end) < 600 { names += recent.names }
         names += calendar.events(from: start.addingTimeInterval(-900), to: start.addingTimeInterval(900)).flatMap(\.attendees)
+        // 会議モードの会議の参加者
+        names += MeetingMode.session(at: start)?.attendees ?? []
         guard !names.isEmpty else { return [] }
         return Set(people.filter { p in
             p.isNamed && !p.isSelf && p.hidden != true && names.contains { Self.sameName($0, p.displayName) }

@@ -61,8 +61,9 @@ private struct TodayView: View {
                         Text("\(mark.formatted(date: .omitted, time: .shortened)) に印を付けました（前後1分の行に★）")
                             .foregroundStyle(.secondary)
                     }
+                    MeetingButton()
                 } footer: {
-                    Text("時計で録音中は、時計の「★ 印」ボタン（またはダブルタップ）でも印を付けられます。")
+                    Text("時計で録音中は、時計の「★ 印」ボタン（またはダブルタップ）でも印を付けられます。会議モードは時計の「会議」ボタンでも始められます（予定の参加者と題名を聞き取りのヒントにし、時計の音質を上げ、終わったらすぐ議事録にします）。")
                 }
 
                 Section("いまの様子") {
@@ -85,6 +86,12 @@ private struct TodayView: View {
                         }
                     }
                     LabeledContent("文字起こし待ち", value: "\(pipeline.pendingCount) 件")
+                    NavigationLink {
+                        RecordingMapView()
+                    } label: {
+                        let gaps = pipeline.ledger.map(for: Calendar.current.startOfDay(for: .now)).gaps
+                        LabeledContent("録音の抜け（今日）", value: gaps.isEmpty ? "なし" : "\(gaps.reduce(0) { $0 + $1.minutes })分")
+                    }
                     if !pipeline.lastEngine.isEmpty {
                         LabeledContent("直近の文字起こし", value: pipeline.lastEngine)
                     }
@@ -100,6 +107,8 @@ private struct TodayView: View {
                 taskBook()
 
                 answerNudge()
+
+                NewVoicesSection()
 
                 questions()
 

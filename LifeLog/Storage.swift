@@ -95,6 +95,30 @@ enum Storage {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
+    // MARK: - 届いた区切りの名前（送り直されてきた区切りを二重に処理しないため。2026-11-06）
+
+    private static let receivedKey = "receivedChunks"
+    /// 時計は返事が無いと3日のあいだ送り直してくるので、それより少し長く覚えておく
+    private static let rememberReceived: TimeInterval = 4 * 24 * 3600
+
+    /// この名前の区切りを、もう受け取っているか
+    static func alreadyReceived(_ name: String) -> Bool {
+        let fm = FileManager.default
+        if [pendingDir, audioDir, brokenDir].contains(where: { fm.fileExists(atPath: $0.appendingPathComponent(name).path) }) {
+            return true
+        }
+        return (UserDefaults.standard.dictionary(forKey: receivedKey) as? [String: Double])?[name] != nil
+    }
+
+    /// 受け取った区切りの名前を覚える（古いものは忘れる）
+    static func noteReceived(_ name: String) {
+        var list = UserDefaults.standard.dictionary(forKey: receivedKey) as? [String: Double] ?? [:]
+        let now = Date.now.timeIntervalSince1970
+        list = list.filter { now - $0.value < rememberReceived }
+        list[name] = now
+        UserDefaults.standard.set(list, forKey: receivedKey)
+    }
+
     static func pendingChunks() -> [URL] {
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: pendingDir, includingPropertiesForKeys: nil)) ?? []

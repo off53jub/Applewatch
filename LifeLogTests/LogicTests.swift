@@ -650,4 +650,126 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(back.first?.voices.count, 2)
         XCTAssertEqual(back.first?.hasClip, false)
     }
+
+    // MARK: - 変更の履歴・書き換えの上限（2026-11-06）
+
+    func testHistoryKeepsFive() {
+        var history: [ConversationLog.Line.Edit]?
+        for i in 0..<7 {
+            history = ConversationLog.Line.adding(.init(at: Date(timeIntervalSince1970: Double(i)), by: "夜の聞き直し", from: "文\(i)"), to: history)
+        }
+        XCTAssertEqual(history?.count, 5)
+        XCTAssertEqual(history?.first?.from, "文2")
+        XCTAssertEqual(history?.last?.from, "文6")
+    }
+
+    func testOldLineWithoutHistoryStillReads() throws {
+        let json = #"{"time":0,"text":"こんにちは"}"#
+        let line = try JSONDecoder().decode(ConversationLog.Line.self, from: Data(json.utf8))
+        XCTAssertNil(line.history)
+        XCTAssertNil(line.rubbed)
+    }
+
+    func testMayRewrite() {
+        // 少しだけ変わる（3割以下）ならよい
+        XCTAssertTrue(Pipeline.mayRewrite("明日の会義は十時から", "明日の会議は十時から", sure: 0.7))
+        // 大きく変わるのは、とても確かなときか、前の文がほとんど無いときだけ
+        XCTAssertFalse(Pipeline.mayRewrite("明日の会議は十時から", "昨日の飲み会は楽しかった", sure: 0.7))
+        XCTAssertTrue(Pipeline.mayRewrite("明日の会議は十時から", "昨日の飲み会は楽しかった", sure: 0.9))
+        XCTAssertTrue(Pipeline.mayRewrite("えっ", "えっと、それは", sure: 0.5))
+    }
+
+    // MARK: - 録音の帳簿（2026-11-06）
+
+    private func state(_ minute: Double, recording: Bool = true, resting: Bool = false, charging: Bool? = nil,
+                       battery: Double? = nil, held: Bool? = nil, base: Date) -> RecordingLedger.State {
+        var s = RecordingLedger.State(at: base.addingTimeInterval(minute * 60), recording: recording, resting: resting,
+                                      charging: charging, battery: battery, lowPower: false)
+        s.held = held
+        return s
+    }
+
+    func testGapMapAndReasons() {
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        let recorded = [(base, base.addingTimeInterval(30 * 60)), (base.addingTimeInterval(90 * 60), base.addingTimeInterval(120 * 60))]
+        // 30分〜60分は充電中、60分〜90分は静かで休み
+        let states = [state(0, base: base), state(30, charging: true, base: base), state(60, resting: true, base: base),
+                      state(75, resting: true, base: base)]
+        let spans = RecordingLedger.spans(from: base, to: base.addingTimeInterval(120 * 60), recorded: recorded, states: states)
+        let gaps = RecordingLedger.gaps(spans, states: states)
+        XCTAssertEqual(gaps.count, 1)
+        XCTAssertEqual(gaps.first?.minutes, 30)
+        XCTAssertEqual(gaps.first?.reason, "時計の充電中")
+        XCTAssertTrue(spans.contains { $0.kind == .quiet })
+    }
+
+    func testGapReasonWhenWatchStopped() {
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        let states = [state(0, recording: false, base: base)]
+        XCTAssertEqual(RecordingLedger.reason(from: base.addingTimeInterval(60), to: base.addingTimeInterval(1800), states: states),
+                       "時計の録音が止まっていた")
+        XCTAssertTrue(RecordingLedger.reason(from: base, to: base.addingTimeInterval(1800), states: []).hasPrefix("時計から知らせが無かった"))
+    }
+
+    func testBatteryForecast() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        // 1時間で 10% 減っている → 残り 50% なら 4時間後に 10%
+        let states = [state(-60, battery: 0.6, base: now), state(0, battery: 0.5, base: now)]
+        let empty = RecordingLedger.batteryEmpty(states: states, now: now)
+        XCTAssertNotNil(empty)
+        XCTAssertEqual(empty?.timeIntervalSince(now) ?? 0, 4 * 3600, accuracy: 60)
+        // 充電中なら予想しない
+        XCTAssertNil(RecordingLedger.batteryEmpty(states: [state(-60, battery: 0.6, base: now),
+                                                           state(0, charging: true, battery: 0.5, base: now)], now: now))
+    }
+
+    func testMorningReportLine() {
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        let gap = RecordingLedger.Gap(start: base, end: base.addingTimeInterval(42 * 60), reason: "時計の充電中")
+        var counts = RecordingLedger.Counts()
+        counts.broken = 1
+        let line = RecordingLedger.reportLine(gaps: [gap], counts: counts, uncertain: 12, unnamedVoices: 3)
+        XCTAssertTrue(line.contains("録れていない時間 42分"))
+        XCTAssertTrue(line.contains("壊れた区切り 1"))
+        XCTAssertTrue(line.contains("自信の低い行 12"))
+        XCTAssertTrue(line.contains("名前の無い声 3人"))
+    }
+
+    // MARK: - 名乗り・会議モード・音の見張り（2026-11-06）
+
+    func testClaimedName() {
+        XCTAssertEqual(NewVoiceBox.claimedName(in: "田中です。よろしくお願いします"), "田中")
+        XCTAssertEqual(NewVoiceBox.claimedName(in: "はじめまして、佐藤と申します"), "佐藤")
+        XCTAssertNil(NewVoiceBox.claimedName(in: "大丈夫です"))
+        XCTAssertNil(NewVoiceBox.claimedName(in: "明日は田中さんが来るそうです"))
+    }
+
+    func testMeetingWords() {
+        XCTAssertEqual(MeetingMode.words(title: "定例会議・新商品の件"), ["定例会議・新商品の件", "定例会議", "新商品の件"])
+        XCTAssertTrue(MeetingMode.words(title: nil).isEmpty)
+    }
+
+    func testAudioCheckJudge() {
+        func block(total: Double, low: Double = 0, high: Double, clipped: Int = 0) -> AudioCheck.Block {
+            AudioCheck.Block(total: total, low: low, high: high, count: 8000, clipped: clipped)
+        }
+        // 声のある 0.5 秒（-20dBFS くらい）が30個、高い音がほとんど無い → こもっている
+        let muffled = AudioCheck.judge(Array(repeating: block(total: 80, high: 0.01), count: 30))
+        XCTAssertTrue(muffled.muffled)
+        let clear = AudioCheck.judge(Array(repeating: block(total: 80, high: 5), count: 30))
+        XCTAssertFalse(clear.muffled)
+        // 振り切れが多い → 割れている
+        XCTAssertTrue(AudioCheck.judge([block(total: 80, high: 5, clipped: 100)]).clipped)
+        // 低い音が大半 → こすれ・風
+        let rub = AudioCheck.judge([block(total: 80, high: 5), block(total: 80, low: 70, high: 1)])
+        XCTAssertEqual(rub.rubbed, [0.5...1.0])
+        XCTAssertTrue(rub.rubbed(from: 0.5, to: 1.0))
+        XCTAssertFalse(rub.rubbed(from: 0, to: 0.5))
+    }
+
+    func testUncertainMarks() {
+        let text = "田中さんに3000円を15時までに"
+        let marked = UncertainMarks.ranges(in: text).map { String(text[$0]) }
+        XCTAssertEqual(marked, ["田中さん", "3000円", "15時"])
+    }
 }
