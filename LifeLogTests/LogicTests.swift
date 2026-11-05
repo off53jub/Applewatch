@@ -475,7 +475,6 @@ final class LogicTests: XCTestCase {
     }
 
     func testTaskAddSkipsDuplicates() {
-        let book = TaskBook()
         let before = book.items.count
         let item = TaskBook.Item(what: "テスト用の頼まれごと\(UUID().uuidString.prefix(6))", said: .now, source: .manual, state: .candidate)
         XCTAssertEqual(book.add([item]).count, 1)
@@ -979,5 +978,82 @@ final class LogicTests: XCTestCase {
         XCTAssertTrue(loose.loose)
         // 次の行の頭は超えない
         XCTAssertEqual(Pipeline.lineEnds([(0, 40), (3, 5)])[0], 3, accuracy: 0.01)
+    }
+
+    // MARK: - 複数のモデルで決める（2026-11-06）
+
+    func testSimilarityAndAgreement() {
+        XCTAssertEqual(MultiModel.similarity("資料を送る", "資料を送る"), 1, accuracy: 0.001)
+        XCTAssertGreaterThan(MultiModel.similarity("田中さんに資料を送る", "資料を田中さんに送る"), 0.35)
+        XCTAssertLessThan(MultiModel.similarity("資料を送る", "明日は雨"), 0.2)
+        XCTAssertTrue(MultiModel.agrees("田中さんに資料を送る", with: ["明日の会議", "資料を田中さんへ送る"]))
+        XCTAssertFalse(MultiModel.agrees("田中さんに資料を送る", with: ["明日の会議"]))
+    }
+
+    func testAgreedFixesKeepOnlyConfirmed() {
+        let original = ["機械があれば行きます", "今日はいい天気", "佐藤さんに電話"]
+        let first = ["機会があれば行きます", "今日はいい転機", "佐藤さんに電話"]
+        let second = ["機会があれば行きます", "今日はいい天気", "佐藤さんに電話"]
+        // 1行目は両方が同じに直した → 使う。2行目は片方だけ → 元に戻す
+        XCTAssertEqual(Pipeline.agreedFixes(original: original, first: first, second: second, alternatives: []),
+                       ["機会があれば行きます", "今日はいい天気", "佐藤さんに電話"])
+        // ほかの音声認識の文に合えば、片方だけでも使う
+        XCTAssertEqual(Pipeline.agreedFixes(original: original, first: first, second: original,
+                                            alternatives: ["", "今日はいい転機 ／ 今日いい", ""])[1], "今日はいい転機")
+    }
+
+    func testSplitWordPairs() {
+        let pairs = SplitWords.pairs(chosen: "今日は齋藤さんと会議", votes: ["haas": "今日は斉藤さんと会議", "reazon": "今日は齋藤さんと会議"])
+        XCTAssertEqual(pairs.count, 1)
+        XCTAssertEqual(pairs.first?.chosen, "齋藤")
+        XCTAssertEqual(pairs.first?.other, "斉藤")
+    }
+
+    func testCalibrationLearnsWrongLines() {
+        var data: [(x: [Double], wrong: Bool)] = []
+        for i in 0..<20 {
+            data.append((Calibration.features(confidence: 0.3 + Double(i % 3) * 0.05, noisy: true, rubbed: false, split: true, length: 20), true))
+            data.append((Calibration.features(confidence: 0.85 + Double(i % 3) * 0.04, noisy: false, rubbed: false, split: false, length: 20), false))
+        }
+        let w = Calibration.train(data)
+        XCTAssertNotNil(w)
+        let bad = Calibration.probability(Calibration.features(confidence: 0.35, noisy: true, rubbed: false, split: true, length: 20), weights: w ?? [])
+        let good = Calibration.probability(Calibration.features(confidence: 0.9, noisy: false, rubbed: false, split: false, length: 20), weights: w ?? [])
+        XCTAssertGreaterThan(bad, 0.5)
+        XCTAssertLessThan(good, 0.5)
+        // 30問より少なければ学ばない
+        XCTAssertNil(Calibration.train(Array(data.prefix(20))))
+    }
+
+    func testPCVoiceDisagreement() {
+        let a: [Float] = [1, 0, 0], b: [Float] = [0, 1, 0]
+        let refs = ["me": [a], "12": [b]]
+        // 記録では「自分」だが、PC のモデルでは 12 番の声に近い
+        XCTAssertEqual(PCVoiceRefs.disagreement([0.1, 0.99, 0], assigned: "me", refs: refs), "12")
+        XCTAssertNil(PCVoiceRefs.disagreement([0.99, 0.1, 0], assigned: "me", refs: refs))
+        // 記録の人の声を PC で測っていなければ見比べない
+        XCTAssertNil(PCVoiceRefs.disagreement([0, 1, 0], assigned: "5", refs: refs))
+    }
+
+    func testSceneVoteNeedsBothModels() {
+        let train: [[(name: String, prob: Double)]] = [[("Train", 0.6), ("Speech", 0.9)], [("Subway, metro, underground", 0.5)]]
+        XCTAssertEqual(SceneVote.decide(pcTags: train, phoneSounds: ["電車"]), "電車")
+        // iPhone が何も言っていなければ決めない
+        XCTAssertNil(SceneVote.decide(pcTags: train, phoneSounds: []))
+        // 確からしさの低いものは数えない
+        XCTAssertNil(SceneVote.decide(pcTags: [[("Train", 0.1)]], phoneSounds: ["電車", "電車"]))
+    }
+
+    func testCandidatesAgreedFirst() {
+        var a = TaskBook.Item(what: "片方だけ", said: Date(timeIntervalSince1970: 300), source: .conversation, state: .candidate, work: true)
+        a.agreed = false
+        var b = TaskBook.Item(what: "両方", said: Date(timeIntervalSince1970: 100), source: .conversation, state: .candidate, work: true)
+        b.agreed = true
+        let c = TaskBook.Item(what: "見比べていない", said: Date(timeIntervalSince1970: 200), source: .conversation, state: .candidate, work: true)
+        let order = [a, b, c].sorted { x, y in
+            let rank = { (i: TaskBook.Item) in i.agreed == true ? 0 : i.agreed == false ? 2 : 1 }
+            return rank(x) != rank(y) ? rank(x) < rank(y) : x.said > y.said
+        }.map(\.what)
+        XCTAssertEqual(order, ["両方", "見比べていない", "片方だけ"])
     }
 }

@@ -80,6 +80,8 @@ final class TaskBook {
         var repeats: Repeat? = nil
         /// iPhone のリマインダーに送ったときの、その項目の id
         var reminderID: String? = nil
+        /// 2つの言語モデルが両方拾った（true）・片方だけ（false）・見比べていない（nil）。2026-11-06
+        var agreed: Bool? = nil
 
         /// 時刻まで入れた期限
         var dueMoment: Date? {
@@ -210,7 +212,14 @@ final class TaskBook {
     private static let url = URL.applicationSupportDirectory.appendingPathComponent("tasks.json")
 
     /// 確かめ待ち（新しいものから）
-    var candidates: [Item] { items.filter { $0.state == .candidate }.sorted { $0.said > $1.said } }
+    /// 確かめ待ち。2つの言語モデルが両方拾ったものを先に（2026-11-06）、その中は新しい順
+    var candidates: [Item] {
+        items.filter { $0.state == .candidate }.sorted { a, b in
+            let x = a.agreed == true ? 0 : a.agreed == false ? 2 : 1
+            let y = b.agreed == true ? 0 : b.agreed == false ? 2 : 1
+            return x != y ? x < y : a.said > b.said
+        }
+    }
     /// まだ済んでいないもの（期限の近い順。期限の無いものは後ろに、言われた順）
     var open: [Item] { items.filter { $0.state == .open }.sorted(by: Self.dueOrder) }
     /// 済んだもの（30日以内・新しいものから）
@@ -503,7 +512,18 @@ extension Pipeline {
                     break scan
                 }
                 scanned.append(id)
-                found += taskItems(result, in: c, lines: lines, marks: marks, day: day, work: work)
+                var items = taskItems(result, in: c, lines: lines, marks: marks, day: day, work: work)
+                // もう1つの言語モデル（iPhone の中）にも拾わせ、両方が拾ったものを先に出す（2026-11-06）
+                if MultiModel.secondOpinionOK, !Summarizer.$sensitive.withValue(work, operation: { Summarizer.usesLocal(apiKey: key) }),
+                   let second = try? await Summarizer.$forceLocal.withValue(true, operation: {
+                       try await Summarizer.tasks(transcript, day: day, apiKey: key)
+                   }) {
+                    let others = second.map { $0.what + " " + $0.quote }
+                    for i in items.indices where items[i].source == .conversation {
+                        items[i].agreed = MultiModel.agrees(items[i].what + " " + (items[i].quote ?? ""), with: others)
+                    }
+                }
+                found += items
             }
         }
         let added = tasks.add(found)

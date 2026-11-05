@@ -32,8 +32,12 @@ enum Summarizer {
     /// 職場の会話など、外に出したくない中身か。「職場の会話は端末内で」のとき、端末内の言語モデルで作る（Groq には送らない）。
     @TaskLocal static var sensitive = false
 
+    /// セカンドオピニオンとして、iPhone の中の言語モデルで作らせる（2026-11-06。MultiModel）
+    @TaskLocal static var forceLocal = false
+
     /// この呼び出しを、はじめから端末内の言語モデルで作るか
     static func usesLocal(apiKey: String) -> Bool {
+        if forceLocal { return LocalModel.isUsable }
         guard LocalModel.isOn else { return false }
         switch LocalModel.mode {
         case .off: return false

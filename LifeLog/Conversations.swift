@@ -57,7 +57,12 @@ final class ConversationLog {
         }
 
         /// 確からしさが低く、聞き直して確かめたほうがよい行
-        var isUncertain: Bool { checked != true && (confidence ?? 1) < Self.uncertainBelow }
+        var isUncertain: Bool {
+            guard checked != true else { return false }
+            // 答え合わせで学んだ「文字が違っている見込み」があれば、それで決める（2026-11-06。MultiModel の Calibration）
+            if let chance = Calibration.wrongChance(self) { return chance >= 0.5 }
+            return (confidence ?? 1) < Self.uncertainBelow
+        }
 
         /// 確かめたほうがよい行の線（初めは 0.45。答え合わせが30問たまったら、当たる値に自動で寄せる。2026-11-06）
         static var uncertainBelow: Double {
@@ -136,6 +141,8 @@ final class ConversationLog {
         var tense: Bool?
         /// 議事録を作ったドキュメントの名前
         var minutes: String?
+        /// 場面（電車・車・店・職場など）。PC の音の分類と iPhone の背景の音の多数決（2026-11-06。前の記録には無い）
+        var scene: String? = nil
 
         /// 話した相手。テレビや動画の声は相手に数えない。
         var people: [String] {
@@ -843,6 +850,14 @@ final class ConversationLog {
     }
 
     /// 議事録を作った会話に、そのドキュメントの名前を記す
+    /// 会話に場面を記す（2026-11-06）
+    func setScene(_ scene: String, start: Date, day: String) {
+        var log = load(day)
+        guard let i = log.conversations.firstIndex(where: { $0.start == start }) else { return }
+        log.conversations[i].scene = scene
+        save(log, day: day)
+    }
+
     func setMinutes(_ name: String, start: Date, day: String) {
         var log = load(day)
         guard let i = log.conversations.firstIndex(where: { $0.start == start }) else { return }

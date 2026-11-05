@@ -2030,6 +2030,8 @@ final class Pipeline {
     }
 
     /// 議事録を作った会話に、そのドキュメントの名前を記す
+    func setScene(_ scene: String, start: Date, day: String) { conversations.setScene(scene, start: start, day: day) }
+
     func markMinutes(_ name: String, start: Date, day: String) {
         conversations.setMinutes(name, start: start, day: day)
         recordsVersion += 1
@@ -2277,8 +2279,24 @@ final class Pipeline {
             NightlyRecheck.markNightDone(target.audio)
             processed += 1
         }
+        // 家の PC の別の種類のモデルで、話者と場面を見比べる（2026-11-06）
+        await crossCheckWithPC()
         nightlyResult = "\(Date.now.formatted(date: .abbreviated, time: .shortened)) に \(processed) 区切りを聞き直し、\(changedLines) 行を直しました。"
             + (processed < targets.count ? "（残りは次の充電中に続けます）" : "")
+    }
+
+    /// 2つの言語モデルの直しを見比べる（2026-11-06）。直した行は、もう片方もほぼ同じに直したか、
+    /// ほかの音声認識の文（alternatives）にほぼ合うときだけ使い、そうでなければ元の文に戻す
+    nonisolated static func agreedFixes(original: [String], first: [String], second: [String], alternatives: [String]) -> [String] {
+        original.indices.map { i in
+            guard first[i] != original[i], !first[i].isEmpty else { return first[i] }
+            if MultiModel.similarity(first[i], second[i]) >= 0.8 { return first[i] }
+            if i < alternatives.count, !alternatives[i].isEmpty,
+               alternatives[i].components(separatedBy: " ／ ").contains(where: { MultiModel.similarity(first[i], $0) >= 0.8 }) {
+                return first[i]
+            }
+            return original[i]
+        }
     }
 
     /// 自動の書き換え（夜の聞き直しなど）で使ってよいか（2026-11-06）。
@@ -2621,10 +2639,21 @@ final class Pipeline {
             }
         }
         if correctionOn, !asleep, !silent, let key = llmKey,
-           let fixed = try? await Summarizer.$sensitive.withValue(context == .work, operation: {
+           var fixed = try? await Summarizer.$sensitive.withValue(context == .work, operation: {
                try await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
                                             previous: previous, alternatives: others, apiKey: key)
            }) {
+            // 直した行は、もう1つの言語モデル（iPhone の中）も同じように直したか、家の PC のほかのモデルの文に合うときだけ使う（2026-11-06）
+            let changedAny = entries.indices.contains { fixed[$0] != entries[$0].text && !fixed[$0].isEmpty }
+            if changedAny, MultiModel.secondOpinionOK,
+               !Summarizer.$sensitive.withValue(context == .work, operation: { Summarizer.usesLocal(apiKey: key) }),
+               let second = try? await Summarizer.$forceLocal.withValue(true, operation: {
+                   try await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
+                                                previous: previous, alternatives: others, apiKey: key)
+               }), second.count == fixed.count {
+                fixed = Self.agreedFixes(original: entries.map(\.text), first: fixed, second: second,
+                                         alternatives: others ?? [])
+            }
             for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
                 if originals[i] == nil { originals[i] = entries[i].text }
                 entries[i].text = fixed[i]
