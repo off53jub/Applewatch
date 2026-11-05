@@ -492,7 +492,7 @@ extension Pipeline {
                 guard budget > 0 else { break scan }
                 budget -= 1
                 let transcript = lines.map { line in
-                    Self.taskClock.string(from: line.time) + " " + (line.speaker.map { "[\($0)] " } ?? "") + line.text
+                    Self.taskClock.string(from: line.time) + " " + (line.speaker.map { "[\($0)] " } ?? "") + line.promptText
                 }.joined(separator: "\n")
                 let result: [Summarizer.FoundTask]
                 do {

@@ -62,22 +62,48 @@ enum CloudLog {
         }
     }
 
-    /// 毎月1日に、前の月の件数を知らせる（1回だけ）
-    static func notifyMonthlyIfDue() {
+    /// OpenAI の文字起こしの費用の目安（米ドル）。送った音声の大きさから長さを推し量る（32kbps として 1分 0.006 ドル）
+    static func openAICost(_ entries: [Entry]) -> Double {
+        let bytes = entries.filter { $0.service.hasPrefix("OpenAI") }.reduce(0) { $0 + $1.size }
+        let minutes = Double(bytes) * 8 / 32_000 / 60
+        return minutes * 0.006
+    }
+
+    /// ドライブの量を「3.2GB / 15GB（21%）」の形に
+    static func quotaText(_ quota: (used: Int64, limit: Int64?)) -> String {
+        let gb = { (b: Int64) in String(format: "%.1fGB", Double(b) / 1_073_741_824) }
+        guard let limit = quota.limit, limit > 0 else { return gb(quota.used) + " 使用" }
+        return gb(quota.used) + " / " + gb(limit) + "（\(Int(Double(quota.used) / Double(limit) * 100))%）"
+    }
+
+    /// 毎月1日に、前の月の件数・費用の目安・ドライブの使っている量を知らせる（1回だけ）
+    @MainActor
+    static func notifyMonthlyIfDue(quota: () async -> (used: Int64, limit: Int64?)?) async {
         let cal = Calendar.current
         guard cal.component(.day, from: .now) == 1,
               let last = cal.date(byAdding: .month, value: -1, to: .now) else { return }
         let key = Self.monthKey(last)
         guard UserDefaults.standard.string(forKey: "cloudMonthly") != key else { return }
         UserDefaults.standard.set(key, forKey: "cloudMonthly")
-        let counts = counts(load(), month: last)
-        guard !counts.isEmpty else { return }
+        let entries = load().filter { cal.isDate($0.at, equalTo: last, toGranularity: .month) }
+        let counts = counts(entries, month: last)
+        var body = counts.isEmpty ? "クラウドには送っていません" : counts.map {
+            "\($0.service) \($0.count) 件" + ($0.work > 0 ? "（うち職場 \($0.work)）" : "")
+        }.joined(separator: "・")
+        let cost = openAICost(entries)
+        if cost > 0 { body += "。OpenAI の費用の目安 \(String(format: "%.2f", cost)) ドル" }
+        if let quota = await quota() {
+            body += "。ドライブ " + quotaText(quota)
+            if let limit = quota.limit, limit > 0, Double(quota.used) / Double(limit) > 0.8 {
+                body += "（8割を超えました。空けるか、容量を足してください）"
+            }
+        }
+        body += "。Groq の無料枠の残りは Groq の画面で確かめてください。"
         let content = UNMutableNotificationContent()
         content.title = "先月クラウドに送ったもの"
-        content.body = counts.map { "\($0.service) \($0.count) 件" + ($0.work > 0 ? "（うち職場 \($0.work)）" : "") }
-            .joined(separator: "・") + "。無料枠の上限と費用は、各サービスの画面で確かめてください。"
+        content.body = body
         content.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "cloud-monthly", content: content, trigger: nil))
+        try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "cloud-monthly", content: content, trigger: nil))
     }
 
     static func monthKey(_ date: Date) -> String {
@@ -88,8 +114,10 @@ enum CloudLog {
 
 /// クラウドに送ったものの一覧の画面
 struct CloudLogView: View {
+    @Environment(Pipeline.self) private var pipeline
     @State private var entries: [CloudLog.Entry] = []
     @State private var monthOffset = 0
+    @State private var quota: String?
 
     var body: some View {
         let month = Calendar.current.date(byAdding: .month, value: -monthOffset, to: .now) ?? .now
@@ -106,6 +134,9 @@ struct CloudLogView: View {
                 ForEach(CloudLog.counts(entries, month: month), id: \.service) { row in
                     LabeledContent(row.service, value: "\(row.count) 件" + (row.work > 0 ? "（職場 \(row.work)）" : ""))
                 }
+                let cost = CloudLog.openAICost(inMonth)
+                if cost > 0 { LabeledContent("OpenAI の費用の目安", value: String(format: "%.2f ドル", cost)) }
+                if let quota { LabeledContent("ドライブの使っている量", value: quota) }
             } footer: {
                 Text("送った時刻・送り先・何のためかだけを残します（中身は残しません。90日分）。職場の会話を外に送らないようにするには、「言語モデル」の設定で「職場の会話は端末内で」を選んでください。")
             }
@@ -122,5 +153,8 @@ struct CloudLogView: View {
         }
         .navigationTitle("クラウドに送ったもの")
         .onAppear { entries = CloudLog.load() }
+        .task {
+            if let q = await pipeline.driveQuota() { quota = CloudLog.quotaText(q) }
+        }
     }
 }

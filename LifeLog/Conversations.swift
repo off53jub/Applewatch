@@ -57,7 +57,16 @@ final class ConversationLog {
         }
 
         /// 確からしさが低く、聞き直して確かめたほうがよい行
-        var isUncertain: Bool { checked != true && (confidence ?? 1) < 0.45 }
+        var isUncertain: Bool { checked != true && (confidence ?? 1) < Self.uncertainBelow }
+
+        /// 確かめたほうがよい行の線（初めは 0.45。答え合わせが30問たまったら、当たる値に自動で寄せる。2026-11-06）
+        static var uncertainBelow: Double {
+            let saved = UserDefaults.standard.double(forKey: "uncertainBelow")
+            return saved > 0 ? saved : 0.45
+        }
+
+        /// 言語モデルに渡す文。自信の低い行には「聞き取りが不確か」と添える（要約・タスク・議事録で信じすぎないように）
+        var promptText: String { isUncertain ? text + "（聞き取りが不確か）" : text }
     }
 
     /// 行の文字の直し
@@ -298,7 +307,7 @@ final class ConversationLog {
         // テレビ・CM・ドラマ・放送の声だった行を見分けて、[テレビ] などの名前にする（相手には数えない）
         if let key = apiKey() { result = await tagBroadcast(result, day: day, apiKey: key) }
         let transcript = result.lines.map { line in
-            (line.speaker.map { "[\($0)] " } ?? "") + line.text
+            (line.speaker.map { "[\($0)] " } ?? "") + line.promptText
         }.joined(separator: "\n")
         guard transcript.count >= Self.minimumCharacters else { return result }
 
@@ -365,7 +374,7 @@ final class ConversationLog {
             for c in load(day).conversations where Self.needsTitle(c) {
                 guard budget > 0 else { return }
                 let transcript = c.lines.map { line in
-                    (line.speaker.map { "[\($0)] " } ?? "") + line.text
+                    (line.speaker.map { "[\($0)] " } ?? "") + line.promptText
                 }.joined(separator: "\n")
                 budget -= transcript.count
                 let range = "\(timeFormatter.string(from: c.start))〜\(timeFormatter.string(from: c.end))"

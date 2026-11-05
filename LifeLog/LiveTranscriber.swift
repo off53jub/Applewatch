@@ -72,7 +72,9 @@ final class LiveTranscriber {
         while !queue.isEmpty {
             let (start, samples) = queue.removeFirst()
             waiting = queue.count + 1
-            if useHaas() {
+            // 騒がしいところ（周りの音の底が -40dBFS より大きい）では、キーがあれば最初からクラウドに聞く（2026-11-06）
+            let noisy = Self.noiseFloor(samples) > -40 && apiKey() != nil
+            if useHaas() && !noisy {
                 do {
                     var text = try await HaasRunner.shared.transcribe(samples: samples)
                     for fix in fixes() { text = text.replacingOccurrences(of: fix.wrong, with: fix.right) }
@@ -110,6 +112,22 @@ final class LiveTranscriber {
                 status = "文字にできませんでした: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// 周りの音の底（0.1秒ごとの大きさの、小さいほうから2割のところ。dBFS）。16kHz として数える
+    nonisolated static func noiseFloor(_ samples: [Float], rate: Int = 16_000) -> Float {
+        let block = max(1, rate / 10)
+        guard samples.count >= block * 5 else { return -100 }
+        var levels: [Float] = []
+        var i = 0
+        while i + block <= samples.count {
+            var sum: Float = 0
+            for j in i..<(i + block) { sum += samples[j] * samples[j] }
+            levels.append(10 * log10(max(sum / Float(block), 1e-12)))
+            i += block
+        }
+        levels.sort()
+        return levels[levels.count / 5]
     }
 
     /// 音を一時ファイル（m4a）に書く。関数を出るとファイルが閉じて書き終わる。

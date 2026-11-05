@@ -10,6 +10,8 @@ struct LifeLogApp: App {
     private static let testing = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     init() {
+        // 日本時間で区切る設定なら、ほかの何よりも先に時間帯を日本にする（2026-11-06）
+        Storage.applyTimeZoneSetting()
         // 「控えから戻す」で選んだ控えは、登録を読む前に入れ替える
         if !Self.testing { BackupKeeper.applyPendingRestore() }
         let pipeline = Pipeline()

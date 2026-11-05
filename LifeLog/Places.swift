@@ -84,8 +84,26 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     /// 会話の始まった時刻にいた場所の名前。分からなければ nil。
     func name(at time: Date) async -> String? {
         guard isOn, let sample = sample(at: time) else { return nil }
+        // 位置の精度が悪い（150m より粗い）か、30分より離れた位置しか無いときは「たぶん〇〇」（2026-11-06）
+        let unsure = Self.isUnsure(accuracy: sample.accuracy, age: abs(time.timeIntervalSince(sample.time)))
+        var name = registered(near: sample.location, accuracy: sample.accuracy)?.name
+        if name == nil { name = await areaName(for: sample.location) }
+        return name.map { unsure ? "たぶん" + $0 : $0 }
+    }
+
+    /// 通信せずに分かる場所の名前（登録した場所か、前に調べた地名）。聞き取りのヒント用
+    func quickName(at time: Date) -> String? {
+        guard isOn, let sample = sample(at: time) else { return nil }
         if let place = registered(near: sample.location, accuracy: sample.accuracy) { return place.name }
-        return await areaName(for: sample.location)
+        let key = String(format: "%.3f,%.3f", sample.location.coordinate.latitude, sample.location.coordinate.longitude)
+        return names[key]
+    }
+
+    /// これより粗い位置は「たぶん」とし、職場かどうかの切り替えには使わない
+    nonisolated static let unsureAccuracy: Double = 150
+
+    nonisolated static func isUnsure(accuracy: Double, age: TimeInterval) -> Bool {
+        accuracy > unsureAccuracy || age > 1800
     }
 
     /// その時刻より前の最後の位置。無ければ、30分以内に分かった位置。
@@ -96,13 +114,15 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
 
     /// その時刻に職場にいたか。職場を登録していない・位置が分からないときは nil。
     func context(at time: Date) -> SpeakerLabeler.Context? {
-        guard isOn, places.contains(where: { $0.isWork == true }), let sample = sample(at: time) else { return nil }
+        guard isOn, places.contains(where: { $0.isWork == true }), let sample = sample(at: time),
+              !Self.isUnsure(accuracy: sample.accuracy, age: abs(time.timeIntervalSince(sample.time))) else { return nil }
         return registered(near: sample.location, accuracy: sample.accuracy)?.isWork == true ? .work : .other
     }
 
     /// 登録した場所にいたなら、そこが職場かどうか。登録していない場所・分からないときは nil。
     func registeredContext(at time: Date) -> SpeakerLabeler.Context? {
         guard isOn, let sample = sample(at: time),
+              !Self.isUnsure(accuracy: sample.accuracy, age: abs(time.timeIntervalSince(sample.time))),
               let place = registered(near: sample.location, accuracy: sample.accuracy) else { return nil }
         return place.isWork == true ? .work : .other
     }

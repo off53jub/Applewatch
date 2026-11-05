@@ -74,7 +74,7 @@ extension Pipeline {
         }
         let lines = c.lines.filter { $0.media == nil }
         let transcript = lines.map { line in
-            Self.minutesTime.string(from: line.time) + " " + (line.speaker.map { "[\($0)] " } ?? "") + line.text
+            Self.minutesTime.string(from: line.time) + " " + (line.speaker.map { "[\($0)] " } ?? "") + line.promptText
         }.joined(separator: "\n")
         let event = calendar.events(from: c.start, to: c.end).first
         var attendees = [SpeakerLabeler.selfName] + c.people.filter { !$0.hasPrefix("人物") }

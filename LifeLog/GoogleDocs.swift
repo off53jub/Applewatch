@@ -459,6 +459,17 @@ final class GoogleDocs {
         }
     }
 
+    /// ドライブの使っている量と上限（バイト。上限が無い契約なら nil）。2026-11-06
+    func storageQuota() async throws -> (used: Int64, limit: Int64?) {
+        let about = try await request("GET", "https://www.googleapis.com/drive/v3/about?fields=storageQuota")
+        let quota = about["storageQuota"] as? [String: Any] ?? [:]
+        func number(_ key: String) -> Int64? {
+            if let s = quota[key] as? String { return Int64(s) }
+            return (quota[key] as? NSNumber)?.int64Value
+        }
+        return (number("usage") ?? 0, number("limit"))
+    }
+
     /// 「控え」フォルダのファイル（ほかの端末の分も）
     func backupFiles() async throws -> [SyncFile] {
         let folder = try await backupFolder()
