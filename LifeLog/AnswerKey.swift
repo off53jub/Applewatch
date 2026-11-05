@@ -25,6 +25,10 @@ final class AnswerKey {
         var offset: TimeInterval
         var confidence: Double?
         var noisy: Bool?
+        /// 家の PC の多数決で食い違った行の、モデルごとの文
+        var votes: [String: String]? = nil
+        /// 週の数字には入れない、モデルの当たりやすさを学ぶための追加の問い（食い違った行から選ぶ）
+        var extra: Bool? = nil
         /// 本当の文字（合っていれば text と同じ）
         var rightText: String? = nil
         /// 話した人が合っていたか（分からないときは nil のまま）
@@ -56,6 +60,12 @@ final class AnswerKey {
 
     /// 1週に選ぶ数
     static let perWeek = 10
+    /// 食い違った行から足す問いの数（モデルの重みを学ぶため）
+    static let extraPerWeek = 3
+    /// 学んだ重み（"haas:1.10,reazon:0.80" の形）。家の PC に送る
+    static let weightsKey = "homePCWeights"
+    /// 重みを決めるのに要る、答えた食い違いの行の数
+    static let weightsNeed = 8
 
     private(set) var samples: [Sample] = []
 
@@ -88,6 +98,44 @@ final class AnswerKey {
         copy.answered = .now
         samples[i] = copy
         save()
+        updateWeights()
+    }
+
+    /// 答えたものから、モデルごとの重みを決め直して保存する（足りなければ消す＝どれも同じ重み）
+    func updateWeights() {
+        let weights = Self.weights(samples)
+        if weights.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.weightsKey)
+        } else {
+            let text = weights.keys.sorted().map { $0 + ":" + String(format: "%.2f", weights[$0]!) }.joined(separator: ",")
+            UserDefaults.standard.set(text, forKey: Self.weightsKey)
+        }
+    }
+
+    /// モデルごとの文字の誤り率（食い違った行の答えから）。答えた数とあわせて
+    nonisolated static func engineErrors(_ samples: [Sample]) -> [String: (error: Double, count: Int)] {
+        var errors: [String: (e: Int, n: Int, count: Int)] = [:]
+        for s in samples where s.isAnswered && s.skipped != true {
+            guard let right = s.rightText, let votes = s.votes else { continue }
+            let r = normalized(right)
+            guard !r.isEmpty else { continue }
+            for (engine, text) in votes {
+                var e = errors[engine] ?? (0, 0, 0)
+                e.e += editDistance(normalized(text), r)
+                e.n += r.count
+                e.count += 1
+                errors[engine] = e
+            }
+        }
+        return errors.mapValues { (Double($0.e) / Double(max($0.n, 1)), $0.count) }
+    }
+
+    /// 重み＝全体の誤り率の平均 ÷ そのモデルの誤り率（0.5〜2.0）。答えた食い違いの行が足りなければ空
+    nonisolated static func weights(_ samples: [Sample]) -> [String: Double] {
+        let errors = engineErrors(samples).filter { $0.value.count >= weightsNeed }
+        guard errors.count >= 2 else { return [:] }
+        let mean = errors.values.map(\.error).reduce(0, +) / Double(errors.count)
+        return errors.mapValues { min(2.0, max(0.5, mean / max($0.error, 0.02))) }
     }
 
     /// 答えを取り消す（もう一度答える）
@@ -101,11 +149,12 @@ final class AnswerKey {
         samples[i].skipped = nil
         samples[i].answered = nil
         save()
+        updateWeights()
     }
 
-    /// 新しい週から
+    /// 新しい週から（追加の問いは数えない）
     var scores: [Score] {
-        let groups = Dictionary(grouping: samples, by: \.week)
+        let groups = Dictionary(grouping: samples.filter { $0.extra != true }, by: \.week)
         return groups.keys.sorted(by: >).map { Self.score($0, groups[$0]!) }
     }
 
@@ -211,7 +260,17 @@ extension Pipeline {
     func answerKeyThisWeek() -> [AnswerKey.Sample] {
         let week = AnswerKey.weekKey(.now)
         if answerKey.samples(of: week).isEmpty {
-            answerKey.fill(week, with: AnswerKey.pick(answerKeyCandidates(week: week), count: AnswerKey.perWeek, seed: week))
+            let candidates = answerKeyCandidates(week: week)
+            var picked = AnswerKey.pick(candidates, count: AnswerKey.perWeek, seed: week)
+            // 食い違った行（モデルごとの文が残っている行）から、重みを学ぶための問いを足す
+            let taken = Set(picked.map(\.id))
+            let split = candidates.filter { $0.votes != nil && !taken.contains($0.id) }
+            picked += AnswerKey.pick(split, count: AnswerKey.extraPerWeek, seed: week + "extra").map { s in
+                var copy = s
+                copy.extra = true
+                return copy
+            }
+            answerKey.fill(week, with: picked.sorted { $0.time < $1.time })
         }
         return answerKey.samples(of: week)
     }
@@ -227,7 +286,7 @@ extension Pipeline {
                         id: day + "|" + String(Int(line.time.timeIntervalSince1970)), week: week, day: day,
                         time: line.time, text: line.text, speaker: line.speaker, speakerID: line.speakerID,
                         place: c.place, title: c.title, audio: audio, offset: offset,
-                        confidence: line.confidence, noisy: line.noisy))
+                        confidence: line.confidence, noisy: line.noisy, votes: line.votes))
                 }
             }
         }
@@ -293,6 +352,22 @@ struct AnswerKeyView: View {
                     Text("文字の誤りは、直した文字の数を本当の文字の数で割ったもの（空白と句読点は数えない）。少ないほど良い。話者と場面は、答えたものの中で合っていた割合。")
                 }
             }
+            let engines = AnswerKey.engineErrors(key.samples)
+            if !engines.isEmpty {
+                let weights = AnswerKey.weights(key.samples)
+                Section {
+                    ForEach(engines.keys.sorted(), id: \.self) { name in
+                        let e = engines[name]!
+                        LabeledContent(Self.engineName(name)) {
+                            Text(percent(e.error) + " 誤り・\(e.count) 問" + (weights[name].map { "・重み " + String(format: "%.2f", $0) } ?? ""))
+                        }
+                    }
+                } header: {
+                    Text("家の PC のモデルごとの当たり")
+                } footer: {
+                    Text("食い違った行の答えから数えます（印「＋」の問い）。どのモデルも \(AnswerKey.weightsNeed) 問以上たまると、よく当たるモデルの票を重く（0.5〜2倍）して多数決します。")
+                }
+            }
         }
         .navigationTitle("答え合わせ")
         .onAppear { week = pipeline.answerKeyThisWeek() }
@@ -315,13 +390,23 @@ struct AnswerKeyView: View {
     }
 
     private func caption(_ s: AnswerKey.Sample) -> String {
-        var parts = [s.time.formatted(date: .abbreviated, time: .shortened)]
+        var parts = [(s.extra == true ? "＋ " : "") + s.time.formatted(date: .abbreviated, time: .shortened)]
         if let speaker = s.speaker { parts.append(speaker) }
         if let place = s.place { parts.append(place) }
         return parts.joined(separator: "・")
     }
 
     private func percent(_ v: Double) -> String { String(Int((v * 100).rounded())) + "%" }
+
+    private static func engineName(_ name: String) -> String {
+        switch name {
+        case "haas": "Haas-ja"
+        case "reazon": "ReazonSpeech"
+        case "whisper": "Whisper"
+        case "cloud": "クラウド"
+        default: name
+        }
+    }
 
     private func metric(_ name: String, _ value: String?) -> some View {
         Text(name + " " + (value ?? "—"))

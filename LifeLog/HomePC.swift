@@ -149,6 +149,10 @@ final class HomePC {
             }
             if !words.isEmpty { items.append(URLQueryItem(name: "hints", value: words.joined(separator: "\n"))) }
             if let previous, !previous.isEmpty { items.append(URLQueryItem(name: "prompt", value: String(previous.suffix(120)))) }
+            // 答え合わせから学んだ、モデルごとの当たりやすさ（多数決の票の重み）
+            if let weights = UserDefaults.standard.string(forKey: AnswerKey.weightsKey), !weights.isEmpty {
+                items.append(URLQueryItem(name: "weights", value: weights))
+            }
             components?.queryItems = items
             upload.url = components?.url
             upload.httpMethod = "POST"

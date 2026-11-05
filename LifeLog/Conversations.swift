@@ -33,6 +33,8 @@ final class ConversationLog {
         var sound: String? = nil
         /// 騒がしいところ（周りの音が大きい・声が雑音に埋もれている区切り）で聞き取った行
         var noisy: Bool? = nil
+        /// 家の PC の多数決で食い違った行の、モデルごとの文（答え合わせでモデルの当たりやすさを学ぶため）
+        var votes: [String: String]? = nil
 
         /// 確からしさが低く、聞き直して確かめたほうがよい行
         var isUncertain: Bool { checked != true && (confidence ?? 1) < 0.45 }

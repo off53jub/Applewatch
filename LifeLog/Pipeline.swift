@@ -2601,6 +2601,10 @@ final class Pipeline {
                                             confidence: confidence[i].map { ($0 * 100).rounded() / 100 })
             line.sound = SoundScene.label(from: offsets[i], to: end, in: scene)
             if noisy { line.noisy = true }
+            if let pcLines, pcLines.count == entries.count, (pcLines[i].confidence ?? 1) < HomePC.cloudVoteBelow,
+               pcLines[i].votes.values.filter({ !$0.isEmpty }).count >= 2 {
+                line.votes = pcLines[i].votes
+            }
             if let id = names[i]?.personID, hiddenIDs.contains(id) {
                 removed.append(Junk.TrashItem(day: dayFormatter.string(from: line.time), line: line,
                                               kind: .hidden, removed: .now))

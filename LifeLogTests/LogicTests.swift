@@ -407,6 +407,26 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(score.textError ?? 0, 0.1, accuracy: 0.0001)
     }
 
+    func testAnswerKeyEngineWeights() {
+        func sample(_ i: Int) -> AnswerKey.Sample {
+            AnswerKey.Sample(id: "\(i)", week: "w", day: "d", time: .now, text: "あいうえお", speaker: nil, speakerID: nil,
+                             place: nil, title: nil, audio: "a", offset: 0, confidence: 0.4, noisy: nil,
+                             votes: ["haas": "あいうえお", "reazon": "あいうえか", "whisper": "かきくけこ"], extra: true,
+                             rightText: "あいうえお", answered: .now)
+        }
+        XCTAssertTrue(AnswerKey.weights((0..<7).map(sample)).isEmpty)
+        let samples = (0..<8).map(sample)
+        let errors = AnswerKey.engineErrors(samples)
+        XCTAssertEqual(errors["haas"]?.error ?? 1, 0, accuracy: 0.001)
+        XCTAssertEqual(errors["reazon"]?.error ?? 0, 0.2, accuracy: 0.001)
+        let weights = AnswerKey.weights(samples)
+        XCTAssertEqual(weights["haas"], 2.0)
+        XCTAssertEqual(weights["whisper"], 0.5)
+        XCTAssertGreaterThan(weights["reazon"] ?? 0, 1.0)
+        // 追加の問いは週の数字に入れない
+        XCTAssertEqual(AnswerKey.score("w", samples.filter { $0.extra != true }).answered, 0)
+    }
+
     func testAnswerKeyWeekAndPick() {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "Asia/Tokyo")!

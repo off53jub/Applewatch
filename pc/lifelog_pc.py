@@ -220,6 +220,7 @@ class Engine:
             provider=provider,
         )
         self.chars = token_chars(files["tokens"])
+        self.tokens_path = files["tokens"]
         self.lock = threading.Lock()
         self.provider = provider
         log(f"Haas-ja を読み込みました（{time.time() - started:.1f} 秒、{provider}、{threads} スレッド）")
@@ -277,6 +278,7 @@ class ReazonEngine(Engine):
             provider=provider,
         )
         self.chars = token_chars(files["tokens"])
+        self.tokens_path = files["tokens"]
         self.lock = threading.Lock()
         self.provider = provider
         log(f"ReazonSpeech を読み込みました（{time.time() - started:.1f} 秒、{provider}）")
@@ -551,7 +553,19 @@ SURFACE_SIMILAR = 0.85
 INVENTING = {"whisper", "cloud"}
 
 
-def vote(hypotheses: dict[str, str]) -> dict | None:
+def parse_weights(text: str | None) -> dict[str, float]:
+    """"haas:1.1,reazon:0.8" の形（答え合わせから iPhone が学んだ、モデルごとの当たりやすさ）。0.5〜2.0 に収める。"""
+    weights: dict[str, float] = {}
+    for part in (text or "").split(","):
+        name, _, value = part.partition(":")
+        try:
+            weights[name.strip()] = min(2.0, max(0.5, float(value)))
+        except ValueError:
+            continue
+    return weights
+
+
+def vote(hypotheses: dict[str, str], weights: dict[str, float] | None = None) -> dict | None:
     """モデルごとの文から1つを選ぶ。選んだ文・確からしさ（0〜1）・候補（ほかの違う文）を返す。何も選べなければ None。
 
     選ぶのは、読みがほかのモデルといちばん近い文（何も書かなかったモデルは 0 として数える）。
@@ -571,7 +585,10 @@ def vote(hypotheses: dict[str, str]) -> dict | None:
     for i, a in enumerate(heard):
         for b in heard[i + 1:]:
             sims[(a, b)] = sims[(b, a)] = similarity(hypotheses[a], hypotheses[b])
-    scores = {k: sum(sims.get((k, o), 0.0) for o in names if o != k) / (len(names) - 1) for k in heard}
+    # 答え合わせでよく当たるモデルの票は重く数える（重みが無ければ、どれも 1）
+    w = {k: (weights or {}).get(k, 1.0) for k in names}
+    scores = {k: (w[k] * 0.01 + sum(w[o] * sims.get((k, o), 0.0) for o in names if o != k))
+              / sum(w[o] for o in names if o != k) for k in heard}
     best = max(heard, key=lambda k: (scores[k], -names.index(k)))
     text = hypotheses[best].strip()
     chosen = best
@@ -610,7 +627,8 @@ class Ensemble:
         self.label = "＋".join(e.label for e in engines)
 
     def transcribe(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str] | None = None,
-                   prompt: str | None = None, votes: bool = False) -> list[dict]:
+                   prompt: str | None = None, votes: bool = False,
+                   weights: dict[str, float] | None = None) -> list[dict]:
         if CLEAN_AUDIO:
             audio = clean_audio(audio, segments)
         jobs = {e.name: self.pool.submit(e.run, audio, segments, hints or [], prompt) for e in self.engines}
@@ -625,7 +643,7 @@ class Ensemble:
         lines = []
         for i, (start, end) in enumerate(segments):
             hypotheses = {name: texts[i] if i < len(texts) else "" for name, texts in results.items()}
-            picked = vote(hypotheses)
+            picked = vote(hypotheses, weights)
             if not picked:
                 continue
             line = {"start": round(start, 2), "end": round(end, 2), "text": picked["text"]}
@@ -790,7 +808,8 @@ class Handler(BaseHTTPRequestHandler):
             # 聞き取ってほしい言葉（改行区切り）と、前の区切りの終わりの文。Whisper のヒントにする
             hints = [w.strip() for w in (query.get("hints") or [""])[0].split("\n") if w.strip()][:80]
             prompt = (query.get("prompt") or [None])[0]
-            lines = self.engine.transcribe(audio, segments, hints=hints, prompt=prompt)
+            weights = parse_weights((query.get("weights") or [None])[0])
+            lines = self.engine.transcribe(audio, segments, hints=hints, prompt=prompt, weights=weights)
         except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
             log(f"文字にできませんでした: {error!r}")
             self.send_json(500, {"error": str(error)})
@@ -926,6 +945,11 @@ def test(path: str, engine: Ensemble, segments: str | None, hints: list[str]) ->
         if hasattr(e, "chars"):
             print(f"    {e.label} の登録語: {hotword_string(hints, e.chars) or '（なし）'}"
                   f"（知っている1文字のトークン {len(e.chars)} 個）")
+            if not e.chars and getattr(e, "tokens_path", None):
+                # 1文字のトークンが無いモデル（BPE など）の、トークンの形と同じフォルダのファイルを見る
+                rows = e.tokens_path.read_text(encoding="utf-8").splitlines()
+                print(f"      トークンの例: {rows[:3] + rows[200:205]}（全 {len(rows)} 個）")
+                print(f"      同じフォルダ: {sorted(p.name for p in e.tokens_path.parent.iterdir())[:20]}")
     for line in lines:
         print(f"[{line['start']:.1f}-{line['end']:.1f}] {line['text']}"
               + (f"  （確からしさ {line['confidence']:.2f}）" if "confidence" in line else ""))
@@ -960,6 +984,14 @@ def check_vote() -> None:
         ok = text == want and (minimum is None or (got and got["confidence"] >= minimum))
         print(("OK " if ok else "NG ") + json.dumps({"in": hypotheses, "out": got}, ensure_ascii=False))
         failed += 0 if ok else 1
+    # 重み：近さが同じなら、答え合わせで当たりやすいと分かったモデルの文を先に選ぶ
+    tie = {"haas": "今日は晴れ", "reazon": "今日は雨", "whisper": "今日は雪"}
+    weighted = vote(tie, {"reazon": 2.0})
+    plain = vote(tie)
+    ok = bool(weighted) and bool(plain) and weighted["engine"] == "reazon" and plain["engine"] == "haas" \
+        and parse_weights("haas:9,reazon:x,whisper:0.7") == {"haas": 2.0, "whisper": 0.7}
+    print(("OK " if ok else "NG ") + json.dumps({"weighted": weighted, "plain": plain}, ensure_ascii=False))
+    failed += 0 if ok else 1
     # 3つとも食い違えば、確からしさを低くして候補を付ける（iPhone で言語モデルに見比べてもらう）
     low = vote({"haas": "明日の予算の話", "reazon": "あしたの洋服の話", "whisper": "飛鳥の羊羹の話"})
     ok = bool(low) and low["confidence"] < 0.5 and len(low["alternatives"]) == 2
