@@ -435,6 +435,114 @@ def similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, ra, rb, autojunk=False).ratio()
 
 
+def _units(text: str) -> list[tuple[str, str]]:
+    """文を「書き方・読み」の小さなまとまりに分ける。漢字の語は1つ、かなは1文字ずつ。読みの無い記号は前に付ける。"""
+    global _kakasi
+    text = unicodedata.normalize("NFKC", text)
+    try:
+        with _kakasi_lock:
+            if _kakasi is None:
+                import pykakasi
+
+                _kakasi = pykakasi.kakasi()
+            parts = [(p["orig"], p["hira"]) for p in _kakasi.convert(text)]
+    except Exception:  # noqa: BLE001
+        parts = [(ch, ch) for ch in text]
+    units: list[tuple[str, str]] = []
+    for orig, hira in parts:
+        kana = all("\u3040" <= ch <= "\u30ff" for ch in orig)
+        pieces = list(zip(orig, hira)) if kana and len(orig) == len(hira) else [(orig, hira)]
+        for o, h in pieces:
+            r = "".join(ch for ch in h.replace("ー", "").replace("～", "").lower() if ch.isalnum())
+            if not r and units:
+                units[-1] = (units[-1][0] + o, units[-1][1])
+            else:
+                units.append((o, r))
+    return units
+
+
+def _bounds(units: list[tuple[str, str]]) -> list[int]:
+    """読みの文字位置で、まとまりの切れ目（0 と末尾を含む）"""
+    edges = [0]
+    for _, r in units:
+        edges.append(edges[-1] + len(r))
+    return edges
+
+
+def _surface(units: list[tuple[str, str]], edges: list[int], j1: int, j2: int) -> str | None:
+    """読みの j1〜j2 にちょうど重なるまとまりの書き方（切れ目が合わなければ None）"""
+    if j1 not in edges or j2 not in edges:
+        return None
+    a, b = edges.index(j1), edges.index(j2)
+    # 読みの無いまとまりで同じ位置が続くときは、いちばん外側を取る
+    while b + 1 < len(edges) and edges[b + 1] == j2 and b < len(units) and not units[b][1]:
+        b += 1
+    return "".join(o for o, _ in units[a:b])
+
+
+def rover(text: str, others: dict[str, str]) -> str:
+    """選んだ文のうち、ほかの2つ以上のモデルが同じ読みで違うと言った所だけを、そちらに置き換える（言葉ごとの多数決）。
+
+    置き換えるのは、選んだ文のまとまりの切れ目にちょうど重なる所だけ。書き方は Whisper があれば Whisper のものを使う。
+    """
+    heard = {k: v.strip() for k, v in others.items() if v.strip()}
+    if len(heard) < 2:
+        return text
+    pu = _units(text)
+    pr = "".join(r for _, r in pu)
+    pe = _bounds(pu)
+    if not pr:
+        return text
+    found: dict[tuple[int, int, str], list[tuple[str, str | None]]] = {}
+    for name, other in heard.items():
+        ou = _units(other)
+        orr = "".join(r for _, r in ou)
+        oe = _bounds(ou)
+        matcher = difflib.SequenceMatcher(None, pr, orr, autojunk=False)
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                continue
+            # 違う所を、選んだ文のまとまりの切れ目まで広げる（前後は同じ読みなので、ほかの文も同じだけ広げる）
+            left = max(e for e in pe if e <= i1)
+            right = min(e for e in pe if e >= i2)
+            if left == right:
+                # 足すだけの所は、前（無ければ後ろ）のまとまりごと置き換える形にする
+                if left > 0:
+                    left = max(e for e in pe if e < left)
+                elif any(e > right for e in pe):
+                    right = min(e for e in pe if e > right)
+            j1 -= i1 - left
+            j2 += right - i2
+            i1, i2 = left, right
+            j1, j2 = max(0, j1), min(len(orr), j2)
+            found.setdefault((i1, i2, orr[j1:j2]), []).append((name, _surface(ou, oe, j1, j2)))
+    changes = []
+    for (i1, i2, rep), voters in found.items():
+        if len(voters) < 2 or i1 not in pe or i2 not in pe:
+            continue
+        surfaces = [s for n, s in sorted(voters, key=lambda v: v[0] != "whisper") if s is not None]
+        if not surfaces:
+            continue
+        changes.append((i1, i2, surfaces[0]))
+    if not changes:
+        return text
+    # 重なるものは、先に見つけたものだけ。後ろから置き換える
+    changes.sort()
+    kept = []
+    for c in changes:
+        if not kept or c[0] >= kept[-1][1]:
+            kept.append(c)
+    out = text_units = [o for o, _ in pu]
+    for i1, i2, surface in reversed(kept):
+        a, b = pe.index(i1), pe.index(i2)
+        if i1 == i2:
+            out = text_units[:a] + [surface] + text_units[a:]
+        else:
+            out = text_units[:a] + [surface] + text_units[b:]
+        text_units = out
+    return "".join(out)
+
+
 # 同じくらい合っているときに先に選ぶ順（日本語の話し言葉に強く、作り話をしにくいものから）
 PRIORITY = ["haas", "reazon", "whisper", "cloud"]
 # Whisper の書き方を使ってよい近さ（読みがほぼ同じなら、ヒントを渡した Whisper の漢字の書き方のほうが名前に強い）
@@ -471,6 +579,11 @@ def vote(hypotheses: dict[str, str]) -> dict | None:
             and sims.get((best, "whisper"), 0.0) >= SURFACE_SIMILAR:
         text = hypotheses["whisper"].strip()
         chosen = "whisper"
+    # 言葉ごとの多数決：選んだ文の一部だけが違っていて、ほかの2つが同じことを言っていれば、そこを直す
+    merged = rover(text, {k: hypotheses[k] for k in heard if k != chosen})
+    if merged != text:
+        text = merged
+        chosen = chosen + "+rover"
     alternatives = []
     for k in heard:
         other = hypotheses[k].strip()
@@ -797,6 +910,11 @@ def check_vote() -> None:
         ({"haas": "さいとうさんと話した", "reazon": "斉藤さんと話した", "whisper": "齋藤さんと話した"}, "齋藤さんと話した", 0.8),
         # Whisper だけが書いた文は作り話とみなす
         ({"haas": "", "reazon": "", "whisper": "ご視聴ありがとうございました"}, None, None),
+        # 言葉ごとの多数決：3つとも少しずつ違えば、所ごとに2つが合っているほうを取る
+        ({"haas": "明日の洋服の件で田中さんと話す", "reazon": "明日の予算の件で中田さんと話す",
+          "whisper": "明日の予算の件で田中さんと話した"}, "明日の予算の件で田中さんと話す", None),
+        # 選んだ文の書き足し・書き落としも、ほかの2つがそろっていれば直す
+        ({"haas": "来週の会議の資料", "reazon": "来週の会議の資料ね", "whisper": "来週の会議の資料ね"}, "来週の会議の資料ね", 0.8),
         # 1つだけ聞き取れた（Whisper 以外）は、確からしさを低くして残す
         ({"haas": "はい", "reazon": "", "whisper": ""}, "はい", None),
     ]

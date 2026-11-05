@@ -228,6 +228,10 @@ final class HomePC {
         // クラウドが選ばれても、読みが前に選んでいた文とほぼ同じなら、元の書き方（ヒントを渡した PC の Whisper など）を残す
         if best == "cloud", let previous = heardKey(of: line.text, in: votes), sim("cloud", previous) >= sameReading {
             result.text = line.text
+        } else if heardKey(of: line.text, in: votes) == nil, let winner = votes[best],
+                  (TranscriptCheck.similarity(winner, line.text) ?? 0) >= sameReading {
+            // PC が言葉ごとの多数決で直した文（どの票とも同じではない）は、選ばれた票と読みがほぼ同じなら残す
+            result.text = line.text
         }
         let agree = others(best).map { o -> Double in
             let s = sim(best, o)
