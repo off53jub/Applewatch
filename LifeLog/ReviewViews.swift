@@ -75,8 +75,26 @@ struct VoiceReviewView: View {
                             Text("「\(item.info.text)」").lineLimit(3)
                             Text(item.info.caption).font(.caption).foregroundStyle(.secondary)
                             Text(reason(item)).font(.caption).foregroundStyle(.orange)
+                            if item.info.loose {
+                                Text("この文と声の時刻が少しずれているかもしれません。左の▶︎は声のひとこま、下の「この行を聞く」は文の行です。")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
                         }
                     }
+                    // 文の行そのものを聞く（声のひとこまと時刻がずれていても、文のセリフが聞ける。2026-11-06）
+                    let lineKey = item.id + "-line"
+                    Button {
+                        Task {
+                            await player.toggle(lineKey, at: item.info.lineStart, until: item.info.lineEnd + 0.5) {
+                                await pipeline.archive.playableURL(for: item.sample.audio)
+                            }
+                        }
+                    } label: {
+                        Label(player.playing == lineKey ? "止める" : "この行を聞く",
+                              systemImage: player.playing == lineKey ? "stop.circle" : "text.bubble")
+                            .font(.callout)
+                    }
+                    .disabled(!pipeline.archive.canPlay(item.sample.audio))
                     if let note = done[item.id] {
                         Text(note).font(.footnote).foregroundStyle(.secondary)
                     } else if working == item.id {
