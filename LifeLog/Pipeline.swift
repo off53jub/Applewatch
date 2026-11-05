@@ -745,9 +745,31 @@ final class Pipeline {
         await speakers.setAsideItems(of: person)
     }
 
+    /// 本人が戻した、声の特徴だけを外した声（もう自動では外さない）
+    private static let keptVoicesKey = "voiceKeptElsewhere"
+
+    /// 自動で覚えた声のうち、その人の決めた声より、ほかの人（たいてい自分）の決めた声にずっと近いものを、
+    /// 聞き分けから外して取っておく（人の画面の「聞き分けから外した声」から戻せる）。設定の「食い違った声を自動で外す」に従う。
+    @discardableResult
+    func setAsideOthersVoices() async -> Int {
+        guard UserDefaults.standard.object(forKey: Self.autoAsideKey) as? Bool ?? true else { return 0 }
+        let kept = Set(UserDefaults.standard.stringArray(forKey: Self.keptVoicesKey) ?? [])
+        let count = await speakers.setAsideOthersVoices(kept: kept)
+        if count > 0 {
+            people = await speakers.people()
+            hasSelfVoice = await speakers.hasSelfVoice
+        }
+        return count
+    }
+
     /// 脇に置いたひとこまを戻す。戻したものは「このままでよい」にして、もう自動では外さない。
     func restoreAside(_ item: SpeakerLabeler.SetAside) async -> Bool {
         guard await speakers.restoreAside(item.id) else { return false }
+        if !item.hasClip {
+            var keptVoices = UserDefaults.standard.stringArray(forKey: Self.keptVoicesKey) ?? []
+            keptVoices += item.voices.map { SpeakerLabeler.keptKey(person: item.person, added: $0.added) }
+            UserDefaults.standard.set(Array(keptVoices.suffix(2000)), forKey: Self.keptVoicesKey)
+        }
         var kept = UserDefaults.standard.stringArray(forKey: Self.reviewKeptKey) ?? []
         kept = Array((kept + [Self.reviewKey(item.person, item.sample)]).suffix(500))
         UserDefaults.standard.set(kept, forKey: Self.reviewKeptKey)
@@ -1334,6 +1356,8 @@ final class Pipeline {
         await sync.run()
         // 声のひとこまが記録のほかの人の行と食い違っていたら、聞き分けから外す（戻せる形で）
         await setAsideMismatched()
+        // 自動で覚えた声が、ほかの人（たいてい自分）の決めた声にずっと近ければ、聞き分けから外す（戻せる形で）
+        await setAsideOthersVoices()
         // 1日のまとめ・人物ノート・週のまとめ・AI 向けの案内と索引は、iPhone だけが書く
         // （iPad の会話は同期で iPhone に届くので、iPhone が両方の分をまとめて書く。二重にならないように）
         if UIDevice.current.userInterfaceIdiom != .pad {
@@ -1376,6 +1400,8 @@ final class Pipeline {
         // 検索の索引（書き換わった日だけ）と、登録の毎日の控えと、動き具合の診断
         refreshSearchIndex()
         await backups.runIfDue(signedIn: email != nil)
+        // 署名の期限の前に知らせる（起動ごとに1回頼む）
+        await Provisioning.scheduleRemindersOnce()
         _ = await writeDiagnostics()
         return true
     }
@@ -1397,9 +1423,31 @@ final class Pipeline {
         do {
             try await docs.overwrite(paragraphs, name: name)
             diagnostics.lastWritten = .now
+            await writeAppStatus()
             return "ドライブの「\(name)」に書きました。"
         } catch {
             return "書けませんでした: \(error.localizedDescription)"
+        }
+    }
+
+    /// 家の PC（Watch-Freshness.ps1）が読む「アプリの状態（端末）.json」を同期フォルダに書く。
+    /// 署名の期限が近い・記録が長く届かないときに、PC から LINE で知らせてもらうため。会話の中身・名前は入れない。
+    private func writeAppStatus() async {
+        let info = Bundle.main.infoDictionary
+        let status = AppStatus(device: sync.deviceID,
+                               kind: UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone",
+                               written: .now,
+                               version: (info?["CFBundleShortVersionString"] as? String ?? "?") + "（"
+                                   + (info?["CFBundleVersion"] as? String ?? "?") + "）",
+                               signExpires: Provisioning.expiry,
+                               recording: isRecording,
+                               pending: pendingCount,
+                               lastProcessed: diagnostics.runs.last?.start)
+        guard let data = try? status.encoded() else { return }
+        let key = "appStatusFileID"
+        if let id = try? await docs.uploadSync(data, name: AppStatus.fileName(device: sync.deviceID),
+                                               id: UserDefaults.standard.string(forKey: key)) {
+            UserDefaults.standard.set(id, forKey: key)
         }
     }
 

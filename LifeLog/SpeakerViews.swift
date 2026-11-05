@@ -344,7 +344,7 @@ struct PersonView: View {
 
     private func loadAside() async {
         aside = await pipeline.setAsideItems(of: id)
-        asideInfo = pipeline.sampleInfo(for: aside.map(\.sample))
+        asideInfo = pipeline.sampleInfo(for: aside.filter(\.hasClip).map(\.sample))
     }
 
     private static let mergeDate: DateFormatter = {
@@ -457,14 +457,25 @@ struct PersonView: View {
                     Section {
                         ForEach(aside) { item in
                             HStack {
-                                SampleButton(player: player, sample: item.sample, key: "aside-" + item.id)
+                                if item.hasClip {
+                                    SampleButton(player: player, sample: item.sample, key: "aside-" + item.id)
+                                } else {
+                                    // 声の特徴だけを外したもの（聞ける音のひとこまは無い）
+                                    Image(systemName: "person.wave.2").foregroundStyle(.secondary).frame(width: 32)
+                                }
                                 VStack(alignment: .leading, spacing: 2) {
-                                    if let info = asideInfo[item.sample] {
-                                        Text("「\(info.text)」").lineLimit(3)
-                                        Text(info.caption).font(.caption).foregroundStyle(.secondary)
+                                    if item.hasClip {
+                                        if let info = asideInfo[item.sample] {
+                                            Text("「\(info.text)」").lineLimit(3)
+                                            Text(info.caption).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Text("記録では\(item.reason)だった").font(.caption).foregroundStyle(.secondary)
+                                    } else {
+                                        Text(item.reason).font(.caption)
+                                        Text("\(item.at.formatted(date: .abbreviated, time: .shortened))に外した（聞ける音はありません）")
+                                            .font(.caption).foregroundStyle(.secondary)
                                     }
-                                    Text("記録では\(item.reason)だった").font(.caption).foregroundStyle(.secondary)
-                                    Button("この人の声だった（戻す）") {
+                                    Button(item.hasClip ? "この人の声だった（戻す）" : "この人の声だった（\(item.voices.count) 個を戻す）") {
                                         Task {
                                             _ = await pipeline.restoreAside(item)
                                             await loadAside()
@@ -477,7 +488,7 @@ struct PersonView: View {
                     } header: {
                         Text("聞き分けから外した声（\(aside.count)）")
                     } footer: {
-                        Text("記録ではほかの人の行やテレビの行と重なっていた声のひとこまは、見直しを待たずに、この人の聞き分けに使わないようにしています。消してはいないので、この人の声だったら戻せます。登録や手直しで覚えた声は外しません。設定の「食い違った声を自動で外す」で止められます。")
+                        Text("記録ではほかの人の行やテレビの行と重なっていた声のひとこまは、見直しを待たずに、この人の聞き分けに使わないようにしています。自動で覚えた声のうち、この人の登録・手直しの声より、ほかの人（たいてい自分）の登録・手直しの声にずっと近いものも外します（自分の声がほかの人の声として覚えられ、自分の発言がその人の行になっていたため）。消してはいないので、この人の声だったら戻せます。登録や手直しで覚えた声は外しません。設定の「食い違った声を自動で外す」で止められます。")
                     }
                 }
                 if !person.isSelf {

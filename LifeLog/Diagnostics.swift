@@ -96,6 +96,11 @@ extension Pipeline {
         let info = Bundle.main.infoDictionary
         let version = (info?["CFBundleShortVersionString"] as? String ?? "?") + "（" + (info?["CFBundleVersion"] as? String ?? "?") + "）"
         add("端末", "アプリの版", version)
+        if let expiry = Provisioning.expiryText() {
+            add("端末", "署名の期限", expiry + (Provisioning.isNear() ? "・Sideloadly で入れ直す" : ""), !Provisioning.isNear())
+        } else {
+            add("端末", "署名の期限", "分からない（TestFlight など）")
+        }
         add("端末", "機種・iOS", UIDevice.current.model + "・iOS " + UIDevice.current.systemVersion)
         let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
         add("端末", "低電力モード", onOff(lowPower), !lowPower)

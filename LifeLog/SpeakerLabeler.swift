@@ -227,8 +227,14 @@ actor SpeakerLabeler {
             }
         }
 
+        // 手首や胸元のマイクに、自分の声くらい大きく入ったまとまり（身につけている自分の声の見込みが高い）
+        func isLoud(_ key: String) -> Bool {
+            guard let selfLevel, let level = loudness[key] else { return false }
+            return level >= selfLevel - 3
+        }
+
         // 近い組から順に決める。1つの区切りで、同じ人を2つのまとまりに当てるのは、どちらも十分近いときだけ。
-        var pairs: [(cluster: String, person: String, distance: Float, second: Float)] = []
+        var pairs: [(cluster: String, person: String, distance: Float, second: Float, rank: Float)] = []
         for (key, c) in clusters {
             let scored = store.people.map { ($0, distance(c.embedding, to: $0)) }.sorted { $0.1 < $1.1 }
             for (i, (p, d)) in scored.enumerated() {
@@ -244,16 +250,35 @@ actor SpeakerLabeler {
                         limit = min(limit, strict)
                     }
                 }
-                if d <= limit { pairs.append((key, p.id, d, second)) }
+                // 自分の声くらい大きい声は、自分とほかの人で迷うときに自分を先に選ぶ（自分の発言がほかの人の行になっていた。2026-11-05）
+                let rank = p.isSelf && isLoud(key) ? d - Self.loudSelfBonus : d
+                // 覚え足すかを決めるための、いちばん近い別の人。名前のある人（自分を含む）は、名前のある人どうしで比べる
+                // （自分の声から分かれた名前の無い人物Nが近いだけで、自分の声を覚え足せなくならないように）
+                let rival = scored.first { $0.0.id != p.id && (!p.isNamed || $0.0.isNamed) }?.1 ?? 1
+                if d <= limit { pairs.append((key, p.id, d, rival, rank)) }
             }
         }
-        pairs.sort { $0.distance < $1.distance }
-        var assigned: [String: (person: String, distance: Float)] = [:]
+        pairs.sort { $0.rank < $1.rank }
+        var assigned: [String: (person: String, distance: Float, second: Float)] = [:]
         var used: Set<String> = []
         for pair in pairs where assigned[pair.cluster] == nil {
             if used.contains(pair.person) && pair.distance > strict { continue }
-            assigned[pair.cluster] = (pair.person, pair.distance)
+            assigned[pair.cluster] = (pair.person, pair.distance, pair.second)
             used.insert(pair.person)
+        }
+        // 同じ区切りの2つのまとまりが同じ人になり、片方は自分の声くらい大きく、もう片方はずっと小さいときは、
+        // 大きいほうを身につけている自分の声とみなす（1対1で、自分の発言まで相手の名前の行になっていた。2026-11-05）
+        if let selfLevel, let me = person(Self.selfID), !assigned.values.contains(where: { $0.person == Self.selfID }) {
+            let owners = assigned.mapValues { $0.person }
+            for key in Self.wearerClusters(owners: owners, levels: loudness, selfLevel: selfLevel) {
+                guard let c = clusters[key] else { continue }
+                let d = distance(c.embedding, to: me)
+                if d <= accept + 0.08 {
+                    // 迷って決めた声なので、自分の声としては覚え足さない（second を同じ距離にしておく）
+                    assigned[key] = (Self.selfID, d, d)
+                    break
+                }
+            }
         }
 
         var labels: [String: String] = [:]
@@ -263,7 +288,10 @@ actor SpeakerLabeler {
             if let match = assigned[key], let i = index(of: match.person) {
                 store.people[i].seconds += c.seconds
                 store.people[i].lastHeard = .now
-                if match.distance <= strictness.learn && c.seconds >= 3 {
+                // 覚え足すのは、2番目に近い人よりはっきり近いときだけ。ほかの人なのに自分の声くらい大きいときは覚えない
+                // （迷った声を覚え足すと、自分の声がほかの人の声として増えていく。井上さんの自動の声20個が自分の声だった）
+                if Self.mayLearn(distance: match.distance, second: match.second, limit: strictness.learn,
+                                 seconds: c.seconds, isSelf: match.person == Self.selfID, loud: isLoud(key)) {
                     addVoice(c.embedding, pinned: false, to: i)
                     remember(sample, for: i)
                 }
@@ -289,6 +317,49 @@ actor SpeakerLabeler {
             return Segment(start: TimeInterval(s.startTimeSeconds), end: TimeInterval(s.endTimeSeconds),
                            personID: id, name: p.displayName)
         }
+    }
+
+    // MARK: - 迷った声の扱い（2026-11-05。自分の声がほかの人の声として覚えられていた）
+
+    /// 自分の声くらい大きいまとまりを、自分とほかの人で迷うときに自分へ寄せる幅
+    static let loudSelfBonus: Float = 0.06
+    /// 覚え足すのは、2番目に近い人よりこれだけ近いときだけ
+    static let learnMargin: Float = 0.10
+
+    /// 声を覚え足してよいか。second は2番目に近い人までの距離（選んだ人が2番目なら、いちばん近い人まで）。
+    nonisolated static func mayLearn(distance: Float, second: Float, limit: Float, seconds: Double,
+                                     isSelf: Bool, loud: Bool) -> Bool {
+        guard distance <= limit, seconds >= 3, second - distance >= learnMargin else { return false }
+        // ほかの人なのに、身につけたマイクに自分の声くらい大きく入った声は、自分の声かもしれないので覚えない
+        return isSelf || !loud
+    }
+
+    /// 1つの区切りで同じ人になったまとまりのうち、自分の声くらい大きく（selfLevel-3 dB 以上）、
+    /// 同じ人のほかのまとまりより 12 dB 以上大きいもの（大きい順）。身につけている自分の声とみなす候補。
+    nonisolated static func wearerClusters(owners: [String: String], levels: [String: Float],
+                                           selfLevel: Float) -> [String] {
+        var result: [(String, Float)] = []
+        for (person, keys) in Dictionary(grouping: owners.keys, by: { owners[$0]! }) where person != selfID && keys.count > 1 {
+            let measured: [(String, Float)] = keys.compactMap { k in levels[k].map { (k, $0) } }
+            guard let quietest = measured.map({ $0.1 }).min() else { continue }
+            result += measured.filter { $0.1 >= selfLevel - 3 && $0.1 - quietest >= 12 }
+        }
+        return result.sorted { $0.1 > $1.1 }.map { $0.0 }
+    }
+
+    /// 近いもの上位3つの距離の平均（声の特徴はどれも長さ1にそろえてある）
+    nonisolated static func top3(_ embedding: [Float], _ bank: [[Float]]) -> Float {
+        let ds = bank.filter { $0.count == embedding.count }
+            .map { 1 - zip($0, embedding).reduce(0) { $0 + $1.0 * $1.1 } }.sorted()
+        guard !ds.isEmpty else { return 1 }
+        let top = ds.prefix(3)
+        return top.reduce(0, +) / Float(top.count)
+    }
+
+    /// 自動で覚えた声が、ほかの人の声とみなせるか。own はその人の決めた声（登録・手直し）まで、
+    /// other はいちばん近いほかの人の決めた声まで。ほかの人の決めた声にはっきり近く、その人の決めた声からは遠いときだけ。
+    nonisolated static func belongsElsewhere(own: Float, other: Float) -> Bool {
+        other <= 0.40 && own - other >= 0.20
     }
 
     /// 近いもの上位3つの距離の平均
@@ -442,6 +513,8 @@ actor SpeakerLabeler {
         let reason: String
         var id: String { Self.key(person, sample) }
         static func key(_ person: String, _ sample: Sample) -> String { person + "|" + sample.audio + "|\(sample.start)" }
+        /// 音のひとこまがあるか（声の特徴だけを外したものは audio が空）
+        var hasClip: Bool { !sample.audio.isEmpty }
     }
 
     private static let asideURL = URL.applicationSupportDirectory.appendingPathComponent("voices-set-aside.json")
@@ -509,10 +582,64 @@ actor SpeakerLabeler {
         let known = Set(store.people[i].voices.map(\.embedding))
         store.people[i].voices += item.voices.filter { !known.contains($0.embedding) }
         trimVoices(i)
-        remember(item.sample, for: i)
+        // 声の特徴だけを外したもの（音のひとこまが無い）は、ひとこまを戻さない
+        if item.hasClip { remember(item.sample, for: i) }
         save()
         saveAside(list)
         return true
+    }
+
+    // MARK: - ほかの人の決めた声に近い、自動で覚えた声を外す（2026-11-05）
+
+    /// 自動で覚えた声のうち、その人の決めた声（登録・手直し）より、ほかの人の決めた声にずっと近いものを外して取っておく。
+    /// 自分の声がほかの人の声として覚えられ、自分の発言がその人の行になっていたため（井上さんの自動の声20個が自分の声だった）。
+    /// 決めた声が無い人は比べる手がかりが無いので触らない。記録に出さない人も触らない。
+    /// kept は、本人が「この人の声だった（戻す）」にした声（`keptKey(person:added:)`）。外した声の数を返す。
+    func setAsideOthersVoices(kept: Set<String>) -> Int {
+        let anchors: [String: [[Float]]] = Dictionary(uniqueKeysWithValues: store.people.compactMap { p -> (String, [[Float]])? in
+            guard p.isNamed else { return nil }
+            let bank = p.voices.filter { $0.pinned && $0.model == Self.model }.map(\.embedding)
+            return bank.isEmpty ? nil : (p.id, bank)
+        })
+        guard anchors.count >= 2 else { return 0 }
+        var list = asideList()
+        var total = 0
+        for i in store.people.indices {
+            let p = store.people[i]
+            guard p.hidden != true, let own = anchors[p.id] else { continue }
+            var out: [Int] = []
+            var towards: [String: Int] = [:]
+            for (j, v) in p.voices.enumerated() where !v.pinned && v.model == Self.model
+                && !kept.contains(Self.keptKey(person: p.id, added: v.added)) {
+                let dOwn = Self.top3(v.embedding, own)
+                guard let nearest = anchors.filter({ $0.key != p.id })
+                    .map({ (id: $0.key, d: Self.top3(v.embedding, $0.value)) })
+                    .min(by: { $0.d < $1.d }) else { continue }
+                if Self.belongsElsewhere(own: dOwn, other: nearest.d) {
+                    out.append(j)
+                    towards[nearest.id, default: 0] += 1
+                }
+            }
+            guard !out.isEmpty else { continue }
+            let removed = out.map { p.voices[$0] }
+            store.people[i].voices = p.voices.enumerated().filter { !out.contains($0.offset) }.map { $0.element }
+            let names = towards.sorted { $0.value > $1.value }
+                .map { person($0.key)?.displayName ?? "人物\($0.key)" }
+            let reason = "「\(names.joined(separator: "」「"))」の決めた声に近かった、自動で覚えた声 \(removed.count) 個"
+            // 音のひとこまが無いので、外した時刻で見分ける
+            let marker = Sample(audio: "", start: Date.now.timeIntervalSince1970, end: 0)
+            list.append(SetAside(person: p.id, sample: marker, voices: removed, at: .now, reason: reason))
+            total += removed.count
+        }
+        guard total > 0 else { return 0 }
+        save()
+        saveAside(Array(list.suffix(300)))
+        return total
+    }
+
+    /// 本人が戻した声の印（同じ声をまた外さないため）
+    nonisolated static func keptKey(person: String, added: Date) -> String {
+        person + "|" + String(format: "%.3f", added.timeIntervalSinceReferenceDate)
     }
 
     /// 1人が話している音から、声の特徴を取る（いちばん長く話した声のまとまりの中心）。

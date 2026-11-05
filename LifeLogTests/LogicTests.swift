@@ -366,4 +366,85 @@ final class LogicTests: XCTestCase {
         filter.mode = .always
         XCTAssertTrue(filter.applies(sureWork: false))
     }
+
+    // MARK: - 自分の声がほかの人の声として覚えられないように（2026-11-05）
+
+    /// 覚え足すのは、2番目の人よりはっきり近いときだけ。ほかの人なのに自分の声くらい大きい声は覚えない
+    func testMayLearnNeedsClearWinner() {
+        XCTAssertTrue(SpeakerLabeler.mayLearn(distance: 0.15, second: 0.40, limit: 0.25, seconds: 5, isSelf: false, loud: false))
+        // 2番目（自分）との差が小さい
+        XCTAssertFalse(SpeakerLabeler.mayLearn(distance: 0.20, second: 0.26, limit: 0.25, seconds: 5, isSelf: false, loud: false))
+        // ほかの人なのに、自分の声くらい大きい
+        XCTAssertFalse(SpeakerLabeler.mayLearn(distance: 0.15, second: 0.40, limit: 0.25, seconds: 5, isSelf: false, loud: true))
+        // 自分なら大きくて当たり前
+        XCTAssertTrue(SpeakerLabeler.mayLearn(distance: 0.15, second: 0.40, limit: 0.25, seconds: 5, isSelf: true, loud: true))
+        // 短い・遠い
+        XCTAssertFalse(SpeakerLabeler.mayLearn(distance: 0.15, second: 0.40, limit: 0.25, seconds: 2, isSelf: true, loud: false))
+        XCTAssertFalse(SpeakerLabeler.mayLearn(distance: 0.30, second: 0.60, limit: 0.25, seconds: 5, isSelf: true, loud: false))
+    }
+
+    /// 1つの区切りで同じ人になった2つのまとまりのうち、自分の声くらい大きく、もう片方より12dB以上大きいほうが候補
+    func testWearerClusters() {
+        let owners = ["S1": "12", "S2": "12", "S3": "me", "S4": "30"]
+        let levels: [String: Float] = ["S1": -20, "S2": -36, "S3": -21, "S4": -19]
+        XCTAssertEqual(SpeakerLabeler.wearerClusters(owners: owners, levels: levels, selfLevel: -19), ["S1"])
+        // 差が12dBに満たなければ候補にしない
+        XCTAssertEqual(SpeakerLabeler.wearerClusters(owners: owners, levels: ["S1": -20, "S2": -28], selfLevel: -19), [])
+        // 大きくても自分の声ほどでなければ候補にしない
+        XCTAssertEqual(SpeakerLabeler.wearerClusters(owners: owners, levels: ["S1": -30, "S2": -45], selfLevel: -19), [])
+    }
+
+    /// 自動で覚えた声が、その人の決めた声より、ほかの人の決めた声にずっと近いときだけ外す（控えで井上さん20個・うい6個）
+    func testBelongsElsewhere() {
+        XCTAssertTrue(SpeakerLabeler.belongsElsewhere(own: 0.79, other: 0.26))
+        XCTAssertTrue(SpeakerLabeler.belongsElsewhere(own: 0.92, other: 0.34))
+        // どちらからも遠い（松澤さんの自動の声: 本人 0.73 / 自分 0.54）
+        XCTAssertFalse(SpeakerLabeler.belongsElsewhere(own: 0.73, other: 0.54))
+        // 差が小さい
+        XCTAssertFalse(SpeakerLabeler.belongsElsewhere(own: 0.45, other: 0.30))
+        let a: [Float] = [1, 0], b: [Float] = [0, 1]
+        XCTAssertEqual(SpeakerLabeler.top3(a, [a, b]), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(SpeakerLabeler.top3(a, []), 1)
+        let t = Date(timeIntervalSinceReferenceDate: 815_234_549.839824)
+        XCTAssertEqual(SpeakerLabeler.keptKey(person: "12", added: t), "12|815234549.840")
+    }
+
+    /// 署名の期限は mobileprovision（署名付きの plist）の ExpirationDate から読む
+    func testProvisioningExpiry() throws {
+        let expiry = Date(timeIntervalSince1970: 1_794_000_000)
+        let plist = try PropertyListSerialization.data(fromPropertyList: ["ExpirationDate": expiry, "Name": "LifeLog"],
+                                                       format: .xml, options: 0)
+        // 前後に署名のバイト列があっても読めること
+        var data = Data([0x30, 0x82, 0x01, 0x00, 0xFF])
+        data.append(plist)
+        data.append(Data([0x00, 0xA0, 0x82]))
+        XCTAssertEqual(Provisioning.expiry(in: data), expiry)
+        XCTAssertNil(Provisioning.expiry(in: Data("no plist here".utf8)))
+        XCTAssertEqual(Provisioning.remaining(-5), "過ぎています")
+        XCTAssertEqual(Provisioning.remaining(3 * 86400 + 60), "あと3日")
+        XCTAssertEqual(Provisioning.remaining(5 * 3600), "あと5時間")
+        XCTAssertEqual(Provisioning.remaining(600), "あと10分")
+    }
+
+    /// PC が読む状態ファイルは、端末どうしの同期で読まれない名前（「-」を含まない）で、日時は ISO 8601
+    func testAppStatusFile() throws {
+        let name = AppStatus.fileName(device: "c4e3a742")
+        XCTAssertFalse(name.contains("-"))
+        let status = AppStatus(device: "c4e3a742", kind: "iPhone", written: Date(timeIntervalSince1970: 1_794_000_000),
+                               version: "1.0（42）", signExpires: nil, recording: true, pending: 2, lastProcessed: nil)
+        let text = String(decoding: try status.encoded(), as: UTF8.self)
+        XCTAssertTrue(text.contains("\"written\" : \"2026-11-"))
+        XCTAssertTrue(text.contains("\"recording\" : true"))
+    }
+
+    /// 声の特徴だけを外したもの（音のひとこま無し）も、保存して読み戻せる
+    func testSetAsideWithoutClip() throws {
+        let marker = SpeakerLabeler.Sample(audio: "", start: 1_793_700_000, end: 0)
+        let voice = SpeakerLabeler.Voice(embedding: [0.6, 0.8], pinned: false, added: Date(timeIntervalSince1970: 1_000), model: SpeakerLabeler.model)
+        let item = SpeakerLabeler.SetAside(person: "12", sample: marker, voices: [voice, voice], at: .now, reason: "「自分」の決めた声に近かった、自動で覚えた声 2 個")
+        XCTAssertFalse(item.hasClip)
+        let back = try JSONDecoder().decode([SpeakerLabeler.SetAside].self, from: JSONEncoder().encode([item]))
+        XCTAssertEqual(back.first?.voices.count, 2)
+        XCTAssertEqual(back.first?.hasClip, false)
+    }
 }

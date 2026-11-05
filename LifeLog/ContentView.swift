@@ -56,6 +56,12 @@ private struct TodayView: View {
                 }
 
                 Section("いまの様子") {
+                    if Provisioning.isNear(), let expiry = Provisioning.expiryText() {
+                        // 無料の署名は7日で切れ、切れるとアプリが起動しなくなって録音が止まる
+                        Label("署名の期限 \(expiry)。切れる前に Sideloadly で入れ直してください（記録は消えません）",
+                              systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
                     if pipeline.recordingHeld {
                         Label("録音を休む場所にいるので、書くのを休んでいます", systemImage: "pause.circle")
                             .foregroundStyle(.orange)
