@@ -2556,7 +2556,8 @@ final class Pipeline {
         }
         let offsets = Self.fillOffsets(entries.map { ($0.offset, $0.text) }, duration: duration)
         let names = await speakerNames(for: offsets, in: url, context: places.context(at: start),
-                                       selfLevel: officeFilter.selfLevel(watch: fromWatch))
+                                       selfLevel: officeFilter.selfLevel(watch: fromWatch),
+                                       expected: expectedSpeakers(at: start, fromWatch: fromWatch))
         // この区切りで聞こえた名前のある人を覚えておく（次の区切りで、その人の言葉をヒントにする）
         var heardPeople: [String] = []
         for segment in names.compactMap({ $0 }) where segment.personID != SpeakerLabeler.selfID
@@ -2652,11 +2653,12 @@ final class Pipeline {
 
     /// 各行を、その時間にいちばん長く話していた人に結びつける。聞き分けがオフ・失敗したときは nil。
     private func speakerNames(for offsets: [TimeInterval], in url: URL,
-                              context: SpeakerLabeler.Context?, selfLevel: Float?) async -> [SpeakerLabeler.Segment?] {
+                              context: SpeakerLabeler.Context?, selfLevel: Float?,
+                              expected: Set<String> = []) async -> [SpeakerLabeler.Segment?] {
         let none = [SpeakerLabeler.Segment?](repeating: nil, count: offsets.count)
         guard speakerLabelsOn,
               let segments = try? await speakers.label(url, context: context, strictness: speakerStrictness,
-                                                       selfLevel: selfLevel),
+                                                       selfLevel: selfLevel, expected: expected),
               !segments.isEmpty else { return none }
         let chunkEnd = Self.duration(of: url)
         return offsets.indices.map { i in
@@ -2668,6 +2670,17 @@ final class Pipeline {
             guard let best = total.max(by: { $0.value < $1.value }), best.value > 0 else { return nil }
             return segments.first { $0.personID == best.key }
         }
+    }
+
+    /// この区切りにいそうな人（名前のある人だけ。自分は除く）：直前10分の区切りで聞こえた人と、前後15分の予定の出席者
+    private func expectedSpeakers(at start: Date, fromWatch: Bool) -> Set<String> {
+        var names: [String] = []
+        if let recent = recentPeople[fromWatch], start.timeIntervalSince(recent.end) < 600 { names += recent.names }
+        names += calendar.events(from: start.addingTimeInterval(-900), to: start.addingTimeInterval(900)).flatMap(\.attendees)
+        guard !names.isEmpty else { return [] }
+        return Set(people.filter { p in
+            p.isNamed && !p.isSelf && p.hidden != true && names.contains { Self.sameName($0, p.displayName) }
+        }.map(\.id))
     }
 
     private func overlap(_ s: SpeakerLabeler.Segment, _ from: TimeInterval, _ to: TimeInterval) -> TimeInterval {

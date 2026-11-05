@@ -187,7 +187,7 @@ actor SpeakerLabeler {
     /// selfLevel は、その機器で覚えた自分の声の大きさ（dB）。手首や胸元のマイクには自分の声がいちばん大きく入るので、
     /// 自分の声くらい大きい声は「自分」と決めやすく、ずっと小さい声は「自分」にしにくくする。
     func label(_ url: URL, context: Context?, strictness: Strictness = .normal,
-               selfLevel: Float? = nil) async throws -> [Segment] {
+               selfLevel: Float? = nil, expected: Set<String> = []) async throws -> [Segment] {
         try await prepare()
         guard let diarizer else { return [] }
         // 区切りの中だけで声を分けてもらう（前の区切りの声とは、下で自分で照らし合わせる）
@@ -251,7 +251,9 @@ actor SpeakerLabeler {
                     }
                 }
                 // 自分の声くらい大きい声は、自分とほかの人で迷うときに自分を先に選ぶ（自分の発言がほかの人の行になっていた。2026-11-05）
-                let rank = p.isSelf && isLoud(key) ? d - Self.loudSelfBonus : d
+                var rank = p.isSelf && isLoud(key) ? d - Self.loudSelfBonus : d
+                // 直前に話していた人・予定の出席者は、ほかの人と迷うときに少しだけ先に選ぶ（受け入れる近さは変えない）
+                if expected.contains(p.id) { rank -= Self.expectedBonus }
                 // 覚え足すかを決めるための、いちばん近い別の人。名前のある人（自分を含む）は、名前のある人どうしで比べる
                 // （自分の声から分かれた名前の無い人物Nが近いだけで、自分の声を覚え足せなくならないように）
                 let rival = scored.first { $0.0.id != p.id && (!p.isNamed || $0.0.isNamed) }?.1 ?? 1
@@ -323,6 +325,8 @@ actor SpeakerLabeler {
 
     /// 自分の声くらい大きいまとまりを、自分とほかの人で迷うときに自分へ寄せる幅
     static let loudSelfBonus: Float = 0.06
+    /// この区切りにいそうな人（直前に話していた人・予定の出席者）を、迷うときに先に選ぶ幅
+    static let expectedBonus: Float = 0.03
     /// 覚え足すのは、2番目に近い人よりこれだけ近いときだけ
     static let learnMargin: Float = 0.10
 
