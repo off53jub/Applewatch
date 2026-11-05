@@ -360,6 +360,24 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(people.first?.items.count, 2)
     }
 
+    // MARK: - 数字
+
+    func testNumberStyle() {
+        XCTAssertEqual(NumberStyle.normalize("千二百円です"), "1200円です")
+        XCTAssertEqual(NumberStyle.normalize("三億五千万円の案件"), "3億5000万円の案件")
+        XCTAssertEqual(NumberStyle.normalize("二〇二六年三月"), "2026年3月")
+        XCTAssertEqual(NumberStyle.normalize("三十五歳"), "35歳")
+        XCTAssertEqual(NumberStyle.normalize("百パーセント"), "100パーセント")
+        XCTAssertEqual(NumberStyle.normalize("五百株買う"), "500株買う")
+        // 言葉としての漢数字は変えない
+        XCTAssertEqual(NumberStyle.normalize("十分です"), "十分です")
+        XCTAssertEqual(NumberStyle.normalize("一時的に"), "一時的に")
+        XCTAssertEqual(NumberStyle.normalize("一部の人"), "一部の人")
+        XCTAssertEqual(NumberStyle.normalize("一緒に統一する"), "一緒に統一する")
+        XCTAssertEqual(NumberStyle.normalize("同一件"), "同一件")
+        XCTAssertEqual(NumberStyle.normalize("万円"), "万円")
+    }
+
     // MARK: - 場面
 
     func testCarAudioAndTrainOrCar() {

@@ -2595,9 +2595,13 @@ final class Pipeline {
         var removed: [Junk.TrashItem] = []
         let lines = entries.indices.compactMap { i -> Merger.Heard? in
             let end = ends[i]
+            // 金額・株数・日付などの漢数字は算用数字にそろえる（探しやすく、読み違えにくく）
+            let text = NumberStyle.normalize(entries[i].text)
             var line = ConversationLog.Line(time: start.addingTimeInterval(offsets[i]), speaker: names[i]?.name,
-                                            text: entries[i].text, audio: url.lastPathComponent,
-                                            offset: offsets[i], original: originals[i], speakerID: names[i]?.personID,
+                                            text: text, audio: url.lastPathComponent,
+                                            offset: offsets[i],
+                                            original: originals[i] ?? (text != entries[i].text ? entries[i].text : nil),
+                                            speakerID: names[i]?.personID,
                                             confidence: confidence[i].map { ($0 * 100).rounded() / 100 })
             line.sound = SoundScene.label(from: offsets[i], to: end, in: scene)
             if noisy { line.noisy = true }
