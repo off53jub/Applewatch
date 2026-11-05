@@ -18,10 +18,11 @@ struct NoiseSettingsView: View {
                 LabeledContent("覚えた自分の声（時計）", value: filter.selfLevelText(watch: true))
                 LabeledContent("これまでに外した行", value: "\(filter.dropped) 行")
                 NavigationLink("外した行を見る・戻す") { CleanupView() }
+                NavigationLink("外しすぎた行をまとめて戻す") { OverRemovedView() }
             } header: {
                 Text("周りの人の声を書かない")
             } footer: {
-                Text("自分の声の大きさを話すたびに覚え、それより14dB以上小さく入った声（遠くの席の声）と、名前の無い声で前後3分に自分が一度も話していないもの（周りの雑談）を記録に書きません。名前を付けた人の声は、やりとりが無くても残します。外した行は「記録の掃除」の「消した行」に30日間残り、そこから戻せます。「職場にいるときだけ」は、職場にした場所・職場のカレンダーの予定・平日8〜19時で決めます。")
+                Text("自分の声の大きさを話すたびに覚え、それより14dB以上小さく入った名前の無い声（遠くの席の声）と、名前の無い声で前後3分に自分が一度も話していないもの（周りの雑談）を記録に書きません。名前を付けた人の声は、小さくても・やりとりが無くても残します。外した行は「記録の掃除」の「消した行」に30日間残り、そこから戻せます。「職場にいるときだけ」は、職場にした場所にいるときと、職場のカレンダーの予定の最中だけです（時刻だけでは決めません）。")
             }
 
             Section {
@@ -250,5 +251,80 @@ struct ShortcutsHelpView: View {
             }
         }
         .navigationTitle("ほかの場所から使う")
+    }
+}
+
+/// 外しすぎた行をまとめて戻す（2026-11-05）。
+/// 「周りの声」として外した行のうち、直した決まり（名前のある人は外さない・職場と分かっているときだけ外す）なら残っていた行を、件数を見てから戻す。
+struct OverRemovedView: View {
+    @Environment(Pipeline.self) private var pipeline
+    @State private var items: [Junk.TrashItem] = []
+    @State private var loaded = false
+    @State private var running = false
+    @State private var done = 0
+    @State private var result: String?
+    @State private var showAll = false
+
+    private static let time: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = "M/d(E) H:mm"
+        return f
+    }()
+
+    var body: some View {
+        List {
+            Section {
+                if !loaded {
+                    ProgressView()
+                } else if items.isEmpty {
+                    Text("戻す行はありません").foregroundStyle(.secondary)
+                } else {
+                    LabeledContent("戻す行", value: "\(items.count) 行・\(Set(items.map(\.day)).count) 日")
+                    if running {
+                        ProgressView(value: Double(done), total: Double(max(1, items.count))) {
+                            Text("戻しています… \(done) / \(items.count)")
+                        }
+                    } else {
+                        Button("記録とドキュメントに戻す", systemImage: "arrow.uturn.backward") {
+                            Task { await run() }
+                        }
+                    }
+                }
+                if let result { Text(result).font(.footnote).foregroundStyle(.secondary) }
+            } footer: {
+                Text("「周りの声」として外した行のうち、名前を付けた人の声と、登録した職場にいない・仕事の予定の最中でもないときの声です（11/5 に、この2つは外さない決まりに直しました）。戻した会話は、見出しと要点を作り直します。1行ずつドキュメントに入れるので、多いと時間がかかります。途中で止まっても、もう一度押せば続きから戻します。")
+            }
+            if !items.isEmpty {
+                Section {
+                    ForEach(showAll ? items : Array(items.prefix(30))) { item in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.line.text).font(.callout).lineLimit(3)
+                            Text(Self.time.string(from: item.line.time) + (item.line.speaker.map { "・" + $0 } ?? ""))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if items.count > 30 && !showAll {
+                        Button("ほか \(items.count - 30) 行も見る") { showAll = true }
+                    }
+                } header: {
+                    Text("戻す行（古い順）")
+                }
+            }
+        }
+        .navigationTitle("外しすぎた行を戻す")
+        .task {
+            items = pipeline.overRemoved()
+            loaded = true
+        }
+    }
+
+    private func run() async {
+        running = true
+        done = 0
+        let made = await pipeline.restoreOverRemoved(items) { count in done = count }
+        running = false
+        result = "\(made.done) 行を戻しました。" + (made.error.map { "途中で止まりました（\($0)）。もう一度押すと続きから戻します。" } ?? "")
+        items = pipeline.overRemoved()
     }
 }

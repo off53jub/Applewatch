@@ -1519,6 +1519,56 @@ final class Pipeline {
 
     func trash() -> [Junk.TrashItem] { conversations.trash() }
 
+    /// 外しすぎた行: 「周りの声」として外したが、2026-11-05 に直した決まりなら残っていた行（古い順）。
+    /// 名前を付けた人の声、または登録した職場にいない・仕事の予定の最中でもないときの声（「いつも」にしていれば名前のある人だけ）。
+    /// 「記録に出さない」にした人の声は入れない。
+    func overRemoved() -> [Junk.TrashItem] {
+        let named = Set(people.filter(\.isNamed).map(\.id))
+        let hidden = Set(people.filter { $0.hidden == true }.map(\.id))
+        let workNames = Set(places.places.filter { $0.isWork == true }.map(\.name))
+        let always = officeFilter.mode == .always
+        var spans: [String: [(start: Date, end: Date, place: String?)]] = [:]
+        return trash().filter { item in
+            guard item.kind == .background else { return false }
+            if let id = item.line.speakerID, hidden.contains(id) { return false }
+            if let id = item.line.speakerID, named.contains(id) { return true }
+            guard !always else { return false }
+            // その時にいた場所（同じ時間の会話の場所）が登録した職場か、仕事の予定の最中か
+            let list = spans[item.day] ?? conversations.conversations(on: item.day).map { ($0.start, $0.end, $0.place) }
+            spans[item.day] = list
+            let t = item.line.time
+            let place = list.first { $0.start.addingTimeInterval(-180) <= t && t <= $0.end.addingTimeInterval(180) }?.place
+            let atWork = place.map { workNames.contains($0) } ?? (places.registeredContext(at: t) == .work)
+            return !(atWork || calendar.context(at: t) == .work)
+        }.sorted { $0.line.time < $1.line.time }
+    }
+
+    /// 外しすぎた行を、記録とドキュメントに戻す（1行ずつ。止まったら、そこまで戻した数を返す）。
+    /// 戻した会話は、見出しと要点（と1日のまとめ）を作り直す。
+    func restoreOverRemoved(_ items: [Junk.TrashItem], progress: @escaping (Int) -> Void) async -> (done: Int, error: String?) {
+        var done = 0
+        var touched: [String: Set<Date>] = [:]
+        defer {
+            for (day, times) in touched {
+                for c in conversations.conversations(on: day) where times.contains(where: { c.start <= $0 && $0 <= c.end }) {
+                    conversations.markResummarize(start: c.start, day: day)
+                }
+            }
+            if done > 0 { recordsVersion += 1 }
+        }
+        for item in items {
+            do {
+                try await restore(item)
+            } catch {
+                return (done, error.localizedDescription)
+            }
+            done += 1
+            touched[item.day, default: []].insert(item.line.time)
+            progress(done)
+        }
+        return (done, nil)
+    }
+
     /// 消した行を元に戻す（以後は自動でも消さない）。
     func restore(_ item: Junk.TrashItem) async throws {
         if let queueTask { await queueTask.value }
@@ -2313,7 +2363,9 @@ final class Pipeline {
                               personID: names[i]?.personID,
                               isNamed: names[i].map { namedIDs.contains($0.personID) } ?? false, level: levels[i])
         }
-        let keep = officeFilter.keep(items, fromWatch: fromWatch, active: officeFilter.applies(to: context), asleep: asleep)
+        // 周りの声を外すのは、登録した職場にいる・仕事の予定の最中と分かっているときだけ（時刻の推定では外さない）
+        let sureWork = places.registeredContext(at: start) == .work || calendar.context(at: start) == .work
+        let keep = officeFilter.keep(items, fromWatch: fromWatch, active: officeFilter.applies(sureWork: sureWork), asleep: asleep)
         var removed: [Junk.TrashItem] = []
         let lines = entries.indices.compactMap { i -> Merger.Heard? in
             let end = ends[i]

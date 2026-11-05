@@ -338,4 +338,32 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(box.relevant(to: "来週のひさおどの練習"), ["「ひさおど」はダンスイベントの名前"])
         XCTAssertEqual(box.relevant(to: "会議の資料を作る"), [])
     }
+
+    // MARK: - 周りの声を外す決まり（2026-11-05 に直した）
+
+    /// 名前を付けた人の声は、自分の声よりずっと小さくても外さない（名前の無い小さな声は外す）
+    func testOfficeFilterKeepsNamedQuietVoices() {
+        let filter = OfficeFilter()
+        let now = Date.now
+        let items = [
+            OfficeFilter.Item(time: now, text: "そうですね", personID: SpeakerLabeler.selfID, isNamed: true, level: -10),
+            OfficeFilter.Item(time: now.addingTimeInterval(5), text: "AMSの方ですね", personID: "23", isNamed: true, level: -40),
+            OfficeFilter.Item(time: now.addingTimeInterval(9), text: "遠くの席の話", personID: "999", isNamed: false, level: -40),
+        ]
+        XCTAssertEqual(filter.keep(items, fromWatch: true, active: true, asleep: false), [true, true, false])
+        // 使わないときは全部残す
+        XCTAssertEqual(filter.keep(items, fromWatch: true, active: false, asleep: false), [true, true, true])
+    }
+
+    /// 「職場にいるときだけ」は、職場と分かっているときだけ使う（時刻の推定では使わない）
+    func testOfficeFilterNeedsSureWork() {
+        let filter = OfficeFilter()
+        let saved = filter.mode
+        defer { filter.mode = saved }
+        filter.mode = .work
+        XCTAssertTrue(filter.applies(sureWork: true))
+        XCTAssertFalse(filter.applies(sureWork: false))
+        filter.mode = .always
+        XCTAssertTrue(filter.applies(sureWork: false))
+    }
 }

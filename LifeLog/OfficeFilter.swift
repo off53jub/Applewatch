@@ -5,6 +5,7 @@ import Observation
 /// オフィスなどで、自分と関係ない周りの人の声を記録に書かないようにする。
 ///
 /// 1. 声の大きさ: 自分の声（機器ごとに覚えておく）より、ずっと小さく入った行は、遠くの人の声とみなす。
+///    名前を付けた人の声は、小さくても残す。
 /// 2. やりとり: 名前の無い声で、前後3分のあいだに自分が一度も話していないものは、周りの雑談とみなす。
 ///    名前を付けた人の声は、やりとりが無くても残す。
 /// 外した行は「記録の掃除」の「消した行」に30日間残るので、そこから戻せる。
@@ -56,10 +57,12 @@ final class OfficeFilter {
         }
     }
 
-    func applies(to context: SpeakerLabeler.Context) -> Bool {
+    /// 使うか。「職場にいるときだけ」は、登録した職場にいる・仕事の予定の最中と分かっているときだけ（sureWork）。
+    /// 時刻だけの推定（平日8〜19時）では使わない。祝日の夕方の食事で友だちの声を外していたため（2026-11-05）。
+    func applies(sureWork: Bool) -> Bool {
         switch mode {
         case .off: false
-        case .work: context == .work
+        case .work: sureWork
         case .always: true
         }
     }
@@ -108,7 +111,8 @@ final class OfficeFilter {
                 return Junk.normalized(item.text).count >= 8 && !quiet[i]
             }
             guard active, !isSelf else { return true }
-            if byLoudness && quiet[i] { return false }
+            // 名前を付けた人の声は、小さくても外さない（1対1の相手の声が自分の声より14dB以上小さく入り、外れていた。2026-11-05）
+            if byLoudness && quiet[i] && !item.isNamed { return false }
             if byExchange, item.personID != nil, !item.isNamed {
                 let near = selfTimes.contains { abs($0.timeIntervalSince(item.time)) <= Self.exchangeWindow }
                     || lastSelfSpoke[fromWatch].map { item.time.timeIntervalSince($0) <= Self.exchangeWindow } == true
