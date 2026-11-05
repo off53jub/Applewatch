@@ -305,6 +305,61 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual([none, later, soon].sorted(by: TaskBook.dueOrder).map(\.what), ["a", "b", "c"])
     }
 
+    func testTaskOldSavedItemsStillRead() throws {
+        // 種類・進み具合が入る前に保存した帳も、そのまま読める
+        let old = #"[{"id":"x","what":"見積書を送る","from":"田中","said":0,"source":"conversation","state":"open","updated":0}]"#
+        let items = try JSONDecoder().decode([TaskBook.Item].self, from: Data(old.utf8))
+        XCTAssertEqual(items.first?.kindOrDefault, .asked)
+        XCTAssertNil(items.first?.progress)
+        XCTAssertEqual(items.first?.isWaiting, false)
+        let manual = TaskBook.Item(what: "a", said: .now, source: .manual, state: .open)
+        XCTAssertEqual(manual.kindOrDefault, .mine)
+    }
+
+    func testTaskBucketsAndWaiting() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let now = cal.date(from: DateComponents(year: 2026, month: 11, day: 5, hour: 10))!  // 木曜
+        func item(_ what: String, _ days: Int?, urgent: Bool = false) -> TaskBook.Item {
+            TaskBook.Item(what: what, due: days.map { cal.date(byAdding: .day, value: $0, to: cal.startOfDay(for: now))! },
+                          said: now, source: .manual, state: .open, urgent: urgent ? true : nil)
+        }
+        XCTAssertEqual(TaskBook.bucket(item("a", -1), now: now, calendar: cal), .late)
+        XCTAssertEqual(TaskBook.bucket(item("b", 0), now: now, calendar: cal), .today)
+        XCTAssertEqual(TaskBook.bucket(item("c", 3), now: now, calendar: cal), .week)
+        XCTAssertEqual(TaskBook.bucket(item("d", 20), now: now, calendar: cal), .later)
+        XCTAssertEqual(TaskBook.bucket(item("e", nil), now: now, calendar: cal), .someday)
+        XCTAssertEqual(TaskBook.nextWeekDays(now: now, calendar: cal), 4)  // 次の月曜
+        let monday = cal.date(byAdding: .day, value: 4, to: now)!
+        XCTAssertEqual(TaskBook.nextWeekDays(now: monday, calendar: cal), 7)
+
+        var delegated = item("f", 1)
+        delegated.kind = .delegated
+        XCTAssertTrue(delegated.isWaiting)
+        delegated.progress = .started
+        XCTAssertFalse(delegated.isWaiting)
+        var parked = item("g", 1)
+        parked.progress = .waiting
+        XCTAssertTrue(parked.isWaiting)
+        XCTAssertEqual(TaskBook.Kind.parse(" Promise "), .promise)
+        XCTAssertNil(TaskBook.Kind.parse(""))
+    }
+
+    func testTaskGroupsUrgentFirstAndByPerson() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var a = TaskBook.Item(what: "a", said: now, source: .manual, state: .open)
+        var b = TaskBook.Item(what: "b", said: now.addingTimeInterval(60), source: .manual, state: .open, urgent: true)
+        a.from = "田中"
+        b.from = "田中 "
+        let c = TaskBook.Item(what: "c", said: now.addingTimeInterval(120), source: .manual, state: .open)
+        let groups = TaskBook.grouped([a, b, c], now: now)
+        XCTAssertEqual(groups.map(\.bucket), [.someday])
+        XCTAssertEqual(groups.first?.items.map(\.what), ["b", "a", "c"])
+        let people = TaskBook.byPerson([a, b, c])
+        XCTAssertEqual(people.map(\.person), ["田中"])
+        XCTAssertEqual(people.first?.items.count, 2)
+    }
+
     func testTaskAddSkipsDuplicates() {
         let book = TaskBook()
         let before = book.items.count

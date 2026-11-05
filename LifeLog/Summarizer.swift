@@ -355,19 +355,26 @@ enum Summarizer {
         let quote: String
         /// 言われた時刻（HH:mm。分からなければ空）
         let time: String
+        /// 種類（asked / mine / delegated / promise。分からなければ空）
+        var kind: String = ""
     }
 
-    /// 会話の文字起こし（[自分] は本人）から、本人が頼まれた・引き受けたことを拾う。長い会話は区切りごとに見る。
+    /// 会話の文字起こし（[自分] は本人）から、本人のやること・人に頼んだこと・約束を拾う。長い会話は区切りごとに見る。
     static func tasks(_ transcript: String, day: String, apiKey: String) async throws -> [FoundTask] {
         var found: [FoundTask] = []
         for piece in pieces(of: transcript, length: pieceLimit(apiKey)) {
             let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
                 次は \(day) の会話の文字起こしです。行の頭は時刻、角かっこは話した人で、[自分] は記録している本人です。
-                本人がほかの人から頼まれたこと・指示されたこと・本人が「やります」と引き受けたことだけを拾ってください。
+                本人に関わる、まだ済んでいない次のことだけを拾ってください。
+                asked: 本人がほかの人から頼まれた・指示された・「やります」と引き受けたこと
+                mine: 本人が自分でやると言ったこと
+                delegated: 本人がほかの人に頼んだこと（相手の返事や結果を待つもの）
+                promise: 本人がほかの人と交わした、会う・連絡するなどの約束
                 ほかの人どうしの頼みごと・雑談・テレビの話・もう終わったことは入れないでください。記録に無いことは書かないでください。
                 次の JSON で返してください。無ければ空の配列にしてください。
-                {"tasks": [{"what": "本人がやること（何を・どうする、を短く）",
-                            "from": "頼んだ人の名前（分からなければ空）",
+                {"tasks": [{"kind": "asked / mine / delegated / promise のどれか",
+                            "what": "やること・頼んだこと・約束（何を・どうする、を短く）",
+                            "from": "相手の名前（頼んだ人・頼んだ相手・約束した相手。分からなければ空）",
                             "due": "期限の言い方（分からなければ空）",
                             "due_day": "期限が日付で分かれば yyyy-MM-dd（会話の日から数える。分からなければ空）",
                             "quote": "根拠になった発言をそのまま短く",
@@ -406,7 +413,7 @@ enum Summarizer {
             let what = text("what")
             guard !what.isEmpty else { return nil }
             return FoundTask(what: what, from: text("from"), dueText: text("due"), dueDay: text("due_day"),
-                             quote: text("quote"), time: text("time"))
+                             quote: text("quote"), time: text("time"), kind: text("kind"))
         }
     }
 

@@ -66,6 +66,98 @@ final class TaskBook {
         var memo: String? = nil
         var doneAt: Date? = nil
         var updated: Date = .now
+        /// 種類（無ければ、頼んだ人がいるか・拾ったものなら「頼まれた」、手で書いたものは「自分で」）
+        var kind: Kind? = nil
+        /// まだのものの進み具合（無ければ未着手）
+        var progress: Progress? = nil
+        /// 急ぎ・大事
+        var urgent: Bool? = nil
+        /// 期限を延ばした回数
+        var postponed: Int? = nil
+
+        var kindOrDefault: Kind {
+            if let kind { return kind }
+            return source == .manual && from == nil ? .mine : .asked
+        }
+
+        /// 相手を待っているもの（人に頼んだもの・「待ち」にしたもの）
+        var isWaiting: Bool { progress == .waiting || (kindOrDefault == .delegated && progress != .started) }
+    }
+
+    enum Kind: String, Codable, CaseIterable, Identifiable {
+        /// ほかの人から頼まれた・引き受けた
+        case asked
+        /// 自分でやると決めた
+        case mine
+        /// 本人がほかの人に頼んだ（相手の返事・結果を待つ）
+        case delegated
+        /// 会う・連絡するなどの約束
+        case promise
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .asked: "頼まれた"
+            case .mine: "自分で"
+            case .delegated: "人に頼んだ"
+            case .promise: "約束"
+            }
+        }
+
+        /// 相手の欄の名前
+        var partyLabel: String {
+            switch self {
+            case .asked: "頼んだ人"
+            case .mine: "関わる人"
+            case .delegated: "頼んだ相手"
+            case .promise: "約束した相手"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .asked: "tray.and.arrow.down"
+            case .mine: "person"
+            case .delegated: "arrow.turn.up.right"
+            case .promise: "handshake"
+            }
+        }
+
+        /// 言語モデルの答え（asked / mine / delegated / promise）から
+        nonisolated static func parse(_ text: String) -> Kind? {
+            Kind(rawValue: text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        }
+    }
+
+    enum Progress: String, Codable, CaseIterable, Identifiable {
+        case started, waiting
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .started: "進行中"
+            case .waiting: "待ち"
+            }
+        }
+    }
+
+    /// タスクタブの並び
+    enum Bucket: Int, CaseIterable, Comparable {
+        case late, today, week, later, someday
+
+        var title: String {
+            switch self {
+            case .late: "期限切れ"
+            case .today: "今日"
+            case .week: "今週（7日以内）"
+            case .later: "それより先"
+            case .someday: "期限なし"
+            }
+        }
+
+        static func < (a: Bucket, b: Bucket) -> Bool { a.rawValue < b.rawValue }
     }
 
     private(set) var items: [Item] = []
@@ -83,6 +175,56 @@ final class TaskBook {
         let since = Date.now.addingTimeInterval(-30 * 86400)
         return items.filter { $0.state == .done && ($0.doneAt ?? $0.updated) >= since }
             .sorted { ($0.doneAt ?? $0.updated) > ($1.doneAt ?? $1.updated) }
+    }
+
+    /// やるもの（待っているもの以外のまだのもの）
+    var todo: [Item] { open.filter { !$0.isWaiting } }
+    /// 相手を待っているもの（期限の近い順）
+    var waiting: [Item] { open.filter(\.isWaiting) }
+
+    /// 期限で分ける（急ぎは同じ並びの中で前に）
+    nonisolated static func bucket(_ item: Item, now: Date = .now, calendar: Calendar = .current) -> Bucket {
+        guard let due = item.due else { return .someday }
+        let today = calendar.startOfDay(for: now)
+        let day = calendar.startOfDay(for: due)
+        let days = calendar.dateComponents([.day], from: today, to: day).day ?? 0
+        switch days {
+        case ..<0: return .late
+        case 0: return .today
+        case 1...7: return .week
+        default: return .later
+        }
+    }
+
+    nonisolated static func grouped(_ items: [Item], now: Date = .now) -> [(bucket: Bucket, items: [Item])] {
+        let groups = Dictionary(grouping: items) { bucket($0, now: now) }
+        return Bucket.allCases.compactMap { b in
+            guard let list = groups[b], !list.isEmpty else { return nil }
+            let sorted = list.sorted { x, y in
+                let ux = x.urgent == true, uy = y.urgent == true
+                return ux != uy ? ux : dueOrder(x, y)
+            }
+            return (b, sorted)
+        }
+    }
+
+    /// 相手ごと（相手の無いものは除く。名前の順）
+    nonisolated static func byPerson(_ items: [Item]) -> [(person: String, items: [Item])] {
+        let named = items.filter { !($0.from ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
+        let groups = Dictionary(grouping: named) { $0.from!.trimmingCharacters(in: .whitespaces) }
+        return groups.keys.sorted().map { ($0, groups[$0]!.sorted(by: dueOrder)) }
+    }
+
+    /// 延ばした先の期限（今日から days 日後の0時）
+    nonisolated static func postponedDue(days: Int, now: Date = .now, calendar: Calendar = .current) -> Date {
+        calendar.date(byAdding: .day, value: days, to: calendar.startOfDay(for: now)) ?? now
+    }
+
+    /// 「来週」＝次の月曜（今日が月曜なら7日後）
+    nonisolated static func nextWeekDays(now: Date = .now, calendar: Calendar = .current) -> Int {
+        let weekday = calendar.component(.weekday, from: now)  // 1 = 日曜
+        let toMonday = (9 - weekday) % 7
+        return toMonday == 0 ? 7 : toMonday
     }
 
     nonisolated static func dueOrder(_ a: Item, _ b: Item) -> Bool {
@@ -141,6 +283,30 @@ final class TaskBook {
         guard let i = items.firstIndex(where: { $0.id == id }) else { return }
         items[i].state = state
         items[i].doneAt = state == .done ? .now : nil
+        items[i].updated = .now
+        save()
+    }
+
+    /// 期限を今日から days 日後に延ばす
+    func postpone(_ id: String, days: Int) {
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        items[i].due = Self.postponedDue(days: days)
+        items[i].postponed = (items[i].postponed ?? 0) + 1
+        items[i].updated = .now
+        save()
+    }
+
+    /// 進み具合を変える（nil で未着手に戻す）
+    func setProgress(_ id: String, _ progress: Progress?) {
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        items[i].progress = progress
+        items[i].updated = .now
+        save()
+    }
+
+    func setUrgent(_ id: String, _ urgent: Bool) {
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        items[i].urgent = urgent ? true : nil
         items[i].updated = .now
         save()
     }
@@ -305,14 +471,17 @@ extension Pipeline {
             let nearMark = marks.first { abs($0.time.timeIntervalSince(said)) <= 120 }
             if let nearMark { coveredMarks.insert(nearMark.time) }
             var from = f.from.isEmpty ? nil : f.from
-            if from == nil, let speaker = line?.speaker, line?.speakerID != SpeakerLabeler.selfID, !speaker.hasPrefix("人物") {
+            // 本人が頼んだものの話し手は本人なので、話し手から相手は決めない
+            if from == nil, TaskBook.Kind.parse(f.kind) != .delegated,
+               let speaker = line?.speaker, line?.speakerID != SpeakerLabeler.selfID, !speaker.hasPrefix("人物") {
                 from = speaker
             }
             items.append(TaskBook.Item(what: f.what, from: from, dueText: f.dueText.isEmpty ? nil : f.dueText,
                                        due: TaskBook.dueDate(f.dueDay), said: said, day: day, place: c.place,
                                        quote: quote, audio: line?.audio, offset: line?.offset,
                                        source: nearMark != nil ? .mark : .conversation,
-                                       state: nearMark != nil ? .open : .candidate, work: work))
+                                       state: nearMark != nil ? .open : .candidate, work: work,
+                                       kind: TaskBook.Kind.parse(f.kind)))
         }
         for mark in marks where !coveredMarks.contains(mark.time) {
             // 近い★は1つにまとめる
@@ -359,7 +528,8 @@ extension Pipeline {
             items = found.map { f in
                 TaskBook.Item(what: f.what, from: f.from.isEmpty ? nil : f.from, dueText: f.dueText.isEmpty ? nil : f.dueText,
                               due: TaskBook.dueDate(f.dueDay), said: now,
-                              quote: f.quote.isEmpty ? quote : f.quote, source: .photo, state: .candidate)
+                              quote: f.quote.isEmpty ? quote : f.quote, source: .photo, state: .candidate,
+                              kind: TaskBook.Kind.parse(f.kind))
             }
         }
         let added = tasks.add(items)
@@ -404,12 +574,19 @@ extension Pipeline {
                 let at = day.addingTimeInterval(TimeInterval(minutes * 60))
                 guard at > now.addingTimeInterval(30) else { continue }
                 let end = day.addingTimeInterval(86400)
-                let late = open.filter { ($0.due ?? .distantFuture) < end }
-                var body = "まだ \(open.count) 件" + (late.isEmpty ? "" : "（今日までのもの・過ぎたもの \(late.count) 件）")
+                let mine = open.filter { !$0.isWaiting }
+                let late = mine.filter { ($0.due ?? .distantFuture) < end }
+                // 人に頼んで、期限を過ぎても済んでいないもの（相手に確かめる）
+                let follow = open.filter { $0.isWaiting && ($0.due ?? .distantFuture) < end }
+                var body = "まだ \(mine.count) 件" + (late.isEmpty ? "" : "（今日までのもの・過ぎたもの \(late.count) 件）")
                 if waiting > 0 { body += "・確かめ待ち \(waiting) 件" }
-                for item in (late + open.filter { !late.contains($0) }).prefix(3) {
+                let urgentFirst = late.sorted { ($0.urgent == true) && ($1.urgent != true) }
+                for item in (urgentFirst + mine.filter { !late.contains($0) }).prefix(3) {
                     // 先の日の知らせなので「明日まで」ではなく日付で
                     body += "\n・" + item.what + (item.due.map { "（" + Self.taskDueFormat.string(from: $0) + "まで）" } ?? "")
+                }
+                for item in follow.prefix(2) {
+                    body += "\n・確かめる: " + item.what + (item.from.map { "（" + $0 + "へ）" } ?? "")
                 }
                 let content = UNMutableNotificationContent()
                 content.title = morning ? "今日の頼まれごと" : "まだ済んでいない頼まれごと"
@@ -474,8 +651,9 @@ extension Pipeline {
         func line(_ item: TaskBook.Item) -> String {
             var text = "・" + item.what
             if let due = item.due { text += "（" + Self.taskDueText(due) + "）" } else if let d = item.dueText { text += "（" + d + "）" }
-            var notes: [String] = []
-            if let from = item.from { notes.append(from + "から") }
+            var notes: [String] = [item.kindOrDefault.label]
+            if let progress = item.progress { notes.append(progress.label) }
+            if let from = item.from { notes.append(from) }
             notes.append(Self.taskDueFormat.string(from: item.said) + " " + item.source.label)
             if let memo = item.memo, !memo.isEmpty { notes.append("メモ: " + memo) }
             return text + " — " + notes.joined(separator: "・")
@@ -527,17 +705,31 @@ private extension CGImagePropertyOrientation {
 
 // MARK: - 画面
 
-/// 頼まれごと帳の画面。確かめ待ち → まだ → 済み。右上の＋で書き足す・写真から読み取る。
+/// タスクタブ。下のタブから開く（自分の NavigationStack を持つ）。
+struct TasksTab: View {
+    var body: some View {
+        NavigationStack { TaskBookView() }
+    }
+}
+
+/// やることの画面。「やる」「待ち」「人」「済み」で切り替える。右上の＋で書き足す・写真から読み取る。
+/// 頼まれごと・自分でやること・人に頼んだこと・約束を、1か所で追いかける。
 struct TaskBookView: View {
+    enum Page: String, CaseIterable, Identifiable {
+        case todo = "やる", waiting = "待ち", people = "人", done = "済み"
+        var id: String { rawValue }
+    }
+
     @Environment(Pipeline.self) private var pipeline
     @State private var player = ClipPlayer()
+    @State private var page = Page.todo
     @State private var editing: TaskBook.Item?
     @State private var photoItem: PhotosPickerItem?
     @State private var choosingPhoto = false
     @State private var takingPhoto = false
     @State private var reading = false
     @State private var note: String?
-    @State private var showDone = false
+    @State private var showSettings = false
     /// Pipeline.taskRemindKey などと同じ名前
     @AppStorage("taskRemind") private var remindOn = true
     @AppStorage("taskMorning") private var morning = 8 * 60
@@ -546,98 +738,47 @@ struct TaskBookView: View {
     var body: some View {
         let book = pipeline.tasks
         List {
+            Section {
+                Picker("見る", selection: $page) {
+                    ForEach(Page.allCases) { p in Text(title(p, book)).tag(p) }
+                }
+                .pickerStyle(.segmented)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
+            }
             if let note {
                 Section { Text(note).font(.footnote).foregroundStyle(.secondary) }
             }
             if reading {
                 Section { HStack { ProgressView(); Text("写真の文字を読み取っています…") } }
             }
-            if !book.candidates.isEmpty {
-                Section {
-                    ForEach(book.candidates) { item in
-                        TaskRow(item: item, player: player) { editing = item }
-                        HStack(spacing: 20) {
-                            Button("入れる", systemImage: "plus.circle") { change(item.id, .open) }
-                            Button("直して入れる", systemImage: "pencil") {
-                                var copy = item
-                                copy.state = .open
-                                editing = copy
-                            }
-                            Button("違う", systemImage: "xmark", role: .destructive) { change(item.id, .rejected) }
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.subheadline)
-                    }
-                } header: {
-                    Text("確かめてほしい（\(book.candidates.count) 件）")
-                } footer: {
-                    Text("会話・議事録・写真から拾ったものです。頼まれごとなら「入れる」、違えば「違う」（同じものはもう出しません）。")
-                }
-            }
-            Section {
-                if book.open.isEmpty {
-                    Text("今はありません").foregroundStyle(.secondary)
-                }
-                ForEach(book.open) { item in
-                    HStack(alignment: .top, spacing: 10) {
-                        Button {
-                            change(item.id, .done)
-                        } label: {
-                            Image(systemName: "circle").font(.title3)
-                        }
-                        .buttonStyle(.borderless)
-                        TaskRow(item: item, player: player) { editing = item }
-                    }
-                    .swipeActions {
-                        Button("済み") { change(item.id, .done) }.tint(.green)
-                        Button("直す") { editing = item }
-                    }
-                }
-            } header: {
-                Text("まだ（\(book.open.count) 件）")
-            } footer: {
-                Text("○を押すと済みになります。期限の近い順です。")
-            }
-            if !book.done.isEmpty {
-                Section {
-                    DisclosureGroup("済み（30日以内・\(book.done.count) 件）", isExpanded: $showDone) {
-                        ForEach(book.done) { item in
-                            HStack(alignment: .top, spacing: 10) {
-                                Button {
-                                    change(item.id, .open)
-                                } label: {
-                                    Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green)
-                                }
-                                .buttonStyle(.borderless)
-                                Text(item.what).strikethrough().foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            }
-            Section {
-                Toggle("朝と夕方に知らせる", isOn: $remindOn)
-                if remindOn {
-                    DatePicker("朝", selection: timeBinding($morning), displayedComponents: .hourAndMinute)
-                    DatePicker("夕方", selection: timeBinding($evening), displayedComponents: .hourAndMinute)
-                }
-            } header: {
-                Text("知らせ")
-            } footer: {
-                Text("まだ済んでいない頼まれごとの数と、期限の近いものを知らせます。仕事中（職場にいた時間か平日の8〜19時）の会話と、時計の★を付けた会話から拾います。頼まれた瞬間に★を押すと、確実に帳に入ります。帳はドライブの「頼まれごと帳」にも写します。")
+            switch page {
+            case .todo: todoPage(book)
+            case .waiting: waitingPage(book)
+            case .people: peoplePage(book)
+            case .done: donePage(book)
             }
         }
-        .navigationTitle("頼まれごと帳")
+        .navigationTitle("タスク")
         .toolbar {
-            Menu {
-                Button("書き足す", systemImage: "square.and.pencil") {
-                    editing = TaskBook.Item(what: "", said: .now, source: .manual, state: .open, work: true)
+            ToolbarItem(placement: .topBarLeading) {
+                Button("知らせの設定", systemImage: "bell") { showSettings = true }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("書き足す", systemImage: "square.and.pencil") {
+                        editing = TaskBook.Item(what: "", said: .now, source: .manual, state: .open, work: true)
+                    }
+                    Button("人に頼んだことを書く", systemImage: "arrow.turn.up.right") {
+                        editing = TaskBook.Item(what: "", said: .now, source: .manual, state: .open, work: true,
+                                                kind: .delegated)
+                    }
+                    Button("写真を撮って読み取る", systemImage: "camera") { takingPhoto = true }
+                        .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                    Button("写真から読み取る", systemImage: "photo") { choosingPhoto = true }
+                } label: {
+                    Image(systemName: "plus")
                 }
-                Button("写真を撮って読み取る", systemImage: "camera") { takingPhoto = true }
-                    .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-                Button("写真から読み取る", systemImage: "photo") { choosingPhoto = true }
-            } label: {
-                Image(systemName: "plus")
             }
         }
         .onDisappear { player.stop() }
@@ -664,6 +805,27 @@ struct TaskBookView: View {
                 }
             }
         }
+        .sheet(isPresented: $showSettings) {
+            NavigationStack {
+                Form {
+                    Section {
+                        Toggle("朝と夕方に知らせる", isOn: $remindOn)
+                        if remindOn {
+                            DatePicker("朝", selection: timeBinding($morning), displayedComponents: .hourAndMinute)
+                            DatePicker("夕方", selection: timeBinding($evening), displayedComponents: .hourAndMinute)
+                        }
+                    } footer: {
+                        Text("まだ済んでいないものの数と、期限の近いもの、期限を過ぎた「人に頼んだこと」を知らせます。仕事中（職場にいた時間か平日の8〜19時）の会話と、時計の★を付けた会話から拾います。頼まれた瞬間に★を押すと、確実に入ります。ドライブの「頼まれごと帳」にも写します。")
+                    }
+                }
+                .navigationTitle("知らせ")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { Button("閉じる") { showSettings = false } }
+                }
+            }
+            .presentationDetents([.medium])
+        }
         .photosPicker(isPresented: $choosingPhoto, selection: $photoItem, matching: .images)
         .onChange(of: photoItem) {
             guard let photoItem else { return }
@@ -680,6 +842,182 @@ struct TaskBookView: View {
                 if let image { Task { await read(image) } }
             }
             .ignoresSafeArea()
+        }
+    }
+
+    private func title(_ p: Page, _ book: TaskBook) -> String {
+        switch p {
+        case .todo: let n = book.todo.count + book.candidates.count; return n > 0 ? "やる \(n)" : "やる"
+        case .waiting: return book.waiting.isEmpty ? "待ち" : "待ち \(book.waiting.count)"
+        case .people, .done: return p.rawValue
+        }
+    }
+
+    // MARK: ページ
+
+    @ViewBuilder
+    private func todoPage(_ book: TaskBook) -> some View {
+        if !book.candidates.isEmpty {
+            Section {
+                ForEach(book.candidates) { item in
+                    TaskRow(item: item, player: player) { editing = item }
+                    HStack(spacing: 20) {
+                        Button("入れる", systemImage: "plus.circle") { change(item.id, .open) }
+                        Button("直して入れる", systemImage: "pencil") {
+                            var copy = item
+                            copy.state = .open
+                            editing = copy
+                        }
+                        Button("違う", systemImage: "xmark", role: .destructive) { change(item.id, .rejected) }
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.subheadline)
+                }
+            } header: {
+                Text("確かめてほしい（\(book.candidates.count) 件）")
+            } footer: {
+                Text("会話・議事録・写真から拾ったものです。合っていれば「入れる」、違えば「違う」（同じものはもう出しません）。")
+            }
+        }
+        let groups = TaskBook.grouped(book.todo)
+        if groups.isEmpty {
+            Section { Text("今やることはありません").foregroundStyle(.secondary) }
+        }
+        ForEach(groups, id: \.bucket) { group in
+            Section {
+                ForEach(group.items) { openRow($0) }
+            } header: {
+                Text("\(group.bucket.title)（\(group.items.count)）")
+                    .foregroundStyle(group.bucket == .late ? Color.red : Color.secondary)
+            }
+        }
+        let box = pipeline.suggestions
+        if !box.waiting.isEmpty {
+            Section("こんなのあったけど、どう？") {
+                ForEach(box.waiting.prefix(3)) { SuggestionRow(item: $0) }
+                if box.waiting.count > 3 || !box.kept.isEmpty {
+                    NavigationLink("すべて見る（まだ \(box.waiting.count) 件・残している \(box.kept.count) 件）") {
+                        SuggestionsView()
+                    }
+                }
+            }
+        }
+        Section {
+            EmptyView()
+        } footer: {
+            Text("○で済み。右へ払うと「明日に」「来週に」、左へ払うと「済み」「待ち」。急ぎ（!）は同じ並びの中で上に出ます。")
+        }
+    }
+
+    @ViewBuilder
+    private func waitingPage(_ book: TaskBook) -> some View {
+        if book.waiting.isEmpty {
+            Section {
+                Text("待っているものはありません").foregroundStyle(.secondary)
+            } footer: {
+                Text("人に頼んだこと（会話から拾ったもの・＋の「人に頼んだことを書く」）と、左へ払って「待ち」にしたものがここに並びます。")
+            }
+        } else {
+            Section {
+                ForEach(book.waiting) { openRow($0) }
+            } footer: {
+                Text("期限を過ぎたものは、朝の知らせで「確かめる」に出します。返事が来たら○で済みに。")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func peoplePage(_ book: TaskBook) -> some View {
+        let people = TaskBook.byPerson(book.open)
+        if people.isEmpty {
+            Section {
+                Text("相手の分かるものはまだありません").foregroundStyle(.secondary)
+            } footer: {
+                Text("頼んだ人・頼んだ相手・約束した相手が分かるものを、人ごとにまとめます。")
+            }
+        }
+        ForEach(people, id: \.person) { group in
+            Section {
+                ForEach(group.items) { openRow($0) }
+            } header: {
+                Text("\(group.person)（\(summary(group.items))）")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func donePage(_ book: TaskBook) -> some View {
+        if book.done.isEmpty {
+            Section { Text("30日以内に済んだものはありません").foregroundStyle(.secondary) }
+        } else {
+            Section {
+                ForEach(book.done) { item in
+                    HStack(alignment: .top, spacing: 10) {
+                        Button {
+                            change(item.id, .open)
+                        } label: {
+                            Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green)
+                        }
+                        .buttonStyle(.borderless)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.what).strikethrough().foregroundStyle(.secondary)
+                            if let at = item.doneAt {
+                                Text(at.formatted(date: .abbreviated, time: .shortened) + " に済み")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("済み（30日以内・\(book.done.count) 件）")
+            } footer: {
+                Text("✓を押すと、まだに戻します。")
+            }
+        }
+    }
+
+    /// 「頼まれた 2・約束 1」
+    private func summary(_ items: [TaskBook.Item]) -> String {
+        TaskBook.Kind.allCases.compactMap { kind in
+            let n = items.filter { $0.kindOrDefault == kind }.count
+            return n > 0 ? "\(kind.label) \(n)" : nil
+        }.joined(separator: "・")
+    }
+
+    /// まだのもの1行。○で済み、払って延ばす・待ちにする。
+    private func openRow(_ item: TaskBook.Item) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Button {
+                change(item.id, .done)
+            } label: {
+                Image(systemName: "circle").font(.title3)
+            }
+            .buttonStyle(.borderless)
+            TaskRow(item: item, player: player) { editing = item }
+        }
+        .swipeActions(edge: .trailing) {
+            Button("済み") { change(item.id, .done) }.tint(.green)
+            if item.isWaiting {
+                Button("やるに戻す") { withAnimation { pipeline.tasks.setProgress(item.id, .started) } }.tint(.blue)
+            } else {
+                Button("待ち") { withAnimation { pipeline.tasks.setProgress(item.id, .waiting) } }.tint(.purple)
+            }
+        }
+        .swipeActions(edge: .leading) {
+            Button("明日に") { withAnimation { pipeline.tasks.postpone(item.id, days: 1) } }.tint(.orange)
+            Button("来週に") { withAnimation { pipeline.tasks.postpone(item.id, days: TaskBook.nextWeekDays()) } }.tint(.indigo)
+        }
+        .contextMenu {
+            Button(item.urgent == true ? "急ぎを外す" : "急ぎにする", systemImage: "exclamationmark") {
+                pipeline.tasks.setUrgent(item.id, item.urgent != true)
+            }
+            Menu("進み具合") {
+                Button("未着手") { pipeline.tasks.setProgress(item.id, nil) }
+                ForEach(TaskBook.Progress.allCases) { p in
+                    Button(p.label) { pipeline.tasks.setProgress(item.id, p) }
+                }
+            }
+            Button("直す", systemImage: "pencil") { editing = item }
         }
     }
 
@@ -721,9 +1059,27 @@ struct TaskRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Button(action: onEdit) {
-                Text(item.what).foregroundStyle(.primary).multilineTextAlignment(.leading)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    if item.urgent == true {
+                        Image(systemName: "exclamationmark").foregroundStyle(.red).fontWeight(.bold)
+                    }
+                    Text(item.what).foregroundStyle(.primary).multilineTextAlignment(.leading)
+                }
             }
             .buttonStyle(.borderless)
+            HStack(spacing: 6) {
+                let kind = item.kindOrDefault
+                Label(kind.label, systemImage: kind.symbol)
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(kind == .delegated ? Color.purple : kind == .promise ? Color.teal : Color.secondary)
+                if let progress = item.progress {
+                    Text(progress.label).foregroundStyle(progress == .waiting ? Color.purple : Color.blue)
+                }
+                if let n = item.postponed, n > 0 {
+                    Text("延期\(n)回").foregroundStyle(n >= 3 ? Color.red : Color.secondary)
+                }
+            }
+            .font(.caption)
             HStack(spacing: 6) {
                 if let due = item.due {
                     let text = Pipeline.taskDueText(due)
@@ -731,7 +1087,13 @@ struct TaskRow: View {
                 } else if let dueText = item.dueText {
                     Text(dueText).foregroundStyle(.orange)
                 }
-                if let from = item.from { Text(from + "から") }
+                if let from = item.from {
+                    switch item.kindOrDefault {
+                    case .asked: Text(from + "から")
+                    case .delegated: Text(from + "へ")
+                    case .mine, .promise: Text(from + "と")
+                    }
+                }
                 Text(Self.said.string(from: item.said) + "・" + item.source.label)
             }
             .font(.caption).foregroundStyle(.secondary)
@@ -784,8 +1146,17 @@ struct TaskEditView: View {
         Form {
             Section("やること") {
                 TextField("何を・どうする", text: $item.what, axis: .vertical)
-                TextField("頼んだ人", text: Binding(get: { item.from ?? "" },
-                                                set: { item.from = $0.isEmpty ? nil : $0 }))
+                Picker("種類", selection: Binding(get: { item.kindOrDefault }, set: { item.kind = $0 })) {
+                    ForEach(TaskBook.Kind.allCases) { Text($0.label).tag($0) }
+                }
+                TextField(item.kindOrDefault.partyLabel, text: Binding(get: { item.from ?? "" },
+                                                                    set: { item.from = $0.isEmpty ? nil : $0 }))
+                Picker("進み具合", selection: Binding(get: { item.progress?.rawValue ?? "" },
+                                                  set: { item.progress = TaskBook.Progress(rawValue: $0) })) {
+                    Text("未着手").tag("")
+                    ForEach(TaskBook.Progress.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                Toggle("急ぎ・大事", isOn: Binding(get: { item.urgent == true }, set: { item.urgent = $0 ? true : nil }))
             }
             Section("期限") {
                 Toggle("期限がある", isOn: $hasDue)
@@ -805,11 +1176,11 @@ struct TaskEditView: View {
             }
             if !item.what.isEmpty || item.source != .manual {
                 Section {
-                    Button(item.source == .manual ? "取り消す" : "頼まれごとではなかった", role: .destructive) { onDelete() }
+                    Button(item.source == .manual ? "取り消す" : "やることではなかった", role: .destructive) { onDelete() }
                 }
             }
         }
-        .navigationTitle(item.source == .manual && item.what.isEmpty ? "書き足す" : "頼まれごと")
+        .navigationTitle(item.source == .manual && item.what.isEmpty ? "書き足す" : item.kindOrDefault.label)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("キャンセル") { dismiss() } }

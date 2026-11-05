@@ -1,14 +1,23 @@
 import SwiftUI
 
-/// 画面の下の5つのタブ。録っている間に触るものは「今日」、ふだん触らない設定は「設定」にまとめる。
+/// 画面の下の5つのタブ。録っている間に触るものは「今日」、やることは「タスク」。ふだん触らない設定は「今日」の右上の歯車から開く。
 struct ContentView: View {
+    @Environment(Pipeline.self) private var pipeline
+
+    /// 今日までのもの・過ぎたもの（待っているものは除く）
+    private var lateTasks: Int {
+        let end = Calendar.current.startOfDay(for: .now).addingTimeInterval(86400)
+        return pipeline.tasks.todo.filter { ($0.due ?? .distantFuture) < end }.count
+    }
+
     var body: some View {
         TabView {
             Tab("今日", systemImage: "waveform") { TodayView() }
+            Tab("タスク", systemImage: "checklist") { TasksTab() }
+                .badge(pipeline.tasks.candidates.count + lateTasks)
             Tab("ライブ", systemImage: "captions.bubble") { LiveView() }
             Tab("記録", systemImage: "books.vertical") { RecordsView() }
             Tab("人と場所", systemImage: "person.2") { PeoplePlacesView() }
-            Tab("設定", systemImage: "gearshape") { SettingsView() }
         }
     }
 }
@@ -19,6 +28,7 @@ private struct TodayView: View {
     @Environment(Pipeline.self) private var pipeline
     /// 見直したい声のひとこまの数（記録をひととおり見るので、開いてから数える）
     @State private var reviewCount = 0
+    @State private var showSettings = false
 
     private static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -79,7 +89,7 @@ private struct TodayView: View {
                         LabeledContent("直近の文字起こし", value: pipeline.lastEngine)
                     }
                     if pipeline.email == nil {
-                        Text("「設定」タブで Google にログインすると、ドキュメントに書き始めます。")
+                        Text("右上の歯車（設定）で Google にログインすると、ドキュメントに書き始めます。")
                             .foregroundStyle(.secondary)
                     }
                     if !pipeline.message.isEmpty {
@@ -133,6 +143,12 @@ private struct TodayView: View {
                 }
             }
             .navigationTitle("今日")
+            .toolbar {
+                Button("設定", systemImage: "gearshape") { showSettings = true }
+            }
+            .sheet(isPresented: $showSettings) {
+                SettingsView { showSettings = false }
+            }
             .task(id: pipeline.people.flatMap(\.samples)) {
                 reviewCount = pipeline.voiceReview().count
             }
@@ -155,7 +171,7 @@ private struct TodayView: View {
                 LabeledContent {
                     Text(summary)
                 } label: {
-                    Label("頼まれごと帳", systemImage: "checklist")
+                    Label("タスク", systemImage: "checklist")
                 }
             }
             ForEach(open.prefix(3)) { item in
@@ -440,6 +456,11 @@ private struct PeoplePlacesView: View {
 
 private struct SettingsView: View {
     @Environment(Pipeline.self) private var pipeline
+    private let onClose: (() -> Void)?
+
+    init(onClose: (() -> Void)? = nil) {
+        self.onClose = onClose
+    }
     /// LocalModel.modeKey と同じ名前
     @AppStorage("localModelMode") private var localModelMode = LocalModel.Mode.fallback.rawValue
     @AppStorage(Pipeline.autoAsideKey) private var autoAside = true
@@ -612,6 +633,11 @@ private struct SettingsView: View {
                 }
             }
             .navigationTitle("設定")
+            .toolbar {
+                if let onClose {
+                    ToolbarItem(placement: .confirmationAction) { Button("閉じる", action: onClose) }
+                }
+            }
         }
     }
 }
