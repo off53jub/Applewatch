@@ -523,3 +523,132 @@ struct BackupView: View {
         }
     }
 }
+
+/// ほかの人の行になっている自分の声を探して、「自分」の行に直す（2026-11-05 本人の希望）。
+/// その人とされた行の声を取り、自分の登録・手直しの声にはっきり近い行だけを出す。▶︎で聞いて、選んだ行だけ直す。
+struct SelfClaimView: View {
+    @Environment(Pipeline.self) private var pipeline
+    let id: String
+    @State private var limit = 150
+    @State private var result: Pipeline.SelfClaim?
+    @State private var selected: Set<Date> = []
+    @State private var working = false
+    @State private var progress = ""
+    @State private var done: String?
+    @State private var player = ClipPlayer()
+
+    private static let time: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = "M/d HH:mm"
+        return f
+    }()
+
+    private var name: String { pipeline.people.first { $0.id == id }?.displayName ?? "人物\(id)" }
+
+    private var clips: [Pipeline.SplitClip] { result?.clips.map { $0.clip } ?? [] }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("調べる行", selection: $limit) {
+                    Text("新しい 150 行").tag(150)
+                    Text("新しい 300 行").tag(300)
+                }
+                Button(working ? progress : (result == nil ? "自分の声だった行を探す" : "もう一度探す")) { run() }
+                    .disabled(working)
+            } footer: {
+                Text("「\(name)」とされた行（2秒以上話したもの）の声を取り、自分の登録・手直しの声にはっきり近く、「\(name)」の声よりも近い行を探します。▶︎で聞いて、自分の声だった行だけに印を残し、「自分に直す」を押してください。記録とドキュメントの名前が「自分」になり、その会話の見出しと要点を作り直します。迷う行は出しません。録音が手元に無い行はドライブから取ってくるので、Wi-Fi のときに。")
+            }
+            if let note = result?.note {
+                Section { Text(note).foregroundStyle(.orange) }
+            }
+            if let done {
+                Section { Text(done) }
+            }
+            if let result, done == nil {
+                if clips.isEmpty {
+                    Section { Text("調べた \(result.checked) 行のうち、自分の声らしい行はありませんでした。") }
+                } else {
+                    Section {
+                        Button(selected.count == clips.count ? "すべての印を外す" : "すべてに印を付ける") {
+                            selected = selected.count == clips.count ? [] : Set(clips.map(\.line.time))
+                        }
+                        ForEach(clips) { clip in row(clip) }
+                    } header: {
+                        Text("自分の声らしい行（\(clips.count) 行・調べた \(result.checked) 行）")
+                    } footer: {
+                        Text("印を外した行は、そのままにします。")
+                    }
+                    Section {
+                        Button(working ? progress : "\(selected.count) 行を自分に直す") { apply() }
+                            .disabled(working || selected.isEmpty)
+                    }
+                }
+            }
+        }
+        .navigationTitle("自分の声だった行")
+        .onDisappear { player.stop() }
+    }
+
+    private func row(_ clip: Pipeline.SplitClip) -> some View {
+        let key = "claim-\(clip.line.time.timeIntervalSince1970)"
+        let on = selected.contains(clip.line.time)
+        return HStack(alignment: .firstTextBaseline) {
+            Button {
+                if on { selected.remove(clip.line.time) } else { selected.insert(clip.line.time) }
+            } label: {
+                Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(on ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.borderless)
+            Button {
+                Task {
+                    await player.toggle(key, at: clip.line.offset ?? 0, until: clip.end) {
+                        guard let audio = clip.line.audio else { return nil }
+                        return await pipeline.archive.playableURL(for: audio)
+                    }
+                }
+            } label: {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(Self.time.string(from: clip.line.time)).font(.caption).foregroundStyle(.secondary)
+                        Text(clip.line.text).lineLimit(3)
+                    }
+                    Spacer(minLength: 0)
+                    if player.loading == key {
+                        ProgressView()
+                    } else {
+                        Image(systemName: player.playing == key ? "stop.circle.fill" : "play.circle")
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
+    private func run() {
+        working = true
+        done = nil
+        progress = "声を調べています…"
+        Task {
+            let found = await pipeline.selfLikeLines(of: id, limit: limit) { text in
+                Task { @MainActor in progress = text }
+            }
+            result = found
+            selected = Set(found.clips.map { $0.clip.line.time })
+            working = false
+        }
+    }
+
+    private func apply() {
+        let chosen = clips.filter { selected.contains($0.line.time) }
+        working = true
+        progress = "直しています…"
+        Task {
+            done = await pipeline.claimAsSelf(id, clips: chosen)
+            working = false
+        }
+    }
+}

@@ -1023,6 +1023,90 @@ final class Pipeline {
         return count
     }
 
+    // MARK: - ほかの人の行になっている自分の声を探す（2026-11-05 本人の希望）
+
+    struct SelfClaim {
+        /// 自分の声らしい行（自分の見本に近い順）。me / own は自分・その人の見本までの近さ
+        var clips: [(clip: SplitClip, me: Float, own: Float)] = []
+        /// 声を取れた行の数
+        var checked = 0
+        var note: String?
+    }
+
+    /// 行の声が自分の声らしいか。me は自分の見本まで、own はその人の見本まで（見本が無ければ 1）。
+    /// 自分の見本にはっきり近く、その人の見本より 0.12 以上近いときだけ（行の声は短いのでぶれやすく、迷うものは出さない）。
+    nonisolated static func looksLikeSelf(me: Float, own: Float) -> Bool { me <= 0.38 && own - me >= 0.12 }
+
+    /// id の人とされた行（新しいものから limit 行。2秒以上）の声を取り、自分の声らしい行を探す。記録はまだ変えない。
+    func selfLikeLines(of id: String, limit: Int, progress: @escaping (String) -> Void) async -> SelfClaim {
+        guard id != SpeakerLabeler.selfID else { return SelfClaim(note: "自分の行です。") }
+        let banks = await speakers.voiceBanks(for: id)
+        guard banks.me.count >= 3 else {
+            return SelfClaim(note: "自分の声の見本が少なすぎます。「人と場所」→「自分の声」で、20秒の読み上げを何度か録ってください。")
+        }
+        let candidates = splitCandidates(for: id, limit: limit)
+        guard !candidates.isEmpty else { return SelfClaim(note: "声を取れる行がありません（2秒以上話した行が要ります）。") }
+        do {
+            try await speakers.prepare()
+        } catch {
+            return SelfClaim(note: "聞き分けを準備できませんでした: \(error.localizedDescription)")
+        }
+        let clips = await embed(candidates, progress: progress)
+        guard !clips.isEmpty else {
+            return SelfClaim(note: "声を取れませんでした（録音が手元にもドライブにも残っていない行が多い）。")
+        }
+        var found: [(clip: SplitClip, me: Float, own: Float)] = []
+        for clip in clips {
+            let me = SpeakerLabeler.top3(clip.embedding, banks.me)
+            let own = banks.own.isEmpty ? 1 : SpeakerLabeler.top3(clip.embedding, banks.own)
+            if Self.looksLikeSelf(me: me, own: own) { found.append((clip, me, own)) }
+        }
+        let note = banks.own.isEmpty
+            ? "この人には登録・手直しの声が無いので、自分の声との近さで探しました。▶︎で聞いて確かめてから直してください。"
+            : nil
+        return SelfClaim(clips: found.sorted { $0.me < $1.me }, checked: clips.count, note: note)
+    }
+
+    /// 選んだ行を「自分」の行にする（ドキュメントも直す）。声は覚え足さない（行の声は短く、迷いが混ざるため）。
+    /// 直した会話は、見出しと要点を作り直す。
+    func claimAsSelf(_ id: String, clips: [SplitClip]) async -> String {
+        guard !clips.isEmpty else { return "選んだ行がありません。" }
+        await speakers.ensureSelf()
+        let times = Set(clips.map(\.line.time))
+        await relabel(to: SpeakerLabeler.selfID) { $0.speakerID == id && times.contains($0.time) }
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.dateFormat = "yyyy-MM-dd"
+        // 日をまたぐ会話は前の日に入っているので、前の日も見る
+        let days = Set(times.flatMap { [format.string(from: $0), format.string(from: $0.addingTimeInterval(-86400))] })
+        for day in days {
+            for c in conversations.conversations(on: day) where times.contains(where: { c.start <= $0 && $0 <= c.end }) {
+                conversations.markResummarize(start: c.start, day: day)
+            }
+        }
+        hasSelfVoice = await speakers.hasSelfVoice
+        placeIndexBuilt = .distantPast
+        recordsVersion += 1
+        return "\(clips.count) 行を「自分」にしました。その会話の見出しと要点は、次の処理で作り直します。"
+    }
+
+    /// 自動で覚えた声のうち「自分」に近くて外した声がある人（自分の行が混ざっていそうな人）。外した数の多い順。
+    struct SelfMixed: Identifiable {
+        let id: String
+        /// 外した、自分に近い声の数
+        let count: Int
+    }
+
+    func peopleWithSelfVoices() async -> [SelfMixed] {
+        let items = await speakers.setAsideItems(of: nil)
+        var counts: [String: Int] = [:]
+        for item in items where !item.hasClip && item.reason.contains("「\(SpeakerLabeler.selfName)」") {
+            counts[item.person, default: 0] += item.voices.count
+        }
+        return counts.filter { $0.key != SpeakerLabeler.selfID }.sorted { $0.value > $1.value }
+            .map { SelfMixed(id: $0.key, count: $0.value) }
+    }
+
     func removePerson(_ id: String) async {
         await speakers.remove(id)
         people = await speakers.people()

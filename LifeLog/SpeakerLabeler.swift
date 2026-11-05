@@ -637,6 +637,18 @@ actor SpeakerLabeler {
         return total
     }
 
+    /// 自分の声の見本（登録・手直しの声。3つより少なければ自分の声すべて）と、その人の声の見本
+    /// （登録・手直しの声。無ければ、自分の見本から 0.40 より離れた自動の声）。過去の行の声を確かめるのに使う。
+    func voiceBanks(for id: String) -> (me: [[Float]], own: [[Float]]) {
+        let mine = (person(Self.selfID)?.voices ?? []).filter { $0.model == Self.model }
+        var me = mine.filter(\.pinned).map(\.embedding)
+        if me.count < 3 { me = mine.map(\.embedding) }
+        let theirs = (person(id)?.voices ?? []).filter { $0.model == Self.model }
+        var own = theirs.filter(\.pinned).map(\.embedding)
+        if own.isEmpty { own = theirs.map(\.embedding).filter { Self.top3($0, me) > 0.40 } }
+        return (me, own)
+    }
+
     /// 本人が戻した声の印（同じ声をまた外さないため）
     nonisolated static func keptKey(person: String, added: Date) -> String {
         person + "|" + String(format: "%.3f", added.timeIntervalSinceReferenceDate)

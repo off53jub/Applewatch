@@ -409,6 +409,14 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(SpeakerLabeler.keptKey(person: "12", added: t), "12|815234549.840")
     }
 
+    /// 過去の行の声が自分の声らしいのは、自分の見本にはっきり近く、その人の見本より0.12以上近いときだけ
+    func testLooksLikeSelf() {
+        XCTAssertTrue(Pipeline.looksLikeSelf(me: 0.25, own: 0.80))
+        XCTAssertTrue(Pipeline.looksLikeSelf(me: 0.38, own: 0.50))
+        XCTAssertFalse(Pipeline.looksLikeSelf(me: 0.30, own: 0.38))   // 差が小さい
+        XCTAssertFalse(Pipeline.looksLikeSelf(me: 0.45, own: 1.0))    // 自分にも遠い
+    }
+
     /// 署名の期限は mobileprovision（署名付きの plist）の ExpirationDate から読む
     func testProvisioningExpiry() throws {
         let expiry = Date(timeIntervalSince1970: 1_794_000_000)

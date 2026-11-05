@@ -339,10 +339,13 @@ struct PersonView: View {
     /// 記録と食い違って、聞き分けから外したひとこま（戻せる）
     @State private var aside: [SpeakerLabeler.SetAside] = []
     @State private var asideInfo: [SpeakerLabeler.Sample: Pipeline.SampleInfo] = [:]
+    /// （自分の画面）自分の声に近い声を外した人＝自分の行が混ざっていそうな人
+    @State private var selfMixed: [Pipeline.SelfMixed] = []
 
     private var person: SpeakerLabeler.Person? { pipeline.people.first { $0.id == id } }
 
     private func loadAside() async {
+        if id == SpeakerLabeler.selfID { selfMixed = await pipeline.peopleWithSelfVoices() }
         aside = await pipeline.setAsideItems(of: id)
         asideInfo = pipeline.sampleInfo(for: aside.filter(\.hasClip).map(\.sample))
     }
@@ -448,10 +451,29 @@ struct PersonView: View {
                         }
                     }
                     NavigationLink("ほかの人の声が混ざっている（分ける）") { SplitPersonView(id: id) }
+                    if !person.isSelf {
+                        NavigationLink("自分の声だった行を探す（自分に直す）") { SelfClaimView(id: id) }
+                    }
                 } header: {
                     Text("声")
                 } footer: {
                     Text("聞き分けを厳しくしても、ほかの人の行がこの人になってしまうときは「ほかの人の声が混ざっている（分ける）」で、行の声を近さで何組にでも分けて聞き比べ、組ごとに分けられます。ひとこまごとに、その時に話していた文と、いつ・どこかを出します（登録で録った声には出ません）。記録で別の名前の行なら、ほかの人の声を拾っているかもしれません。声を足すときは、その人だけが話しているときに録ってください（相手の了承を取ってから）。記録の行を長押しして「話者を直す」と、その行の声も覚えます。")
+                }
+                if person.isSelf && !selfMixed.isEmpty {
+                    Section {
+                        ForEach(selfMixed) { entry in
+                            NavigationLink {
+                                SelfClaimView(id: entry.id)
+                            } label: {
+                                LabeledContent(pipeline.people.first { $0.id == entry.id }?.displayName ?? "人物\(entry.id)",
+                                               value: "自分に近い声 \(entry.count) 個")
+                            }
+                        }
+                    } header: {
+                        Text("自分の行が混ざっていそうな人")
+                    } footer: {
+                        Text("自分の声がこの人の声として覚えられていました（その声は聞き分けから外してあります）。それまでに書いた行には、自分の発言がこの人の名前になっているものがあります。押すと行の声を調べ、自分の声らしい行を▶︎で聞いて確かめてから「自分」に直せます。")
+                    }
                 }
                 if !aside.isEmpty {
                     Section {
