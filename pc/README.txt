@@ -60,8 +60,19 @@ Haas-ja と ReazonSpeech にも「ホットワード」として効かせます�
     LifeLogPC.exe --device cpu                 GPU を使わない
 読み込めなかったモデルは飛ばして、残りで動きます（ログに理由が出ます）。
 
+■ おまけの機能（版 3 から）
+新しい iPhone のアプリが使います。古いアプリはこれまでどおり動きます。
+・聞き逃した声を探す: iPhone が声と気づかなかった所も、PC が音の大きさで探して一緒に文字にします（新しいモデルは使いません）。
+・話し手の声の特徴: 区間ごとに、誰の声かを見分けるための数の並びを返します。
+  3D-Speaker の ERes2Net（Apache License 2.0、約40MB）を使います。
+・周りの音: 区間ごとに、話し声・音楽・車などの音の名前を上位 5 つ返します。
+  sherpa-onnx の Zipformer の音の聞き分けモデル（AudioSet、Apache License 2.0、約110MB）を使います。
+話し手と周りの音のモデルは、初めて頼まれたときに取ってきます（その1回だけ時間がかかります）。
+うまく動かなくても、文字にする処理には響きません。試すときは
+    LifeLogPC.exe --check-extras 音声ファイル
+
 ■ 置き場所
-モデル・合言葉・記録: %LOCALAPPDATA%\LifeLogPC（model・reazon・whisper・cuda のフォルダ）
+モデル・合言葉・記録: %LOCALAPPDATA%\LifeLogPC（model・reazon・whisper・cuda・speaker・tagging のフォルダ）
 合言葉を変えたいときは、そこにある config.json を消して起動し直します（iPhone 側も入れ直してください）。
 
 ■ モデル
@@ -69,3 +80,5 @@ Haas-ja-v1.0（Third Intelligence、Apache License 2.0）の ONNX 版
 oboroge0/Haas-ja-v1.0-onnx（非公式の変換、Apache License 2.0）を sherpa-onnx で動かしています。
 ReazonSpeech k2 v2（Reazon Research、Apache License 2.0）を sherpa-onnx で動かしています。
 Whisper large-v3 / large-v3-turbo（OpenAI、MIT License）の CTranslate2 版を faster-whisper で動かしています。
+話し手の声の特徴: 3D-Speaker の ERes2Net（3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k、Apache License 2.0）。
+周りの音: sherpa-onnx-zipformer-small-audio-tagging-2024-04-15（Apache License 2.0）。

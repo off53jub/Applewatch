@@ -475,6 +475,7 @@ final class LogicTests: XCTestCase {
     }
 
     func testTaskAddSkipsDuplicates() {
+        let book = TaskBook()
         let before = book.items.count
         let item = TaskBook.Item(what: "テスト用の頼まれごと\(UUID().uuidString.prefix(6))", said: .now, source: .manual, state: .candidate)
         XCTAssertEqual(book.add([item]).count, 1)

@@ -12,8 +12,14 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 選んだ文の合い方を「確からしさ」、ほかのモデルの違う文を「候補」として一緒に返す。
 合言葉（起動したときに表示される）が合わない相手には何も返さない。
 
+おまけの機能（版 3 から。古い iPhone のアプリは使わないので、今までどおり動く）:
+- POST /transcribe?vad=union  iPhone が聞き逃した声を、音の大きさだけで PC でも探して一緒に文字にする（"extra": true の行）
+- POST /speakers?segments=…   区間ごとの話し手の声の特徴（3D-Speaker の ERes2Net、初回に約40MB を取ってくる）
+- POST /scene?segments=…      区間ごとの周りの音の上位 5 つ（Zipformer の音の聞き分け、初回に約110MB を取ってくる）
+
     LifeLogPC.exe                 普通に起動する（受け付けを始める）
     LifeLogPC.exe --test 音声     その音声を文字にして、モデルごとの文とかかった時間を表示する
+    LifeLogPC.exe --check-extras 音声  おまけの機能を、その音声で試す
     LifeLogPC.exe --startup       Windows の起動時に自動で始まるようにする（--no-startup でやめる）
 """
 
@@ -39,7 +45,7 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-VERSION = 2
+VERSION = 3
 # 待ち受ける番号。8765 はほかのソフトとよくぶつかるので、使われにくい番号にする
 PORT = 47615
 RATE = 16000
@@ -647,7 +653,9 @@ class Ensemble:
 
     def transcribe(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str] | None = None,
                    prompt: str | None = None, votes: bool = False,
-                   weights: dict[str, float] | None = None) -> list[dict]:
+                   weights: dict[str, float] | None = None, extra_from: int | None = None) -> list[dict]:
+        """extra_from を渡すと、その番号から後ろの区間（PC が見つけた、iPhone が聞き逃した声）の行に "extra": true を付け、
+        全部の行を時間の順に並べ直す。"""
         if CLEAN_AUDIO:
             audio = clean_audio(audio, segments)
         jobs = {e.name: self.pool.submit(e.run, audio, segments, hints or [], prompt) for e in self.engines}
@@ -672,7 +680,11 @@ class Ensemble:
                 line["alternatives"] = picked["alternatives"]
             if votes or len(results) > 1:
                 line["votes"] = hypotheses
+            if extra_from is not None and i >= extra_from:
+                line["extra"] = True
             lines.append(line)
+        if extra_from is not None:
+            lines.sort(key=lambda line: (line["start"], line["end"]))
         return lines
 
 
@@ -771,12 +783,295 @@ def parse_segments(text: str | None, duration: float) -> list[tuple[float, float
     return result
 
 
+def parse_ranges(text: str | None, duration: float) -> list[tuple[float, float]]:
+    """"0.0-3.2,5.1-9.0" の形。parse_segments と違い、長い区間も分けない（送られた区間と1つずつ対応させる）。
+    読めない区間は (0, 0) にして、答えを null にする。無ければ全体を1つの区間にする。"""
+    if not text:
+        return [(0.0, duration)]
+    result = []
+    for part in text.split(","):
+        try:
+            a, b = part.split("-")
+            start, end = max(0.0, float(a)), min(duration, float(b))
+        except ValueError:
+            start, end = 0.0, 0.0
+        result.append((start, max(start, end)))
+    return result
+
+
+# MARK: - iPhone が聞き逃した声を探す（vad=union）
+
+
+EXTRA_FRAME = 0.03       # 30ms ずつ音の大きさを測る
+EXTRA_NOISE_PCT = 20     # 小さいほうから 20% の大きさを「周りの音の大きさ」とみなす
+EXTRA_MARGIN_DB = 10.0   # それより 10dB 大きければ声かもしれない
+EXTRA_MIN_DB = -60.0     # 無音の録音でも、これより小さい音は声とみなさない
+EXTRA_MIN = 0.4          # 0.4 秒より短いものは捨てる
+EXTRA_GAP = 0.3          # 0.3 秒より短い切れ目はつなぐ
+EXTRA_OVERLAP = 0.5      # iPhone の区間と半分より多く重なるものは、もう聞いているので捨てる
+EXTRA_PAD = 0.1          # 言い始め・言い終わりが切れないよう、前後を少し広げる
+
+
+def extra_speech(audio: np.ndarray, segments: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """iPhone の区間の外にある、声らしい大きな音の区間（モデルは使わない、音の大きさだけで決める）。
+
+    30ms ごとの大きさ（dB）を測り、周りの音（小さいほうから 20%）より 10dB 大きい所を拾う。
+    0.3 秒より短い切れ目はつなぎ、0.4 秒より短いものは捨てる。iPhone の区間と半分より多く重なるものも捨てる。
+    少しだけ重なるものは、重なった所を除いた残りを返す（同じ所を2回文字にしないため）。
+    """
+    frame = int(EXTRA_FRAME * RATE)
+    count = len(audio) // frame
+    if count < 2:
+        return []
+    duration = len(audio) / RATE
+    frames = np.asarray(audio[:count * frame], dtype=np.float64).reshape(count, frame)
+    db = 20.0 * np.log10(np.sqrt(np.mean(frames * frames, axis=1)) + 1e-10)
+    threshold = max(float(np.percentile(db, EXTRA_NOISE_PCT)) + EXTRA_MARGIN_DB, EXTRA_MIN_DB)
+    loud = (db > threshold).astype(np.int8)
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], loud, [0]])))
+    merged: list[list[float]] = []
+    for a, b in zip(edges[0::2], edges[1::2]):
+        start, end = a * EXTRA_FRAME, b * EXTRA_FRAME
+        if merged and start - merged[-1][1] < EXTRA_GAP:
+            merged[-1][1] = end
+        else:
+            merged.append([start, end])
+    given = sorted((a, b) for a, b in segments if b > a)
+    found: list[tuple[float, float]] = []
+    for start, end in merged:
+        if end - start < EXTRA_MIN:
+            continue
+        start, end = max(0.0, start - EXTRA_PAD), min(duration, end + EXTRA_PAD)
+        covered = sum(max(0.0, min(end, b) - max(start, a)) for a, b in given)
+        if covered > EXTRA_OVERLAP * (end - start):
+            continue
+        # 重なった所を除いた残り
+        pieces = [(start, end)]
+        for a, b in given:
+            rest = []
+            for s, e in pieces:
+                if b <= s or a >= e:
+                    rest.append((s, e))
+                    continue
+                if a > s:
+                    rest.append((s, a))
+                if b < e:
+                    rest.append((b, e))
+            pieces = rest
+        for s, e in pieces:
+            if e - s < EXTRA_MIN:
+                continue
+            # 長すぎるものは分ける（文字にするときと同じ上限）
+            s, e = float(s), float(e)
+            while e - s > MAX_SEGMENT:
+                found.append((round(s, 2), round(s + MAX_SEGMENT, 2)))
+                s += MAX_SEGMENT
+            found.append((round(s, 2), round(e, 2)))
+    return found
+
+
+# MARK: - 話し手の声の特徴（/speakers）・周りの音（/scene）
+# どちらも初回に頼まれたときにモデルを取ってきて、1回だけ読み込む。失敗しても文字にする処理には響かない。
+
+
+RELEASES = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
+# 3D-Speaker の ERes2Net（iPhone の WeSpeaker 型とは違う作りのモデル、Apache-2.0）。
+# 置き場所の名前 "speaker-recongition-models" の綴りの誤りは、元のまま（直すと取ってこられない）
+SPEAKER_MODEL = os.environ.get("LIFELOG_SPEAKER_MODEL", "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
+SPEAKER_URL = f"{RELEASES}/speaker-recongition-models/{SPEAKER_MODEL}"
+SPEAKER_DIR = HOME / "speaker"
+SPEAKER_MIN = 0.5  # これより短い区間は声の特徴を出さない（null）
+# AudioSet の 527 種類の音を聞き分ける Zipformer（small、Apache-2.0）
+TAGGING_NAME = "sherpa-onnx-zipformer-small-audio-tagging-2024-04-15"
+TAGGING_URL = f"{RELEASES}/audio-tagging-models/{TAGGING_NAME}.tar.bz2"
+TAGGING_DIR = HOME / "tagging"
+TAGGING_TOP = 5
+TAGGING_MIN = 0.3   # これより短い区間は空にする
+TAGGING_MAX = 30.0  # 長い区間は真ん中の 30 秒だけを聞く（時間がかかりすぎないように）
+
+
+def fetch(url: str, path: Path) -> None:
+    """url を path に保存する。途中で止まっても壊れたファイルが残らないよう、別の名前で受けてから置き換える。"""
+    import urllib.request
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    part = path.with_name(path.name + ".part")
+    with urllib.request.urlopen(url, timeout=120) as response, part.open("wb") as f:
+        while True:
+            chunk = response.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+    part.replace(path)
+
+
+def download_speaker() -> Path:
+    path = SPEAKER_DIR / SPEAKER_MODEL
+    if path.exists() and path.stat().st_size > 1_000_000:
+        return path
+    log(f"話し手の声の特徴を出すモデル（{SPEAKER_MODEL}、約40MB）を取ってきます。初回だけです。置き場所: {SPEAKER_DIR}")
+    fetch(SPEAKER_URL, path)
+    return path
+
+
+def tagging_files() -> dict[str, Path] | None:
+    """周りの音を聞き分けるモデルと、音の名前の一覧。揃っていなければ None。"""
+    models = sorted(TAGGING_DIR.rglob("*.onnx"))
+    labels = sorted(TAGGING_DIR.rglob("class_labels_indices.csv"))
+    if not models or not labels:
+        return None
+    # 軽い int8 の版があればそれを使う（説明書の例も int8）
+    small = [p for p in models if "int8" in p.name]
+    return {"model": (small or models)[0], "labels": labels[0]}
+
+
+def download_tagging() -> dict[str, Path]:
+    files = tagging_files()
+    if files:
+        return files
+    import bz2  # noqa: F401 — exe にしたとき tar.bz2 を開く部品が入るように
+    import tarfile
+
+    log(f"周りの音を聞き分けるモデル（{TAGGING_NAME}、約110MB）を取ってきます。初回だけです。置き場所: {TAGGING_DIR}")
+    archive = TAGGING_DIR / f"{TAGGING_NAME}.tar.bz2"
+    fetch(TAGGING_URL, archive)
+    with tarfile.open(archive, "r:bz2") as tar:
+        try:
+            tar.extractall(TAGGING_DIR, filter="data")
+        except TypeError:  # 古い Python には filter が無い
+            members = [m for m in tar.getmembers()
+                       if not (m.name.startswith(("/", "\\")) or ".." in Path(m.name).parts)]
+            tar.extractall(TAGGING_DIR, members=members)
+    archive.unlink(missing_ok=True)
+    files = tagging_files()
+    if not files:
+        raise RuntimeError("周りの音のモデルのファイルが揃いませんでした（*.onnx・class_labels_indices.csv）")
+    return files
+
+
+def clip(audio: np.ndarray, start: float, end: float) -> np.ndarray:
+    a = max(0, int(start * RATE))
+    b = min(len(audio), int(end * RATE))
+    return np.ascontiguousarray(audio[a:b], dtype=np.float32) if b > a else np.zeros(0, dtype=np.float32)
+
+
+class SpeakerModel:
+    """区間ごとの話し手の声の特徴（長さ 1 にそろえた数の並び）。同じ人なら向きが近くなる。"""
+
+    def __init__(self, threads: int) -> None:
+        import sherpa_onnx
+
+        path = download_speaker()
+        config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(path), num_threads=threads, provider="cpu")
+        if not config.validate():
+            raise RuntimeError(f"話し手のモデルの設定が正しくありません: {config}")
+        self.extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
+        self.dim = int(self.extractor.dim)
+        self.name = path.stem
+        self.lock = threading.Lock()
+        log(f"話し手のモデルを読み込みました（{self.name}、{self.dim} 次元）")
+
+    def embed(self, audio: np.ndarray, ranges: list[tuple[float, float]]) -> list[list[float] | None]:
+        out: list[list[float] | None] = []
+        with self.lock:
+            for start, end in ranges:
+                samples = clip(audio, start, end)
+                if len(samples) < int(SPEAKER_MIN * RATE):
+                    out.append(None)
+                    continue
+                stream = self.extractor.create_stream()
+                stream.accept_waveform(RATE, samples)
+                stream.input_finished()
+                if not self.extractor.is_ready(stream):
+                    out.append(None)
+                    continue
+                vector = np.asarray(self.extractor.compute(stream), dtype=np.float64)
+                norm = float(np.linalg.norm(vector))
+                if not np.isfinite(norm) or norm <= 0:
+                    out.append(None)
+                    continue
+                out.append([round(float(x), 6) for x in vector / norm])
+        return out
+
+
+class SceneModel:
+    """区間ごとの周りの音（話し声・音楽・車・雨など）の上位 5 つと、その確からしさ。"""
+
+    def __init__(self, threads: int) -> None:
+        import sherpa_onnx
+
+        files = download_tagging()
+        config = sherpa_onnx.AudioTaggingConfig(
+            model=sherpa_onnx.AudioTaggingModelConfig(
+                zipformer=sherpa_onnx.OfflineZipformerAudioTaggingModelConfig(model=str(files["model"])),
+                num_threads=threads,
+                provider="cpu",
+            ),
+            labels=str(files["labels"]),
+            top_k=TAGGING_TOP,
+        )
+        if not config.validate():
+            raise RuntimeError(f"周りの音のモデルの設定が正しくありません: {config}")
+        self.tagger = sherpa_onnx.AudioTagging(config)
+        self.name = TAGGING_NAME
+        self.lock = threading.Lock()
+        log(f"周りの音のモデルを読み込みました（{self.name}、{files['model'].name}）")
+
+    def tag(self, audio: np.ndarray, ranges: list[tuple[float, float]]) -> list[list[dict]]:
+        out: list[list[dict]] = []
+        with self.lock:
+            for start, end in ranges:
+                if end - start > TAGGING_MAX:
+                    middle = (start + end) / 2
+                    start, end = middle - TAGGING_MAX / 2, middle + TAGGING_MAX / 2
+                samples = clip(audio, start, end)
+                if len(samples) < int(TAGGING_MIN * RATE):
+                    out.append([])
+                    continue
+                stream = self.tagger.create_stream()
+                stream.accept_waveform(RATE, samples)
+                events = self.tagger.compute(stream, TAGGING_TOP)
+                out.append([{"name": e.name, "prob": round(min(1.0, max(0.0, float(e.prob))), 4)}
+                            for e in list(events)[:TAGGING_TOP]])
+        return out
+
+
+_extras: dict[str, object] = {}
+_extras_lock = threading.Lock()
+
+
+def extra_model(kind: str, threads: int):
+    """"speaker" か "scene" のモデル。初回だけ取ってきて読み込む（失敗したら次に頼まれたときにやり直す）。"""
+    with _extras_lock:
+        if kind not in _extras:
+            _extras[kind] = SpeakerModel(threads) if kind == "speaker" else SceneModel(threads)
+        return _extras[kind]
+
+
+def features() -> list[str]:
+    """この PC が受け付けるおまけの機能。モデルは初回に頼まれたときに取ってくる。"""
+    found = []
+    try:
+        import sherpa_onnx
+    except Exception:  # noqa: BLE001
+        sherpa_onnx = None
+    if sherpa_onnx is not None:
+        if all(hasattr(sherpa_onnx, n) for n in ("SpeakerEmbeddingExtractor", "SpeakerEmbeddingExtractorConfig")):
+            found.append("speakers")
+        if all(hasattr(sherpa_onnx, n) for n in ("AudioTagging", "AudioTaggingConfig", "AudioTaggingModelConfig",
+                                                  "OfflineZipformerAudioTaggingModelConfig")):
+            found.append("scene")
+    found.append("vad")
+    return found
+
+
 # MARK: - 受け付け
 
 
 class Handler(BaseHTTPRequestHandler):
     engine: Ensemble
     key: str
+    extra_threads = 2  # /speakers・/scene のモデルに使うスレッドの数
     server_version = "LifeLogPC"
 
     def log_message(self, format: str, *args) -> None:  # 標準の出力は使わない
@@ -806,11 +1101,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_json(200, {"app": "LifeLogPC", "version": VERSION, "model": self.engine.label,
                              "provider": self.engine.provider,
-                             "engines": [e.name for e in self.engine.engines]})
+                             "engines": [e.name for e in self.engine.engines],
+                             "features": features()})
 
     def do_POST(self) -> None:
         url = urlparse(self.path)
-        if url.path != "/transcribe":
+        if url.path not in ("/transcribe", "/speakers", "/scene"):
             self.send_json(404, {"error": "not found"})
             return
         if not self.authorized():
@@ -820,17 +1116,59 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "音声がありません"})
             return
         data = self.rfile.read(length)
+        if url.path == "/transcribe":
+            self.transcribe(data, url.query)
+        else:
+            self.extras(url.path, data, url.query)
+
+    def extras(self, path: str, data: bytes, query_text: str) -> None:
+        """/speakers（区間ごとの話し手の声の特徴）と /scene（区間ごとの周りの音）。失敗しても受け付けは続ける。"""
+        what = "話し手の声の特徴を出せませんでした" if path == "/speakers" else "周りの音を聞き分けられませんでした"
         started = time.time()
         try:
             audio = load_audio(data)
             duration = len(audio) / RATE
-            query = parse_qs(url.query)
+            query = parse_qs(query_text)
+            ranges = parse_ranges((query.get("segments") or [None])[0], duration)
+            if path == "/speakers":
+                model = extra_model("speaker", self.extra_threads)
+                body: dict = {"embeddings": model.embed(audio, ranges), "model": model.name, "dim": model.dim}
+            else:
+                model = extra_model("scene", self.extra_threads)
+                body = {"tags": model.tag(audio, ranges), "model": model.name}
+        except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
+            log(f"{what}: {error!r}")
+            self.send_json(500, {"error": f"{what}: {error}"})
+            return
+        took = time.time() - started
+        body["seconds"] = round(took, 2)
+        log(f"{self.client_address[0]} から {path}: {duration:.0f} 秒・{len(ranges)} 区間、{took:.1f} 秒")
+        self.send_json(200, body)
+
+    def transcribe(self, data: bytes, query_text: str) -> None:
+        started = time.time()
+        extra: list[tuple[float, float]] = []
+        try:
+            audio = load_audio(data)
+            duration = len(audio) / RATE
+            query = parse_qs(query_text)
             segments = parse_segments((query.get("segments") or [None])[0], duration)
             # 聞き取ってほしい言葉（改行区切り）と、前の区切りの終わりの文。Whisper のヒントにする
             hints = [w.strip() for w in (query.get("hints") or [""])[0].split("\n") if w.strip()][:80]
             prompt = (query.get("prompt") or [None])[0]
             weights = parse_weights((query.get("weights") or [None])[0])
-            lines = self.engine.transcribe(audio, segments, hints=hints, prompt=prompt, weights=weights)
+            # vad=union: iPhone が聞き逃した声も PC で探して、一緒に文字にする
+            if (query.get("vad") or [""])[0] == "union":
+                try:
+                    extra = extra_speech(audio, segments)
+                except Exception as error:  # noqa: BLE001 — 探せなくても、iPhone の区間だけで続ける
+                    log(f"聞き逃した声を探せませんでした（iPhone の区間だけで続けます）: {error!r}")
+                    extra = []
+            if extra:
+                lines = self.engine.transcribe(audio, segments + extra, hints=hints, prompt=prompt, weights=weights,
+                                               extra_from=len(segments))
+            else:
+                lines = self.engine.transcribe(audio, segments, hints=hints, prompt=prompt, weights=weights)
         except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
             log(f"文字にできませんでした: {error!r}")
             self.send_json(500, {"error": str(error)})
@@ -838,6 +1176,9 @@ class Handler(BaseHTTPRequestHandler):
         took = time.time() - started
         voiced = sum(b - a for a, b in segments)
         log(f"{self.client_address[0]} から {duration:.0f} 秒（声 {voiced:.0f} 秒）→ {len(lines)} 行、{took:.1f} 秒")
+        if extra:
+            found = sum(1 for line in lines if line.get("extra"))
+            log(f"  iPhone が聞き逃した声: {len(extra)} 区間（{sum(b - a for a, b in extra):.0f} 秒）→ {found} 行")
         unsure = sum(1 for line in lines if line.get("confidence", 1) < 0.5)
         log(f"  多数決: {len(self.engine.engines)} モデル、食い違いの大きい行 {unsure}")
         self.send_json(200, {"lines": lines, "seconds": round(took, 2),
@@ -899,8 +1240,9 @@ class Server(ThreadingHTTPServer):
         super().server_bind()
 
 
-def serve(engine_factory, port: int) -> None:
+def serve(engine_factory, port: int, threads: int = 4) -> None:
     key = passphrase()
+    Handler.extra_threads = max(1, threads // 2)
     # モデルを読み込む前に、番号が使えるか確かめる
     try:
         server = Server(("0.0.0.0", port), Handler)
@@ -1021,6 +1363,83 @@ def check_vote() -> None:
     ok = bool(low) and low["confidence"] < 0.5 and len(low["alternatives"]) == 2
     print(("OK " if ok else "NG ") + json.dumps(low, ensure_ascii=False))
     failed += 0 if ok else 1
+    # 聞き逃した声の探し方（vad=union）もモデル無しで確かめられる
+    failed += check_extra_speech()
+    if failed:
+        sys.exit(1)
+
+
+def check_extra_speech() -> int:
+    """聞き逃した声の探し方を、作った音で確かめる（モデル無し）。NG の数を返す。"""
+    rng = np.random.default_rng(0)
+    audio = (rng.standard_normal(10 * RATE) * 0.003).astype(np.float32)  # 周りの音（約 -50dBFS）
+    t = np.arange(10 * RATE) / RATE
+    tone = (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    for a, b in [(2.0, 3.0), (5.0, 5.15), (6.0, 6.5), (6.7, 7.2), (8.0, 9.0)]:
+        audio[int(a * RATE):int(b * RATE)] += tone[int(a * RATE):int(b * RATE)]
+
+    def near(got: list[tuple[float, float]], want: list[tuple[float, float]]) -> bool:
+        return len(got) == len(want) and all(abs(g[0] - w[0]) <= 0.15 and abs(g[1] - w[1]) <= 0.15
+                                             for g, w in zip(got, want))
+
+    cases = [
+        # 短すぎる音（0.15 秒）は捨て、0.2 秒の切れ目はつなぎ、iPhone の区間と同じ所は捨てる
+        ([(8.0, 9.0)], [(2.0, 3.0), (6.0, 7.2)]),
+        # 半分より多く重なるものは捨てる
+        ([(1.9, 2.8), (8.0, 9.0)], [(6.0, 7.2)]),
+        # 少しだけ重なるものは、重なっていない所だけを返す
+        ([(6.7, 7.4), (8.0, 9.0)], [(2.0, 3.0), (5.9, 6.7)]),
+        # iPhone の区間が無ければ、声らしい所を全部返す
+        ([], [(2.0, 3.0), (6.0, 7.2), (8.0, 9.0)]),
+    ]
+    failed = 0
+    for given, want in cases:
+        got = extra_speech(audio, given)
+        ok = near(got, want)
+        print(("OK " if ok else "NG ") + f"聞き逃した声: 区間 {given} → {got}（ほぼ {want} のはず）")
+        failed += 0 if ok else 1
+    # 無音だけ・短すぎる音声でも落ちない
+    ok = extra_speech(np.zeros(5 * RATE, dtype=np.float32), []) == [] and extra_speech(np.zeros(10, np.float32), []) == []
+    print(("OK " if ok else "NG ") + "無音・短い音声では何も返さない")
+    return failed + (0 if ok else 1)
+
+
+def check_extras(path: str, threads: int) -> None:
+    """聞き逃した声の探し方・/speakers・/scene を、その音声で試す（モデルを取ってくる。CI で使う）。"""
+    failed = check_extra_speech()
+    audio = load_audio(Path(path).read_bytes())
+    duration = len(audio) / RATE
+    found = extra_speech(audio, [])
+    print(f"音声 {duration:.1f} 秒。iPhone の区間が無いとき、声らしい所: {found}")
+    if found:
+        print(f"  最初の区間を iPhone の区間にすると: {extra_speech(audio, found[:1])}")
+    # 区間ごとに1つずつ答えが返るか。短すぎる区間（0.2 秒）は null になるはず
+    ranges = parse_ranges(",".join(f"{a}-{b}" for a, b in found[:3]) + f",0-0.2,0-{duration:.2f}" if found
+                          else f"0-0.2,0-{duration:.2f}", duration)
+    started = time.time()
+    speaker = extra_model("speaker", threads)
+    embeddings = speaker.embed(audio, ranges)
+    print(f"話し手のモデル: {speaker.name}（{speaker.dim} 次元、{time.time() - started:.1f} 秒）")
+    for (a, b), e in zip(ranges, embeddings):
+        print(f"  [{a:.1f}-{b:.1f}] " + ("null" if e is None else f"{len(e)} 次元、長さ {np.linalg.norm(e):.3f}"))
+    vectors = [np.array(e) for e in embeddings if e is not None]
+    if len(vectors) >= 2:
+        print(f"  最初の2つの近さ（cos）: {float(vectors[0] @ vectors[1]):.3f}")
+    ok = len(embeddings) == len(ranges) and embeddings[-2] is None and embeddings[-1] is not None \
+        and len(embeddings[-1]) == speaker.dim and abs(np.linalg.norm(embeddings[-1]) - 1) < 1e-3
+    print(("OK " if ok else "NG ") + "区間ごとに声の特徴が出る（短い区間は null、長さは 1）")
+    failed += 0 if ok else 1
+    started = time.time()
+    scene = extra_model("scene", threads)
+    tags = scene.tag(audio, ranges)
+    print(f"周りの音のモデル: {scene.name}（{time.time() - started:.1f} 秒）")
+    for (a, b), t in zip(ranges, tags):
+        print(f"  [{a:.1f}-{b:.1f}] " + ("、".join(f"{x['name']} {x['prob']:.2f}" for x in t) or "（なし）"))
+    ok = len(tags) == len(ranges) and tags[-2] == [] and 1 <= len(tags[-1]) <= TAGGING_TOP \
+        and all(0 <= x["prob"] <= 1 for x in tags[-1])
+    print(("OK " if ok else "NG ") + "区間ごとに周りの音の上位が出る")
+    failed += 0 if ok else 1
+    print("この PC で使える機能: " + ", ".join(features()))
     if failed:
         sys.exit(1)
 
@@ -1038,6 +1457,8 @@ def main() -> None:
                         help="聞く前に音をそろえない（低いうなりを削る・小さい声を持ち上げる処理をしない）")
     parser.add_argument("--download", action="store_true", help="モデルを取ってくるだけ")
     parser.add_argument("--check-vote", action="store_true", help="多数決の決まりを確かめる")
+    parser.add_argument("--check-extras", metavar="音声",
+                        help="聞き逃した声の探し方・話し手の声の特徴・周りの音を、その音声で試す（モデルを取ってくる）")
     parser.add_argument("--startup", action="store_true", help="Windows の起動時に自動で始める")
     parser.add_argument("--no-startup", action="store_true", help="起動時に始めるのをやめる")
     parser.add_argument("--threads", type=int, default=max(1, min(8, (os.cpu_count() or 4) // 2)))
@@ -1055,6 +1476,9 @@ def main() -> None:
         return
     if args.check_vote:
         check_vote()
+        return
+    if args.check_extras:
+        check_extras(args.check_extras, max(1, args.threads // 2))
         return
     global USE_HOTWORDS, CLEAN_AUDIO
     if args.no_hotwords:
@@ -1077,7 +1501,7 @@ def main() -> None:
         test(args.test, factory(), args.segments, [w for w in re.split("[、,]", args.hints) if w])
         return
     try:
-        serve(factory, args.port)
+        serve(factory, args.port, args.threads)
     except Exception as error:  # noqa: BLE001
         log(f"始められませんでした: {error!r}")
         if getattr(sys, "frozen", False):
