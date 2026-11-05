@@ -376,6 +376,10 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(NumberStyle.normalize("一緒に統一する"), "一緒に統一する")
         XCTAssertEqual(NumberStyle.normalize("同一件"), "同一件")
         XCTAssertEqual(NumberStyle.normalize("万円"), "万円")
+        XCTAssertEqual(NumberStyle.normalize("四六時中ずっと"), "四六時中ずっと")
+        XCTAssertEqual(NumberStyle.normalize("五分五分です"), "五分五分です")
+        XCTAssertEqual(NumberStyle.normalize("一個人として三日坊主"), "一個人として三日坊主")
+        XCTAssertEqual(NumberStyle.normalize("一日中会議、三日後に"), "一日中会議、3日後に")
     }
 
     // MARK: - 場面

@@ -12,11 +12,21 @@ enum NumberStyle {
                                 "件", "社", "%", "倍", "年", "か月", "ヶ月", "月", "日", "時", "分", "秒", "歳", "回",
                                 "個", "台", "本", "通", "部", "階", "番目", "位", "割", "キロ", "メートル"]
 
+    /// 単位が続いても数ではない言い回し
+    private static let idioms = ["四六時中", "五分五分", "一個人", "三日坊主", "一件落着", "一枚岩", "一分一秒",
+                                 "一日一善", "一年中", "一日中", "七転八倒", "千載一遇", "百発百中"]
+
     static func normalize(_ text: String) -> String {
         let chars = Array(text)
         var out = ""
         var i = 0
         while i < chars.count {
+            // 決まった言い回し（「四六時中」「五分五分」など）はそのまま
+            if let idiom = idioms.first(where: { chars[i...].starts(with: $0) }) {
+                out += idiom
+                i += idiom.count
+                continue
+            }
             // 漢数字の続き（数字・十百千・万億兆）を取る
             var j = i
             while j < chars.count, digits[chars[j]] != nil || small[chars[j]] != nil || large.contains(chars[j]) { j += 1 }
