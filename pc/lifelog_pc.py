@@ -172,7 +172,9 @@ def token_chars(tokens: Path) -> set[str]:
     ここに無い文字を含む登録語を渡すと、その回の登録語がまるごと捨てられる。"""
     chars: set[str] = set()
     for row in tokens.read_text(encoding="utf-8").splitlines():
-        token = row.rsplit(" ", 1)[0] if " " in row else row
+        # 「トークン 番号」。空白でもタブでも区切られている（ReazonSpeech はタブ）
+        parts = row.rsplit(None, 1)
+        token = parts[0] if len(parts) == 2 else row
         if len(token) == 1 and not token.isspace():
             chars.add(token)
     return chars
