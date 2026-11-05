@@ -2108,6 +2108,7 @@ final class Pipeline {
             // PC の3つのモデルでその日の言葉をヒントに書き直す。ほぼ同じ読みのモデルが多い（確からしさ 0.66 以上）行だけ差し替える。
             // 端末内で何も聞き取れていなかった行は、もっと確かなとき（0.85 以上）だけ
             var ensembleDone = NightlyRecheck.isEnsembleDone(target.audio)
+            let doneDuringDay = ensembleDone
             if !ensembleDone, homePC.shouldTry,
                let pc = try? await homePC.transcribe(url, local: local, hints: words), homePC.engineCount > 1 {
                 ensembleDone = true
@@ -2124,6 +2125,35 @@ final class Pipeline {
                     }
                     texts[i] = fixed
                     confidence[i] = (sure * 100).rounded() / 100
+                }
+            }
+            // 昼に多数決で書いた区切りでも、食い違った行は、会話の相手の名前とその前の話を渡して PC でもう一度聞く。
+            // 昼は区切りが届いた順に書くので、相手の名前や後から出た言葉を知らずに聞いている。前より確かになった行だけ差し替える
+            if doneDuringDay, homePC.shouldTry, homePC.engineCount > 1 {
+                let unsure = lines.indices.filter {
+                    texts[$0] == lines[$0].text && (confidence[$0] ?? 1) < HomePC.cloudVoteBelow
+                }
+                if let first = unsure.first {
+                    let talk = conversations(on: target.day).first { c in c.lines.contains { $0.audio == target.audio } }
+                    let people = (talk?.people ?? []).filter { !$0.hasPrefix("人物") && $0 != SpeakerLabeler.selfName }
+                    let before = (talk?.lines ?? []).filter { $0.time < lines[first].time && $0.media == nil }
+                        .suffix(8).map(\.text).joined()
+                    if let again = try? await homePC.transcribe(url, segments: unsure.map { spans[$0] }, hints: people + words,
+                                                                previous: before.isEmpty ? nil : String(before.suffix(200))) {
+                        for i in unsure {
+                            let inSpan = again.filter { $0.offset >= spans[i].start - 0.5 && $0.offset < spans[i].end - 0.2 }
+                            let text = inSpan.map(\.text).joined()
+                            guard !text.isEmpty, text != texts[i] else { continue }
+                            let sure = inSpan.compactMap(\.confidence).min() ?? 0
+                            guard sure >= max(0.66, (confidence[i] ?? 0) + 0.1) else { continue }
+                            var fixed = text
+                            for fix in vocabulary.fixes(for: context) {
+                                fixed = fixed.replacingOccurrences(of: fix.wrong, with: fix.right)
+                            }
+                            texts[i] = fixed
+                            confidence[i] = (sure * 100).rounded() / 100
+                        }
+                    }
                 }
             }
             if !ensembleDone, !NightlyRecheck.isHaasDone(target.audio) {
