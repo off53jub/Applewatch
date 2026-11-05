@@ -11,7 +11,9 @@ import Observation
 final class BackupKeeper {
     /// 控える登録のファイル（Application Support の中）
     static let files = ["people.json", "merges.json", "wordstats.json", "suggestions.json", "trash.json",
-                        "uploads.json", "uploads-remote.json", "voices-set-aside.json"]
+                        "uploads.json", "uploads-remote.json", "voices-set-aside.json",
+                        // タスク・AI からの質問の答え・正解帳・聞き違いの記録も、消えると作り直せないので控える
+                        "tasks.json", "asks.json", "answerkey.json", "misheard.json"]
     /// 戻すときに入れ替える設定（言葉の登録・場所・消したい言葉・カレンダーの選び方・聞き分けの厳しさ）。
     /// 設定は全部控えるが、端末の印や同期の進み具合まで戻すとおかしくなるので、戻すのはこれだけ。
     static let restoredSettings = ["vocabulary", "placeList", "junkPhrases", "workCalendars", "ignoredCalendars",
