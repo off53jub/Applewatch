@@ -960,4 +960,24 @@ final class LogicTests: XCTestCase {
         merger.sent(merger.outbox.count)
         XCTAssertTrue(merger.outbox.isEmpty)
     }
+
+    // MARK: - 声のひとこまと行の結び付け（2026-11-06）
+
+    func testSampleMatchesOnlyRealOverlap() {
+        // 「文句なしキャプテン。」（10文字）を 0 秒に言い、次の行は 30 秒。あいだは黙っていた
+        let lines: [(offset: TimeInterval, chars: Int)] = [(0, 10), (30, 8)]
+        XCTAssertEqual(Pipeline.lineEnds(lines)[0], 2.6, accuracy: 0.01)
+        // 黙っていた時間のひとこまには、もうセリフを付けない（前は次の行の頭まで続くとみなして付けていた）
+        XCTAssertTrue(Pipeline.matchLines(lines, sample: (start: 10, end: 15)).indices.isEmpty)
+        // セリフとしっかり重なるひとこま
+        let firm = Pipeline.matchLines(lines, sample: (start: 0.5, end: 3))
+        XCTAssertEqual(firm.indices, [0])
+        XCTAssertFalse(firm.loose)
+        // 少しだけ重なるひとこまは、ずれているかもしれない印を付ける
+        let loose = Pipeline.matchLines(lines, sample: (start: 2.4, end: 10))
+        XCTAssertEqual(loose.indices, [0])
+        XCTAssertTrue(loose.loose)
+        // 次の行の頭は超えない
+        XCTAssertEqual(Pipeline.lineEnds([(0, 40), (3, 5)])[0], 3, accuracy: 0.01)
+    }
 }

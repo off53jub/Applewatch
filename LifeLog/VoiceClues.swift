@@ -181,6 +181,11 @@ extension Pipeline {
         /// テレビ・動画・放送などの声とされた行が重なっている
         let media: Bool
         let place: String?
+        /// 重なった行の音声の中の位置（秒。「この行を聞く」で鳴らす。2026-11-06）
+        var lineStart: TimeInterval = 0
+        var lineEnd: TimeInterval = 0
+        /// 1秒以上しっかり重なる行が無く、いちばん近い行を出している（文と声がずれているかもしれない）
+        var loose = false
 
         /// 「11/2(日) 14:05・会社」
         var caption: String {
@@ -203,14 +208,13 @@ extension Pipeline {
         var result: [SpeakerLabeler.Sample: SampleInfo] = [:]
         for sample in samples {
             let list = (byAudio[sample.audio] ?? []).sorted { ($0.line.offset ?? 0) < ($1.line.offset ?? 0) }
-            // 行は次の行の頭まで続くとみなし、ひとこまの時間と重なる行
-            var hit: [(line: ConversationLog.Line, place: String?)] = []
-            for (i, item) in list.enumerated() {
-                let start = item.line.offset ?? 0
-                let next = i + 1 < list.count ? (list[i + 1].line.offset ?? 0) : .infinity
-                if start < sample.end && next > sample.start { hit.append(item) }
-            }
-            guard let first = hit.first else { continue }
+            // 行の長さは文字数から見積もり（次の行の頭まで）、ひとこまとしっかり重なる行だけを出す（2026-11-06）。
+            // 前は「次の行の頭まで続く」とみなしていたので、短いセリフのあと黙っていた時間のひとこまにも、そのセリフが付いていた
+            let spans = list.map { (offset: $0.line.offset ?? 0, chars: $0.line.text.count) }
+            let match = Self.matchLines(spans, sample: (start: sample.start, end: sample.end))
+            let hit = match.indices.map { list[$0] }
+            guard let first = hit.first, let firstIndex = match.indices.first, let lastIndex = match.indices.last else { continue }
+            let ends = Self.lineEnds(spans)
             let text = hit.map(\.line.text).joined(separator: " ")
             var speakers: [String] = []
             for name in hit.compactMap(\.line.speaker) where !speakers.contains(name) { speakers.append(name) }
@@ -218,9 +222,36 @@ extension Pipeline {
             for id in hit.compactMap(\.line.speakerID) where !ids.contains(id) { ids.append(id) }
             result[sample] = SampleInfo(time: first.line.time, text: text.count > 80 ? String(text.prefix(80)) + "…" : text,
                                         speakers: speakers, speakerIDs: ids,
-                                        media: hit.contains { $0.line.media != nil }, place: first.place)
+                                        media: hit.contains { $0.line.media != nil }, place: first.place,
+                                        lineStart: spans[firstIndex].offset, lineEnd: ends[lastIndex], loose: match.loose)
         }
         return result
+    }
+
+    /// 行の終わりの見積もり。文字数から話した長さを見積もり（1文字 0.18 秒＋0.8 秒、1.5 秒以上）、次の行の頭を超えない
+    nonisolated static func lineEnds(_ lines: [(offset: TimeInterval, chars: Int)]) -> [TimeInterval] {
+        lines.indices.map { i in
+            let spoken = lines[i].offset + max(1.5, Double(lines[i].chars) * 0.18 + 0.8)
+            let next = i + 1 < lines.count ? lines[i + 1].offset : .infinity
+            return min(spoken, max(next, lines[i].offset + 0.5))
+        }
+    }
+
+    /// 声のひとこま（start〜end）としっかり重なる行。重なりが1秒以上か、ひとこまの3割以上の行。
+    /// 無ければ、いちばん長く重なる行（少しでも重なれば）を loose として返す。lines は始まりの順
+    nonisolated static func matchLines(_ lines: [(offset: TimeInterval, chars: Int)],
+                                       sample: (start: TimeInterval, end: TimeInterval)) -> (indices: [Int], loose: Bool) {
+        let ends = lineEnds(lines)
+        let length = max(sample.end - sample.start, 0.1)
+        var overlaps: [(index: Int, seconds: Double)] = []
+        for i in lines.indices {
+            let seconds = min(ends[i], sample.end) - max(lines[i].offset, sample.start)
+            if seconds > 0 { overlaps.append((i, seconds)) }
+        }
+        let firm = overlaps.filter { $0.seconds >= min(1.0, length * 0.3) }.map(\.index)
+        if !firm.isEmpty { return (firm, false) }
+        if let best = overlaps.max(by: { $0.seconds < $1.seconds }) { return ([best.index], true) }
+        return ([], false)
     }
 
     /// 見直したい声のひとこま（記録ではほかの人の行や、テレビ・放送などの行と重なっているもの）
