@@ -71,7 +71,7 @@ struct RecordControl: ControlWidget {
             }
         }
         .displayName("録音を始める・止める")
-        .description("LifeLog を開かずに、iPhone の録音を始めるか止めます。")
+        .description("LifeLog を開かずに、この端末の録音を始めるか止めます。")
     }
 }
 
