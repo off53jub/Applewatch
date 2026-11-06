@@ -267,7 +267,7 @@ final class HomePC {
     /// PC の LifeLog PC の版（hello で分かる。古い PC は 1）
     var version: Int?
     /// このアプリが前提にしている PC の版（多数決・ヒント・重み）
-    nonisolated static let expectedVersion = 5
+    nonisolated static let expectedVersion = 6
 
     /// 声の区間の長さに対する処理の時間（直近をならした値。1 より大きいと録音に追いつかない）。2026-11-06
     var speed: Double? = UserDefaults.standard.object(forKey: "homePCSpeed") as? Double {
