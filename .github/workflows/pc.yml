@@ -29,6 +29,9 @@ jobs:
     needs: sample
     runs-on: windows-latest
     timeout-minutes: 60
+    # main に入ったときに、自分で入れ替える版のリリースを作るため
+    permissions:
+      contents: write
     env:
       PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
@@ -67,7 +70,9 @@ jobs:
 
       # 言葉ごとの時刻のまとめ方と、/train-sample の保存（一時フォルダ、作った音）もここで確かめる
       # 版 5: 言いよどみ・数字をそろえた比べ方、合言葉違いの大きな音声に 401 が届くか、/llm（作り物の Ollama）も
-      - name: 多数決の決まり・聞き逃した声の探し方・言葉の時刻・材料の保存・/llm を確かめる
+      # 版 6: 後で受け取る文字起こし（/jobs、作り物のモデル）・見守りの画面（/dash）・自分で入れ替える仕組み
+      #       （作り物の GitHub から取ってきて確かめ、入れ替えの .cmd を作り物のフォルダで本当に動かす）・意味で探す（作り物の Ollama）
+      - name: 多数決の決まり・聞き逃した声の探し方・言葉の時刻・材料の保存・/llm・版 6 の機能を確かめる
         run: python pc/lifelog_pc.py --check-vote
 
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
@@ -112,14 +117,25 @@ jobs:
           cat extras.txt
           while IFS= read -r line; do echo "::notice::$line"; done < <(grep -E '^(OK|NG|話し手|周りの音|雑音|Silero|この PC)' extras.txt)
 
+      # 版 6 の部品（jobqueue・dashboard・updater・semantic・v6checks）は pc/ にあるので、--paths pc で探させ、念のため名前でも入れる。
+      # BUILD.txt は作った回の番号（exe が自分の版を知り、新しい版と比べるのに使う）
       - name: exe にする
         run: |
-          pyinstaller --noconfirm --onedir --console --name LifeLogPC \
+          pyinstaller --noconfirm --onedir --console --name LifeLogPC --paths pc \
             --collect-all sherpa_onnx --collect-all av --collect-all faster_whisper \
             --collect-all ctranslate2 --collect-all pykakasi --collect-all tokenizers \
-            --hidden-import tarfile --hidden-import bz2 \
+            --hidden-import tarfile --hidden-import bz2 --hidden-import sqlite3 \
+            --hidden-import jobqueue --hidden-import dashboard --hidden-import updater \
+            --hidden-import semantic --hidden-import v6checks \
             --exclude-module torch --exclude-module transformers --exclude-module qwen_asr pc/lifelog_pc.py
           cp pc/README.txt pc/train_personal.py dist/LifeLogPC/
+          echo "${{ github.run_number }}" > dist/LifeLogPC/BUILD.txt
+
+      # exe に版 6 の部品が入っているか（多数決の決まりから意味で探すまで、Python のときと同じものを exe で）
+      - name: exe で多数決の決まり・版 6 の機能を確かめる
+        run: |
+          dist/LifeLogPC/LifeLogPC.exe --check-vote > vote-exe.txt 2>&1 || { cat vote-exe.txt; grep '^NG' vote-exe.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' vote-exe.txt | sed 's/^/::notice::exe の --check-vote の OK の数: /'
 
       - name: exe で試す
         run: |
@@ -138,3 +154,29 @@ jobs:
         with:
           name: LifeLogPC
           path: dist/LifeLogPC
+
+      # main に入ったときだけ、家の PC が自分で入れ替える版として GitHub のリリースにする（pc-v6-回の番号）。
+      # --latest=false --prerelease なので、アプリのリリース（v2026.MM.DD-N）がいつも「Latest」のまま。
+      - name: 自分で入れ替える版としてリリースにする（main のときだけ）
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(python -c "import re,sys; print(re.search(r'^VERSION = (\d+)', open('pc/lifelog_pc.py', encoding='utf-8').read(), re.M).group(1))")
+          TAG="pc-v${VER}-${{ github.run_number }}"
+          python - <<'PY'
+          import zipfile
+          from pathlib import Path
+          root = Path("dist/LifeLogPC")
+          with zipfile.ZipFile("LifeLogPC.zip", "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+              for path in sorted(root.rglob("*")):
+                  if path.is_file():
+                      z.write(path, (Path("LifeLogPC") / path.relative_to(root)).as_posix())
+          PY
+          sha256sum LifeLogPC.zip | sed 's/ \*/  /' > LifeLogPC.zip.sha256
+          cat LifeLogPC.zip.sha256
+          ls -la LifeLogPC.zip
+          gh release create "$TAG" LifeLogPC.zip LifeLogPC.zip.sha256 --title "$TAG" --target "${{ github.sha }}" \
+            --latest=false --prerelease \
+            --notes "家の PC の LifeLog PC（版 ${VER}、作った回 ${{ github.run_number }}）。版 6 からの LifeLog PC は、これを自分で取ってきて入れ替えます。手で入れるときは LifeLogPC.zip を展開します。"
+          echo "::notice::リリース $TAG を作りました"
