@@ -111,13 +111,20 @@ final class AnswerKey {
 
     /// 答えたものから、モデルごとの重みを決め直して保存する（足りなければ消す＝どれも同じ重み）
     func updateWeights() {
-        let weights = Self.weights(samples)
-        if weights.isEmpty {
-            UserDefaults.standard.removeObject(forKey: Self.weightsKey)
-        } else {
-            let text = weights.keys.sorted().map { $0 + ":" + String(format: "%.2f", weights[$0]!) }.joined(separator: ",")
-            UserDefaults.standard.set(text, forKey: Self.weightsKey)
+        // 全体のものと、騒がしい行・静かな行で分けたもの（2026-11-06。分けた側が足りなければ全体のものを使う）
+        for (suffix, part) in [("", samples), (".noisy", samples.filter { $0.noisy == true }),
+                               (".quiet", samples.filter { $0.noisy != true })] {
+            let weights = Self.weights(part)
+            if weights.isEmpty {
+                UserDefaults.standard.removeObject(forKey: Self.weightsKey + suffix)
+            } else {
+                UserDefaults.standard.set(Self.weightsText(weights), forKey: Self.weightsKey + suffix)
+            }
         }
+    }
+
+    nonisolated static func weightsText(_ weights: [String: Double]) -> String {
+        weights.keys.sorted().map { $0 + ":" + String(format: "%.2f", weights[$0]!) }.joined(separator: ",")
     }
 
     /// モデルごとの文字の誤り率（食い違った行の答えから）。答えた数とあわせて
@@ -647,6 +654,7 @@ extension Pipeline {
         // 話者の線と、頼まれごとの候補も、直した記録から学ぶ（2026-11-06）
         if SpeakerTuning.tune() { Tally.add("learn.updated") }
         if TaskLearning.train(tasks.items) { Tally.add("learn.updated") }
+        if ConversationGap.tune() { Tally.add("learn.updated") }
         // 確からしさの手がかりを束ねる重みも学ぶ（30問から。2026-11-06）
         let data = answerKey.samples.compactMap { s -> (x: [Double], wrong: Bool)? in
             guard s.isAnswered, s.skipped != true, let right = s.rightText else { return nil }

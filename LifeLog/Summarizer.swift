@@ -91,7 +91,15 @@ enum Summarizer {
             \(material)
             """)
         let title = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let points = (json["points"] as? [String]) ?? []
+        // 要点のうち、もとの会話に根拠がほとんど見つからないものは出さない（2026-11-06。長い会話の要点メモから作ったときは測らない）
+        var points = (json["points"] as? [String]) ?? []
+        if transcript.count <= limit {
+            let lines = transcript.components(separatedBy: "\n")
+            let before = points.count
+            points = points.filter { !Grounding.unsupported($0, in: lines, below: 0.15) }
+            Tally.add("ground.checked", before)
+            Tally.add("ground.dropped", before - points.count)
+        }
         let kind = (json["kind"] as? String) ?? "会話"
         let media: String? = kind.contains("テレビ") ? "テレビ"
             : kind.contains("動画") || kind.lowercased().contains("youtube") ? "動画"

@@ -250,6 +250,16 @@ struct ConversationsView: View {
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
+                        // 前の会話とつなぐ（2026-11-06。閉じた会話で、その日の前に閉じた会話があるとき）
+                        if conversation.closed, conversations.contains(where: { $0.closed && $0.start < conversation.start }) {
+                            Button("前の会話とつなぐ", systemImage: "arrow.up.and.down.text.horizontal") {
+                                Task {
+                                    await pipeline.joinConversation(start: conversation.start, day: day)
+                                    conversations = load()
+                                }
+                            }
+                            .font(.caption)
+                        }
                         ForEach(Array(conversation.lines.enumerated()), id: \.offset) { l, line in
                             let next = conversation.lines[(l + 1)...].first { $0.audio == line.audio }
                             row(line, key: "\(g)-\(c)-\(l)")
@@ -262,6 +272,15 @@ struct ConversationsView: View {
                                     }
                                     Button("言葉を登録", systemImage: "character.book.closed") {
                                         addingWord = WordTarget(line: line)
+                                    }
+                                    // この行から別の会話にする（2026-11-06）
+                                    if conversation.closed, l > 0 {
+                                        Button("ここで会話を分ける", systemImage: "scissors") {
+                                            Task {
+                                                await pipeline.splitConversation(start: conversation.start, at: line.time, day: day)
+                                                conversations = load()
+                                            }
+                                        }
                                     }
                                 }
                                 .swipeActions(edge: .leading) {
@@ -331,6 +350,10 @@ struct ConversationsView: View {
                         }
                         if let speaker = line.speaker {
                             Text(speaker)
+                            // 2つの声のモデルで話し手が食い違った行（2026-11-06）
+                            if let doubt = line.speakerDoubt, doubt != line.speakerID {
+                                Text("？").foregroundStyle(.orange)
+                            }
                         }
                     }
                     .font(.caption.bold())

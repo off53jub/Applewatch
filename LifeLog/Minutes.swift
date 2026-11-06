@@ -106,6 +106,13 @@ extension Pipeline {
         } else if !MultiModel.secondOpinionOK {
             Tally.add("second.skipped")
         }
+        // もとの会話に根拠が見つからない項目（2026-11-06）
+        let groundLines = transcript.components(separatedBy: "\n")
+        var ungroundedDecisions = Set<Int>(), ungroundedTodos = Set<Int>()
+        for (i, d) in made.decisions.enumerated() where Grounding.unsupported(d, in: groundLines) { ungroundedDecisions.insert(i) }
+        for (i, t) in made.todos.enumerated() where Grounding.unsupported(t.what, in: groundLines) { ungroundedTodos.insert(i) }
+        Tally.add("ground.checked", made.decisions.count + made.todos.count)
+        Tally.add("ground.flagged", ungroundedDecisions.count + ungroundedTodos.count)
 
         let title = (event?.title).flatMap { $0.isEmpty ? nil : $0 } ?? c.title ?? "会議"
         let name = "議事録 " + Self.minutesName.string(from: c.start) + " " + title
@@ -119,13 +126,13 @@ extension Pipeline {
         }
         if !made.decisions.isEmpty {
             body += "\n◆ 決まったこと\n" + made.decisions.enumerated().map { i, d in
-                "・" + d + (unsureDecisions.contains(i) ? MultiModel.unsureMark : "") + "\n"
+                "・" + d + (ungroundedDecisions.contains(i) ? Grounding.mark : unsureDecisions.contains(i) ? MultiModel.unsureMark : "") + "\n"
             }.joined()
         }
         if !made.todos.isEmpty {
             body += "\n◆ 宿題\n" + made.todos.enumerated().map { i, todo in
                 "・" + (todo.who.isEmpty ? "" : todo.who + "：") + todo.what + (todo.due.isEmpty ? "" : "（\(todo.due)まで）")
-                    + (unsureTodos.contains(i) ? MultiModel.unsureMark : "") + "\n"
+                    + (ungroundedTodos.contains(i) ? Grounding.mark : unsureTodos.contains(i) ? MultiModel.unsureMark : "") + "\n"
             }.joined()
         }
         if !made.next.isEmpty { body += "\n◆ 次回\n・" + made.next + "\n" }
