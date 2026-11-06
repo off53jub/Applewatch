@@ -69,6 +69,9 @@ private struct TodayView: View {
 
                 confirmBox()
 
+                // 朝の読み上げ（2026-11-07。MorningBrief.swift）
+                MorningBriefSection()
+
                 Section("いまの様子") {
                     if Provisioning.isNear(), let expiry = Provisioning.expiryText() {
                         // 無料の署名は7日で切れ、切れるとアプリが起動しなくなって録音が止まる
@@ -583,6 +586,8 @@ private struct SettingsView: View {
                 Section {
                     Toggle("開くときに Face ID", isOn: $appLock)
                     Toggle("毎朝、前の日の点検を知らせる", isOn: $morningCheck)
+                    // 朝の読み上げの知らせと時刻（2026-11-07。MorningBrief.swift）
+                    MorningBriefSettingsRows()
                     Toggle("もう1つの言語モデルでも見比べる（充電中か開いているとき）", isOn: $secondOpinion)
                     // 2026-11-06
                     Toggle("職場の会話は、家の PC の言語モデルで作る（PC に Ollama があるとき）", isOn: $pcLLMForWork)
