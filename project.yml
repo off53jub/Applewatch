@@ -57,6 +57,8 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
+        # 暗号は HTTPS などの標準のものだけ（TestFlight で毎回聞かれないように。2026-11-07）
+        ITSAppUsesNonExemptEncryption: false
         # 画面の向き（TestFlight に上げるのに要る。iPhone は縦だけ、iPad は全部。2026-11-07）
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UISupportedInterfaceOrientations~ipad:
