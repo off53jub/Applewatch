@@ -48,7 +48,7 @@ NVIDIA の GPU があれば、Whisper は GPU で動きます（無ければ CPU
 ■ モデルを減らす・選ぶ
     LifeLogPC.exe --engines haas,reazon        Whisper を使わない
     LifeLogPC.exe --whisper large-v3-turbo     Whisper を軽いものにする（GPU のメモリが足りないときなど）
-    LifeLogPC.exe --engines haas,reazon,whisper  4票目の kotoba-whisper を使わない
+    LifeLogPC.exe --engines haas,reazon,whisper  4票目の kotoba-whisper（とあなた向け Whisper）を使わない
 
 NVIDIA の GPU があると、日本語の話し言葉で学び直した kotoba-whisper（kotoba-tech/kotoba-whisper-v2.0-faster、MIT、約1.5GB）も
 4票目として動かします（GPU が無いときは遅すぎるので使いません）。
@@ -71,8 +71,41 @@ Haas-ja と ReazonSpeech にも「ホットワード」として効かせます�
 うまく動かなくても、文字にする処理には響きません。試すときは
     LifeLogPC.exe --check-extras 音声ファイル
 
+■ 版 4 で足したもの
+新しい iPhone のアプリが使います。古いアプリはこれまでどおり動きます。どれも、うまく動かなければ前と同じに動きます。
+・言葉ごとの時刻: 文字にした行に、言葉ごとの始まりと終わりの秒を付けます（再生しながら今の言葉を示すのに使います）。
+  選んだ文を書いたモデルが時刻を出せるときだけ付けます。ほかのモデルの文で一部を直した行には付けません。
+  要らないときは LifeLogPC.exe --no-words（Whisper が少し速くなります）。
+・雑音を除いてもう一度聞く: iPhone が頼んだときだけ、雑音を除いた音を Haas-ja と ReazonSpeech にもう一度聞かせて、
+  多数決の票を増やします。雑音を除くのは GTCRN（とても小さいモデル、約0.5MB、起動したときに取ってきます）。
+  試すときは  LifeLogPC.exe --test 音声ファイル --enhance
+・あなた向けのモデルの材料: iPhone で直した文と、その所の声を、PC の中（下の personal\data）に貯めます。
+  同じものは2回貯めません。5000 個までです（それより多くは貯めません。古いものを勝手に消すこともしません）。
+・あなた向けのモデル: 下の「あなた向けのモデルを作る」で作ると、次に起動したときから
+  「あなた向け Whisper」も票を入れます（NVIDIA の GPU があるときだけ）。
+録音も文も、PC の外には送りません。
+
+■ あなた向けのモデルを作る（NVIDIA の GPU と、300 個以上の材料が要ります）
+iPhone で直した文が 300 個以上たまったら、あなたの声と言い回しに合わせて Whisper（kotoba-whisper v2.0）を学び直せます。
+NVIDIA の GPU が要ります（メモリ 8GB 以上がおすすめ。CPU だけの PC では学び直しません）。
+NVIDIA のドライバーが古いと GPU を使えません。nvidia-smi で版を見て、528 より古ければ先に更新してください。
+1. Python 3.12 を入れます（https://www.python.org/）。
+2. コマンドプロンプトで、学び直す部品を入れます（LifeLog PC の exe には入っていません。合わせて 5GB ほど）。
+    pip install torch --index-url https://download.pytorch.org/whl/cu124
+    pip install transformers peft accelerate ctranslate2 numpy faster-whisper
+3. LifeLog PC を止めてから（GPU のメモリを空けるため）、このフォルダの train_personal.py を動かします。
+    python train_personal.py
+   - 初回は元のモデル（約1.5GB）を取ってきます。学び直しは GPU によって 30 分〜数時間かかります。
+   - 材料の 1 割は試験用に取り分けて、学び直す前と後で誤りの割合（CER）を比べます。
+     良くなったときだけ、あなた向けのモデルを入れ替えます（前のものは personal\model.old に1つ残します）。
+   - GPU が無い・材料が 300 より少ないときは、理由を表示して何もせずに終わります。
+   - GPU のメモリが足りないと出たら  python train_personal.py --batch 2
+4. LifeLog PC を起動し直すと、「あなた向け Whisper」が加わります（起動の画面の「使うモデル」に出ます）。
+使わないときは  LifeLogPC.exe --engines haas,reazon,whisper,kotoba
+
 ■ 置き場所
-モデル・合言葉・記録: %LOCALAPPDATA%\LifeLogPC（model・reazon・whisper・cuda・speaker・tagging のフォルダ）
+モデル・合言葉・記録: %LOCALAPPDATA%\LifeLogPC（model・reazon・whisper・cuda・speaker・tagging・enhance のフォルダ）
+あなた向けのモデルの材料とモデル: %LOCALAPPDATA%\LifeLogPC\personal（data に声と文、model に作ったモデル）
 合言葉を変えたいときは、そこにある config.json を消して起動し直します（iPhone 側も入れ直してください）。
 
 ■ モデル
@@ -82,3 +115,5 @@ ReazonSpeech k2 v2（Reazon Research、Apache License 2.0）を sherpa-onnx で�
 Whisper large-v3 / large-v3-turbo（OpenAI、MIT License）の CTranslate2 版を faster-whisper で動かしています。
 話し手の声の特徴: 3D-Speaker の ERes2Net（3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k、Apache License 2.0）。
 周りの音: sherpa-onnx-zipformer-small-audio-tagging-2024-04-15（Apache License 2.0）。
+雑音を除く: GTCRN（gtcrn_simple.onnx、MIT License）を sherpa-onnx で動かしています。
+あなた向けのモデルの元: kotoba-whisper v2.0（kotoba-tech/kotoba-whisper-v2.0、MIT License）。

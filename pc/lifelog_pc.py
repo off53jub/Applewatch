@@ -17,8 +17,17 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 - POST /speakers?segments=…   区間ごとの話し手の声の特徴（3D-Speaker の ERes2Net、初回に約40MB を取ってくる）
 - POST /scene?segments=…      区間ごとの周りの音の上位 5 つ（Zipformer の音の聞き分け、初回に約110MB を取ってくる）
 
+版 4 で足したもの（どれも、うまく動かなければ前と同じに動く）:
+- 行ごとの "words": [[始まり, 終わり, "言葉"], …]  選んだ文を書いたモデルが言葉ごとの時刻を出せるときだけ付ける
+  （秒は送られた音声の頭から。言葉をつなげると、空白を除いて行の "text" と同じになる）
+- POST /transcribe?enhance=1  雑音を除いた音（GTCRN、初回に約0.5MB を取ってくる）を Haas-ja・ReazonSpeech で
+  もう一度聞き、"haas_e"・"reazon_e" の票として多数決に加える（weights にもこの名前を使える）
+- POST /train-sample?start=S&end=E&text=…  音声の S〜E 秒と直した文を、あなた向けのモデルの材料として PC に保存する
+- GET  /train-status         材料の数・あなた向けのモデルがあるか・作った日
+- あなた向けのモデル（train_personal.py で作る）があれば、"mine"（あなた向け Whisper）の票も加える
+
     LifeLogPC.exe                 普通に起動する（受け付けを始める）
-    LifeLogPC.exe --test 音声     その音声を文字にして、モデルごとの文とかかった時間を表示する
+    LifeLogPC.exe --test 音声     その音声を文字にして、モデルごとの文とかかった時間を表示する（--enhance で雑音を除いた票も）
     LifeLogPC.exe --check-extras 音声  おまけの機能を、その音声で試す
     LifeLogPC.exe --startup       Windows の起動時に自動で始まるようにする（--no-startup でやめる）
 """
@@ -27,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import io
 import json
 import os
@@ -37,6 +47,7 @@ import sys
 import threading
 import time
 import unicodedata
+import wave
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,7 +56,7 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-VERSION = 3
+VERSION = 4
 # 待ち受ける番号。8765 はほかのソフトとよくぶつかるので、使われにくい番号にする
 PORT = 47615
 RATE = 16000
@@ -71,6 +82,10 @@ CUDA_WHEELS = {
 }
 CONFIG = HOME / "config.json"
 LOG = HOME / "log.txt"
+# あなた向けのモデルの材料（data）と、train_personal.py が作ったモデル（model）。どちらも PC の外には出さない
+PERSONAL_DIR = HOME / "personal"
+PERSONAL_DATA = PERSONAL_DIR / "data"
+PERSONAL_MODEL = PERSONAL_DIR / "model"
 
 
 def log(message: str) -> None:
@@ -200,6 +215,76 @@ def hotword_string(hints: list[str], chars: set[str]) -> str:
     return "/".join(words)
 
 
+# MARK: - 言葉ごとの時刻（"words"）
+
+# 言葉ごとの時刻を付ける（--no-words でやめる。Whisper は時刻を出す分だけ少し遅くなる）
+WORD_TIMES = True
+WORD_MAX = 1.0  # 次の言葉までが長くても、1つの言葉はこれより長くしない（間の無音を含めない）
+
+
+def token_pieces(tokens, timestamps, durations, offset: float, end: float) -> list[tuple[float, float, str]] | None:
+    """sherpa-onnx の結果のトークンと始まりの時刻（区間の頭からの秒）を、音声の頭からの [始まり, 終わり, 字] にする。
+    長さ（durations）が無いモデルは、次のトークンの始まりを終わりにする。数が合わなければ None。"""
+    tokens = [str(t) for t in (tokens or [])]
+    starts = [float(t) for t in (timestamps or [])]
+    if not tokens or len(starts) != len(tokens):
+        return None
+    lengths = [float(d) for d in (durations or [])]
+    use_lengths = len(lengths) == len(tokens) and any(d > 0 for d in lengths)
+    pieces = []
+    for i, token in enumerate(tokens):
+        s = min(offset + starts[i], end)
+        if use_lengths:
+            e = s + lengths[i]
+        elif i + 1 < len(starts):
+            e = offset + starts[i + 1]
+        else:
+            e = end
+        pieces.append((s, max(s, min(e, s + WORD_MAX, end)), token))
+    return pieces
+
+
+def _bare(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
+def group_words(pieces: list[tuple[float, float, str]] | None, text: str) -> list[list] | None:
+    """[始まり, 終わり, 字] の並びを、行の文に合う [[始まり, 終わり, "言葉"], …] にする。
+    句読点・記号だけのものは前の言葉に付ける。"▁"（sentencepiece の区切り）が途中にあれば、それを言葉の切れ目にする。
+    つなげた言葉が文と（空白を除いて）同じにならなければ、当て推量はせず None。"""
+    if not pieces or not _bare(text):
+        return None
+    spaced = any("▁" in p for _, _, p in pieces[1:])
+    words: list[list] = []
+    for s, e, piece in pieces:
+        piece = piece.replace("▁", " ")
+        bare = _bare(piece)
+        if not bare:
+            continue
+        mark = not any(ch.isalnum() for ch in bare)
+        if words and (mark or (spaced and not piece[:1].isspace())):
+            words[-1][1] = max(words[-1][1], e)
+            words[-1][2] += bare
+        else:
+            words.append([s, e, bare])
+    if "".join(w[2] for w in words) != _bare(text):
+        return None
+    # 前から順に、重ならないようにそろえる
+    out: list[list] = []
+    last = 0.0
+    for s, e, word in words:
+        s = max(float(s), last)
+        e = max(float(e), s)
+        out.append([round(s, 2), round(e, 2), word])
+        last = e
+    return out
+
+
+def words_fit(words: list[list] | None, text: str) -> bool:
+    """words をつなげると、空白を除いて text と同じになるか"""
+    return bool(words) and "".join(w[2] for w in words) == _bare(text)
+
+
 class Engine:
     """sherpa-onnx で Haas-ja を動かす。一度に1つずつ。"""
 
@@ -236,20 +321,35 @@ class Engine:
     def run(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
             prompt: str | None) -> list[str]:
         """区間ごとの文（聞き取れなければ空）。"""
-        texts = []
+        return [text for text, _ in self.run_timed(audio, segments, hints, prompt)]
+
+    def run_timed(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
+                  prompt: str | None) -> list[tuple[str, list | None]]:
+        """区間ごとの (文, 言葉ごとの時刻)。時刻が出せなければ None。"""
+        out: list[tuple[str, list | None]] = []
         hotwords = hotword_string(hints, self.chars) if USE_HOTWORDS else ""
         with self.lock:
             for start, end in segments:
                 a = max(0, int(start * RATE))
                 b = min(len(audio), int(end * RATE))
                 if b - a < int(0.3 * RATE):
-                    texts.append("")
+                    out.append(("", None))
                     continue
                 stream = self.recognizer.create_stream(hotwords=hotwords) if hotwords else self.recognizer.create_stream()
                 stream.accept_waveform(RATE, audio[a:b])
                 self.recognizer.decode_stream(stream)
-                texts.append(stream.result.text.strip())
-        return texts
+                result = stream.result
+                text = result.text.strip()
+                words = None
+                if WORD_TIMES and text:
+                    try:
+                        pieces = token_pieces(getattr(result, "tokens", None), getattr(result, "timestamps", None),
+                                              getattr(result, "durations", None), a / RATE, b / RATE)
+                        words = group_words(pieces, text)
+                    except Exception:  # noqa: BLE001 — 時刻が読めなくても文は使う
+                        words = None
+                out.append((text, words))
+        return out
 
     def transcribe(self, audio: np.ndarray, segments: list[tuple[float, float]]) -> list[dict]:
         lines = []
@@ -352,9 +452,11 @@ class WhisperEngine:
         from faster_whisper import WhisperModel
 
         use_gpu = device == "cuda" or (device == "auto" and has_nvidia_gpu())
-        if self.name == "kotoba" and not use_gpu:
-            # 日本語で学び直した Whisper は4票目。CPU では遅すぎるので GPU のときだけ使う
+        if self.name in ("kotoba", "mine") and not use_gpu:
+            # 日本語で学び直した Whisper（kotoba・あなた向け）は追加の票。CPU では遅すぎるので GPU のときだけ使う
             raise RuntimeError("GPU が無いので使いません")
+        if self.name == "mine" and not personal_model_ready():
+            raise RuntimeError(f"あなた向けのモデルがまだありません（{PERSONAL_MODEL}）")
         if use_gpu:
             try:
                 prepare_cuda()
@@ -363,6 +465,8 @@ class WhisperEngine:
                 use_gpu = False
         if self.name == "kotoba":
             model = KOTOBA_REPO
+        elif self.name == "mine":
+            model = str(PERSONAL_MODEL)
         elif model == "auto":
             model = "large-v3" if use_gpu else "large-v3-turbo"
         log(f"Whisper（{model}）を読み込んでいます…（初回は 1.5〜3GB を取ってきます）")
@@ -382,30 +486,41 @@ class WhisperEngine:
             self.model = WhisperModel(model, device="cpu", compute_type="int8", cpu_threads=threads,
                                       download_root=str(WHISPER_DIR))
             self.provider = "cpu"
-        self.label = "kotoba-whisper" if self.name == "kotoba" else f"Whisper {model}"
+        self.label = {"kotoba": "kotoba-whisper", "mine": "あなた向け Whisper"}.get(self.name, f"Whisper {model}")
         self.lock = threading.Lock()
-        log(f"Whisper を読み込みました（{time.time() - started:.1f} 秒、{self.provider}）")
+        log(f"Whisper を読み込みました（{self.label}、{time.time() - started:.1f} 秒、{self.provider}）")
 
     def run(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
             prompt: str | None) -> list[str]:
+        return [text for text, _ in self.run_timed(audio, segments, hints, prompt)]
+
+    def run_timed(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
+                  prompt: str | None) -> list[tuple[str, list | None]]:
+        """区間ごとの (文, 言葉ごとの時刻)。時刻が出せなければ None。"""
         # ヒント（名前・専門用語）は先頭ほど効くので、前の区切りの文より先に置く
         initial = "、".join(hints[:40])
         if prompt:
             initial = (initial + "。" if initial else "") + prompt[-120:]
-        texts = []
+        out: list[tuple[str, list | None]] = []
         with self.lock:
             for start, end in segments:
                 a = max(0, int(start * RATE))
                 b = min(len(audio), int(end * RATE))
                 if b - a < int(0.3 * RATE):
-                    texts.append("")
+                    out.append(("", None))
                     continue
                 pieces, _ = self.model.transcribe(
                     audio[a:b], language="ja", beam_size=5, initial_prompt=initial or None,
                     condition_on_previous_text=False, without_timestamps=True, vad_filter=False,
-                    temperature=0.0)
+                    temperature=0.0, word_timestamps=WORD_TIMES)
                 kept = []
+                timed: list[tuple[float, float, str]] = []
+                timed_ok = WORD_TIMES
                 for piece in pieces:
+                    # 言葉の時刻を付けると、faster-whisper は最後の言葉の後ろをもう一度聞き直すことがある。
+                    # 区間は 30 秒の窓1つに収まるので、最初の窓（seek 0）だけを使えば、時刻を付けないときと同じ文になる
+                    if WORD_TIMES and getattr(piece, "seek", 0) > 0:
+                        break
                     text = piece.text.strip()
                     # 声が無いのに作った文（無音らしさが高く、自信が低い）と決まり文句は捨てる
                     if piece.no_speech_prob > 0.6 and piece.avg_logprob < -1.0:
@@ -413,14 +528,32 @@ class WhisperEngine:
                     if WHISPER_JUNK.match(text):
                         continue
                     kept.append(text)
-                texts.append("".join(kept))
-        return texts
+                    if not piece.words:
+                        timed_ok = False
+                        continue
+                    for word in piece.words:
+                        s = min(a / RATE + float(word.start), b / RATE)
+                        timed.append((s, max(s, min(a / RATE + float(word.end), b / RATE)), word.word))
+                text = "".join(kept)
+                out.append((text, group_words(timed, text) if timed_ok and text else None))
+        return out
 
 
 class KotobaEngine(WhisperEngine):
     """日本語の話し言葉で学び直した Whisper（kotoba-whisper v2.0、MIT）。GPU があるときの4票目。"""
 
     name = "kotoba"
+
+
+def personal_model_ready() -> bool:
+    """train_personal.py が作った、あなた向けのモデル（CTranslate2 の形）があるか"""
+    return (PERSONAL_MODEL / "model.bin").exists()
+
+
+class MineEngine(WhisperEngine):
+    """あなたの声と直した文で学び直した Whisper（train_personal.py で作る）。GPU があるときの追加の票。"""
+
+    name = "mine"
 
 
 # MARK: - 多数決
@@ -568,11 +701,12 @@ def rover(text: str, others: dict[str, str]) -> str:
 
 
 # 同じくらい合っているときに先に選ぶ順（日本語の話し言葉に強く、作り話をしにくいものから）
-PRIORITY = ["haas", "reazon", "whisper", "kotoba", "cloud"]
+# （"_e" は雑音を除いた音でもう一度聞いた票。同じモデルなので、もとの票より後にする）
+PRIORITY = ["haas", "reazon", "whisper", "kotoba", "mine", "haas_e", "reazon_e", "cloud"]
 # Whisper の書き方を使ってよい近さ（読みがほぼ同じなら、ヒントを渡した Whisper の漢字の書き方のほうが名前に強い）
 SURFACE_SIMILAR = 0.85
 # Whisper だけが書いた文は、ほかが何も聞き取っていなければ作り話とみなす
-INVENTING = {"whisper", "kotoba", "cloud"}
+INVENTING = {"whisper", "kotoba", "mine", "cloud"}
 
 
 def parse_weights(text: str | None) -> dict[str, float]:
@@ -646,20 +780,35 @@ class Ensemble:
         if not engines:
             raise RuntimeError("動かせるモデルがありません")
         self.engines = engines
-        self.pool = ThreadPoolExecutor(max_workers=len(engines))
+        # 雑音を除いた音でもう一度聞く分（haas_e・reazon_e）も並べられるよう、多めにしておく
+        self.pool = ThreadPoolExecutor(max_workers=len(engines) * 2)
         gpu = any(getattr(e, "provider", "") == "cuda" for e in engines)
         self.provider = "cuda" if gpu else "cpu"
         self.label = "＋".join(e.label for e in engines)
 
     def transcribe(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str] | None = None,
                    prompt: str | None = None, votes: bool = False,
-                   weights: dict[str, float] | None = None, extra_from: int | None = None) -> list[dict]:
+                   weights: dict[str, float] | None = None, extra_from: int | None = None,
+                   enhance: bool = False) -> list[dict]:
         """extra_from を渡すと、その番号から後ろの区間（PC が見つけた、iPhone が聞き逃した声）の行に "extra": true を付け、
-        全部の行を時間の順に並べ直す。"""
+        全部の行を時間の順に並べ直す。enhance なら、雑音を除いた音を Haas-ja・ReazonSpeech でもう一度聞いた票も加える。"""
+        denoised = None
+        if enhance and any(isinstance(e, Engine) for e in self.engines):
+            try:
+                denoised = extra_model("enhance", ENHANCE_THREADS).denoise_segments(audio, segments)
+                if CLEAN_AUDIO:
+                    denoised = clean_audio(denoised, segments)
+            except Exception as error:  # noqa: BLE001 — 雑音を除けなくても、いつもの票だけで決める
+                log(f"雑音を除けませんでした（いつもの票だけで決めます）: {error!r}")
+                denoised = None
         if CLEAN_AUDIO:
             audio = clean_audio(audio, segments)
-        jobs = {e.name: self.pool.submit(e.run, audio, segments, hints or [], prompt) for e in self.engines}
-        results: dict[str, list[str]] = {}
+        jobs = {e.name: self.pool.submit(self._run, e, audio, segments, hints or [], prompt) for e in self.engines}
+        if denoised is not None:
+            for e in self.engines:
+                if isinstance(e, Engine):
+                    jobs[e.name + "_e"] = self.pool.submit(self._run, e, denoised, segments, hints or [], prompt)
+        results: dict[str, list[tuple[str, list | None]]] = {}
         for name, job in jobs.items():
             try:
                 results[name] = job.result()
@@ -669,11 +818,17 @@ class Ensemble:
             raise RuntimeError("どのモデルでも文字にできませんでした")
         lines = []
         for i, (start, end) in enumerate(segments):
-            hypotheses = {name: texts[i] if i < len(texts) else "" for name, texts in results.items()}
+            hypotheses = {name: got[i][0] if i < len(got) else "" for name, got in results.items()}
             picked = vote(hypotheses, weights)
             if not picked:
                 continue
             line = {"start": round(start, 2), "end": round(end, 2), "text": picked["text"]}
+            # 言葉ごとの時刻は、選んだ文を書いたモデルのものをそのまま使う（ほかの票で直した文 "+rover" には付けない）
+            chosen = picked["engine"]
+            if WORD_TIMES and chosen in results and i < len(results[chosen]):
+                words = results[chosen][i][1]
+                if words_fit(words, picked["text"]):
+                    line["words"] = words
             if picked["confidence"] is not None:
                 line["confidence"] = picked["confidence"]
             if picked["alternatives"]:
@@ -686,6 +841,14 @@ class Ensemble:
         if extra_from is not None:
             lines.sort(key=lambda line: (line["start"], line["end"]))
         return lines
+
+    @staticmethod
+    def _run(engine, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
+             prompt: str | None) -> list[tuple[str, list | None]]:
+        """区間ごとの (文, 言葉ごとの時刻)。時刻を出せないモデルは None にする。"""
+        if hasattr(engine, "run_timed"):
+            return engine.run_timed(audio, segments, hints, prompt)
+        return [(text, None) for text in engine.run(audio, segments, hints, prompt)]
 
 
 def load_engines(names: list[str], threads: int, provider: str, whisper: str, device: str) -> Ensemble:
@@ -701,6 +864,9 @@ def load_engines(names: list[str], threads: int, provider: str, whisper: str, de
                 engines.append(WhisperEngine(whisper, device, threads))
             elif name == "kotoba" and whisper != "off":
                 engines.append(KotobaEngine(whisper, device, threads))
+            elif name == "mine" and whisper != "off" and personal_model_ready():
+                # あなた向けのモデルは、train_personal.py で作ったあとだけ（無ければ何も言わずに飛ばす）
+                engines.append(MineEngine(whisper, device, threads))
         except Exception as error:  # noqa: BLE001
             log(f"{name} を読み込めませんでした（このモデル抜きで続けます）: {error!r}")
     return Ensemble(engines)
@@ -1036,19 +1202,181 @@ class SceneModel:
         return out
 
 
+# MARK: - 雑音を除いてもう一度聞く（enhance=1）
+# GTCRN（とても小さい雑音除去のモデル、MIT）。sherpa-onnx の OfflineSpeechDenoiser で動かす。
+
+ENHANCE_MODEL = "gtcrn_simple.onnx"
+ENHANCE_URL = f"{RELEASES}/speech-enhancement-models/{ENHANCE_MODEL}"
+ENHANCE_DIR = HOME / "enhance"
+ENHANCE_THREADS = 2
+ENHANCE_MIN = 0.3  # これより短い区間は除かずにそのまま（文字にもしない長さ）
+# 雑音除去は 256 サンプルずつ進むので、終わりが切れないよう後ろに無音を足してから、もとの長さに切る。
+# 長さが 0 の音を渡すと sherpa-onnx 2.0.1 は落ちるので、短い音は渡さない
+ENHANCE_PAD = 512
+
+
+def download_enhance() -> Path:
+    path = ENHANCE_DIR / ENHANCE_MODEL
+    if path.exists() and path.stat().st_size > 100_000:
+        return path
+    log(f"雑音を除くモデル（{ENHANCE_MODEL}、約0.5MB）を取ってきます。初回だけです。置き場所: {ENHANCE_DIR}")
+    fetch(ENHANCE_URL, path)
+    return path
+
+
+class Denoiser:
+    """声の区間ごとに雑音を除いた音を作る（時刻はずれない）。"""
+
+    def __init__(self, threads: int) -> None:
+        import sherpa_onnx
+
+        path = download_enhance()
+        # 設定の部品は、C++ 側が使い終わるまで消えないよう持っておく
+        self.gtcrn = sherpa_onnx.OfflineSpeechDenoiserGtcrnModelConfig(model=str(path))
+        self.model_config = sherpa_onnx.OfflineSpeechDenoiserModelConfig(gtcrn=self.gtcrn, num_threads=threads,
+                                                                          provider="cpu")
+        self.config = sherpa_onnx.OfflineSpeechDenoiserConfig(model=self.model_config)
+        if not self.config.validate():
+            raise RuntimeError(f"雑音を除くモデルの設定が正しくありません: {self.config}")
+        self.denoiser = sherpa_onnx.OfflineSpeechDenoiser(self.config)
+        if int(self.denoiser.sample_rate) != RATE:
+            raise RuntimeError(f"雑音を除くモデルの音の細かさが {self.denoiser.sample_rate} Hz です（{RATE} Hz が要ります）")
+        self.name = path.stem
+        self.lock = threading.Lock()
+        log(f"雑音を除くモデルを読み込みました（{self.name}）")
+
+    def denoise(self, samples: np.ndarray) -> np.ndarray:
+        """同じ長さの、雑音を除いた音。短すぎる音・うまくいかなかった音は、もとのまま返す。"""
+        samples = np.ascontiguousarray(samples, dtype=np.float32)
+        if len(samples) < int(ENHANCE_MIN * RATE):
+            return samples.copy()
+        padded = np.concatenate([samples, np.zeros(ENHANCE_PAD, dtype=np.float32)])
+        with self.lock:
+            result = self.denoiser.run(padded, RATE)
+        out = np.asarray(result.samples, dtype=np.float32)
+        if len(out) < len(samples) or not np.all(np.isfinite(out[:len(samples)])):
+            return samples.copy()
+        return np.ascontiguousarray(out[:len(samples)])
+
+    def denoise_segments(self, audio: np.ndarray, segments: list[tuple[float, float]]) -> np.ndarray:
+        """声の区間だけ雑音を除いた、audio と同じ長さの音（区間の外は無音。モデルは区間の中しか聞かない）。"""
+        out = np.zeros_like(audio, dtype=np.float32)
+        for start, end in segments:
+            a = max(0, int(start * RATE))
+            b = min(len(audio), int(end * RATE))
+            if b > a:
+                out[a:b] = self.denoise(audio[a:b])
+        return out
+
+
+# MARK: - あなた向けのモデルの材料（/train-sample・/train-status）
+# 直した文と、その声を PC の中だけに貯める。train_personal.py がこれで Whisper を学び直す。
+
+SAMPLE_LIMIT = 5000      # これより多くは貯めない（古いものを勝手に消さない）
+SAMPLE_MIN = 0.3         # これより短い声は材料にしない
+SAMPLE_MAX = 30.0        # Whisper が一度に聞ける長さまで
+SAMPLE_TEXT_MAX = 500
+_samples_lock = threading.Lock()
+
+
+def now_iso(when: float | None = None) -> str:
+    """"2026-11-06T18:30:00+09:00" の形の日時"""
+    import datetime
+
+    moment = datetime.datetime.fromtimestamp(time.time() if when is None else when)
+    return moment.astimezone().isoformat(timespec="seconds")
+
+
+def read_samples(folder: Path) -> list[dict]:
+    """samples.jsonl の中身（読めない行は飛ばす）"""
+    rows = []
+    try:
+        lines = (folder / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return rows
+    for row in lines:
+        try:
+            item = json.loads(row)
+        except ValueError:
+            continue
+        if isinstance(item, dict) and item.get("audio") and item.get("text"):
+            rows.append(item)
+    return rows
+
+
+def save_sample(folder: Path, audio: np.ndarray, start: float, end: float, text: str) -> tuple[int, bool]:
+    """audio の start〜end 秒を 16kHz モノラルの wav にし、文と一緒に folder に足す。(材料の数, 足したか) を返す。
+    同じ声と文（ハッシュが同じ）は足さない。SAMPLE_LIMIT に達したら足さない。"""
+    text = unicodedata.normalize("NFC", text or "").strip()
+    if not text:
+        raise ValueError("文がありません")
+    if len(text) > SAMPLE_TEXT_MAX:
+        raise ValueError(f"文が長すぎます（{SAMPLE_TEXT_MAX} 文字まで）")
+    if not (np.isfinite(start) and np.isfinite(end)) or end <= start:
+        raise ValueError("start と end の秒が正しくありません")
+    samples = clip(audio, start, end)
+    seconds = len(samples) / RATE
+    if seconds < SAMPLE_MIN:
+        raise ValueError(f"声が短すぎます（{SAMPLE_MIN} 秒より長くしてください）")
+    if seconds > SAMPLE_MAX + 0.01:
+        raise ValueError(f"声が長すぎます（{SAMPLE_MAX:.0f} 秒まで）")
+    pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+    digest = hashlib.sha256(text.encode("utf-8") + b"\0" + pcm).hexdigest()
+    with _samples_lock:
+        rows = read_samples(folder)
+        if any(row.get("hash") == digest for row in rows) or len(rows) >= SAMPLE_LIMIT:
+            return len(rows), False
+        folder.mkdir(parents=True, exist_ok=True)
+        name = f"{digest[:24]}.wav"
+        part = folder / (name + ".part")
+        with wave.open(str(part), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(RATE)
+            w.writeframes(pcm)
+        part.replace(folder / name)
+        row = {"audio": name, "text": text, "seconds": round(seconds, 2), "hash": digest,
+               "added": now_iso()}
+        with (folder / "samples.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return len(rows) + 1, True
+
+
+def train_status() -> dict:
+    """材料の数・あなた向けのモデルがあるか・作った日時（train_personal.py が trained.json に書く）"""
+    trained = None
+    if personal_model_ready():
+        try:
+            trained = json.loads((PERSONAL_MODEL / "trained.json").read_text(encoding="utf-8")).get("trained")
+        except (OSError, ValueError, AttributeError):
+            trained = None
+        if not trained:
+            trained = now_iso((PERSONAL_MODEL / "model.bin").stat().st_mtime)
+    return {"count": len(read_samples(PERSONAL_DATA)), "model": personal_model_ready(), "trained": trained}
+
+
 _extras: dict[str, object] = {}
 _extras_lock = threading.Lock()
+EXTRA_KINDS = {"speaker": SpeakerModel, "scene": SceneModel, "enhance": Denoiser}
 
 
 def extra_model(kind: str, threads: int):
-    """"speaker" か "scene" のモデル。初回だけ取ってきて読み込む（失敗したら次に頼まれたときにやり直す）。"""
+    """"speaker"・"scene"・"enhance" のモデル。初回だけ取ってきて読み込む（失敗したら次に頼まれたときにやり直す）。"""
     with _extras_lock:
         if kind not in _extras:
-            _extras[kind] = SpeakerModel(threads) if kind == "speaker" else SceneModel(threads)
+            _extras[kind] = EXTRA_KINDS[kind](threads)
         return _extras[kind]
 
 
-def features() -> list[str]:
+def prepare_enhance() -> None:
+    """起動したときに、雑音を除くモデルを裏で用意しておく（/hello の features に "enhance" を出すため）。"""
+    try:
+        extra_model("enhance", ENHANCE_THREADS)
+    except Exception as error:  # noqa: BLE001 — 用意できなくても、ほかはいつもどおり動く
+        log(f"雑音を除くモデルを用意できませんでした（enhance=1 は使えません）: {error!r}")
+
+
+def features(engines: list | None = None) -> list[str]:
     """この PC が受け付けるおまけの機能。モデルは初回に頼まれたときに取ってくる。"""
     found = []
     try:
@@ -1062,6 +1390,15 @@ def features() -> list[str]:
                                                   "OfflineZipformerAudioTaggingModelConfig")):
             found.append("scene")
     found.append("vad")
+    # /train-sample・/train-status（あなた向けのモデルの材料を貯める）
+    found.append("train")
+    if WORD_TIMES:
+        found.append("words")
+    # 雑音除去は、読み込めたときだけ（起動したときに裏で用意する）
+    if "enhance" in _extras:
+        found.append("enhance")
+    if any(getattr(e, "name", "") == "mine" for e in engines or []):
+        found.append("personal")
     return found
 
 
@@ -1094,19 +1431,27 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def do_GET(self) -> None:
-        if urlparse(self.path).path != "/hello":
+        path = urlparse(self.path).path
+        if path not in ("/hello", "/train-status"):
             self.send_json(404, {"error": "not found"})
             return
         if not self.authorized():
             return
+        if path == "/train-status":
+            try:
+                self.send_json(200, train_status())
+            except Exception as error:  # noqa: BLE001
+                log(f"材料の数を数えられませんでした: {error!r}")
+                self.send_json(500, {"error": f"材料の数を数えられませんでした: {error}"})
+            return
         self.send_json(200, {"app": "LifeLogPC", "version": VERSION, "model": self.engine.label,
                              "provider": self.engine.provider,
                              "engines": [e.name for e in self.engine.engines],
-                             "features": features()})
+                             "features": features(self.engine.engines)})
 
     def do_POST(self) -> None:
         url = urlparse(self.path)
-        if url.path not in ("/transcribe", "/speakers", "/scene"):
+        if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample"):
             self.send_json(404, {"error": "not found"})
             return
         if not self.authorized():
@@ -1118,8 +1463,35 @@ class Handler(BaseHTTPRequestHandler):
         data = self.rfile.read(length)
         if url.path == "/transcribe":
             self.transcribe(data, url.query)
+        elif url.path == "/train-sample":
+            self.train_sample(data, url.query)
         else:
             self.extras(url.path, data, url.query)
+
+    def train_sample(self, data: bytes, query_text: str) -> None:
+        """直した文とその声を、あなた向けのモデルの材料として PC に保存する（外には送らない）。"""
+        query = parse_qs(query_text)
+        try:
+            start = float((query.get("start") or [""])[0])
+            end = float((query.get("end") or [""])[0])
+        except ValueError:
+            self.send_json(400, {"error": "start と end（秒）が要ります"})
+            return
+        text = (query.get("text") or [""])[0]
+        try:
+            audio = load_audio(data)
+            count, added = save_sample(PERSONAL_DATA, audio, start, end, text)
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+            return
+        except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
+            log(f"材料を保存できませんでした: {error!r}")
+            self.send_json(500, {"error": f"材料を保存できませんでした: {error}"})
+            return
+        # 文の中身は記録に書かない
+        log(f"{self.client_address[0]} から材料: {end - start:.1f} 秒、" + ("足しました" if added else "足しませんでした")
+            + f"（全部で {count}）")
+        self.send_json(200, {"count": count, "added": added})
 
     def extras(self, path: str, data: bytes, query_text: str) -> None:
         """/speakers（区間ごとの話し手の声の特徴）と /scene（区間ごとの周りの音）。失敗しても受け付けは続ける。"""
@@ -1157,6 +1529,8 @@ class Handler(BaseHTTPRequestHandler):
             hints = [w.strip() for w in (query.get("hints") or [""])[0].split("\n") if w.strip()][:80]
             prompt = (query.get("prompt") or [None])[0]
             weights = parse_weights((query.get("weights") or [None])[0])
+            # enhance=1: 雑音を除いた音でも Haas-ja・ReazonSpeech にもう一度聞いてもらい、票を増やす
+            enhance = (query.get("enhance") or [""])[0] in ("1", "true", "yes")
             # vad=union: iPhone が聞き逃した声も PC で探して、一緒に文字にする
             if (query.get("vad") or [""])[0] == "union":
                 try:
@@ -1166,9 +1540,10 @@ class Handler(BaseHTTPRequestHandler):
                     extra = []
             if extra:
                 lines = self.engine.transcribe(audio, segments + extra, hints=hints, prompt=prompt, weights=weights,
-                                               extra_from=len(segments))
+                                               extra_from=len(segments), enhance=enhance)
             else:
-                lines = self.engine.transcribe(audio, segments, hints=hints, prompt=prompt, weights=weights)
+                lines = self.engine.transcribe(audio, segments, hints=hints, prompt=prompt, weights=weights,
+                                               enhance=enhance)
         except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
             log(f"文字にできませんでした: {error!r}")
             self.send_json(500, {"error": str(error)})
@@ -1180,7 +1555,9 @@ class Handler(BaseHTTPRequestHandler):
             found = sum(1 for line in lines if line.get("extra"))
             log(f"  iPhone が聞き逃した声: {len(extra)} 区間（{sum(b - a for a, b in extra):.0f} 秒）→ {found} 行")
         unsure = sum(1 for line in lines if line.get("confidence", 1) < 0.5)
-        log(f"  多数決: {len(self.engine.engines)} モデル、食い違いの大きい行 {unsure}")
+        timed = sum(1 for line in lines if line.get("words"))
+        log(f"  多数決: {len(self.engine.engines)} モデル" + ("（雑音を除いた票も）" if enhance else "")
+            + f"、食い違いの大きい行 {unsure}、言葉の時刻のある行 {timed}")
         self.send_json(200, {"lines": lines, "seconds": round(took, 2),
                              "engines": [e.name for e in self.engine.engines]})
 
@@ -1250,6 +1627,8 @@ def serve(engine_factory, port: int, threads: int = 4) -> None:
         raise RuntimeError(f"番号 {port} はほかのソフトが使っています。--port で別の番号を指定してください（{error}）") from error
     Handler.engine = engine_factory()
     Handler.key = key
+    # 雑音を除くモデル（約0.5MB）は裏で用意する。用意できなくても受け付けは始める
+    threading.Thread(target=prepare_enhance, daemon=True).start()
     print()
     print("=" * 60)
     print(" LifeLog PC を始めました。この画面は閉じずに置いておいてください。")
@@ -1297,11 +1676,11 @@ def set_startup(on: bool) -> None:
 # MARK: - 試す
 
 
-def test(path: str, engine: Ensemble, segments: str | None, hints: list[str]) -> None:
+def test(path: str, engine: Ensemble, segments: str | None, hints: list[str], enhance: bool = False) -> None:
     audio = load_audio(Path(path).read_bytes())
     duration = len(audio) / RATE
     started = time.time()
-    lines = engine.transcribe(audio, parse_segments(segments, duration), hints=hints, votes=True)
+    lines = engine.transcribe(audio, parse_segments(segments, duration), hints=hints, votes=True, enhance=enhance)
     took = time.time() - started
     print(f"使ったモデル: {engine.label}（{engine.provider}）")
     for e in engine.engines:
@@ -1318,6 +1697,12 @@ def test(path: str, engine: Ensemble, segments: str | None, hints: list[str]) ->
               + (f"  （確からしさ {line['confidence']:.2f}）" if "confidence" in line else ""))
         for name, text in (line.get("votes") or {}).items():
             print(f"    {name}: {text or '（なし）'}")
+        words = line.get("words")
+        if words:
+            print(f"    言葉の時刻（{len(words)} 個）: " + " ".join(f"{w[2]}[{w[0]:.2f}-{w[1]:.2f}]" for w in words[:12])
+                  + (" …" if len(words) > 12 else ""))
+        else:
+            print("    言葉の時刻: （なし）")
     print(f"音声 {duration:.1f} 秒を {took:.1f} 秒で文字にしました（実時間の {took / max(duration, 0.01):.3f} 倍）")
     if not lines:
         sys.exit(1)
@@ -1363,10 +1748,156 @@ def check_vote() -> None:
     ok = bool(low) and low["confidence"] < 0.5 and len(low["alternatives"]) == 2
     print(("OK " if ok else "NG ") + json.dumps(low, ensure_ascii=False))
     failed += 0 if ok else 1
+    # 雑音を除いた票（haas_e・reazon_e）も、ほかの票と同じように数える
+    enhanced = vote({"haas": "明日の予算", "reazon": "あしたの洋服", "haas_e": "明日の予算", "reazon_e": "明日の予算"},
+                    parse_weights("haas_e:1.5,reazon_e:0.8"))
+    ok = bool(enhanced) and enhanced["text"] == "明日の予算" and enhanced["engine"] in ("haas", "haas_e", "reazon_e") \
+        and parse_weights("haas_e:1.5,reazon_e:0.8") == {"haas_e": 1.5, "reazon_e": 0.8}
+    print(("OK " if ok else "NG ") + json.dumps({"enhanced": enhanced}, ensure_ascii=False))
+    failed += 0 if ok else 1
     # 聞き逃した声の探し方（vad=union）もモデル無しで確かめられる
     failed += check_extra_speech()
+    # 言葉ごとの時刻と、あなた向けのモデルの材料の保存もモデル無しで確かめる
+    failed += check_words()
+    failed += check_train_sample()
     if failed:
         sys.exit(1)
+
+
+def check_words() -> int:
+    """言葉ごとの時刻のまとめ方を確かめる（モデル無し）。NG の数を返す。"""
+    cases = [
+        # 1文字ずつのトークン。句読点は前の言葉に付ける
+        ([(0.0, 0.1, "今"), (0.1, 0.2, "日"), (0.2, 0.3, "は"), (0.3, 0.35, "。")], "今日は。",
+         [[0.0, 0.1, "今"], [0.1, 0.2, "日"], [0.2, 0.35, "は。"]]),
+        # sentencepiece の "▁" が途中にあれば、そこで言葉を切る
+        ([(0.0, 0.2, "▁Apple"), (0.2, 0.4, "▁Wat"), (0.4, 0.5, "ch")], "Apple Watch",
+         [[0.0, 0.2, "Apple"], [0.2, 0.5, "Watch"]]),
+        # Whisper の言葉（前に空白が付くことがある）はそのまま1つずつ
+        ([(0.0, 0.3, " 今日"), (0.3, 0.5, "は"), (0.5, 0.9, " Apple")], "今日は Apple",
+         [[0.0, 0.3, "今日"], [0.3, 0.5, "は"], [0.5, 0.9, "Apple"]]),
+        # 重なった時刻は、前から順に重ならないようにそろえる
+        ([(0.0, 0.5, "あ"), (0.3, 0.6, "い")], "あい", [[0.0, 0.5, "あ"], [0.5, 0.6, "い"]]),
+        # 文と合わなければ（ほかの票で直した文など）、当て推量はしない
+        ([(0.0, 0.1, "今"), (0.1, 0.2, "日")], "今日は", None),
+        ([], "今日は", None),
+        # 読めないトークン（バイトのかけら）が混ざっていても合わないので付けない
+        ([(0.0, 0.1, "<0xE4>"), (0.1, 0.2, "日")], "今日", None),
+    ]
+    failed = 0
+    for pieces, text, want in cases:
+        got = group_words(pieces, text)
+        ok = got == want
+        print(("OK " if ok else "NG ") + f"言葉の時刻: {text} → {got}")
+        failed += 0 if ok else 1
+    # sherpa-onnx の時刻（区間の頭から）を、音声の頭からの秒にする。最後の言葉は WORD_MAX まで
+    got = token_pieces(["今", "日"], [0.0, 0.4], [], 10.0, 12.0)
+    ok = got == [(10.0, 10.4, "今"), (10.4, 11.4, "日")] and token_pieces(["今"], [0.0, 0.4], [], 0, 1) is None \
+        and token_pieces(["今", "日"], [0.0, 0.4], [0.2, 0.3], 1.0, 2.0) == [(1.0, 1.2, "今"), (1.4, 1.7, "日")]
+    print(("OK " if ok else "NG ") + f"トークンの時刻: {got}")
+    failed += 0 if ok else 1
+
+    # 多数決で選んだ文を書いたモデルの時刻だけを付ける（ほかの票で直した文には付けない）
+    class Fake:
+        provider = "cpu"
+
+        def __init__(self, name: str, texts: list[str]) -> None:
+            self.name = self.label = name
+            self.texts = texts
+
+        def run_timed(self, audio, segments, hints, prompt):
+            out = []
+            for (start, end), text in zip(segments, self.texts):
+                step = (end - start) / max(1, len(text))
+                pieces = [(start + k * step, start + (k + 1) * step, ch) for k, ch in enumerate(text)]
+                out.append((text, group_words(pieces, text)))
+            return out
+
+    ensemble = Ensemble([Fake("haas", ["今日は会議です", "明日の洋服の件で田中さんと話す"]),
+                         Fake("reazon", ["今日は会議です", "明日の予算の件で中田さんと話す"]),
+                         Fake("whisper", ["", "明日の予算の件で田中さんと話した"])])
+    lines = ensemble.transcribe(np.zeros(4 * RATE, dtype=np.float32), [(0.0, 2.0), (2.0, 4.0)])
+    first = lines[0].get("words") if lines else None
+    ok = len(lines) == 2 and words_fit(first, lines[0]["text"]) and first[0][0] == 0.0 \
+        and all(a[0] <= b[0] for a, b in zip(first, first[1:])) and "words" not in lines[1]
+    print(("OK " if ok else "NG ") + "選んだ文に言葉の時刻が付き、直した文には付かない: "
+          + json.dumps([{k: v for k, v in line.items() if k != "votes"} for line in lines], ensure_ascii=False))
+    failed += 0 if ok else 1
+    ensemble.pool.shutdown(wait=False)
+    return failed
+
+
+def check_train_sample() -> int:
+    """/train-sample・/train-status を、作った音と一時フォルダで確かめる（モデル無し）。NG の数を返す。"""
+    import http.client
+    import tempfile
+    import urllib.parse
+
+    global PERSONAL_DATA, PERSONAL_MODEL, SAMPLE_LIMIT
+    saved = (PERSONAL_DATA, PERSONAL_MODEL, SAMPLE_LIMIT, getattr(Handler, "key", None))
+    failed = 0
+    t = np.arange(3 * RATE) / RATE
+    tone = (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    body = io.BytesIO()
+    with wave.open(body, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes((tone * 32767).astype("<i2").tobytes())
+    data = body.getvalue()
+    with tempfile.TemporaryDirectory() as folder:
+        PERSONAL_DATA = Path(folder) / "personal" / "data"
+        PERSONAL_MODEL = Path(folder) / "personal" / "model"
+        Handler.key = "check-key"
+        server = Server(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        port = server.server_address[1]
+
+        def call(path: str, payload: bytes | None = None, key: str = "check-key") -> tuple[int, dict]:
+            # 暗号の部品（ssl）を使わない、ただの http で PC の中だけに送る
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+            try:
+                connection.request("POST" if payload else "GET", path, body=payload,
+                                   headers={"Authorization": f"Bearer {key}"})
+                response = connection.getresponse()
+                return response.status, json.loads(response.read() or b"{}")
+            finally:
+                connection.close()
+
+        try:
+            words = urllib.parse.quote("今日は会議です")
+            first = call(f"/train-sample?start=0.5&end=2.0&text={words}", data)
+            again = call(f"/train-sample?start=0.5&end=2.0&text={words}", data)
+            other = call(f"/train-sample?start=0.5&end=2.0&text={urllib.parse.quote('今日も会議です')}", data)
+            bad = call(f"/train-sample?start=2.0&end=1.0&text={words}", data)
+            empty = call("/train-sample?start=0.5&end=2.0&text=", data)
+            # 合言葉が違うと、音声を読む前に断る（送り途中で切られるので、ここでは音声を付けずに試す）
+            stranger = call("/train-status", key="wrong")
+            status = call("/train-status")
+            rows = read_samples(PERSONAL_DATA)
+            frames = 0
+            if rows:
+                with wave.open(str(PERSONAL_DATA / rows[0]["audio"]), "rb") as w:
+                    frames = w.getnframes() if w.getframerate() == RATE and w.getnchannels() == 1 else -1
+            ok = first == (200, {"count": 1, "added": True}) and again == (200, {"count": 1, "added": False}) \
+                and other == (200, {"count": 2, "added": True}) and bad[0] == 400 and empty[0] == 400 \
+                and stranger[0] == 401 and status == (200, {"count": 2, "model": False, "trained": None}) \
+                and len(rows) == 2 and rows[0]["text"] == "今日は会議です" and abs(frames - int(1.5 * RATE)) <= 1
+            print(("OK " if ok else "NG ") + f"材料の保存: {first} {again} {other} 範囲違い {bad[0]} 文なし {empty[0]} "
+                  f"合言葉違い {stranger[0]} 状態 {status} wav {frames} サンプル")
+            failed += 0 if ok else 1
+            # 上限に達したら足さない（古いものは消さない）
+            SAMPLE_LIMIT = 2
+            full = save_sample(PERSONAL_DATA, tone, 0.0, 1.0, "上限の確かめ")
+            ok = full == (2, False) and len(read_samples(PERSONAL_DATA)) == 2
+            print(("OK " if ok else "NG ") + f"材料の上限: {full}")
+            failed += 0 if ok else 1
+        finally:
+            server.shutdown()
+            server.server_close()
+            PERSONAL_DATA, PERSONAL_MODEL, SAMPLE_LIMIT, Handler.key = saved
+    return failed
 
 
 def check_extra_speech() -> int:
@@ -1439,9 +1970,52 @@ def check_extras(path: str, threads: int) -> None:
         and all(0 <= x["prob"] <= 1 for x in tags[-1])
     print(("OK " if ok else "NG ") + "区間ごとに周りの音の上位が出る")
     failed += 0 if ok else 1
+    failed += check_enhance(audio, ranges, threads)
     print("この PC で使える機能: " + ", ".join(features()))
     if failed:
         sys.exit(1)
+
+
+def check_enhance(audio: np.ndarray, ranges: list[tuple[float, float]], threads: int) -> int:
+    """雑音を除くモデルを取ってきて、その音声と作った音で試す。NG の数を返す。"""
+    failed = 0
+    started = time.time()
+    denoiser = extra_model("enhance", threads)
+    cleaned = denoiser.denoise_segments(audio, ranges)
+    print(f"雑音を除くモデル: {denoiser.name}（{time.time() - started:.1f} 秒）")
+
+    def db(x: np.ndarray) -> float:
+        return 20.0 * float(np.log10(np.sqrt(np.mean(np.asarray(x, dtype=np.float64) ** 2)) + 1e-10))
+
+    for a, b in ranges:
+        print(f"  [{a:.1f}-{b:.1f}] {db(clip(audio, a, b)):.1f} dB → {db(clip(cleaned, a, b)):.1f} dB")
+    # 長さが同じ・数として正しい・短すぎる音と空の音でも落ちない
+    ok = len(cleaned) == len(audio) and bool(np.all(np.isfinite(cleaned))) \
+        and len(denoiser.denoise(audio[:int(0.1 * RATE)])) == int(0.1 * RATE) \
+        and len(denoiser.denoise(np.zeros(0, dtype=np.float32))) == 0
+    print(("OK " if ok else "NG ") + "雑音を除いた音が、もとと同じ長さで出る（短い音はそのまま）")
+    failed += 0 if ok else 1
+    # 作った音：周りの音（約 -40dBFS）の中に 1〜1.5 秒だけ声のような音。周りの音が小さくなり、声の位置はずれない
+    rng = np.random.default_rng(0)
+    t = np.arange(3 * RATE) / RATE
+    noisy = (rng.standard_normal(3 * RATE) * 0.01).astype(np.float32)
+    voice = sum(np.sin(2 * np.pi * 150 * k * t) / k for k in range(1, 10)) * 0.1 * (0.5 + 0.5 * np.sin(2 * np.pi * 4 * t))
+    noisy[RATE:int(1.5 * RATE)] += voice[RATE:int(1.5 * RATE)].astype(np.float32)
+    out = denoiser.denoise(noisy)
+
+    def loud(x: np.ndarray) -> tuple[float, float]:
+        """10ms ごとに測って、-25dB より大きい所の始まりと終わり（秒）"""
+        frames = np.asarray(x[:len(x) // 160 * 160], dtype=np.float64).reshape(-1, 160)
+        found = np.flatnonzero(20 * np.log10(np.sqrt(np.mean(frames ** 2, axis=1)) + 1e-10) > -25)
+        return (found[0] / 100, (found[-1] + 1) / 100) if len(found) else (-1.0, -1.0)
+
+    before, after = loud(noisy), loud(out)
+    ok = len(out) == len(noisy) and db(out[:int(0.8 * RATE)]) < db(noisy[:int(0.8 * RATE)]) - 10 \
+        and after[0] >= 0 and abs(after[0] - before[0]) <= 0.03 and abs(after[1] - before[1]) <= 0.05
+    print(("OK " if ok else "NG ") + f"作った音: 周りの音 {db(noisy[:int(0.8 * RATE)]):.1f} → {db(out[:int(0.8 * RATE)]):.1f} dB、"
+          f"声の位置 {before[0]:.2f}〜{before[1]:.2f} 秒 → {after[0]:.2f}〜{after[1]:.2f} 秒（ずれないはず）")
+    failed += 0 if ok else 1
+    return failed
 
 
 def main() -> None:
@@ -1455,6 +2029,10 @@ def main() -> None:
                         help="Haas-ja・ReazonSpeech に登録語を効かせない（前と同じ速い聞き方にする）")
     parser.add_argument("--no-clean", action="store_true",
                         help="聞く前に音をそろえない（低いうなりを削る・小さい声を持ち上げる処理をしない）")
+    parser.add_argument("--no-words", action="store_true",
+                        help="言葉ごとの時刻（words）を付けない（Whisper が少し速くなる）")
+    parser.add_argument("--enhance", action="store_true",
+                        help="--test で、雑音を除いた音を Haas-ja・ReazonSpeech でもう一度聞いた票も加える")
     parser.add_argument("--download", action="store_true", help="モデルを取ってくるだけ")
     parser.add_argument("--check-vote", action="store_true", help="多数決の決まりを確かめる")
     parser.add_argument("--check-extras", metavar="音声",
@@ -1464,8 +2042,9 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=max(1, min(8, (os.cpu_count() or 4) // 2)))
     parser.add_argument("--port", type=int, default=PORT, help=f"待ち受ける番号（既定 {PORT}）")
     parser.add_argument("--provider", default="cpu", help="Haas-ja・ReazonSpeech を動かす場所: cpu（既定）または cuda")
-    parser.add_argument("--engines", default="haas,reazon,whisper,kotoba",
-                        help="使うモデル（haas,reazon,whisper,kotoba のうち。kotoba は GPU のときだけ動く）")
+    parser.add_argument("--engines", default="haas,reazon,whisper,kotoba,mine",
+                        help="使うモデル（haas,reazon,whisper,kotoba,mine のうち。kotoba・mine は GPU のときだけ、"
+                             "mine は train_personal.py で作ったあとだけ動く）")
     parser.add_argument("--whisper", default="auto",
                         help="Whisper の大きさ: auto（GPU なら large-v3、無ければ large-v3-turbo）・large-v3・large-v3-turbo・small・off")
     parser.add_argument("--device", default="auto", help="Whisper を動かす場所: auto（既定）・cuda・cpu")
@@ -1480,11 +2059,13 @@ def main() -> None:
     if args.check_extras:
         check_extras(args.check_extras, max(1, args.threads // 2))
         return
-    global USE_HOTWORDS, CLEAN_AUDIO
+    global USE_HOTWORDS, CLEAN_AUDIO, WORD_TIMES
     if args.no_hotwords:
         USE_HOTWORDS = False
     if args.no_clean:
         CLEAN_AUDIO = False
+    if args.no_words:
+        WORD_TIMES = False
     names = [n.strip() for n in args.engines.split(",") if n.strip()]
 
     def factory() -> Ensemble:
@@ -1493,12 +2074,12 @@ def main() -> None:
     if args.download:
         engine = factory()
         print(f"用意できたモデル: {engine.label}（{engine.provider}）")
-        wanted = [n for n in names if n != "kotoba" and not (n == "whisper" and args.whisper == "off")]
-        if len(engine.engines) < len(wanted):
+        wanted = [n for n in names if n not in ("kotoba", "mine") and not (n == "whisper" and args.whisper == "off")]
+        if len([e for e in engine.engines if e.name in wanted]) < len(wanted):
             sys.exit(1)
         return
     if args.test:
-        test(args.test, factory(), args.segments, [w for w in re.split("[、,]", args.hints) if w])
+        test(args.test, factory(), args.segments, [w for w in re.split("[、,]", args.hints) if w], args.enhance)
         return
     try:
         serve(factory, args.port, args.threads)
