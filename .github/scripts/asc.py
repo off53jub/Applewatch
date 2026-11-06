@@ -3,7 +3,9 @@
     python asc.py cleanup-certs              CI が前に作った開発用の証明書（作られて2時間より前のもの）を片づける
     python asc.py revoke-own-cert            この CI の中で作った開発用の証明書を片づける（キーチェーンにあるもの）
     python asc.py wait-upload <番号>          送ったビルドの受け付け結果を待つ。弾かれたら理由を出して失敗にする。
-                                            main のときは、内部テストのグループにそのビルドを渡す
+                                            main のときは、内部テストのグループ「自分（main）」にそのビルドを渡す
+                                            （「すべてのビルドを自動で受け取る」は API で切れないので、自動で受け取らない
+                                            グループを2026-11-07 に作り直した。PR のビルドは本人に届かない）
 
 環境変数: ASC_KEY_ID・ASC_ISSUER_ID と、ASC_KEY_PATH（.p8 のファイル）。
 リポジトリは公開なので、人の名前・メールアドレス・証明書の名前は記録に出さない。
@@ -120,7 +122,7 @@ def app_id() -> str | None:
 
 
 def give_to_testers(app: str, number: str) -> None:
-    """内部テストのグループ（すべてのビルドを自動で受け取る設定は切る）に、このビルドを渡す"""
+    """内部テストのグループ「自分（main）」（自動では受け取らない）に、このビルドを渡す"""
     build = None
     for _ in range(10):
         rows = call("GET", "/v1/builds", **{"filter[app]": app, "filter[version]": number, "limit": 5}).get("data", [])
@@ -132,7 +134,8 @@ def give_to_testers(app: str, number: str) -> None:
         print("::warning::ビルドが見つからないので、テスターに渡せませんでした")
         return
     for g in call("GET", f"/v1/apps/{app}/betaGroups", limit=50).get("data", []):
-        if not g["attributes"].get("isInternalGroup"):
+        # 自動で全部受け取るグループには渡せない（API が断る）ので、自動で受け取らない内部テストのグループだけ
+        if not g["attributes"].get("isInternalGroup") or g["attributes"].get("hasAccessToAllBuilds"):
             continue
         try:
             call("POST", f"/v1/betaGroups/{g['id']}/relationships/builds", json={"data": [{"type": "builds", "id": build}]})
@@ -141,25 +144,11 @@ def give_to_testers(app: str, number: str) -> None:
             print(f"::warning::ビルドをグループに渡せませんでした: {error}")
 
 
-def stop_auto_distribution(app: str) -> None:
-    """PR のビルドが本人に届かないよう、内部テストのグループの「すべてのビルドを自動で受け取る」を切る（main だけ CI が渡す）"""
-    for g in call("GET", f"/v1/apps/{app}/betaGroups", limit=50).get("data", []):
-        a = g["attributes"]
-        if a.get("isInternalGroup") and a.get("hasAccessToAllBuilds"):
-            try:
-                call("PATCH", f"/v1/betaGroups/{g['id']}",
-                     json={"data": {"type": "betaGroups", "id": g["id"], "attributes": {"hasAccessToAllBuilds": False}}})
-                print(f"グループ「{a.get('name')}」は、main のビルドだけを受け取るようにしました")
-            except RuntimeError as error:
-                print(f"::warning::グループの設定を変えられませんでした: {error}")
-
-
 def wait_upload(number: str) -> None:
     app = app_id()
     if app is None:
         print("::warning::App Store Connect にアプリが見つからないので、受け付け結果を確かめられません")
         return
-    stop_auto_distribution(app)
     deadline = time.time() + 35 * 60
     while time.time() < deadline:
         ups = [u for u in call("GET", f"/v1/apps/{app}/buildUploads", limit=20).get("data", [])
