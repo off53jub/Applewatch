@@ -24,12 +24,17 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     var onMeeting: (@MainActor (Bool) -> Void)?
     /// 時計から「さっき何て言った？」と聞かれた（答えの文を返す）
     var onAsk: (@MainActor (String) -> String)?
+    /// 時計で頼まれごとの「済み」が押された（頼まれごとの id。2026-11-07）
+    var onTaskDone: (@MainActor (String) -> Void)?
+    /// 時計の「聞く」で質問された（答えの文を返す。時間がかかるので、答えはあとで transferUserInfo で送る。2026-11-07）
+    var onQuestion: (@MainActor (String) async -> String)?
 
     /// 時計からの問い（返事を待っている）
     /// 時計から「起きて」と言われた（2026-11-06）。アプリが止まっていても、iOS が裏で起こしてここに来る
     var onWake: (@MainActor () -> Void)?
 
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        if handleWatchRequest(message) { return }
         guard message["wake"] != nil else { return }
         readContext(message)
         Task { @MainActor in self.onWake?() }
@@ -42,13 +47,71 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
             replyHandler([:])
             return
         }
+        if let id = message["taskDone"] as? String {
+            Task { @MainActor in self.onTaskDone?(id) }
+            replyHandler(["ok": true])
+            return
+        }
         guard let ask = message["ask"] as? String else {
             replyHandler([:])
+            return
+        }
+        // 「聞く」の質問（"q:" + 質問）は、すぐ「調べています」と返し、答えはあとで送る
+        if ask.hasPrefix(Self.questionPrefix) {
+            replyHandler(["answer": "調べています", "pending": true])
+            answerLater(String(ask.dropFirst(Self.questionPrefix.count)))
             return
         }
         Task { @MainActor in
             replyHandler(["answer": self.onAsk?(ask) ?? "iPhone の LifeLog の準備ができていません。"])
         }
+    }
+
+    // MARK: - 時計のアプリ（2026-11-07）
+
+    /// 時計の「聞く」の質問の頭（"q:" + 質問）。"recent" は今までどおり「さっき何て言った？」
+    static let questionPrefix = "q:"
+
+    /// 返事の要らない知らせ（sendMessage・transferUserInfo）で届いた「済み」と「聞く」。扱ったら true
+    @discardableResult
+    private func handleWatchRequest(_ message: [String: Any]) -> Bool {
+        var handled = false
+        if let id = message["taskDone"] as? String {
+            Task { @MainActor in self.onTaskDone?(id) }
+            handled = true
+        }
+        if let ask = message["ask"] as? String, ask.hasPrefix(Self.questionPrefix) {
+            answerLater(String(ask.dropFirst(Self.questionPrefix.count)))
+            handled = true
+        }
+        return handled
+    }
+
+    /// 質問に答えて、答えを時計に送る（時計は届いたら震えて出す）
+    private func answerLater(_ question: String) {
+        Task { @MainActor in
+            let text: String
+            if let onQuestion = self.onQuestion {
+                text = await onQuestion(question)
+            } else {
+                text = "iPhone の LifeLog の準備ができていません。"
+            }
+            self.sendAnswer(text, question: question)
+        }
+    }
+
+    /// 「聞く」の答えを時計に送る（時計が離れていても、つながったときに届く）
+    func sendAnswer(_ text: String, question: String) {
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated,
+              WCSession.default.isWatchAppInstalled else { return }
+        WCSession.default.transferUserInfo(["answer": text, "question": question])
+    }
+
+    /// 時計の画面に出す中身（WatchInfo の JSON）を、設定と一緒に送る（設定は消さずに足す）
+    func sendWatchInfo(_ data: Data) {
+        lastSettings[WatchInfo.contextKey] = data
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
+        try? WCSession.default.updateApplicationContext(lastSettings)
     }
 
     /// 時計が知らせてきた様子
@@ -137,6 +200,8 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     }
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        // 時計の「済み」と「聞く」（iPhone が離れていたときに、あとから届いた分）
+        handleWatchRequest(userInfo)
         if let time = userInfo["mark"] as? Double {
             Task { @MainActor in self.onMark?(Date(timeIntervalSince1970: time)) }
         }
