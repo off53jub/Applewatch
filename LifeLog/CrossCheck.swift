@@ -158,7 +158,7 @@ extension Pipeline {
                         box.notes.append(note)
                         Tally.add("pc.speakerDiffer")
                         // 記録の行にも印（話し手の名前のあとに「？」）
-                        conversations.markSpeakerDoubt(other, time: line.time, day: day)
+                        markSpeakerDoubt(other, time: line.time, day: day)
                     }
                 }
                 checked.append(key)

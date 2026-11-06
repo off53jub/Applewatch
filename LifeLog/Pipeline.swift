@@ -2043,6 +2043,7 @@ final class Pipeline {
 
     /// 議事録を作った会話に、そのドキュメントの名前を記す
     func setScene(_ scene: String, start: Date, day: String) { conversations.setScene(scene, start: start, day: day) }
+    func markSpeakerDoubt(_ other: String, time: Date, day: String) { conversations.markSpeakerDoubt(other, time: time, day: day) }
 
     func markMinutes(_ name: String, start: Date, day: String) {
         conversations.setMinutes(name, start: start, day: day)
