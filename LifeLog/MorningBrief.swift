@@ -75,7 +75,7 @@ enum MorningBrief {
             for event in input.events.prefix(2) {
                 var line = event.time + "から" + bare(event.title)
                 if !event.people.isEmpty {
-                    line += "、" + event.people.prefix(3).map(WatchInfo.politeName).joined(separator: "、") + "と"
+                    line += "、" + event.people.prefix(3).map { WatchInfo.politeName($0) }.joined(separator: "、") + "と"
                 }
                 s.append(line + "。")
                 if let note = event.note, !bare(note).isEmpty { s.append(bare(note) + "。") }
@@ -90,7 +90,7 @@ enum MorningBrief {
         }
         // 前の日
         if !input.yesterdayTopics.isEmpty {
-            s.append("昨日は、" + input.yesterdayTopics.prefix(3).map(bare).joined(separator: "、") + "の話をしました。")
+            s.append("昨日は、" + input.yesterdayTopics.prefix(3).map { bare($0) }.joined(separator: "、") + "の話をしました。")
         }
         if let decision = input.yesterdayDecisions.first {
             s.append("決まったことは、" + bare(decision) + "。")
