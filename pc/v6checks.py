@@ -178,12 +178,14 @@ def check_jobs(main) -> int:
                 and main.App.jobs.jobs["broken-1.m4a"]["params"]["enhance"] is False
             failed += say(ok, f"失敗したものだけ送り直すとやり直す: {broken.get('status')}（{broken.get('error')}）→ {fixed.get('status')}")
             # 名前・合言葉・大きさ
-            checks = {"名前なし": client.call("POST", "/jobs", audio)[0],
-                      "../": client.call("POST", "/jobs?name=../x", audio)[0],
-                      "点だけ": client.call("POST", "/jobs?name=..", audio)[0],
-                      "長すぎる名前": client.call("POST", f"/jobs?name={'a' * 81}", audio)[0],
+            # （断るときは中身を読み捨ててから接続を閉じる。ここでは答えの番号だけを見るので、小さな中身で送る）
+            small = b"x" * 100
+            checks = {"名前なし": client.call("POST", "/jobs", small)[0],
+                      "../": client.call("POST", "/jobs?name=../x", small)[0],
+                      "点だけ": client.call("POST", "/jobs?name=..", small)[0],
+                      "長すぎる名前": client.call("POST", f"/jobs?name={'a' * 81}", small)[0],
                       "空": client.call("POST", "/jobs?name=empty.m4a", b"")[0],
-                      "合言葉違い": client.call("POST", "/jobs?name=x.m4a", audio, key="wrong")[0],
+                      "合言葉違い": client.call("POST", "/jobs?name=x.m4a", small, key="wrong")[0],
                       "一覧の合言葉違い": client.call("GET", "/jobs", key="wrong")[0],
                       "知らない名前": client.call("GET", "/jobs/unknown.m4a")[0]}
             ok = checks == {"名前なし": 400, "../": 400, "点だけ": 400, "長すぎる名前": 400, "空": 400, "合言葉違い": 401,

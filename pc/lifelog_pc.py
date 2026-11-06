@@ -1950,8 +1950,10 @@ def start_v6(threads: int) -> None:
             App.semantic = None
             log(f"意味で探す機能を始められませんでした: {error!r}")
     try:
+        # 試すときだけ、環境変数 LIFELOG_UPDATE_API で問い合わせ先を作り物にできる（ふだんは GitHub）
         App.updater = updater.Updater(HOME, BUILD, bool(getattr(sys, "frozen", False)), INSTALL_DIR, App.auto_update,
-                                      busy, pause_work, resume_work, log, task=App.task)
+                                      busy, pause_work, resume_work, log, task=App.task,
+                                      api=os.environ.get("LIFELOG_UPDATE_API") or updater.API)
         App.updater.start()
     except Exception as error:  # noqa: BLE001
         App.updater = None
