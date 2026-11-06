@@ -205,6 +205,8 @@ def render(info: dict) -> str:
     """見守りの画面の HTML。info は lifelog_pc.dash_info() が作る。"""
     parts = [f"<h1>LifeLog PC 版 {_e(info.get('version'))}"
              f"<span class='sub'>（番号 {_e(info.get('build') or '—')}）</span></h1>"]
+    # 版 7（records）: 記録の画面への入口
+    parts.append("<p><a href='/dash/records' style='color:var(--btn)'>記録を読む・探す・直す →</a></p>")
     # 動いているもの
     rows = [("動いている時間", _seconds(info.get("uptime"))),
             ("ディスクの空き", f"{info['disk_free'] / 1e9:.1f} GB（{_e(info.get('disk_path'))}）"

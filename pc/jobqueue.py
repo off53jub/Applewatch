@@ -5,6 +5,8 @@ iPhone は録音の区切りを1つずつ裏で送っておき、PC が文字に
 - 1つずつ、来た順に文字にする（裏の仕事は1本だけ）。
 - 受けた音声と状態は <home>/jobs/ に置くので、PC を起動し直しても続きから文字にする。
 - 音声は、文字にし終えたら（失敗しても）すぐ消す。答えは、でき上がってから 7 日で消す。
+  版 7: 音声を残す先 keep_audio（records.RecordStore.keep_audio）を渡したときは、文字にし終えても消さずに残し、
+  iPhone が消したとき（DELETE /jobs/<名前>）と 7 日たって片付けるときに、keep_audio(名前, 音声のファイル, 状態) に移してもらう。
 ここには文字にする仕組みは無い。lifelog_pc.py が渡す runner(音声のファイル, 頼まれた設定, 名前) が文字にする。
 """
 
@@ -56,12 +58,15 @@ class JobQueue:
     """区切りごとの仕事を、来た順に1つずつ文字にする。"""
 
     def __init__(self, folder: Path, runner: Callable[[Path, dict, str], tuple[dict, dict]],
-                 log: Callable[[str], None], limit: int = QUEUE_LIMIT, keep: float = KEEP_SECONDS) -> None:
+                 log: Callable[[str], None], limit: int = QUEUE_LIMIT, keep: float = KEEP_SECONDS,
+                 keep_audio: Callable[[str, Path, dict], None] | None = None) -> None:
         self.folder = Path(folder)
         self.runner = runner
         self.log = log
         self.limit = limit
         self.keep = keep
+        # 版 7（records）: 音声を残す先。あれば、音声は消すときまで残して、ここに移してもらう
+        self.keep_audio = keep_audio
         self.jobs: dict[str, dict] = {}
         self.receiving: set[str] = set()
         self.lock = threading.Lock()
@@ -117,7 +122,7 @@ class JobQueue:
             if path.is_file() and (stem not in known or path.name.endswith(".part")):
                 _unlink(path)
         for name, meta in self.jobs.items():
-            if meta.get("status") in ("done", "failed"):
+            if meta.get("status") in ("done", "failed") and self.keep_audio is None:
                 _unlink(self.audio_path(name))
 
     # MARK: 受け付け
@@ -207,12 +212,25 @@ class JobQueue:
             return counts
 
     def delete(self, name: str) -> bool:
-        """その仕事のもの（音声・答え・状態）を全部消す。文字にしている途中なら、でき上がった答えは捨てる。"""
+        """その仕事のもの（音声・答え・状態）を全部消す。文字にしている途中なら、でき上がった答えは捨てる。
+        版 7: 音声を残す先があれば、音声は消さずに移す。"""
         with self.lock:
-            if self.jobs.pop(name, None) is None:
+            meta = self.jobs.pop(name, None)
+            if meta is None:
                 return False
+            self._keep_audio(name, meta)
             self._remove_files(name)
             return True
+
+    def _keep_audio(self, name: str, meta: dict) -> None:
+        """版 7（records）: 音声を残す先に移す（無い・移せなければ、このあと消す）"""
+        audio = self.audio_path(name)
+        if self.keep_audio is None or not audio.exists():
+            return
+        try:
+            self.keep_audio(name, audio, dict(meta))
+        except Exception as error:  # noqa: BLE001 — 移せなくても、消す処理は続ける
+            self.log(f"後で受け取る文字起こし {name}: 音声を残せませんでした（消します）: {error!r}")
 
     def _remove_files(self, name: str) -> None:
         for path in (self.meta_path(name), self.audio_path(name), self.result_path(name)):
@@ -227,6 +245,7 @@ class JobQueue:
                 done_at = meta.get("done_at")
                 if meta.get("status") in ("done", "failed") and done_at and now - float(done_at) > self.keep:
                     self.jobs.pop(name, None)
+                    self._keep_audio(name, meta)
                     self._remove_files(name)
                     removed += 1
             self.cleaned = now
@@ -329,7 +348,8 @@ class JobQueue:
                     current.update(status="failed", error=f"答えを保存できませんでした: {failure}")
             else:
                 current.update(status="failed", error=(error or "文字にできませんでした")[:500])
-            _unlink(audio)
+            if self.keep_audio is None:  # 版 7: 残す先があれば、iPhone が消すまで残す
+                _unlink(audio)
             _write_json(self.meta_path(name), current)
             self.changed.notify_all()
         return True

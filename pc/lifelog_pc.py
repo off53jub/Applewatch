@@ -88,6 +88,9 @@ import dashboard
 import jobqueue
 import semantic
 import updater
+# 版 7（records）: 記録・音声の保存・直し（records.py）と、その画面（recordsui.py）
+import records
+import recordsui
 
 VERSION = 6
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
@@ -1784,6 +1787,9 @@ def features(engines: list | None = None) -> list[str]:
         found.append("jobs")
     if App.semantic is not None and App.semantic.available():
         found.append("semantic")
+    # 版 7（records）: POST /records/<日>（記録を受ける）・GET /edits と POST /edits/ack（PC で直した分を返す）
+    if App.records is not None:
+        found += ["records", "edits"]
     return found
 
 
@@ -1797,6 +1803,7 @@ class App:
     jobs: jobqueue.JobQueue | None = None
     semantic: semantic.SemanticIndex | None = None
     updater: updater.Updater | None = None
+    records: records.RecordStore | None = None   # 版 7（records）
     recent = dashboard.Recent()      # 直近の文字起こしの速さ・モデルの組の近さ（見守りの画面）
     transcribing = 0                 # 今動いている /transcribe の数
     closing = False                  # 入れ替え・再起動の前（新しい /transcribe を断る）
@@ -1934,7 +1941,9 @@ def dash_info() -> dict:
 def start_v6(threads: int) -> None:
     """版 6 の裏の仕事を始める（後で受け取る文字起こし・意味で探す・自分で入れ替える）。どれも失敗しても受け付けは続ける。"""
     try:
-        App.jobs = jobqueue.JobQueue(JOBS_DIR, run_job, log)
+        # 版 7（records）: 記録の機能があれば、iPhone が消した区切りの音声を消さずに移す
+        App.jobs = jobqueue.JobQueue(JOBS_DIR, run_job, log,
+                                     keep_audio=App.records.keep_audio if App.records is not None else None)
         App.jobs.start()
         counts = App.jobs.counts()
         if counts["queued"]:
@@ -1958,6 +1967,16 @@ def start_v6(threads: int) -> None:
     except Exception as error:  # noqa: BLE001
         App.updater = None
         log(f"自分で入れ替える仕組みを始められませんでした: {error!r}")
+
+
+# 版 7（records）: 記録の置き場所（HOME/records・HOME/audio・HOME/edits.db）。start_v6 より前に始める
+def start_records() -> None:
+    try:
+        App.records = records.RecordStore(HOME, log, load_config)
+        App.records.start()
+    except Exception as error:  # noqa: BLE001 — 始められなくても、ほかの受け付けは続ける
+        App.records = None
+        log(f"記録の機能を始められませんでした: {error!r}")
 
 
 def restart_later() -> None:
@@ -2190,6 +2209,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/dash":
             self.dash(url, "GET")
             return
+        # 版 7（records）: 記録の画面・保存した音声（合言葉は見守りの画面と同じ）と、GET /edits（Bearer）
+        if recordsui.handles(path):
+            recordsui.http(self, url, "GET", App.records, App.semantic, log)
+            return
+        if path == "/edits":
+            records.http_get_edits(self, App.records, url.query, log)
+            return
         if path not in ("/hello", "/train-status", "/jobs", "/index/status") and not path.startswith("/jobs/"):
             self.send_json(404, {"error": "not found"})
             return
@@ -2239,6 +2265,13 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if url.path in ("/dash/restart", "/dash/update"):
             self.dash(url, "POST")
+            return
+        # 版 7（records）: 記録の画面のボタン（合言葉は見守りの画面と同じ）と、POST /records/<日>・/edits/ack（Bearer）
+        if recordsui.handles(url.path):
+            recordsui.http(self, url, "POST", App.records, App.semantic, log)
+            return
+        if url.path.startswith("/records/") or url.path == "/edits/ack":
+            records.http_post(self, App.records, url.path, log)
             return
         if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample", "/llm", "/jobs") \
                 and url.path not in semantic.POSTS:
@@ -2474,6 +2507,8 @@ def serve(engine_factory, port: int, threads: int = 4) -> None:
     Handler.key = key
     # 雑音を除くモデル（約0.5MB）は裏で用意する。用意できなくても受け付けは始める
     threading.Thread(target=prepare_enhance, daemon=True).start()
+    # 版 7（records）: 記録の置き場所（後で受け取る文字起こしが音声を移す先なので、先に始める）
+    start_records()
     # 版 6: 後で受け取る文字起こし・意味で探す・自分で入れ替える
     start_v6(threads)
     log(f"LifeLog PC 版 {VERSION}（番号 {BUILD}）を始めます")
@@ -3156,6 +3191,13 @@ def main() -> None:
                         help="意味で探す機能（/index・/search、Ollama の bge-m3）を使わない（config.json の \"semantic\": false でも同じ）")
     parser.add_argument("--check-semantic", action="store_true",
                         help="この PC の Ollama で、意味で探す機能を本物のモデル（bge-m3）で試す")
+    # 版 7（records）
+    parser.add_argument("--check-v7-records", action="store_true",
+                        help="記録・音声の保存・直し（/records・/edits・記録の画面）を、一時のフォルダと作り物で確かめる")
+    parser.add_argument("--try-records", action="store_true",
+                        help="モデルを読み込まずに、一時のフォルダ（--try-home）と作り物の記録で起動して、記録の画面を試す"
+                             "（この PC の中 127.0.0.1 だけで受ける。文字起こしはできない）")
+    parser.add_argument("--try-home", default=None, help="--try-records で使うフォルダ（既定は新しい一時のフォルダ）")
     parser.add_argument("--whisper", default="auto",
                         help="Whisper の大きさ: auto（GPU なら large-v3、無ければ large-v3-turbo）・large-v3・large-v3-turbo・small・off")
     parser.add_argument("--device", default="auto", help="Whisper を動かす場所: auto（既定）・cuda・cpu")
@@ -3169,6 +3211,14 @@ def main() -> None:
         return
     if args.check_extras:
         check_extras(args.check_extras, max(1, args.threads // 2))
+        return
+    # 版 7（records）: 確かめる・試す（どちらも本物のモデルと、ふだんの置き場所は使わない）
+    if args.check_v7_records or args.try_records:
+        import v7checks_records
+
+        if args.check_v7_records:
+            sys.exit(1 if v7checks_records.run(sys.modules[__name__]) else 0)
+        v7checks_records.try_serve(sys.modules[__name__], args.port, args.try_home)
         return
     global USE_HOTWORDS, CLEAN_AUDIO, WORD_TIMES
     if args.no_hotwords:
