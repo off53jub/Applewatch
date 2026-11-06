@@ -110,6 +110,7 @@ final class HomePC {
         let hello = try JSONDecoder().decode(Hello.self, from: data)
         version = hello.version ?? 1
         features = Set(hello.features ?? [])
+        UserDefaults.standard.set(features.contains("jobs"), forKey: "homePCJobs")
         speakerModel = hello.speaker_model
         return "\(hello.model)（\(hello.provider == "cuda" ? "GPU" : "CPU")）"
     }
@@ -266,7 +267,7 @@ final class HomePC {
     /// PC の LifeLog PC の版（hello で分かる。古い PC は 1）
     var version: Int?
     /// このアプリが前提にしている PC の版（多数決・ヒント・重み）
-    nonisolated static let expectedVersion = 5
+    nonisolated static let expectedVersion = 6
 
     /// 声の区間の長さに対する処理の時間（直近をならした値。1 より大きいと録音に追いつかない）。2026-11-06
     var speed: Double? = UserDefaults.standard.object(forKey: "homePCSpeed") as? Double {
@@ -324,55 +325,173 @@ final class HomePC {
             defer { session.finishTasksAndInvalidate() }
             let (data, response) = try await session.upload(for: upload, fromFile: url)
             try Self.check(response, data: data)
-            struct Reply: Decodable {
-                struct Line: Decodable {
-                    let start: Double; let end: Double; let text: String
-                    let confidence: Double?; let alternatives: [String]?; let votes: [String: String]?
-                    /// PC の声の区間だけが声とした所（iPhone の区間には無かった。2026-11-06）
-                    let extra: Bool?
-                    /// 言葉ごとの時刻（版 4 から）
-                    let words: [Word]?
-                }
-                let lines: [Line]
-                let seconds: Double
-                let engines: [String]?
-                /// モデルの組ごとの読みの近さの平均と、何も書かなかった行の数（版 5 から。中身は入っていない）
-                let pairs: [String: Double]?
-                let pair_lines: [String: Int]?
-                let silent: [String: Int]?
-            }
-            let reply = try JSONDecoder().decode(Reply.self, from: data)
-            // 区切りごとの平均を、行の数で重み付けして足す
-            for (pair, value) in reply.pairs ?? [:] {
-                let count = max(1, reply.pair_lines?[pair] ?? 1)
-                Tally.add("pair." + pair + ".s", Int((value * 1000).rounded()) * count)
-                Tally.add("pair." + pair + ".n", count)
-            }
-            for (engine, count) in reply.silent ?? [:] { Tally.add("silent." + engine, count) }
-            Tally.add("pc.vadExtra", reply.lines.filter { $0.extra == true }.count)
-            failedAt = nil
-            downSince = nil
-            engineCount = reply.engines?.count ?? 1
-            // 声の区間の長さに対して、処理に何倍かかったか（直近をならす）
-            let voiced = segments.reduce(0) { $0 + max(0, $1.end - $1.start) }
-            if voiced >= 5 {
-                let ratio = reply.seconds / voiced
-                speed = speed.map { $0 * 0.7 + ratio * 0.3 } ?? ratio
-            }
-            lastResult = "最後に使った時刻: \(Date().formatted(date: .omitted, time: .shortened))（\(String(format: "%.1f", reply.seconds)) 秒"
-                + (engineCount > 1 ? "・\(engineCount) つのモデルの多数決" : "")
-                + (speed.map { "・実時間の \(String(format: "%.2f", $0)) 倍" + ($0 > Self.tooSlow ? "（追いつかないので登録語を減らしています）" : "") } ?? "")
-                + "）"
-            return reply.lines.map {
-                Line(offset: $0.start, end: $0.end, text: $0.text, confidence: $0.confidence,
-                     alternatives: $0.alternatives ?? [], votes: $0.votes ?? [:], words: $0.words ?? [])
-            }
+            let reply = try JSONDecoder().decode(PCReply.self, from: data)
+            return accept(reply, voiced: segments.reduce(0) { $0 + max(0, $1.end - $1.start) })
         } catch {
             failedAt = .now
             if downSince == nil { downSince = .now }
             lastResult = "つながりませんでした（\(Date().formatted(date: .omitted, time: .shortened))）: \(Self.describe(error))"
             throw error
         }
+    }
+
+    /// PC の答え（/transcribe と、裏で送った区切りの結果 /jobs の中身）を受け取り、数を数えて行にする
+    private func accept(_ reply: PCReply, voiced: Double) -> [Line] {
+        // 区切りごとの平均を、行の数で重み付けして足す
+        for (pair, value) in reply.pairs ?? [:] {
+            let count = max(1, reply.pair_lines?[pair] ?? 1)
+            Tally.add("pair." + pair + ".s", Int((value * 1000).rounded()) * count)
+            Tally.add("pair." + pair + ".n", count)
+        }
+        for (engine, count) in reply.silent ?? [:] { Tally.add("silent." + engine, count) }
+        Tally.add("pc.vadExtra", reply.lines.filter { $0.extra == true }.count)
+        failedAt = nil
+        downSince = nil
+        engineCount = reply.engines?.count ?? 1
+        // 声の区間の長さに対して、処理に何倍かかったか（直近をならす）
+        if voiced >= 5 {
+            let ratio = reply.seconds / voiced
+            speed = speed.map { $0 * 0.7 + ratio * 0.3 } ?? ratio
+        }
+        lastResult = "最後に使った時刻: \(Date().formatted(date: .omitted, time: .shortened))（\(String(format: "%.1f", reply.seconds)) 秒"
+            + (engineCount > 1 ? "・\(engineCount) つのモデルの多数決" : "")
+            + (speed.map { "・実時間の \(String(format: "%.2f", $0)) 倍" + ($0 > Self.tooSlow ? "（追いつかないので登録語を減らしています）" : "") } ?? "")
+            + "）"
+        return reply.lines.map {
+            Line(offset: $0.start, end: $0.end, text: $0.text, confidence: $0.confidence,
+                 alternatives: $0.alternatives ?? [], votes: $0.votes ?? [:], words: $0.words ?? [])
+        }
+    }
+
+    // MARK: - 区切りを裏で PC に送っておく（PC の版 6 から。2026-11-07）
+
+    /// PC が「裏で送った区切り」を受け付けるか。裏で起こされたときは PC に聞けないので、最後に聞いた答えを覚えておく
+    static var acceptsJobs: Bool { UserDefaults.standard.bool(forKey: "homePCJobs") }
+
+    /// 区切りを、アプリが止まっても続く転送で PC に送る（PC はその場で文字にして、結果をためておく）
+    func enqueueJob(_ url: URL, hints: [String]) {
+        guard isConfigured, Self.acceptsJobs, var req = try? request("jobs") else { return }
+        let name = url.lastPathComponent
+        var components = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)
+        var items = [URLQueryItem(name: "name", value: name)]
+        var words: [String] = []
+        var length = 0
+        for word in hints where !word.isEmpty && !word.contains("\n") {
+            length += word.count + 1
+            if length > 1500 || words.count >= Self.hintLimit(speed: speed) { break }
+            words.append(word)
+        }
+        if !words.isEmpty { items.append(URLQueryItem(name: "hints", value: words.joined(separator: "\n"))) }
+        if !Self.skipWeights, let text = Self.weightsText(noisy: false) { items.append(URLQueryItem(name: "weights", value: text)) }
+        components?.queryItems = items
+        req.url = components?.url
+        req.httpMethod = "POST"
+        req.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
+        PCJobUploader.shared.upload(url, request: req, cellular: useCellular)
+    }
+
+    enum JobState {
+        /// 結果が出ている
+        case done([Line])
+        /// PC が受け付けて、まだ文字にしている（いつ受け付けたか）
+        case pending(Date)
+        /// PC に無い（まだ届いていない・失敗した・消えた）
+        case missing
+    }
+
+    /// 裏で送った区切りの様子（数秒で諦める）
+    func jobState(_ name: String) async -> JobState {
+        guard isConfigured, Self.acceptsJobs, let req = try? request("jobs/" + name) else { return .missing }
+        struct Reply: Decodable {
+            let status: String
+            let queued_at: Double?
+            let result: PCReply?
+        }
+        let session = makeSession(timeout: 8)
+        defer { session.finishTasksAndInvalidate() }
+        guard let (data, response) = try? await session.data(for: req),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let reply = try? JSONDecoder().decode(Reply.self, from: data) else { return .missing }
+        switch reply.status {
+        case "done":
+            guard let result = reply.result else { return .missing }
+            let voiced = result.lines.reduce(0) { $0 + max(0, $1.end - $1.start) }
+            return .done(accept(result, voiced: voiced))
+        case "queued", "working":
+            return .pending(reply.queued_at.map { Date(timeIntervalSince1970: $0) } ?? .now)
+        default:
+            return .missing
+        }
+    }
+
+    /// 使い終わった結果を PC から消す（失敗してもよい。PC は7日で消す）
+    func deleteJob(_ name: String) async {
+        guard var req = try? request("jobs/" + name) else { return }
+        req.httpMethod = "DELETE"
+        let session = makeSession(timeout: 8)
+        defer { session.finishTasksAndInvalidate() }
+        _ = try? await session.data(for: req)
+    }
+
+    // MARK: - 意味で探す（PC の版 6 から。2026-11-07）
+
+    struct IndexItem: Encodable {
+        let id: String
+        let day: String
+        let time: Double
+        let speaker: String?
+        let text: String
+        let work: Bool
+        let conversation: String
+    }
+
+    struct SearchHit: Decodable {
+        struct Context: Decodable {
+            let id: String?
+            let time: Double?
+            let speaker: String?
+            let text: String
+        }
+        let id: String
+        let day: String
+        let time: Double
+        let speaker: String?
+        let text: String
+        let conversation: String?
+        let score: Double
+        let context: [Context]?
+    }
+
+    /// 会話の行を PC の索引に入れる（500行まで）。入れた数
+    func index(_ items: [IndexItem]) async throws -> Int {
+        struct Reply: Decodable { let indexed: Int }
+        let data = try await postJSON("index", body: ["items": items], timeout: 180)
+        return try JSONDecoder().decode(Reply.self, from: data).indexed
+    }
+
+    /// 索引から消す
+    func forget(_ ids: [String]) async throws {
+        _ = try await postJSON("forget", body: ["ids": ids], timeout: 30)
+    }
+
+    /// 意味の近い行を探す
+    func semanticSearch(_ query: String, k: Int = 30, from: String? = nil, to: String? = nil) async throws -> [SearchHit] {
+        struct Body: Encodable { let query: String; let k: Int; let from: String?; let to: String?; let include_work: Bool }
+        struct Reply: Decodable { let hits: [SearchHit] }
+        let data = try await postJSON("search", body: Body(query: query, k: k, from: from, to: to, include_work: true), timeout: 30)
+        return try JSONDecoder().decode(Reply.self, from: data).hits
+    }
+
+    private func postJSON<T: Encodable>(_ path: String, body: T, timeout: TimeInterval) async throws -> Data {
+        var req = try request(path)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(body)
+        let session = makeSession(timeout: timeout)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: req)
+        try Self.check(response, data: data)
+        return data
     }
 
     // MARK: - クラウドの票を足す
@@ -515,5 +634,83 @@ private enum PCKeychain {
 
     static func delete() {
         SecItemDelete(query as CFDictionary)
+    }
+}
+
+/// PC の文字起こしの答え（/transcribe と /jobs の結果。2026-11-07 に型を外に出した）
+struct PCReply: Decodable {
+    struct Line: Decodable {
+        let start: Double; let end: Double; let text: String
+        let confidence: Double?; let alternatives: [String]?; let votes: [String: String]?
+        /// PC の声の区間だけが声とした所（iPhone の区間には無かった。2026-11-06）
+        let extra: Bool?
+        /// 言葉ごとの時刻（版 4 から）
+        let words: [HomePC.Word]?
+    }
+    let lines: [Line]
+    let seconds: Double
+    let engines: [String]?
+    /// モデルの組ごとの読みの近さの平均と、何も書かなかった行の数（版 5 から。中身は入っていない）
+    let pairs: [String: Double]?
+    let pair_lines: [String: Int]?
+    let silent: [String: Int]?
+}
+
+/// 区切りを、アプリが止まっても続く転送（バックグラウンドの URLSession）で PC に送る（2026-11-07）。
+/// 送る区切りは写しを作ってから送る（送っているあいだに元の区切りが処理されて動いても困らないように）。
+final class PCJobUploader: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static let shared = PCJobUploader()
+    static let identifier = "com.off53jub.lifelog.pcjobs"
+    private static let stage: URL = {
+        let dir = URL.cachesDirectory.appendingPathComponent("pcjobs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    private let lock = NSLock()
+    private var finish: (() -> Void)?
+
+    private lazy var session: URLSession = {
+        let config = URLSessionConfiguration.background(withIdentifier: Self.identifier)
+        config.sessionSendsLaunchEvents = true
+        config.isDiscretionary = false
+        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }()
+
+    /// アプリが起動したときに呼ぶ（前の起動で送っていた分の知らせを受け取れるように）
+    func start() { _ = session }
+
+    func upload(_ url: URL, request: URLRequest, cellular: Bool) {
+        let copy = Self.stage.appendingPathComponent(url.lastPathComponent)
+        try? FileManager.default.removeItem(at: copy)
+        guard (try? FileManager.default.copyItem(at: url, to: copy)) != nil else { return }
+        var request = request
+        request.allowsCellularAccess = cellular
+        let task = session.uploadTask(with: request, fromFile: copy)
+        task.taskDescription = url.lastPathComponent
+        task.resume()
+        Tally.add("jobs.sent")
+    }
+
+    /// iOS が、裏での転送の知らせを渡すためにアプリを起こしたとき
+    func handleEvents(completion: @escaping () -> Void) {
+        lock.withLock { finish = completion }
+        _ = session
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let name = task.taskDescription {
+            try? FileManager.default.removeItem(at: Self.stage.appendingPathComponent(name))
+        }
+        let status = (task.response as? HTTPURLResponse)?.statusCode ?? 0
+        if error != nil || status != 200 { Tally.add("jobs.failed") }
+    }
+
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        let done = lock.withLock { () -> (() -> Void)? in
+            defer { finish = nil }
+            return finish
+        }
+        DispatchQueue.main.async { done?() }
     }
 }

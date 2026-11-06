@@ -269,7 +269,14 @@ final class Pipeline {
             await speakers.forgetUnnamed(ids)
             people = await speakers.people()
         }
-        recorder.onChunk = { [weak self] _ in self?.processQueue() }
+        recorder.onChunk = { [weak self] url in
+            guard let self else { return }
+            // iPhone で録った区切りも、すぐ家の PC に送っておく（2026-11-07）
+            if let start = Storage.startDate(of: url) {
+                homePC.enqueueJob(url, hints: keywords(for: vocabularyContext(at: start)))
+            }
+            processQueue()
+        }
         recorder.onStop = { [weak self] reason in
             self?.endLive()
             self?.isRecording = false
@@ -309,11 +316,14 @@ final class Pipeline {
             watchDelays.received(url.lastPathComponent, ended: start.addingTimeInterval(Self.duration(of: url)),
                                  at: time, lowPower: watchLowPower)
             ledger.received(url, at: time)
+            // 届いたらすぐ、アプリが止まっても続く転送で家の PC に送っておく（2026-11-07）
+            homePC.enqueueJob(url, hints: keywords(for: vocabularyContext(at: start)))
         }
         receiver.onWatchState = { [weak self] state in self?.noteWatchState(state) }
         receiver.onNewPerson = { [weak self] time in self?.markNewPerson(at: time) }
         receiver.onMeeting = { [weak self] on in self?.setMeeting(on) }
         receiver.onAsk = { [weak self] _ in self?.recentWords() ?? "" }
+        setUpWatchApp()  // 時計のアプリ: 済み・聞く・時計に送る中身（2026-11-07。WatchInfo.swift）
         // 時計に起こされたら、待機モードを確かめて、届いた区切りを文字にする（2026-11-06）
         receiver.onWake = { [weak self] in
             guard let self else { return }
@@ -1381,6 +1391,7 @@ final class Pipeline {
         updateHold()
         if email != nil { Task { await sync.run() } }
         if UIDevice.current.userInterfaceIdiom != .pad { Task { await scheduleMeetingBriefs() } }
+        morningBriefOnActive()  // 朝の読み上げ（まだなら作る）と時計に送る中身（2026-11-07。MorningBrief.swift）
         liveAutoOff?.cancel()
         liveAutoOff = nil
         // ボタンで始めた録音の Live Activity は、古ければ出し直す（8時間で iOS に終わらせられるため）。
@@ -1427,6 +1438,12 @@ final class Pipeline {
         // アプリを開いていれば、閉じたばかりの会話の話し手を PC の声のモデルでも見比べる（2026-11-06）
         if UIApplication.shared.applicationState == .active, homePC.shouldTry {
             Task { await crossCheckDaytime() }
+            // 意味で探す索引も、1時間に1回まで入れ直す（2026-11-07）
+            let key = "semanticIndexedAt"
+            if (UserDefaults.standard.object(forKey: key) as? Date).map({ Date.now.timeIntervalSince($0) > 3600 }) ?? true {
+                UserDefaults.standard.set(Date.now, forKey: key)
+                Task { await refreshSemanticIndex(limit: 1500) }
+            }
         }
         if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
         Self.scheduleBackgroundWork()
@@ -1476,6 +1493,9 @@ final class Pipeline {
                 }
                 // 文字起こしした音声は、アプリで聞き直せるよう1日だけ残す
                 Storage.keep(url)
+            } catch is PCJobDeferred {
+                // 家の PC がまだ文字にしている。次の機会（時計の合図・開いたとき）に続ける
+                return false
             } catch where Self.isBrokenAudio(error) {
                 // 開けても中身が途中で切れている区切り
                 ledger.broken(url)
@@ -2052,6 +2072,8 @@ final class Pipeline {
     /// 議事録を作った会話に、そのドキュメントの名前を記す
     func setScene(_ scene: String, start: Date, day: String) { conversations.setScene(scene, start: start, day: day) }
     func markSpeakerDoubt(_ other: String, time: Date, day: String) { conversations.markSpeakerDoubt(other, time: time, day: day) }
+    /// その日の記録を最後に書き換えた時刻（意味で探す索引の入れ直しに使う。2026-11-07）
+    func dayModified(_ day: String) -> Date? { conversations.modified(day) }
 
     func markMinutes(_ name: String, start: Date, day: String) {
         conversations.setMinutes(name, start: start, day: day)
@@ -2310,8 +2332,11 @@ final class Pipeline {
         // 精度の物差し（答え合わせの行を今の設定で文字にし直して測る）と、自分向けのモデルの材料を PC に渡す
         await measureAccuracy()
         await sendPersonalSamples()
+        // 意味で探す索引を、変わった日だけ入れ直す（2026-11-07）
+        await refreshSemanticIndex()
         nightlyResult = "\(Date.now.formatted(date: .abbreviated, time: .shortened)) に \(processed) 区切りを聞き直し、\(changedLines) 行を直しました。"
             + (processed < targets.count ? "（残りは次の充電中に続けます）" : "")
+        await makeMorningBriefAtNight()  // 朝の読み上げを作る（2026-11-07。MorningBrief.swift）
     }
 
     /// 2つの言語モデルの直しを見比べる（2026-11-06）。直した行は、もう片方もほぼ同じに直したか、
@@ -2445,6 +2470,26 @@ final class Pipeline {
         let start = Storage.startDate(of: url) ?? .now
         let fromWatch = Storage.isFromWatch(url)
         let duration = Self.duration(of: url)
+        // 裏で家の PC に送っておいた区切りなら、その結果を使う（2026-11-07）。PC がまだ文字にしている最中なら、
+        // アプリを開いていれば2分まで待ち、裏にいるときは次の機会に回す（同じ区切りを PC に二重に頼まない）。
+        // 20分たっても終わらない区切りは待たずに、今までどおりその場で頼む
+        var jobLines: [HomePC.Line]?
+        if homePC.shouldTry, HomePC.acceptsJobs {
+            switch await homePC.jobState(url.lastPathComponent) {
+            case .done(let lines):
+                jobLines = lines
+            case .pending(let since) where Date.now.timeIntervalSince(since) < 20 * 60:
+                if UIApplication.shared.applicationState == .active {
+                    for _ in 0..<24 where jobLines == nil {
+                        try? await Task.sleep(for: .seconds(5))
+                        if case .done(let lines) = await homePC.jobState(url.lastPathComponent) { jobLines = lines }
+                    }
+                }
+                guard jobLines != nil else { throw PCJobDeferred() }
+            default:
+                break
+            }
+        }
         // まず端末内で文字起こしする（無料）。何も聞き取れなければ、お金をかけずにここで終わる。
         let context = vocabularyContext(at: start)
         let placeWords = keywords(for: context)
@@ -2531,8 +2576,15 @@ final class Pipeline {
         if !usedHaas, homePC.shouldTry {
             // 家の PC（無料）。Haas-ja・ReazonSpeech・Whisper の多数決（古い PC は Haas-ja だけ）。
             // PC が切れているときや届かないときは、この区切りはほかの方法で
-            if var lines = try? await homePC.transcribe(url, segments: haasSegments, hints: keywords, previous: previous,
-                                                         noisy: noisy) {
+            var fromJob: [HomePC.Line]? = jobLines
+            if fromJob == nil {
+                fromJob = try? await homePC.transcribe(url, segments: haasSegments, hints: keywords, previous: previous,
+                                                       noisy: noisy)
+            } else {
+                Tally.add("jobs.used")
+                Task { await homePC.deleteJob(url.lastPathComponent) }
+            }
+            if var lines = fromJob {
                 let ensemble = homePC.engineCount > 1
                 // 話者が替わった所で行を分ける（PC が言葉ごとの時刻を返したときだけ。2026-11-06）
                 if speakerLabelsOn, lines.contains(where: { $0.words.count >= 2 }),

@@ -54,6 +54,11 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// iPhone から届いた知らせ（こもり・音割れなど）。時計を震わせて画面に出す
     var onAlert: (@Sendable (String) -> Void)?
 
+    /// iPhone から届いた、時計の画面に出す中身（WatchInfo の JSON。2026-11-07）
+    var onInfo: (@Sendable (Data) -> Void)?
+    /// iPhone から届いた「聞く」の答え（答え, 質問。2026-11-07）
+    var onAnswer: (@Sendable (String, String) -> Void)?
+
     @MainActor
     func activate() {
         WKInterfaceDevice.current().isBatteryMonitoringEnabled = true
@@ -163,6 +168,36 @@ final class WatchSender: NSObject, WCSessionDelegate {
             done(reply["answer"] as? String ?? "答えがありませんでした。")
         }, errorHandler: { error in
             done("聞けませんでした: \(error.localizedDescription)")
+        })
+    }
+
+    // MARK: - 時計のアプリの頼まれごと・聞く（2026-11-07）
+
+    /// 頼まれごとを「済み」にしたと iPhone に送る。iPhone が近くに無ければ、つながったときに送る
+    func taskDone(_ id: String) {
+        let message: [String: Any] = ["taskDone": id]
+        guard WCSession.default.activationState == .activated, WCSession.default.isReachable else {
+            queueInfo(message)
+            return
+        }
+        WCSession.default.sendMessage(message, replyHandler: { _ in }, errorHandler: { [weak self] _ in
+            self?.queueInfo(message)
+        })
+    }
+
+    /// iPhone の記録に質問する。iPhone はすぐ「調べています」と返し、答えはあとで transferUserInfo で届く（onAnswer）
+    func askQuestion(_ question: String, _ done: @escaping @Sendable (String) -> Void) {
+        let message: [String: Any] = ["ask": "q:" + question]
+        guard WCSession.default.activationState == .activated, WCSession.default.isReachable else {
+            queueInfo(message)
+            done("iPhone とつながっていません。つながったら答えが届きます。")
+            return
+        }
+        WCSession.default.sendMessage(message, replyHandler: { reply in
+            done(reply["answer"] as? String ?? "調べています")
+        }, errorHandler: { [weak self] _ in
+            self?.queueInfo(message)
+            done("iPhone にあとで届けます。答えはそのあとで届きます。")
         })
     }
 
@@ -350,6 +385,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
         if state == .activated {
             Self.readSettings(session.receivedApplicationContext)
+            if let info = session.receivedApplicationContext["watchInfo"] as? Data { onInfo?(info) }
             if !ProcessInfo.processInfo.isLowPowerModeEnabled || unsentCount() >= Self.batch { resendPending() }
             publish()
             flushMarks()
@@ -363,12 +399,14 @@ final class WatchSender: NSObject, WCSessionDelegate {
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         if let got = userInfo["got"] as? String { acknowledged(got) }
         if let alert = userInfo["alert"] as? String { onAlert?(alert) }
+        if let answer = userInfo["answer"] as? String { onAnswer?(answer, userInfo["question"] as? String ?? "") }
         onChange?()
     }
 
     /// iPhone の設定（無音のあいだは書かない、など）を受け取る
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
         Self.readSettings(applicationContext)
+        if let info = applicationContext["watchInfo"] as? Data { onInfo?(info) }
     }
 
     static func readSettings(_ context: [String: Any]) {

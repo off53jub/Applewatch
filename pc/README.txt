@@ -103,6 +103,45 @@ Haas-ja と ReazonSpeech にも「ホットワード」として効かせます�
 ・Qwen3-ASR の票（使う設定にしたときだけ）: 下の「Qwen3-ASR も使う」を見てください。
 ・この PC の言語モデル（使う設定にしたときだけ）: 下の「この PC の言語モデル（Ollama）」を見てください。
 
+■ 版 6 で足したもの
+新しい iPhone のアプリが使います。古いアプリはこれまでどおり動きます。どれも、うまく動かなければ前と同じに動きます。
+・後で受け取る文字起こし: iPhone は録音の区切りを1つずつ裏で PC に預け、PC が文字にし終えたころに答えを受け取ります。
+  PC が声のある所を自分で探し（Silero VAD、使えなければ音の大きさ）、今までと同じ多数決で文字にします。
+  1つずつ、来た順に文字にします。PC を起動し直しても、預かったものは続きから文字にします。
+  預かった音声は、文字にし終えたら（うまくいかなくても）すぐ消します。答えは 7 日たったら消します。
+  置き場所は %LOCALAPPDATA%\LifeLogPC\jobs です。録音も文も PC の外には送りません。
+・見守りの画面: iPhone の Safari で次を開くと、PC の様子が見られます。
+    http://<PC の Tailscale 名>:47615/dash
+  （<PC の Tailscale 名> は、起動したときに「宛先」に出る 〜.ts.net の名前です）
+  ユーザー名とパスワードを聞かれたら、ユーザー名は何でもよく、パスワードに合言葉を入れます。
+  または一度だけ  http://<PC の Tailscale 名>:47615/dash?key=合言葉  で開くと、次からはそのまま開けます。
+  版と作った回の番号、モデルが CPU と GPU のどちらで動いているか（GPU の最後の失敗も）、Ollama とモデル、
+  預かった区切りの数と直近 20 個（音声の長さ・かかった時間・速さ）、/transcribe の速さ（直近 20 回の中央値）、
+  モデルの組ごとの読みの近さ（直近 100 回）、記録の中の失敗・注意（直近 15 行）、ディスクの空き、動いている時間が出ます。
+  文字起こしの文の中身は出しません。
+  「再起動」: LifeLog PC を終えて、タスク スケジューラの Lifelog-HomePC-Autostart で起動し直します
+  （そのタスクが無ければ、同じ引数で起動し直します）。
+  「更新を確かめる」: 下の「自分で新しい版に入れ替える」を、今すぐ行います（自動の更新をオフにしていても行います）。
+・自分で新しい版に入れ替える: 起動して 10 分後と、そのあと 6 時間ごとに、GitHub（off53jub/Applewatch）のリリースの
+  「pc-v6-番号」を見て、今より新しい版があれば取ってきて（数百 MB）、ハッシュ（SHA-256）を確かめてから入れ替えます。
+  入れ替えるのは、文字にしている最中のものが無いときだけです。入れ替えの手順:
+    1. 新しい版を、LifeLog PC のフォルダの隣の「<フォルダの名前> 新しい版」に展開します
+    2. LifeLog PC を終え、今のフォルダの名前を「<フォルダの名前> 前の版」に変えます（前からある「前の版」は消します）
+    3. 新しい版のフォルダを、もとの名前にします
+    4. タスク スケジューラの Lifelog-HomePC-Autostart で起動し直します（無ければ同じ引数で起動します）
+  うまくいかなかったときは、前の版のまま起動します。新しい版がおかしいときは、LifeLog PC を止めてから、
+  「前の版」のフォルダをもとの名前に戻すと、前の版に戻せます。
+  取ってきたものは %LOCALAPPDATA%\LifeLogPC\update に置きます。Python のまま動かしているときは入れ替えません。
+  自動の更新をやめるときは、config.json に "auto_update": false を足すか、LifeLogPC.exe --no-auto-update で起動します。
+  ※ 版 5 から版 6 へは自動では替わりません。一度だけ、GitHub の Actions の成果物か、リリースの LifeLogPC.zip を手で展開して
+    入れ替えてください。
+・意味で探す: iPhone から送られた文字起こしの行を、この PC の Ollama の埋め込みのモデル bge-m3（約1.2GB、MIT License）で
+  数の並びにして、%LOCALAPPDATA%\LifeLogPC\semantic.db に置きます。言葉が同じでなくても、意味の近い行を探せます。
+  Ollama が動いていて bge-m3 が無ければ、起動したときに Ollama に取ってきてもらいます（1回だけ）。
+  Ollama はこの PC の中（http://127.0.0.1:11434）だけを使い、文はこの PC の外には送りません。
+  使わないときは  LifeLogPC.exe --no-semantic（config.json の "semantic": false でも同じ）。
+  試すときは  LifeLogPC.exe --check-semantic（一時のフォルダで、本物の bge-m3 に日本語の文を置いて探します）
+
 ■ GPU について（NVIDIA のドライバー）
 Whisper・kotoba-whisper・Qwen3-ASR を GPU で動かすには、NVIDIA のドライバー 528 以上が要ります。
 nvidia-smi で版を見られます。古いと記録（log.txt）に「CUDA driver version is insufficient」と出て、
@@ -160,6 +199,7 @@ NVIDIA のドライバーが古いと GPU を使えません。nvidia-smi で版
 
 ■ 置き場所
 モデル・合言葉・記録: %LOCALAPPDATA%\LifeLogPC（model・reazon・whisper・cuda・speaker・tagging・enhance・vad・qwen のフォルダ）
+預かった区切り・意味で探すための行・取ってきた新しい版: %LOCALAPPDATA%\LifeLogPC（jobs のフォルダ・semantic.db・update のフォルダ）
 あなた向けのモデルの材料とモデル: %LOCALAPPDATA%\LifeLogPC\personal（data に声と文、model に作ったモデル）
 合言葉を変えたいときは、そこにある config.json を消して起動し直します（iPhone 側も入れ直してください）。
 
@@ -175,4 +215,5 @@ Whisper large-v3 / large-v3-turbo（OpenAI、MIT License）の CTranslate2 版�
 声のある所を探す: Silero VAD（silero_vad.onnx、MIT License）を sherpa-onnx で動かしています。
 Qwen3-ASR（使う設定のときだけ）: Qwen/Qwen3-ASR-0.6B（Apache License 2.0）を公式の qwen-asr の部品で動かしています。
 この PC の言語モデル（使う設定のときだけ）: Ollama の qwen3:8b（Apache License 2.0）。
+意味で探す（Ollama があるときだけ）: Ollama の bge-m3（BAAI、MIT License）。
 あなた向けのモデルの元: kotoba-whisper v2.0（kotoba-tech/kotoba-whisper-v2.0、MIT License）。

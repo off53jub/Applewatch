@@ -1350,4 +1350,20 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(saved.night, 3)
         XCTAssertTrue(saved.correction.isEmpty)
     }
+
+    // MARK: - 裏で PC に送る・意味で探す（2026-11-07）
+
+    func testPCReplyDecodesJobResult() throws {
+        let json = #"{"lines":[{"start":1.0,"end":2.5,"text":"明日行きます","confidence":0.9,"words":[[1.0,1.4,"明日"],[1.4,2.5,"行きます"]]}],"seconds":3.2,"engines":["haas","reazon","whisper"],"pairs":{"haas-reazon":0.91},"pair_lines":{"haas-reazon":1}}"#
+        let reply = try JSONDecoder().decode(PCReply.self, from: Data(json.utf8))
+        XCTAssertEqual(reply.lines.first?.words?.count, 2)
+        XCTAssertEqual(reply.engines?.count, 3)
+        XCTAssertEqual(reply.pair_lines?["haas-reazon"], 1)
+    }
+
+    func testSemanticIDIsStableToTheMillisecond() {
+        let t = Date(timeIntervalSince1970: 1_762_400_000.1234)
+        XCTAssertEqual(Pipeline.semanticID(day: "2026-11-06", time: t), "2026-11-06|1762400000123")
+        XCTAssertEqual(Pipeline.semanticID(day: "2026-11-06", time: t), Pipeline.semanticID(day: "2026-11-06", time: t))
+    }
 }
