@@ -171,6 +171,9 @@ extension Pipeline {
         add("状態", "控え（ドライブ）", "最後 " + Self.when(backups.lastDrive) + (backups.problem.map { "・" + $0 } ?? ""),
             backups.lastDrive.map { Date.now.timeIntervalSince($0) < 3 * 86400 } ?? false)
 
+        // 家の PC とのやり取り（実機の様子・見えない通知・記録と直し。2026-11-07。PCDiag.swift）
+        for row in pcLinkRows() { add(row.section, row.label, row.value, row.ok) }
+
         // 処理の重さ
         let runs = diagnostics.runs
         if let last = runs.last {
