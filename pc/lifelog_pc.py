@@ -38,12 +38,25 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 - POST /llm {"prompt": "…", "json": true|false, "max_tokens": N} → {"text": "…"}
   この PC の中で動く Ollama（http://127.0.0.1:11434）に取り次ぐ。動いていてモデルがあるときだけ features に "llm"
 
+版 6 で足したもの（どれも、うまく動かなければ前と同じに動く。中身は jobqueue.py・dashboard.py・updater.py・semantic.py）:
+- POST /jobs?name=区切りの名前&hints=…&noisy=0|1&enhance=0|1&weights=…  音声を預けて、後で答えを受け取る
+  （PC が声のある区間を自分で探し、/transcribe と同じ多数決で文字にする。同じ名前は2回文字にしない。失敗したものだけやり直す）
+  → {"id": 名前, "status": "queued"|"working"|"done"|"failed"}
+- GET /jobs/名前 → {"id", "status", "queued_at", "done_at", "error"?, "result": /transcribe と同じ答え（でき上がったときだけ）}
+- GET /jobs → {"jobs": [{"id", "status", "queued_at", "done_at"}…]}（新しい順、500 まで）　DELETE /jobs/名前 → 全部消す
+  （時刻は 1970 年からの秒。音声は文字にし終えたらすぐ消し、答えは 7 日で消す。起動し直しても続きから文字にする）
+- GET /dash  iPhone のブラウザで見る見守りの画面（合言葉で守る。再起動・更新を確かめるボタン）
+- 自分で新しい版に入れ替える（GitHub の pc-v6-番号 のリリース。config.json の "auto_update": false か --no-auto-update でやめる）
+- POST /index・POST /search・POST /forget・GET /index/status  意味で探す（この PC の Ollama の bge-m3。features に "semantic"）
+
     LifeLogPC.exe                 普通に起動する（受け付けを始める）
     LifeLogPC.exe --test 音声     その音声を文字にして、モデルごとの文とかかった時間を表示する（--enhance で雑音を除いた票も）
     LifeLogPC.exe --check-extras 音声  おまけの機能を、その音声で試す
     LifeLogPC.exe --startup       Windows の起動時に自動で始まるようにする（--no-startup でやめる）
     python lifelog_pc.py --qwen   Qwen3-ASR の票も加えて起動する（exe には部品が入っていないので Python で動かす）
     LifeLogPC.exe --llm-model 名前  /llm に使う Ollama のモデルを変える（--no-llm で使わない）
+    LifeLogPC.exe --no-auto-update  自分で新しい版に入れ替えない（--no-semantic で意味で探す機能を使わない）
+    LifeLogPC.exe --check-semantic  この PC の Ollama で、意味で探す機能を本物のモデルで試す
 """
 
 from __future__ import annotations
@@ -70,7 +83,16 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-VERSION = 5
+# 版 6 の機能（lifelog_pc.py と同じフォルダの部品）
+import dashboard
+import jobqueue
+import semantic
+import updater
+
+VERSION = 6
+# 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
+INSTALL_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+BUILD = updater.read_build(INSTALL_DIR)
 # 待ち受ける番号。8765 はほかのソフトとよくぶつかるので、使われにくい番号にする
 PORT = 47615
 RATE = 16000
@@ -100,6 +122,9 @@ LOG = HOME / "log.txt"
 PERSONAL_DIR = HOME / "personal"
 PERSONAL_DATA = PERSONAL_DIR / "data"
 PERSONAL_MODEL = PERSONAL_DIR / "model"
+# 後で受け取る文字起こしの音声と答え・意味で探すための行と数の並び（版 6）。どちらも PC の外には出さない
+JOBS_DIR = HOME / "jobs"
+SEMANTIC_DB = HOME / "semantic.db"
 
 
 def log(message: str) -> None:
@@ -1754,7 +1779,199 @@ def features(engines: list | None = None) -> list[str]:
     # POST /llm（この PC の中の Ollama が答え、モデルが入っているときだけ）
     if LLM.available():
         found.append("llm")
+    # 版 6: POST /jobs（後で受け取る文字起こし）と、意味で探す（Ollama と bge-m3 が使えるときだけ）
+    if App.jobs is not None:
+        found.append("jobs")
+    if App.semantic is not None and App.semantic.available():
+        found.append("semantic")
     return found
+
+
+# MARK: - 版 6 の部品をまとめておく所
+
+# 起動し直すときに使うタスク スケジューラのタスク（試すときは環境変数 LIFELOG_TASK で、無いタスクの名前にできる）
+_TASK = os.environ.get("LIFELOG_TASK", updater.TASK)
+
+
+class App:
+    jobs: jobqueue.JobQueue | None = None
+    semantic: semantic.SemanticIndex | None = None
+    updater: updater.Updater | None = None
+    recent = dashboard.Recent()      # 直近の文字起こしの速さ・モデルの組の近さ（見守りの画面）
+    transcribing = 0                 # 今動いている /transcribe の数
+    closing = False                  # 入れ替え・再起動の前（新しい /transcribe を断る）
+    lock = threading.Lock()
+    started = time.time()
+    # main() が決める設定
+    auto_update = True
+    use_semantic = True
+    task = _TASK
+
+
+def busy() -> bool:
+    """文字にしている最中のもの（/transcribe・後で受け取る文字起こし）があるか"""
+    return App.transcribing > 0 or (App.jobs is not None and App.jobs.busy())
+
+
+def pause_work() -> None:
+    App.closing = True
+    if App.jobs is not None:
+        App.jobs.pause()
+
+
+def resume_work() -> None:
+    App.closing = False
+    if App.jobs is not None:
+        App.jobs.resume()
+
+
+def transcribe_reply(engine: Ensemble, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
+                     prompt: str | None, weights: dict[str, float], enhance: bool, union: bool, who: str, kind: str,
+                     started: float) -> tuple[dict, dict]:
+    """/transcribe と後で受け取る文字起こしの共通の中身。(/transcribe の答え, 数の見立て) を返す。
+    who は記録の行の頭（「100.x.x.x から 」など）。文の中身は記録に書かない。"""
+    duration = len(audio) / RATE
+    extra: list[tuple[float, float]] = []
+    stats: dict = {}
+    # vad=union: iPhone が聞き逃した声も PC で探して、一緒に文字にする
+    if union:
+        try:
+            extra = find_extra(audio, segments)
+        except Exception as error:  # noqa: BLE001 — 探せなくても、iPhone の区間だけで続ける
+            log(f"聞き逃した声を探せませんでした（iPhone の区間だけで続けます）: {error!r}")
+            extra = []
+    if extra:
+        lines = engine.transcribe(audio, segments + extra, hints=hints, prompt=prompt, weights=weights,
+                                  extra_from=len(segments), enhance=enhance, stats=stats)
+    else:
+        lines = engine.transcribe(audio, segments, hints=hints, prompt=prompt, weights=weights,
+                                  enhance=enhance, stats=stats)
+    took = time.time() - started
+    voiced = sum(b - a for a, b in segments)
+    log(f"{who}{duration:.0f} 秒（声 {voiced:.0f} 秒）→ {len(lines)} 行、{took:.1f} 秒")
+    if extra:
+        found = sum(1 for line in lines if line.get("extra"))
+        log(f"  iPhone が聞き逃した声: {len(extra)} 区間（{sum(b - a for a, b in extra):.0f} 秒）→ {found} 行")
+    unsure = sum(1 for line in lines if line.get("confidence", 1) < 0.5)
+    timed = sum(1 for line in lines if line.get("words"))
+    log(f"  多数決: {len(engine.engines)} モデル" + ("（雑音を除いた票も）" if enhance else "")
+        + f"、食い違いの大きい行 {unsure}、言葉の時刻のある行 {timed}")
+    reply: dict = {"lines": lines, "seconds": round(took, 2), "engines": [e.name for e in engine.engines]}
+    if stats:
+        # モデルの組ごとの近さと、何も書かなかった区間の数（数だけ。文の中身は記録に書かない）
+        log(pair_stats_line(stats))
+        reply.update(stats)
+    App.recent.record(kind, took, voiced, duration, stats)
+    return reply, {"audio_seconds": round(duration, 2), "voiced_seconds": round(voiced, 2), "lines": len(lines)}
+
+
+def find_voice(audio: np.ndarray, threads: int = 1) -> list[tuple[float, float]]:
+    """音声全体の、声のある区間（Silero VAD で探し、使えなければ音の大きさで探す。vad=union と同じ決まり）"""
+    return find_extra(audio, [], threads)
+
+
+def run_job(path: Path, params: dict, name: str) -> tuple[dict, dict]:
+    """後で受け取る文字起こしの1つ分。区間は PC が探す。答えは /transcribe と同じ形。"""
+    started = time.time()
+    audio = load_audio(path.read_bytes())
+    segments = find_voice(audio)
+    enhance = params.get("enhance")
+    if enhance is None:
+        # enhance を指定しなかったら、iPhone と同じく、騒がしい区切りだけ雑音を除いた票も加える
+        enhance = bool(params.get("noisy"))
+    return transcribe_reply(Handler.engine, audio, segments, list(params.get("hints") or []), None,
+                            parse_weights(params.get("weights")), bool(enhance), False,
+                            f"後で受け取る文字起こし {name}: ", "job", started)
+
+
+def dash_info() -> dict:
+    """見守りの画面に出すもの（文字起こしの文の中身は入れない）"""
+    import shutil
+
+    engine = getattr(Handler, "engine", None)
+    engines = [{"name": e.name, "label": getattr(e, "label", e.name), "provider": getattr(e, "provider", "cpu")}
+               for e in (engine.engines if engine else [])]
+    lines = dashboard.log_tail(LOG)
+    try:
+        nvidia = has_nvidia_gpu()
+    except Exception:  # noqa: BLE001
+        nvidia = False
+    models, running = [], False
+    try:
+        tags = LLM.call("/api/tags", timeout=2.0)
+        models = [str(m.get("name") or m.get("model") or "") for m in tags.get("models") or []]
+        running = True
+    except Exception:  # noqa: BLE001 — Ollama が無いだけ
+        pass
+    index = App.semantic
+    if index is None or not index.enabled:
+        state = "使わない設定です"
+    elif index.pulling:
+        state = "モデルを取ってきてもらっています"
+    elif index.available():
+        state = "使えます"
+    else:
+        state = index.error or "使えません（Ollama が動いていないか、モデルがありません）"
+    disk_path = MODEL_DIR if MODEL_DIR.exists() else HOME
+    try:
+        free = shutil.disk_usage(disk_path).free
+    except OSError:
+        free = None
+    return {"version": VERSION, "build": BUILD, "frozen": bool(getattr(sys, "frozen", False)),
+            "uptime": time.time() - App.started, "disk_free": free, "disk_path": str(disk_path),
+            "engines": engines,
+            "gpu": {"nvidia": nvidia, "used": any(e["provider"] == "cuda" for e in engines),
+                    "last_error": dashboard.last_cuda_error(lines)},
+            "ollama": {"running": running, "models": models, "llm": LLM.available(), "llm_model": LLM.model,
+                       "semantic_model": semantic.EMBED_MODEL, "semantic_state": state,
+                       "semantic_count": index.status()["count"] if index is not None and index.enabled else 0},
+            "job_counts": App.jobs.counts() if App.jobs else {}, "jobs": App.jobs.recent(20) if App.jobs else [],
+            "speed": App.recent.speed("transcribe", 20), "pairs": App.recent.pairs(),
+            "update": App.updater.status() if App.updater else {"auto": App.auto_update, "state": "—"},
+            "problems": dashboard.problems(lines, 15)}
+
+
+def start_v6(threads: int) -> None:
+    """版 6 の裏の仕事を始める（後で受け取る文字起こし・意味で探す・自分で入れ替える）。どれも失敗しても受け付けは続ける。"""
+    try:
+        App.jobs = jobqueue.JobQueue(JOBS_DIR, run_job, log)
+        App.jobs.start()
+        counts = App.jobs.counts()
+        if counts["queued"]:
+            log(f"後で受け取る文字起こし: 待っているものが {counts['queued']} 個あります。続きから文字にします")
+    except Exception as error:  # noqa: BLE001
+        App.jobs = None
+        log(f"後で受け取る文字起こしを始められませんでした: {error!r}")
+    if App.use_semantic:
+        try:
+            App.semantic = semantic.SemanticIndex(SEMANTIC_DB, semantic.OllamaEmbedder(LLM.url), log)
+            threading.Thread(target=App.semantic.available, kwargs={"force": True}, daemon=True).start()
+        except Exception as error:  # noqa: BLE001
+            App.semantic = None
+            log(f"意味で探す機能を始められませんでした: {error!r}")
+    try:
+        App.updater = updater.Updater(HOME, BUILD, bool(getattr(sys, "frozen", False)), INSTALL_DIR, App.auto_update,
+                                      busy, pause_work, resume_work, log, task=App.task)
+        App.updater.start()
+    except Exception as error:  # noqa: BLE001
+        App.updater = None
+        log(f"自分で入れ替える仕組みを始められませんでした: {error!r}")
+
+
+def restart_later() -> None:
+    """見守りの画面の「再起動」。文字にしている最中のものを（60 秒まで）待ってから、終わって起動し直す。"""
+    def run() -> None:
+        pause_work()
+        deadline = time.time() + 60
+        while busy() and time.time() < deadline:
+            time.sleep(1)
+        try:
+            updater.restart(HOME, App.task, log)
+        except Exception as error:  # noqa: BLE001
+            log(f"再起動できませんでした: {error!r}")
+            resume_work()
+
+    threading.Thread(target=run, name="restart", daemon=True).start()
 
 
 # MARK: - この PC の中の言語モデル（POST /llm、Ollama に取り次ぐ）
@@ -1966,11 +2183,21 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
-        if path not in ("/hello", "/train-status"):
+        url = urlparse(self.path)
+        path = url.path
+        if path == "/dash":
+            self.dash(url, "GET")
+            return
+        if path not in ("/hello", "/train-status", "/jobs", "/index/status") and not path.startswith("/jobs/"):
             self.send_json(404, {"error": "not found"})
             return
         if not self.authorized():
+            return
+        if path == "/jobs" or path.startswith("/jobs/"):
+            jobqueue.http_get(self, App.jobs, path)
+            return
+        if path == "/index/status":
+            semantic.http_status(self, App.semantic)
             return
         if path == "/train-status":
             try:
@@ -1979,7 +2206,7 @@ class Handler(BaseHTTPRequestHandler):
                 log(f"材料の数を数えられませんでした: {error!r}")
                 self.send_json(500, {"error": f"材料の数を数えられませんでした: {error}"})
             return
-        self.send_json(200, {"app": "LifeLogPC", "version": VERSION, "model": self.engine.label,
+        self.send_json(200, {"app": "LifeLogPC", "version": VERSION, "build": BUILD, "model": self.engine.label,
                              "provider": self.engine.provider,
                              "engines": [e.name for e in self.engine.engines],
                              # 話し手のモデルのファイルの名前。変わったら、iPhone は登録した声を測り直す
@@ -2008,7 +2235,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         url = urlparse(self.path)
-        if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample", "/llm"):
+        if url.path in ("/dash/restart", "/dash/update"):
+            self.dash(url, "POST")
+            return
+        if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample", "/llm", "/jobs") \
+                and url.path not in semantic.POSTS:
             self.discard_body()
             self.send_json(404, {"error": "not found"})
             return
@@ -2018,16 +2249,23 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = 0
-        limit = LLM_BODY_LIMIT if url.path == "/llm" else DRAIN_LIMIT
+        if url.path == "/jobs":
+            # 音声は読みながらファイルに書く（200MB まで）
+            jobqueue.http_post(self, App.jobs, url.query, length)
+            return
+        small = url.path == "/llm" or url.path in semantic.POSTS
+        limit = LLM_BODY_LIMIT if url.path == "/llm" else semantic.BODY_LIMIT if small else DRAIN_LIMIT
         if length <= 0 or length > limit:
             self.discard_body()
-            if url.path == "/llm":
+            if small:
                 self.send_json(400 if length <= 0 else 413, {"error": "中身がありません" if length <= 0 else "長すぎます"})
             else:
                 self.send_json(400, {"error": "音声がありません"})  # 前の版と同じ答え
             return
         data = self.rfile.read(length)
-        if url.path == "/llm":
+        if url.path in semantic.POSTS:
+            semantic.http_post(self, App.semantic, url.path, data, log)
+        elif url.path == "/llm":
             self.llm(data)
         elif url.path == "/transcribe":
             self.transcribe(data, url.query)
@@ -2085,54 +2323,86 @@ class Handler(BaseHTTPRequestHandler):
         log(f"{self.client_address[0]} から {path}: {duration:.0f} 秒・{len(ranges)} 区間、{took:.1f} 秒")
         self.send_json(200, body)
 
-    def transcribe(self, data: bytes, query_text: str) -> None:
-        started = time.time()
-        extra: list[tuple[float, float]] = []
-        stats: dict = {}
-        try:
-            audio = load_audio(data)
-            duration = len(audio) / RATE
-            query = parse_qs(query_text)
-            segments = parse_segments((query.get("segments") or [None])[0], duration)
-            # 聞き取ってほしい言葉（改行区切り）と、前の区切りの終わりの文。Whisper のヒントにする
-            hints = [w.strip() for w in (query.get("hints") or [""])[0].split("\n") if w.strip()][:80]
-            prompt = (query.get("prompt") or [None])[0]
-            weights = parse_weights((query.get("weights") or [None])[0])
-            # enhance=1: 雑音を除いた音でも Haas-ja・ReazonSpeech にもう一度聞いてもらい、票を増やす
-            enhance = (query.get("enhance") or [""])[0] in ("1", "true", "yes")
-            # vad=union: iPhone が聞き逃した声も PC で探して、一緒に文字にする
-            if (query.get("vad") or [""])[0] == "union":
-                try:
-                    extra = find_extra(audio, segments)
-                except Exception as error:  # noqa: BLE001 — 探せなくても、iPhone の区間だけで続ける
-                    log(f"聞き逃した声を探せませんでした（iPhone の区間だけで続けます）: {error!r}")
-                    extra = []
-            if extra:
-                lines = self.engine.transcribe(audio, segments + extra, hints=hints, prompt=prompt, weights=weights,
-                                               extra_from=len(segments), enhance=enhance, stats=stats)
-            else:
-                lines = self.engine.transcribe(audio, segments, hints=hints, prompt=prompt, weights=weights,
-                                               enhance=enhance, stats=stats)
-        except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
-            log(f"文字にできませんでした: {error!r}")
-            self.send_json(500, {"error": str(error)})
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+        if not path.startswith("/jobs/"):
+            self.discard_body()
+            self.send_json(404, {"error": "not found"})
             return
-        took = time.time() - started
-        voiced = sum(b - a for a, b in segments)
-        log(f"{self.client_address[0]} から {duration:.0f} 秒（声 {voiced:.0f} 秒）→ {len(lines)} 行、{took:.1f} 秒")
-        if extra:
-            found = sum(1 for line in lines if line.get("extra"))
-            log(f"  iPhone が聞き逃した声: {len(extra)} 区間（{sum(b - a for a, b in extra):.0f} 秒）→ {found} 行")
-        unsure = sum(1 for line in lines if line.get("confidence", 1) < 0.5)
-        timed = sum(1 for line in lines if line.get("words"))
-        log(f"  多数決: {len(self.engine.engines)} モデル" + ("（雑音を除いた票も）" if enhance else "")
-            + f"、食い違いの大きい行 {unsure}、言葉の時刻のある行 {timed}")
-        reply: dict = {"lines": lines, "seconds": round(took, 2), "engines": [e.name for e in self.engine.engines]}
-        if stats:
-            # モデルの組ごとの近さと、何も書かなかった区間の数（数だけ。文の中身は記録に書かない）
-            log(pair_stats_line(stats))
-            reply.update(stats)
-        self.send_json(200, reply)
+        if not self.authorized():
+            return
+        jobqueue.http_delete(self, App.jobs, path)
+
+    def dash(self, url, method: str) -> None:
+        """見守りの画面（GET /dash）と、そのボタン（POST /dash/restart・/dash/update）。合言葉は Basic 認証かクッキー。"""
+        ok, set_cookie = dashboard.check(self.headers, url.query, self.key)
+        if not ok:
+            if self.headers.get("Authorization") or "key=" in url.query:
+                log(f"見守りの画面で合言葉の違う接続を断りました: {self.client_address[0]}")
+            self.discard_body()
+            dashboard.send(self, 401, dashboard.login_page(),
+                           extra={"WWW-Authenticate": 'Basic realm="LifeLog PC", charset="UTF-8"'})
+            return
+        if method == "GET":
+            if set_cookie:
+                # 合言葉の入った宛先を残さないよう、クッキーを渡して /dash に移る
+                dashboard.send(self, 303, "", extra={"Location": "/dash", "Set-Cookie": dashboard.cookie_header(self.key)})
+                return
+            try:
+                page = dashboard.render(dash_info())
+            except Exception as error:  # noqa: BLE001 — 画面が作れなくても受け付けは続ける
+                log(f"見守りの画面を作れませんでした: {error!r}")
+                dashboard.send_json(self, 500, {"error": f"見守りの画面を作れませんでした: {error}"})
+                return
+            dashboard.send(self, 200, page)
+            return
+        self.discard_body()
+        # ほかのサイトから押させられないよう、画面の中のボタンだけが付ける印を確かめる
+        if self.headers.get(dashboard.HEADER) != "1":
+            dashboard.send_json(self, 403, {"error": "この画面のボタンから押してください"})
+            return
+        if url.path == "/dash/restart":
+            restart_later()
+            dashboard.send_json(self, 200, {"message": "起動し直します。1〜2分たってから、この画面を開き直してください。"})
+        elif App.updater is None:
+            dashboard.send_json(self, 503, {"error": "自分で入れ替える仕組みが動いていません"})
+        elif App.updater.trigger():
+            dashboard.send_json(self, 200, {"message": "新しい版があるか確かめています。あれば入れ替えて起動し直します"
+                                                       "（数分かかります。この画面の「更新」で様子が分かります）。"})
+        else:
+            dashboard.send_json(self, 200, {"message": "いま確かめている最中です。少し待ってから画面を開き直してください。"})
+
+    def transcribe(self, data: bytes, query_text: str) -> None:
+        if App.closing:
+            self.send_json(503, {"error": "PC を起動し直すところです。少し待ってから送ってください"})
+            return
+        started = time.time()
+        with App.lock:
+            App.transcribing += 1
+        try:
+            try:
+                audio = load_audio(data)
+                duration = len(audio) / RATE
+                query = parse_qs(query_text)
+                segments = parse_segments((query.get("segments") or [None])[0], duration)
+                # 聞き取ってほしい言葉（改行区切り）と、前の区切りの終わりの文。Whisper のヒントにする
+                hints = [w.strip() for w in (query.get("hints") or [""])[0].split("\n") if w.strip()][:80]
+                prompt = (query.get("prompt") or [None])[0]
+                weights = parse_weights((query.get("weights") or [None])[0])
+                # enhance=1: 雑音を除いた音でも Haas-ja・ReazonSpeech にもう一度聞いてもらい、票を増やす
+                enhance = (query.get("enhance") or [""])[0] in ("1", "true", "yes")
+                # vad=union: iPhone が聞き逃した声も PC で探して、一緒に文字にする
+                union = (query.get("vad") or [""])[0] == "union"
+                reply, _ = transcribe_reply(self.engine, audio, segments, hints, prompt, weights, enhance, union,
+                                            f"{self.client_address[0]} から ", "transcribe", started)
+            except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
+                log(f"文字にできませんでした: {error!r}")
+                self.send_json(500, {"error": str(error)})
+                return
+            self.send_json(200, reply)
+        finally:
+            with App.lock:
+                App.transcribing -= 1
 
 
 def addresses() -> list[str]:
@@ -2202,6 +2472,9 @@ def serve(engine_factory, port: int, threads: int = 4) -> None:
     Handler.key = key
     # 雑音を除くモデル（約0.5MB）は裏で用意する。用意できなくても受け付けは始める
     threading.Thread(target=prepare_enhance, daemon=True).start()
+    # 版 6: 後で受け取る文字起こし・意味で探す・自分で入れ替える
+    start_v6(threads)
+    log(f"LifeLog PC 版 {VERSION}（番号 {BUILD}）を始めます")
     print()
     print("=" * 60)
     print(" LifeLog PC を始めました。この画面は閉じずに置いておいてください。")
@@ -2216,6 +2489,8 @@ def serve(engine_factory, port: int, threads: int = 4) -> None:
         print("     Tailscale にログインしているか、Tailscale の管理画面（login.tailscale.com）の")
         print("     DNS で MagicDNS がオンになっているかを確かめて、起動し直してください。")
     print(f"   合言葉: {key}")
+    print()
+    print(f" 見守りの画面: http://{name or 'この PC の名前'}:{port}/dash（パスワードの欄に合言葉）")
     print()
     print(" （iPhone のアプリは、番号の宛先 " + ", ".join(addresses()) + " には送れません。上の名前を使います）")
     print("=" * 60)
@@ -2339,6 +2614,10 @@ def check_vote() -> None:
     failed += check_train_sample()
     # /llm（Ollama への取り次ぎ）を、作り物の Ollama で確かめる
     failed += check_llm()
+    # 版 6: 後で受け取る文字起こし・見守りの画面・自分で入れ替える・意味で探す（作り物のモデルと Ollama で）
+    import v6checks
+
+    failed += v6checks.run(sys.modules[__name__])
     if failed:
         sys.exit(1)
 
@@ -2869,6 +3148,12 @@ def main() -> None:
     parser.add_argument("--llm-model", default=None,
                         help=f"/llm に使う Ollama のモデル（既定 {LLM_MODEL}。config.json の \"llm_model\" でも同じ）")
     parser.add_argument("--no-llm", action="store_true", help="/llm（この PC の中の Ollama への取り次ぎ）を使わない")
+    parser.add_argument("--no-auto-update", action="store_true",
+                        help="自分で新しい版に入れ替えない（config.json の \"auto_update\": false でも同じ）")
+    parser.add_argument("--no-semantic", action="store_true",
+                        help="意味で探す機能（/index・/search、Ollama の bge-m3）を使わない（config.json の \"semantic\": false でも同じ）")
+    parser.add_argument("--check-semantic", action="store_true",
+                        help="この PC の Ollama で、意味で探す機能を本物のモデル（bge-m3）で試す")
     parser.add_argument("--whisper", default="auto",
                         help="Whisper の大きさ: auto（GPU なら large-v3、無ければ large-v3-turbo）・large-v3・large-v3-turbo・small・off")
     parser.add_argument("--device", default="auto", help="Whisper を動かす場所: auto（既定）・cuda・cpu")
@@ -2904,6 +3189,16 @@ def main() -> None:
     except ValueError as error:
         log(f"/llm は使いません: {error}")
         LLM = LocalLLM(enabled=False)
+    # 版 6 の設定
+    App.auto_update = not args.no_auto_update and config.get("auto_update") is not False
+    App.use_semantic = not args.no_semantic and config.get("semantic") is not False
+    if config.get("task"):
+        App.task = str(config["task"])
+    if args.check_semantic:
+        import v6checks
+
+        v6checks.check_semantic_real(sys.modules[__name__])
+        return
 
     def factory() -> Ensemble:
         return load_engines(names, args.threads, args.provider, args.whisper, args.device, qwen)
