@@ -90,6 +90,15 @@ extension Pipeline {
                 for hit in searchIndex.search([keyword], limit: 300) ?? [] { found.insert(hit.day) }
             }
         }
+        // 家の PC の索引で、意味の近い発言も探す（言葉が一致しなくても見つかる。2026-11-07）
+        let near = await semanticSearch(question, from: plan.from, to: plan.to, k: 40)
+        var nearTalks = Set<String>()
+        for hit in near {
+            found.insert(hit.day)
+            if let c = conversations(on: hit.day).first(where: { $0.lines.contains { $0.time == hit.line.time } }) {
+                nearTalks.insert(hit.day + "|" + String(c.start.timeIntervalSince1970))
+            }
+        }
         var scored: [(score: Int, day: String, conversation: ConversationLog.Conversation)] = []
         for day in days where (day >= from && day <= to) || found.contains(day) {
             for c in conversations(on: day) {
@@ -98,6 +107,8 @@ extension Pipeline {
                 var score = plan.keywords.reduce(0) { $0 + text.components(separatedBy: $1).count - 1 }
                 score += plan.people.filter { c.people.contains($0) }.count * 3
                 if plan.keywords.isEmpty && plan.people.isEmpty { score = 1 }
+                // 意味の近い発言のある会話は、先に読む
+                if nearTalks.contains(day + "|" + String(c.start.timeIntervalSince1970)) { score += 6 }
                 if score > 0 { scored.append((score, day, c)) }
             }
         }
@@ -121,10 +132,11 @@ extension Pipeline {
                 Self.minuteFormatter.string(from: line.time) + " " + (line.speaker.map { "[\($0)] " } ?? "") + line.text
             }
             var picked = lines
-            if lines.joined().count > 1_500, !plan.keywords.isEmpty {
-                // 長い会話は、言葉が出てくる行とその前後2行だけ
+            if lines.joined().count > 1_500, !plan.keywords.isEmpty || !near.isEmpty {
+                // 長い会話は、言葉が出てくる行・意味の近い行と、その前後2行だけ
                 var keep = Set<Int>()
-                for (i, line) in c.lines.enumerated() where plan.keywords.contains(where: { line.text.contains($0) }) {
+                for (i, line) in c.lines.enumerated() where plan.keywords.contains(where: { line.text.contains($0) })
+                    || near.contains(where: { $0.day == item.day && $0.line.time == line.time }) {
                     for j in max(0, i - 2)...min(c.lines.count - 1, i + 2) { keep.insert(j) }
                 }
                 picked = keep.isEmpty ? Array(lines.prefix(10)) : keep.sorted().map { lines[$0] }
@@ -187,9 +199,19 @@ struct SearchView: View {
     @State private var query = ""
     @State private var hits: [Pipeline.Hit] = []
     @State private var searched = false
+    /// 意味で探す（家の PC の索引。2026-11-07）
+    @AppStorage("searchByMeaning") private var byMeaning = false
+    @State private var searching = false
 
     var body: some View {
-        List(hits) { HitRow(hit: $0) }
+        List {
+            if pipeline.homePC.features.contains("semantic") {
+                Toggle("意味で探す（家の PC）", isOn: $byMeaning)
+                    .onChange(of: byMeaning) { if query.count >= 2 { run() } }
+            }
+            if searching { ProgressView() }
+            ForEach(hits) { HitRow(hit: $0) }
+        }
             .overlay {
                 if searched && hits.isEmpty {
                     ContentUnavailableView.search(text: query)
@@ -200,13 +222,26 @@ struct SearchView: View {
             }
             .searchable(text: $query, prompt: "言葉・名前")
             .onSubmit(of: .search) { run() }
-            .onChange(of: query) { if query.count >= 2 { run() } else { hits = []; searched = false } }
+            .onChange(of: query) { if query.count >= 2 && !byMeaning { run() } else if query.count < 2 { hits = []; searched = false } }
             .navigationTitle("記録を探す")
     }
 
     private func run() {
-        hits = pipeline.search(query)
-        searched = true
+        guard byMeaning, pipeline.homePC.features.contains("semantic") else {
+            hits = pipeline.search(query)
+            searched = true
+            return
+        }
+        // 意味で探すときは、打ち終わって検索を押したときと、切り替えたときだけ（PC に毎回聞かない）
+        let asked = query
+        searching = true
+        Task {
+            let found = await pipeline.semanticSearch(asked)
+            guard asked == query else { return }
+            hits = found
+            searched = true
+            searching = false
+        }
     }
 }
 

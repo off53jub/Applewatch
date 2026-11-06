@@ -1,8 +1,21 @@
 import GoogleSignIn
 import SwiftUI
 
+/// iOS が、裏での転送（家の PC に区切りを送る）の知らせを渡すためにアプリを起こしたときの受け口（2026-11-07）
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        guard identifier == PCJobUploader.identifier else {
+            completionHandler()
+            return
+        }
+        PCJobUploader.shared.handleEvents(completion: completionHandler)
+    }
+}
+
 @main
 struct LifeLogApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var pipeline: Pipeline
     @Environment(\.scenePhase) private var scenePhase
 
@@ -27,6 +40,8 @@ struct LifeLogApp: App {
         if Self.demo { DemoData.install() }
         #endif
         let pipeline = Pipeline()
+        // 家の PC に送っている途中の区切りの知らせを受け取れるようにする
+        if !Self.testing && !Self.demo { PCJobUploader.shared.start() }
         // 裏での処理は、起動が終わる前に登録しておく必要がある
         if !Self.testing && !Self.demo {
             pipeline.registerBackgroundWork()

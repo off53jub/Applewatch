@@ -475,3 +475,6 @@ enum AudioClip {
         }
     }
 }
+
+/// 家の PC がまだ文字にしている区切り（次の機会に回す。2026-11-07）
+struct PCJobDeferred: Error {}
