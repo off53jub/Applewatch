@@ -93,6 +93,21 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_REVERSED_CLIENT_ID: ${{ secrets.GOOGLE_REVERSED_CLIENT_ID }}
         run: |
+          set +e
+          archive() {
+            rm -rf "$RUNNER_TEMP/LifeLog.xcarchive"
+            xcodebuild archive \
+              -project LifeLog.xcodeproj -scheme LifeLog \
+              -destination 'generic/platform=iOS' \
+              -archivePath "$RUNNER_TEMP/LifeLog.xcarchive" \
+              DEVELOPMENT_TEAM="$TEAM_ID" \
+              CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+              GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
+              GOOGLE_REVERSED_CLIENT_ID="$GOOGLE_REVERSED_CLIENT_ID" \
+              "$@" 2>&1 | tee -a "$RUNNER_TEMP/build.log"
+            return ${PIPESTATUS[0]}
+          }
+          : > "$RUNNER_TEMP/build.log"
           # TestFlight に上げるときは、ヘルスケアの許可（entitlements）を入れるため、ビルドの段階から署名する
           if [ "$HAS_ASC" = "true" ]; then
             sign=(-allowProvisioningUpdates
@@ -100,19 +115,27 @@ jobs:
                   -authenticationKeyID "${{ secrets.ASC_KEY_ID }}"
                   -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
                   CODE_SIGN_STYLE=Automatic)
+            archive "${sign[@]}"
+            status=$?
+            # 署名のプロファイルを作った直後は、ビルドに間に合わないことがある（初回など）。1回だけやり直す
+            if [ "$status" -ne 0 ] && grep -q "Provisioning Profiles" "$RUNNER_TEMP/build.log"; then
+              echo "::notice::署名のプロファイルが間に合わなかったので、もう一度アーカイブします"
+              archive "${sign[@]}"
+              status=$?
+            fi
+            # それでも署名つきで作れなければ、TestFlight には送らず、今までどおり署名なしの IPA とリリースを作る
+            if [ "$status" -ne 0 ]; then
+              grep -E "error:" "$RUNNER_TEMP/build.log" | sort -u | head -20 | while IFS= read -r line; do echo "::warning::${line}"; done
+              echo "::warning::署名つきで作れなかったので、署名なしで作ります（今回は TestFlight に送りません）"
+              echo "HAS_ASC=false" >> "$GITHUB_ENV"
+              : > "$RUNNER_TEMP/build.log"
+              archive CODE_SIGNING_ALLOWED=NO
+              status=$?
+            fi
           else
-            sign=(CODE_SIGNING_ALLOWED=NO)
+            archive CODE_SIGNING_ALLOWED=NO
+            status=$?
           fi
-          xcodebuild archive \
-            -project LifeLog.xcodeproj -scheme LifeLog \
-            -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/LifeLog.xcarchive" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
-            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
-            GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
-            GOOGLE_REVERSED_CLIENT_ID="$GOOGLE_REVERSED_CLIENT_ID" \
-            "${sign[@]}" 2>&1 | tee "$RUNNER_TEMP/build.log"
-          status=${PIPESTATUS[0]}
           # コンパイルのエラーは、ログを開かなくても見えるよう注記にも出す
           if [ "$status" -ne 0 ]; then
             grep -E "error:" "$RUNNER_TEMP/build.log" | sort -u | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
