@@ -87,6 +87,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
     }
 
     private var recordingNow = false
+    /// 最後に iPhone を起こした時刻（2026-11-06）
+    private var lastWake = Date.distantPast
     private var resting: Date?
 
     /// 静かで書くのを休んでいるなら、休み始めた時刻。iPhone は、それより前の区切りが届いていれば待たない。
@@ -102,7 +104,28 @@ final class WatchSender: NSObject, WCSessionDelegate {
         set {
             lock.withLock { recordingNow = newValue }
             publish()
+            if newValue { wakePhone(force: true) }
         }
+    }
+
+    /// iPhone の LifeLog を起こす（2026-11-06）。
+    /// 様子の知らせ（updateApplicationContext）や区切りの送り（transferFile）では、止まっている iPhone のアプリは起きない。
+    /// sendMessage は、iPhone のアプリが止まっていても裏で起こせるので、録音を始めたときと、区切るたびに（2分に1回まで）送る。
+    /// 起きた iPhone は待機モード（無音を流してアプリを起こしておく）に入り、届いた区切りをその場で文字にする。
+    func wakePhone(force: Bool = false) {
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated,
+              WCSession.default.isReachable else { return }
+        let now = Date.now
+        let due = lock.withLock { () -> Bool in
+            guard force || now.timeIntervalSince(lastWake) >= 120 else { return false }
+            lastWake = now
+            return true
+        }
+        guard due else { return }
+        let message: [String: Any] = ["wake": true, "recording": isRecording, "at": now.timeIntervalSince1970,
+                                      "lowPower": ProcessInfo.processInfo.isLowPowerModeEnabled,
+                                      "kept": sentFiles().count]
+        WCSession.default.sendMessage(message, replyHandler: nil, errorHandler: { _ in })
     }
 
     private func publish() {
@@ -123,6 +146,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
     func heartbeat() {
         publish()
         resendUnacknowledged()
+        // 録音中・まだ届いていない区切りがあるときは、iPhone のアプリを起こしておく
+        if isRecording || unsentCount() > 0 || !WCSession.default.outstandingFileTransfers.isEmpty { wakePhone() }
     }
 
     /// 「初めての人と話している」の印を iPhone に送る（その前後の知らない声を、確かめ待ちに出す）

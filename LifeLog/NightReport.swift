@@ -104,6 +104,9 @@ enum Tally {
         if n("talk.joined") + n("talk.split") > 0 {
             rows.append(("会話の区切りの手直し", "つないだ \(n("talk.joined"))・分けた \(n("talk.split"))", nil))
         }
+        if n("watch.wake") > 0 {
+            rows.append(("時計が iPhone のアプリを起こした", "\(n("watch.wake")) 回", nil))
+        }
         if n("othermic.lines") > 0 {
             rows.append(("もう1台のマイクの票", "\(n("othermic.lines")) 行（iPhone と時計の両方で録った時間）", nil))
         }

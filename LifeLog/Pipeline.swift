@@ -314,6 +314,14 @@ final class Pipeline {
         receiver.onNewPerson = { [weak self] time in self?.markNewPerson(at: time) }
         receiver.onMeeting = { [weak self] on in self?.setMeeting(on) }
         receiver.onAsk = { [weak self] _ in self?.recentWords() ?? "" }
+        // 時計に起こされたら、待機モードを確かめて、届いた区切りを文字にする（2026-11-06）
+        receiver.onWake = { [weak self] in
+            guard let self else { return }
+            Tally.add("watch.wake")
+            // 待機モードが止まっていたら（ほかのアプリの音や電話で切れたなど）入れ直す
+            self.updateStandby()
+            self.processQueue()
+        }
         receiver.onWatchLowPower = { [weak self] in self?.watchLowPower = $0 }
         receiver.onWatchRecording = { [weak self] recording, at in
             guard let self else { return }
