@@ -280,6 +280,7 @@ final class Pipeline {
         recorder.onStop = { [weak self] reason in
             self?.endLive()
             self?.isRecording = false
+            self?.updateWidgets()  // 止まったことをウィジェットにも出す（2026-11-07。WidgetBridge.swift）
             self?.buttonRecordingStarted = nil
             RecordingActivity.end()
             self?.message = reason
@@ -1303,6 +1304,7 @@ final class Pipeline {
     /// fromButton: アクションボタン・コントロールセンター・ショートカットなど、アプリを開かずに押されたとき。
     /// そのときは iOS の決まりで、録音を始める前に Live Activity を出す（出さないと録音が止められる）。
     func toggleRecording(fromButton: Bool = false) async {
+        defer { updateWidgets() }  // 録音を始めた・止めたら、ウィジェットにも出す（2026-11-07。WidgetBridge.swift）
         if isRecording {
             endLive()
             recorder.stop()

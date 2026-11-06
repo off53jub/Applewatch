@@ -12,6 +12,9 @@ struct WatchInfo: Codable {
         var due: String?
         var from: String?
         var late: Bool?
+        /// 期限を過ぎたもの・相手を待っているもの（文字盤の数に使う。2026-11-07）
+        var overdue: Bool?
+        var waiting: Bool?
     }
 
     struct Event: Codable {
@@ -49,6 +52,10 @@ struct WatchInfo: Codable {
     var last: Talk?
     var status: Status?
     var morning: Brief?
+    /// 今日までの頼まれごとの数と、そのうち期限を過ぎた数（相手を待っているものは数えない。15件より多くても数える。
+    /// 文字盤に出す。2026-11-07）
+    var dueCount: Int?
+    var overdueCount: Int?
 }
 
 /// 時計の画面の中身（頼まれごと・次の予定・さっきの会話・聞く・朝の読み上げ）を持つ。
@@ -67,6 +74,8 @@ final class WatchBoard {
 
     /// 「済み」を押した頼まれごと（iPhone から新しい中身が届くまで、一覧から隠す）
     private var doneAt: [String: Date] = [:]
+    /// 中身が変わった（iPhone から届いた・「済み」を押した）ときに呼ぶ。文字盤を出し直す（2026-11-07）
+    @ObservationIgnored var onChange: (@MainActor () -> Void)?
 
     private let sender: WatchSender
     private static let infoKey = "watchInfo"
@@ -98,6 +107,18 @@ final class WatchBoard {
         max(0, (info?.openCount ?? info?.tasks?.count ?? 0) - doneAt.count)
     }
 
+    /// 文字盤に出す、今日までの頼まれごとの数と、そのうち期限を過ぎた数（相手を待っているものは数えない。
+    /// 「済み」を押した分を引く。2026-11-07）。まだ iPhone から何も届いていなければ nil。
+    /// 数が届かない古い iPhone のアプリからの中身なら、一覧（15件まで）から数える
+    var dueCounts: (due: Int, overdue: Int)? {
+        guard let info else { return nil }
+        let mine = (info.tasks ?? []).filter { $0.waiting != true }
+        let hidden = mine.filter { doneAt[$0.id] != nil }
+        let due = (info.dueCount ?? mine.filter { $0.late == true }.count) - hidden.filter { $0.late == true }.count
+        let overdue = (info.overdueCount ?? mine.filter { $0.overdue == true }.count) - hidden.filter { $0.overdue == true }.count
+        return (max(0, due), max(0, overdue))
+    }
+
     private func received(_ data: Data) {
         guard let new = try? JSONDecoder().decode(WatchInfo.self, from: data) else { return }
         // 前に届いたものより古ければ使わない
@@ -107,6 +128,7 @@ final class WatchBoard {
         // iPhone が済みにした（一覧から消えた）もの・30分たったものは、隠すのをやめる
         let ids = Set((new.tasks ?? []).map(\.id))
         doneAt = doneAt.filter { ids.contains($0.key) && Date.now.timeIntervalSince($0.value) < 30 * 60 }
+        onChange?()
     }
 
     /// 頼まれごとを済みにする（iPhone の頼まれごと帳で済みになる）
@@ -114,6 +136,7 @@ final class WatchBoard {
         doneAt[id] = .now
         sender.taskDone(id)
         WKInterfaceDevice.current().play(.success)
+        onChange?()
     }
 
     /// iPhone の記録に質問する
