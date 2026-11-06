@@ -111,6 +111,12 @@ extension Pipeline {
 
     /// 名前のある人（自分も）の声を PC の話者モデルで測っておく（声のひとこまから。まだの人だけ）
     private func pcReferences() async -> [String: [[Float]]] {
+        // PC の話者モデルが替わったら、前のモデルで測った声は使えないので測り直す（2026-11-06）
+        let model = homePC.speakerModel ?? "eres2net-zh"
+        if UserDefaults.standard.string(forKey: "pcVoiceRefsModel") != model {
+            PCVoiceRefs.save([:])
+            UserDefaults.standard.set(model, forKey: "pcVoiceRefsModel")
+        }
         var refs = PCVoiceRefs.load()
         for person in people where person.isNamed && !person.samples.isEmpty && refs[person.id] == nil {
             var list: [[Float]] = []
@@ -130,7 +136,8 @@ extension Pipeline {
         let refs = await pcReferences()
         guard refs.count >= 2 else { return }
         var checked = UserDefaults.standard.stringArray(forKey: Self.crossCheckedKey) ?? []
-        var box = newVoices
+        // 見比べているあいだに本人や時計が確認箱を変えても消さないよう、足す分だけ集めて最後に今の箱へ足す（見直しで直した）
+        var added: [NewVoiceBox.Note] = []
         var done = 0
         for day in recordedDays().prefix(2) {
             for c in conversations(on: day) where c.closed && c.media == nil {
@@ -152,10 +159,10 @@ extension Pipeline {
                         guard let embedding, let assigned = line.speakerID,
                               let other = PCVoiceRefs.disagreement(embedding, assigned: assigned, refs: refs) else { continue }
                         let id = "pc-\(assigned)-\(Int(line.time.timeIntervalSince1970))"
-                        guard !box.notes.contains(where: { $0.id == id }) else { continue }
+                        guard !newVoices.notes.contains(where: { $0.id == id }), !added.contains(where: { $0.id == id }) else { continue }
                         var note = NewVoiceBox.Note(id: id, time: line.time, personID: assigned, claimed: nil, quote: line.text)
                         note.pcSuggests = other
-                        box.notes.append(note)
+                        added.append(note)
                         Tally.add("pc.speakerDiffer")
                         // 記録の行にも印（話し手の名前のあとに「？」）
                         markSpeakerDoubt(other, time: line.time, day: day)
@@ -165,6 +172,8 @@ extension Pipeline {
                 done += 1
             }
         }
+        var box = newVoices
+        for note in added where !box.notes.contains(where: { $0.id == note.id }) { box.notes.append(note) }
         box.save()
         newVoices = box
         UserDefaults.standard.set(Array(checked.suffix(400)), forKey: Self.crossCheckedKey)

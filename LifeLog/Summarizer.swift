@@ -26,6 +26,49 @@ enum Summarizer {
 
     private static let mainModel = "openai/gpt-oss-120b"
     private static let noteModel = "openai/gpt-oss-20b"
+
+    // MARK: - 直しの言語モデルを物差しで選ぶ（2026-11-06）
+
+    static let correctionModelKey = "correctionModel"
+    /// 誤変換の直しに使う Groq のモデル（精度の物差しで、別のモデルが1割以上良ければ切り替わる）
+    static var correctionModel: String {
+        UserDefaults.standard.string(forKey: correctionModelKey) ?? noteModel
+    }
+    /// 比べる候補（Groq に今あるものだけ使う）
+    static let correctionCandidates = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct-0905",
+                                       "qwen/qwen3-32b", "llama-3.3-70b-versatile"]
+    /// 物差しで比べるときだけ、使うモデルを決める
+    @TaskLocal static var modelOverride: String?
+    /// 物差しで比べるときは、Groq だけで作る（失敗しても端末内・PC のモデルに回さない）
+    @TaskLocal static var strictCloud = false
+
+    /// Groq に今あるモデルの名前（1日に1回だけ聞く。聞けなければ空）
+    static func availableModels(apiKey: String) async -> Set<String> {
+        let key = "groqModels", dayKey = "groqModelsDay"
+        let today = String(Int(Date.now.timeIntervalSince1970 / 86400))
+        if UserDefaults.standard.string(forKey: dayKey) == today, let list = UserDefaults.standard.stringArray(forKey: key) {
+            return Set(list)
+        }
+        var request = URLRequest(url: URL(string: "https://api.groq.com/openai/v1/models")!)
+        request.timeoutInterval = 20
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let items = json["data"] as? [[String: Any]] else { return [] }
+        let ids = items.compactMap { $0["id"] as? String }
+        UserDefaults.standard.set(ids, forKey: key)
+        UserDefaults.standard.set(today, forKey: dayKey)
+        return Set(ids)
+    }
+
+    // MARK: - 家の PC の言語モデル（2026-11-06）
+
+    /// 家の PC の言語モデルに頼む（system, prompt → JSON の文字列）。PC が使えないときは nil（Pipeline が入れる）
+    nonisolated(unsafe) static var pcLLM: (@Sendable (String, String) async throws -> String)?
+    static let pcLLMKey = "pcLLMForWork"
+    /// 職場の会話を、iPhone の中の言語モデルの代わりに家の PC の言語モデルで作る（本人がオンにしたときだけ）
+    static var pcLLMForWork: Bool { UserDefaults.standard.bool(forKey: pcLLMKey) }
     /// 1回に渡す文字数の上限（1分あたりのトークン上限に収まるように）
     private static let pieceLength = 4_000
 
@@ -557,7 +600,7 @@ enum Summarizer {
             両方の正しい部分を合わせてもかまいませんが、どちらにも無い言葉は足さないでください。"others" は返さないでください。
 
             """
-        let json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 20, prompt: """
+        let json = try await chat(model: modelOverride ?? correctionModel, apiKey: apiKey, maxWait: 20, prompt: """
             次の JSON の "lines" は、日本語の会話を音声認識で書き起こした文の配列です（\(lines.count) 個）。
             同音異義語の誤変換（例: 機会→機械）、固有名詞の書き間違い、明らかな聞き間違いだけを、前後の文脈から直してください。
             言い回しや話し言葉はそのまま残し、要約・言い換え・行の結合や分割はしないでください。
@@ -677,6 +720,13 @@ enum Summarizer {
     /// Groq が使えなかったとき（混んでいる・無料枠を超えた・通信できない）は、端末内の言語モデルが使えればそちらで作る。
     /// 端末内で作れなかったとき（読めない答え・断られた）は、外に出してよい中身なら Groq で作る。
     private static func chat(model: String, apiKey: String, maxWait: Double = 90, prompt: String) async throws -> [String: Any] {
+        if strictCloud { return try await groq(model: model, apiKey: apiKey, maxWait: maxWait, prompt: prompt) }
+        // 職場の会話は、本人がオンにしていれば家の PC の言語モデルで作る（外のサービスには送らない。2026-11-06）
+        if sensitive, !forceLocal, pcLLMForWork, let pc = pcLLM,
+           let text = try? await pc(system, prompt),
+           let result = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] {
+            return result
+        }
         if usesLocal(apiKey: apiKey) {
             do {
                 return try await LocalModel.json(system: system, prompt: prompt)
@@ -702,16 +752,18 @@ enum Summarizer {
         request.timeoutInterval = 120
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
+        var body: [String: Any] = [
             "model": model,
             "messages": [
                 ["role": "system", "content": system],
                 ["role": "user", "content": prompt],
             ],
             "response_format": ["type": "json_object"],
-            "reasoning_effort": "low",
             "temperature": 0.3,
-        ] as [String: Any])
+        ]
+        // 考える量を指定できるモデルだけ（ほかのモデルに送ると断られる）
+        if model.hasPrefix("openai/gpt-oss") || model.hasPrefix("qwen/qwen3") { body["reasoning_effort"] = model.hasPrefix("qwen") ? "none" : "low" }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         for attempt in 1...3 {
             let (data, response) = try await URLSession.shared.data(for: request)

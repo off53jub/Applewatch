@@ -56,7 +56,7 @@ jobs:
               from huggingface_hub import HfApi
               for repo in ["oboroge0/Haas-ja-v1.0-onnx", "reazon-research/reazonspeech-k2-v2",
                            "mobiuslabsgmbh/faster-whisper-large-v3-turbo", "Systran/faster-whisper-large-v3",
-                           "kotoba-tech/kotoba-whisper-v2.0-faster"]:
+                           "kotoba-tech/kotoba-whisper-v2.0-faster", "Qwen/Qwen3-ASR-0.6B"]:
                   info = HfApi().model_info(repo, files_metadata=True)
                   print(f"::notice::{repo} の版 {info.sha}")
                   print("::notice::" + ", ".join(f"{s.rfilename} {(s.size or 0) // 1_000_000}MB" for s in (info.siblings or [])))
@@ -66,7 +66,8 @@ jobs:
           PY
 
       # 言葉ごとの時刻のまとめ方と、/train-sample の保存（一時フォルダ、作った音）もここで確かめる
-      - name: 多数決の決まり・聞き逃した声の探し方・言葉の時刻・材料の保存を確かめる
+      # 版 5: 言いよどみ・数字をそろえた比べ方、合言葉違いの大きな音声に 401 が届くか、/llm（作り物の Ollama）も
+      - name: 多数決の決まり・聞き逃した声の探し方・言葉の時刻・材料の保存・/llm を確かめる
         run: python pc/lifelog_pc.py --check-vote
 
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
@@ -88,6 +89,7 @@ jobs:
             ~/AppData/Local/LifeLogPC/speaker
             ~/AppData/Local/LifeLogPC/tagging
             ~/AppData/Local/LifeLogPC/enhance
+            ~/AppData/Local/LifeLogPC/vad
           key: lifelog-pc-models-${{ hashFiles('pc/lifelog_pc.py') }}
           restore-keys: lifelog-pc-models-
 
@@ -102,19 +104,21 @@ jobs:
           cat test.txt
           while IFS= read -r line; do echo "::notice::$line"; done < <(grep -v '^20' test.txt)
 
-      # 話し手の声の特徴（/speakers）・周りの音（/scene）・雑音を除くモデル（enhance=1）を取ってきて、実際に動くか確かめる
+      # 話し手の声の特徴（/speakers、CAM++）・周りの音（/scene）・雑音を除くモデル（enhance=1）・Silero VAD（vad=union）を
+      # 取ってきて、実際に動くか確かめる
       - name: おまけの機能を Python のまま試す
         run: |
           python pc/lifelog_pc.py --check-extras sample.m4a > extras.txt 2>&1 || { cat extras.txt; tail -c 3000 extras.txt | tr '\n' '|' | sed 's/^/::error::/'; echo; exit 1; }
           cat extras.txt
-          while IFS= read -r line; do echo "::notice::$line"; done < <(grep -E '^(OK|NG|話し手|周りの音|雑音|この PC)' extras.txt)
+          while IFS= read -r line; do echo "::notice::$line"; done < <(grep -E '^(OK|NG|話し手|周りの音|雑音|Silero|この PC)' extras.txt)
 
       - name: exe にする
         run: |
           pyinstaller --noconfirm --onedir --console --name LifeLogPC \
             --collect-all sherpa_onnx --collect-all av --collect-all faster_whisper \
             --collect-all ctranslate2 --collect-all pykakasi --collect-all tokenizers \
-            --hidden-import tarfile --hidden-import bz2 pc/lifelog_pc.py
+            --hidden-import tarfile --hidden-import bz2 \
+            --exclude-module torch --exclude-module transformers --exclude-module qwen_asr pc/lifelog_pc.py
           cp pc/README.txt pc/train_personal.py dist/LifeLogPC/
 
       - name: exe で試す
@@ -128,7 +132,7 @@ jobs:
         run: |
           dist/LifeLogPC/LifeLogPC.exe --check-extras sample.m4a > extras-exe.txt 2>&1 || { cat extras-exe.txt; tail -c 3000 extras-exe.txt | tr '\n' '|' | sed 's/^/::error::/'; echo; exit 1; }
           cat extras-exe.txt
-          while IFS= read -r line; do echo "::notice::exe: $line"; done < <(grep -E '^(OK|NG|話し手|周りの音|雑音|この PC)' extras-exe.txt)
+          while IFS= read -r line; do echo "::notice::exe: $line"; done < <(grep -E '^(OK|NG|話し手|周りの音|雑音|Silero|この PC)' extras-exe.txt)
 
       - uses: actions/upload-artifact@v4
         with:

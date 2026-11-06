@@ -26,7 +26,22 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     var onAsk: (@MainActor (String) -> String)?
 
     /// 時計からの問い（返事を待っている）
+    /// 時計から「起きて」と言われた（2026-11-06）。アプリが止まっていても、iOS が裏で起こしてここに来る
+    var onWake: (@MainActor () -> Void)?
+
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        guard message["wake"] != nil else { return }
+        readContext(message)
+        Task { @MainActor in self.onWake?() }
+    }
+
     func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
+        if message["wake"] != nil {
+            readContext(message)
+            Task { @MainActor in self.onWake?() }
+            replyHandler([:])
+            return
+        }
         guard let ask = message["ask"] as? String else {
             replyHandler([:])
             return

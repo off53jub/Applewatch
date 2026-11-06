@@ -103,10 +103,14 @@ final class HomePC {
         defer { session.finishTasksAndInvalidate() }
         let (data, response) = try await session.data(for: try request("hello"))
         try Self.check(response, data: data)
-        struct Hello: Decodable { let model: String; let provider: String; let version: Int?; let features: [String]? }
+        struct Hello: Decodable {
+            let model: String; let provider: String; let version: Int?; let features: [String]?
+            let speaker_model: String?
+        }
         let hello = try JSONDecoder().decode(Hello.self, from: data)
         version = hello.version ?? 1
         features = Set(hello.features ?? [])
+        speakerModel = hello.speaker_model
         return "\(hello.model)（\(hello.provider == "cuda" ? "GPU" : "CPU")）"
     }
 
@@ -187,6 +191,28 @@ final class HomePC {
         return try JSONDecoder().decode(Reply.self, from: data).tags.map { $0.map { (name: $0.name, prob: $0.prob) } }
     }
 
+    // MARK: - 家の PC の言語モデル（PC の版 5 から。2026-11-06）
+
+    /// PC の言語モデル（Ollama）に頼む。JSON の文字列を返す。PC が使えない・その働きが無いときは失敗
+    func llm(system: String, prompt: String) async throws -> String {
+        guard shouldTry, features.contains("llm") else { throw Failure.notConfigured }
+        struct Reply: Decodable { let text: String }
+        var request = try request("llm")
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "prompt": system + "\n\n" + prompt, "json": true, "max_tokens": 2000,
+        ] as [String: Any])
+        let session = makeSession(timeout: 180)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: request)
+        try Self.check(response, data: data)
+        return try JSONDecoder().decode(Reply.self, from: data).text
+    }
+
+    /// PC の話者モデルの名前（版 5 から。変わったら、名前のある人の声を測り直す）
+    var speakerModel: String?
+
     // MARK: - あなた向けのモデルの材料（PC の版 4 から。2026-11-06）
 
     /// 直した文とその音声の区間を PC に渡す（PC の中だけに置く。学び直しは PC で本人が動かす）。PC にたまった数を返す
@@ -240,7 +266,7 @@ final class HomePC {
     /// PC の LifeLog PC の版（hello で分かる。古い PC は 1）
     var version: Int?
     /// このアプリが前提にしている PC の版（多数決・ヒント・重み）
-    nonisolated static let expectedVersion = 4
+    nonisolated static let expectedVersion = 5
 
     /// 声の区間の長さに対する処理の時間（直近をならした値。1 より大きいと録音に追いつかない）。2026-11-06
     var speed: Double? = UserDefaults.standard.object(forKey: "homePCSpeed") as? Double {
@@ -310,8 +336,19 @@ final class HomePC {
                 let lines: [Line]
                 let seconds: Double
                 let engines: [String]?
+                /// モデルの組ごとの読みの近さの平均と、何も書かなかった行の数（版 5 から。中身は入っていない）
+                let pairs: [String: Double]?
+                let pair_lines: [String: Int]?
+                let silent: [String: Int]?
             }
             let reply = try JSONDecoder().decode(Reply.self, from: data)
+            // 区切りごとの平均を、行の数で重み付けして足す
+            for (pair, value) in reply.pairs ?? [:] {
+                let count = max(1, reply.pair_lines?[pair] ?? 1)
+                Tally.add("pair." + pair + ".s", Int((value * 1000).rounded()) * count)
+                Tally.add("pair." + pair + ".n", count)
+            }
+            for (engine, count) in reply.silent ?? [:] { Tally.add("silent." + engine, count) }
             Tally.add("pc.vadExtra", reply.lines.filter { $0.extra == true }.count)
             failedAt = nil
             downSince = nil

@@ -4,56 +4,31 @@ import Foundation
 ///
 /// 端末どうしの同期では、会話ごとに番号の大きいほうを丸ごと残す。古い版のアプリは、新しい版で足した項目
 /// （［場面］・書き換えの履歴など）を知らないので、古い版の端末が会話を書き直して送ると、その項目が抜けたまま
-/// 「新しい版」として戻ってくる。そこで、送ってきた端末の版が古いときは、向こうに無い項目を手元の値で埋めて合わせる。
+/// 「新しい版」として戻ってくる。そこで、送ってきた端末の版がその項目を知らないときだけ、手元の値で埋める。
 enum SyncFill {
-    /// remote に無い項目を local の値で埋めたものを返す（入れ子の中も、行どうしは時刻で組にして埋める）。
-    /// 形が合わないときや読めないときは remote のまま。
-    static func filled<T: Codable>(_ remote: T, keeping local: T) -> T {
-        // 時刻は会話を見分ける鍵なので、途中で少しもずれないように、数のビットのまま文字にして運ぶ
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .custom { date, enc in
-            var c = enc.singleValueContainer()
-            try c.encode(String(date.timeIntervalSinceReferenceDate.bitPattern))
+    /// 埋めてよい項目と、その項目を知っている最初のアプリの版（2026-11-06。見直しで、これ以外は埋めないことにした）。
+    /// どれも「付けるだけで、消すことの無い」項目。消すことのある項目（放送の印・話者の番号・作り直しの印・票など）は、
+    /// 向こうで消したのか知らないのか区別できないので、埋めない（埋めると本人の直しが戻ってしまう）。
+    static let conversationFields = ["scene": 121]
+    static let lineFields = ["history": 116, "rubbed": 116, "end": 130, "speakerDoubt": 130]
+
+    /// 送ってきた端末の版（分からない＝版を送らない古いアプリなら 0）が、その項目を知らないときだけ、手元の値で埋める
+    static func filledConversation(_ remote: ConversationLog.Conversation, keeping local: ConversationLog.Conversation,
+                                   senderBuild: Int?) -> ConversationLog.Conversation {
+        let sender = senderBuild ?? 0
+        func unknown(_ intro: Int?) -> Bool { intro.map { sender < $0 } ?? false }
+        var out = remote
+        if unknown(conversationFields["scene"]), out.scene == nil { out.scene = local.scene }
+        var byTime: [Date: ConversationLog.Line] = [:]
+        for line in local.lines where byTime[line.time] == nil { byTime[line.time] = line }
+        for i in out.lines.indices {
+            guard let mine = byTime[out.lines[i].time] else { continue }
+            if unknown(lineFields["history"]), out.lines[i].history == nil { out.lines[i].history = mine.history }
+            if unknown(lineFields["rubbed"]), out.lines[i].rubbed == nil { out.lines[i].rubbed = mine.rubbed }
+            if unknown(lineFields["end"]), out.lines[i].end == nil { out.lines[i].end = mine.end }
+            if unknown(lineFields["speakerDoubt"]), out.lines[i].speakerDoubt == nil { out.lines[i].speakerDoubt = mine.speakerDoubt }
         }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { dec in
-            let text = try dec.singleValueContainer().decode(String.self)
-            guard let bits = UInt64(text) else {
-                throw DecodingError.dataCorrupted(.init(codingPath: dec.codingPath, debugDescription: "時刻が読めない"))
-            }
-            return Date(timeIntervalSinceReferenceDate: Double(bitPattern: bits))
-        }
-        guard let r = try? encoder.encode(remote), let l = try? encoder.encode(local),
-              let ro = try? JSONSerialization.jsonObject(with: r), let lo = try? JSONSerialization.jsonObject(with: l),
-              let data = try? JSONSerialization.data(withJSONObject: merge(ro, lo)),
-              let out = try? decoder.decode(T.self, from: data) else { return remote }
         return out
-    }
-
-    /// 並びの中の組を決める手がかり（会話は start、行は time）
-    private static let keys = ["start", "time", "id"]
-
-    static func merge(_ remote: Any, _ local: Any) -> Any {
-        if let r = remote as? [String: Any], let l = local as? [String: Any] {
-            var out = r
-            for (key, value) in l {
-                if let rv = r[key] { out[key] = merge(rv, value) } else { out[key] = value }
-            }
-            return out
-        }
-        if let r = remote as? [Any], let l = local as? [Any] {
-            let rd = r.compactMap { $0 as? [String: Any] }, ld = l.compactMap { $0 as? [String: Any] }
-            if rd.count == r.count, ld.count == l.count,
-               let key = keys.first(where: { k in rd.allSatisfy { $0[k] != nil } && ld.allSatisfy { $0[k] != nil } }) {
-                // 同じ時刻の行どうしで埋める（向こうで足した・消した行はそのまま）
-                var byKey: [String: [String: Any]] = [:]
-                for item in ld { byKey["\(item[key]!)"] = item }
-                return rd.map { item in byKey["\(item[key]!)"].map { merge(item, $0) } ?? item }
-            }
-            if r.count == l.count { return zip(r, l).map { merge($0, $1) } }
-            return remote
-        }
-        return remote
     }
 }
 

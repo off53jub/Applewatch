@@ -64,7 +64,7 @@ Haas-ja と ReazonSpeech にも「ホットワード」として効かせます�
 新しい iPhone のアプリが使います。古いアプリはこれまでどおり動きます。
 ・聞き逃した声を探す: iPhone が声と気づかなかった所も、PC が音の大きさで探して一緒に文字にします（新しいモデルは使いません）。
 ・話し手の声の特徴: 区間ごとに、誰の声かを見分けるための数の並びを返します。
-  3D-Speaker の ERes2Net（Apache License 2.0、約40MB）を使います。
+  版 5 からは 3D-Speaker の CAM++（いろいろな国の人の声 VoxCeleb で学んだもの、Apache License 2.0、約30MB）を使います。
 ・周りの音: 区間ごとに、話し声・音楽・車などの音の名前を上位 5 つ返します。
   sherpa-onnx の Zipformer の音の聞き分けモデル（AudioSet、Apache License 2.0、約110MB）を使います。
 話し手と周りの音のモデルは、初めて頼まれたときに取ってきます（その1回だけ時間がかかります）。
@@ -85,6 +85,61 @@ Haas-ja と ReazonSpeech にも「ホットワード」として効かせます�
   「あなた向け Whisper」も票を入れます（NVIDIA の GPU があるときだけ）。
 録音も文も、PC の外には送りません。
 
+■ 版 5 で足したもの
+新しい iPhone のアプリが使います。古いアプリはこれまでどおり動きます。どれも、うまく動かなければ前と同じに動きます。
+・言いよどみを食い違いに数えない: 多数決でモデルどうしの文を比べるとき、「えーと」「えっと」「あのー」「うーん」「んー」、
+  文の頭の「えー」「そのー」、句読点にはさまれた「まあ」「あー」を除いてから比べます。
+  「3時」と「三時」、「1人」と「一人」のような数字の書き方の違いもそろえます。
+  「あの人」の「あの」、「その件」、「うん」「ええ」（はい）、「ううん」（いいえ）、「なんか」は、中身のある言葉のことが多いので除きません。
+  除くのは比べるときだけで、iPhone に返す文はモデルが書いたままです。
+・合言葉が違うとき: 送られてきた音声を（200MB まで）読み捨ててから「合言葉が違います」と答えます。
+  前の版は読む前に断っていたので、iPhone には「接続が切れました」と見えていました。
+・話し手の声の特徴のモデルを、中国語の声だけで学んだ ERes2Net から、いろいろな国の人の声で学んだ CAM++
+  （3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx、512 次元）に替えました。
+  モデルが替わると声の特徴の数の並びも変わるので、iPhone はつながったときにモデルの名前を見て、登録した声を測り直します。
+  前のモデルに戻すときは、環境変数 LIFELOG_SPEAKER_MODEL に 3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx を入れて起動します。
+・聞き逃した声を探す（vad=union）のに、声らしさを聞き分ける Silero VAD（MIT License、約0.6MB）を使います。
+  起動したときに取ってきます。取ってこられないときは、前と同じ音の大きさで探します。
+・Qwen3-ASR の票（使う設定にしたときだけ）: 下の「Qwen3-ASR も使う」を見てください。
+・この PC の言語モデル（使う設定にしたときだけ）: 下の「この PC の言語モデル（Ollama）」を見てください。
+
+■ GPU について（NVIDIA のドライバー）
+Whisper・kotoba-whisper・Qwen3-ASR を GPU で動かすには、NVIDIA のドライバー 528 以上が要ります。
+nvidia-smi で版を見られます。古いと記録（log.txt）に「CUDA driver version is insufficient」と出て、
+Whisper と kotoba-whisper は CPU で動きます（遅くなります。Qwen3-ASR は使いません）。
+ドライバーは NVIDIA のサイト（https://www.nvidia.com/ja-jp/drivers/）から、自分の GPU に合うものを入れます。
+
+■ Qwen3-ASR も使う（NVIDIA の GPU が要ります。使わなくても困りません）
+Qwen3-ASR（Alibaba の Qwen、Apache License 2.0、2026 年 1 月公開）の 0.6B を、多数決の5票目「qwen」として加えます。
+torch などの大きな部品が要るので、LifeLogPC.exe には入っていません。Python で動かします。
+1. Python 3.12 を入れます（https://www.python.org/）。
+2. コマンドプロンプトでこのフォルダに移り、Qwen3-ASR 用の置き場（venv）を作って、部品を入れます（合わせて 5GB ほど）。
+   GPU 用の torch を先に入れます。requirements.txt はそのまま使いません
+   （qwen-asr が使う transformers は huggingface_hub 1.0 より前の版が要り、requirements.txt の版とぶつかるため）。
+    python -m venv qwen-env
+    qwen-env\Scripts\activate
+    pip install torch --index-url https://download.pytorch.org/whl/cu128
+    pip install qwen-asr sherpa-onnx==2.0.1 av==19.0.2 faster-whisper==1.2.1 ctranslate2==4.8.5 pykakasi==2.3.0
+3. 同じコマンドプロンプトで、--qwen を付けて起動します（exe ではなく Python で）。
+    python lifelog_pc.py --qwen
+   - 初回だけ、モデル（Qwen/Qwen3-ASR-0.6B、約2GB）を取ってきます（置き場所は下の qwen のフォルダ）。
+   - 大きい 1.7B を使うときは  python lifelog_pc.py --qwen --qwen-model Qwen/Qwen3-ASR-1.7B
+   - 毎回 --qwen を付ける代わりに、config.json に "qwen": true を足しても同じです。
+GPU が使えない・部品が入っていないときは、記録に理由を1行書いて、Qwen3-ASR 抜きで動きます。
+iPhone の答え合わせで学ぶ重みの名前は「qwen」です。
+
+■ この PC の言語モデル（Ollama、使わなくても困りません）
+iPhone の「仕事の文脈」の文を、クラウドではなくこの PC の中の言語モデルに作ってもらえます。
+iPhone の設定でこれをオンにしたときだけ使います（オフのままなら何も送りません）。
+LifeLog PC は、この PC の中で動く Ollama（http://127.0.0.1:11434）にだけ取り次ぎます。ほかの所には送りません。
+1. Ollama を入れます: https://ollama.com/download/windows
+2. コマンドプロンプトで、モデルを取ってきます（約5.2GB）。
+    ollama pull qwen3:8b
+3. LifeLog PC を起動すると、Ollama とモデルがあるかを確かめます（あとから入れても、1分ほどで気づきます）。
+別のモデルにするときは  LifeLogPC.exe --llm-model モデルの名前（config.json の "llm_model" でも同じ）。
+使わないときは  LifeLogPC.exe --no-llm。
+GPU が使えないと CPU で動くので、答えが返るまで数十秒〜数分かかることがあります。
+
 ■ あなた向けのモデルを作る（NVIDIA の GPU と、300 個以上の材料が要ります）
 iPhone で直した文が 300 個以上たまったら、あなたの声と言い回しに合わせて Whisper（kotoba-whisper v2.0）を学び直せます。
 NVIDIA の GPU が要ります（メモリ 8GB 以上がおすすめ。CPU だけの PC では学び直しません）。
@@ -104,7 +159,7 @@ NVIDIA のドライバーが古いと GPU を使えません。nvidia-smi で版
 使わないときは  LifeLogPC.exe --engines haas,reazon,whisper,kotoba
 
 ■ 置き場所
-モデル・合言葉・記録: %LOCALAPPDATA%\LifeLogPC（model・reazon・whisper・cuda・speaker・tagging・enhance のフォルダ）
+モデル・合言葉・記録: %LOCALAPPDATA%\LifeLogPC（model・reazon・whisper・cuda・speaker・tagging・enhance・vad・qwen のフォルダ）
 あなた向けのモデルの材料とモデル: %LOCALAPPDATA%\LifeLogPC\personal（data に声と文、model に作ったモデル）
 合言葉を変えたいときは、そこにある config.json を消して起動し直します（iPhone 側も入れ直してください）。
 
@@ -113,7 +168,11 @@ Haas-ja-v1.0（Third Intelligence、Apache License 2.0）の ONNX 版
 oboroge0/Haas-ja-v1.0-onnx（非公式の変換、Apache License 2.0）を sherpa-onnx で動かしています。
 ReazonSpeech k2 v2（Reazon Research、Apache License 2.0）を sherpa-onnx で動かしています。
 Whisper large-v3 / large-v3-turbo（OpenAI、MIT License）の CTranslate2 版を faster-whisper で動かしています。
-話し手の声の特徴: 3D-Speaker の ERes2Net（3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k、Apache License 2.0）。
+話し手の声の特徴: 3D-Speaker の CAM++（3dspeaker_speech_campplus_sv_en_voxceleb_16k、Apache License 2.0）。
+  （版 4 までは ERes2Net の 3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k）
 周りの音: sherpa-onnx-zipformer-small-audio-tagging-2024-04-15（Apache License 2.0）。
 雑音を除く: GTCRN（gtcrn_simple.onnx、MIT License）を sherpa-onnx で動かしています。
+声のある所を探す: Silero VAD（silero_vad.onnx、MIT License）を sherpa-onnx で動かしています。
+Qwen3-ASR（使う設定のときだけ）: Qwen/Qwen3-ASR-0.6B（Apache License 2.0）を公式の qwen-asr の部品で動かしています。
+この PC の言語モデル（使う設定のときだけ）: Ollama の qwen3:8b（Apache License 2.0）。
 あなた向けのモデルの元: kotoba-whisper v2.0（kotoba-tech/kotoba-whisper-v2.0、MIT License）。

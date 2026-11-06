@@ -1065,39 +1065,42 @@ final class LogicTests: XCTestCase {
         let start = Date(timeIntervalSinceReferenceDate: 915_150_000.123456789)
         var mine = conversation(start, title: "朝", rev: 1)
         mine.scene = "電車"
-        mine.lines = [ConversationLog.Line(time: start, speaker: "自分", text: "おはよう", rubbed: true)]
-        // 新しい版の端末から来たものは、そのまま入れる
+        var line = ConversationLog.Line(time: start, speaker: "自分", text: "おはよう", rubbed: true)
+        line.end = 2.5
+        line.speakerDoubt = "3"
+        line.media = "テレビ"
+        mine.lines = [line]
         XCTAssertTrue(log.mergeRemote(.init(conversations: [mine], removed: [], summaryWritten: false, summary: nil, build: 200),
-                                      day: day, myBuild: 200))
-        // 古い版の端末が書き直した（［場面］とこすれの印を知らない）
+                                      day: day))
+        // 版を送らない古いアプリが書き直した（［場面］・行の終わり・食い違いの印・こすれの印を知らない）。
+        // 放送の印（media）は古いアプリも知っているので、向こうで消したものは消したまま
         var old = conversation(start, title: "朝の話", rev: 2)
-        old.lines = [ConversationLog.Line(time: start, speaker: "自分", text: "おはようございます")]
-        XCTAssertTrue(log.mergeRemote(.init(conversations: [old], removed: [], summaryWritten: false, summary: nil),
-                                      day: day, myBuild: 200))
+        old.lines = [ConversationLog.Line(time: start, speaker: "田中", text: "おはようございます")]
+        XCTAssertTrue(log.mergeRemote(.init(conversations: [old], removed: [], summaryWritten: false, summary: nil), day: day))
         let got = try XCTUnwrap(log.conversations(on: day).first)
         XCTAssertEqual(got.title, "朝の話")
         XCTAssertEqual(got.scene, "電車")
         XCTAssertEqual(got.lines.first?.text, "おはようございます")
         XCTAssertEqual(got.lines.first?.rubbed, true)
+        XCTAssertEqual(got.lines.first?.end, 2.5)
+        XCTAssertEqual(got.lines.first?.speakerDoubt, "3")
+        XCTAssertNil(got.lines.first?.media)
         XCTAssertEqual(got.start, start)
         XCTAssertEqual(log.conversations(on: day).count, 1)
-        // 同じか新しい版の端末から、項目を消したものが来たら、消したほうを使う
-        var newer = conversation(start, title: "朝の話", rev: 3)
-        newer.lines = got.lines
+        // 版 125 の端末は［場面］を知っているので、消したものは消したまま。行の終わり（版 130 から）だけ埋める
+        var mid = conversation(start, title: "朝の話", rev: 3)
+        mid.lines = [ConversationLog.Line(time: start, speaker: "田中", text: "おはようございます")]
+        XCTAssertTrue(log.mergeRemote(.init(conversations: [mid], removed: [], summaryWritten: false, summary: nil, build: 125),
+                                      day: day))
+        let after = try XCTUnwrap(log.conversations(on: day).first)
+        XCTAssertNil(after.scene)
+        XCTAssertEqual(after.lines.first?.end, 2.5)
+        // 新しい版の端末からのものは、そのまま
+        var newer = conversation(start, title: "朝の話", rev: 4)
+        newer.lines = [ConversationLog.Line(time: start, speaker: "田中", text: "おはようございます")]
         XCTAssertTrue(log.mergeRemote(.init(conversations: [newer], removed: [], summaryWritten: false, summary: nil, build: 201),
-                                      day: day, myBuild: 200))
-        XCTAssertNil(log.conversations(on: day).first?.scene)
-    }
-
-    func testFillMatchesLinesByTime() {
-        let remote: [String: Any] = ["lines": [["time": 2.0, "text": "b"], ["time": 1.0, "text": "a"], ["time": 3.0, "text": "c"]]]
-        let local: [String: Any] = ["scene": "店", "lines": [["time": 1.0, "text": "A", "rubbed": true], ["time": 2.0, "text": "B"]]]
-        let merged = SyncFill.merge(remote, local) as? [String: Any]
-        XCTAssertEqual(merged?["scene"] as? String, "店")
-        let lines = merged?["lines"] as? [[String: Any]]
-        XCTAssertEqual(lines?.map { $0["text"] as? String }, ["b", "a", "c"])
-        XCTAssertEqual(lines?[1]["rubbed"] as? Bool, true)
-        XCTAssertNil(lines?[0]["rubbed"])
+                                      day: day))
+        XCTAssertNil(log.conversations(on: day).first?.lines.first?.end)
     }
 
     func testOlderPeers() {
@@ -1309,5 +1312,42 @@ final class LogicTests: XCTestCase {
         talks = log.conversations(on: day)
         XCTAssertEqual(talks.map(\.lines.count), [2, 1])
         XCTAssertEqual(talks.last?.start, b)
+    }
+
+    // MARK: - モデルの追加と材料の広げ方（2026-11-06）
+
+    func testOtherMicPicksClosestOtherDevice() {
+        let dir = URL(fileURLWithPath: "/tmp")
+        let phone = dir.appendingPathComponent("20261106-103200.m4a")
+        let start = Storage.startDate(of: phone)!
+        let kept = [dir.appendingPathComponent("20261106-103000-w.m4a"),   // 2分前（時計）
+                    dir.appendingPathComponent("20261106-103230-w.m4a"),   // 30秒後（時計）→ これ
+                    dir.appendingPathComponent("20261106-103300.m4a"),     // 同じ iPhone
+                    dir.appendingPathComponent("20261106-103210-i.m4a"),   // 取り込んだ音声
+                    dir.appendingPathComponent("20261106-110000-w.m4a")]   // 遠い
+        XCTAssertEqual(AudioClip.otherMic(for: phone, start: start, fromWatch: false, in: kept)?.lastPathComponent,
+                       "20261106-103230-w.m4a")
+        let watch = dir.appendingPathComponent("20261106-103230-w.m4a")
+        XCTAssertEqual(AudioClip.otherMic(for: watch, start: Storage.startDate(of: watch)!, fromWatch: true, in: kept)?.lastPathComponent,
+                       "20261106-103300.m4a")
+    }
+
+    func testWeightsFromTruths() {
+        var truths: [AnswerKey.Truth] = []
+        for i in 0..<10 {
+            truths.append(AnswerKey.Truth(right: "明日の会議は三時から", votes: ["haas": "明日の会議は三時から", "reazon": "明日の会議は散事から"],
+                                          noisy: i % 2 == 0, audio: "a.m4a", offset: Double(i), end: nil, time: .now))
+        }
+        let w = AnswerKey.weights(truths: truths)
+        XCTAssertGreaterThan(w["haas"] ?? 0, w["reazon"] ?? 0)
+        XCTAssertEqual(AnswerKey.weights(truths: Array(truths.prefix(5))), [:])
+    }
+
+    func testBenchmarkSavedReadsOlderData() throws {
+        // correction が無かったころの形も読める
+        let old = Data(#"{"scores":{},"history":[],"night":3}"#.utf8)
+        let saved = try JSONDecoder().decode(Benchmark.Saved.self, from: old)
+        XCTAssertEqual(saved.night, 3)
+        XCTAssertTrue(saved.correction.isEmpty)
     }
 }

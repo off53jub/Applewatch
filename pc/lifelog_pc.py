@@ -13,8 +13,8 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 合言葉（起動したときに表示される）が合わない相手には何も返さない。
 
 おまけの機能（版 3 から。古い iPhone のアプリは使わないので、今までどおり動く）:
-- POST /transcribe?vad=union  iPhone が聞き逃した声を、音の大きさだけで PC でも探して一緒に文字にする（"extra": true の行）
-- POST /speakers?segments=…   区間ごとの話し手の声の特徴（3D-Speaker の ERes2Net、初回に約40MB を取ってくる）
+- POST /transcribe?vad=union  iPhone が聞き逃した声を PC でも探して一緒に文字にする（"extra": true の行）
+- POST /speakers?segments=…   区間ごとの話し手の声の特徴（版 5 から 3D-Speaker の CAM++、初回に約30MB を取ってくる）
 - POST /scene?segments=…      区間ごとの周りの音の上位 5 つ（Zipformer の音の聞き分け、初回に約110MB を取ってくる）
 
 版 4 で足したもの（どれも、うまく動かなければ前と同じに動く）:
@@ -26,10 +26,24 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 - GET  /train-status         材料の数・あなた向けのモデルがあるか・作った日
 - あなた向けのモデル（train_personal.py で作る）があれば、"mine"（あなた向け Whisper）の票も加える
 
+版 5 で足したもの（どれも、うまく動かなければ前と同じに動く）:
+- 多数決で文どうしを比べるとき、言いよどみ（えーと・えっと・あのー・うーん など）を除き、数字と漢数字をそろえる
+  （「えーと、明日の会議は三時です」と「明日の会議は3時です」は同じとみなす。返す文はモデルが書いたまま）
+- 合言葉が違うときは、送られた音声を読み捨ててから 401 {"error": "合言葉が違います"} を返す（200MB まで）
+- POST /speakers の既定のモデルを、いろいろな国の人の声（VoxCeleb）で学んだ 3D-Speaker の CAM++ にする
+  （GET /hello の "speaker_model" にファイルの名前。変わったら iPhone は登録した声を測り直す）
+- POST /transcribe?vad=union  聞き逃した声を Silero VAD（初回に約0.6MB を取ってくる）で探す
+  （読み込めなければ前と同じ音の大きさで探す。features に "silero"）
+- "qwen"（Qwen3-ASR 0.6B）の票  --qwen のときだけ。NVIDIA の GPU と、別に入れる torch・qwen-asr の部品が要る
+- POST /llm {"prompt": "…", "json": true|false, "max_tokens": N} → {"text": "…"}
+  この PC の中で動く Ollama（http://127.0.0.1:11434）に取り次ぐ。動いていてモデルがあるときだけ features に "llm"
+
     LifeLogPC.exe                 普通に起動する（受け付けを始める）
     LifeLogPC.exe --test 音声     その音声を文字にして、モデルごとの文とかかった時間を表示する（--enhance で雑音を除いた票も）
     LifeLogPC.exe --check-extras 音声  おまけの機能を、その音声で試す
     LifeLogPC.exe --startup       Windows の起動時に自動で始まるようにする（--no-startup でやめる）
+    python lifelog_pc.py --qwen   Qwen3-ASR の票も加えて起動する（exe には部品が入っていないので Python で動かす）
+    LifeLogPC.exe --llm-model 名前  /llm に使う Ollama のモデルを変える（--no-llm で使わない）
 """
 
 from __future__ import annotations
@@ -56,7 +70,7 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-VERSION = 4
+VERSION = 5
 # 待ち受ける番号。8765 はほかのソフトとよくぶつかるので、使われにくい番号にする
 PORT = 47615
 RATE = 16000
@@ -556,6 +570,80 @@ class MineEngine(WhisperEngine):
     name = "mine"
 
 
+# MARK: - Qwen3-ASR（使う設定にしたときだけの追加の票 "qwen"）
+# torch・transformers・qwen-asr（公式の部品）が要る。exe には入れない（大きすぎるため）。
+# NVIDIA の GPU が使え、部品が入っていて、--qwen か config.json の "qwen": true のときだけ読み込む。
+
+QWEN_MODEL = "Qwen/Qwen3-ASR-0.6B"   # 1.7B にするときは --qwen-model Qwen/Qwen3-ASR-1.7B
+QWEN_DIR = HOME / "qwen"
+QWEN_BATCH = 8          # 一度に聞く区間の数（GPU のメモリが足りないときは小さく）
+QWEN_MAX_TOKENS = 256   # 1つの区間（20 秒まで）で書く長さの上限
+QWEN_LANGUAGE = "Japanese"
+
+
+class Unavailable(RuntimeError):
+    """この PC では使えない（部品が無い・GPU が無いなど）。"""
+
+
+def optional_module(name: str):
+    """入っていれば読み込む部品（exe を作るときに、勝手に中に入れられないよう名前で読み込む）。"""
+    import importlib
+
+    return importlib.import_module(name)
+
+
+class QwenEngine:
+    """公式の qwen-asr の部品（transformers を使う版）で Qwen3-ASR を動かす。"""
+
+    name = "qwen"
+
+    def __init__(self, repo: str) -> None:
+        try:
+            torch = optional_module("torch")
+            qwen_asr = optional_module("qwen_asr")
+        except Exception as error:  # noqa: BLE001
+            raise Unavailable(f"torch・qwen-asr の部品が入っていません（{error}）") from error
+        if not torch.cuda.is_available():
+            raise Unavailable("NVIDIA の GPU を使えません（GPU が無いか、ドライバーが古い）")
+        # すでに取ってきたフォルダを渡されたらそれを使う。名前（Qwen/…）なら初回に QWEN_DIR に取ってくる
+        local = Path(repo) if (Path(repo) / "config.json").exists() else QWEN_DIR / repo.replace("/", "--")
+        if not (local / "config.json").exists():
+            log(f"Qwen3-ASR（{repo}）を取ってきます。初回だけです。置き場所: {local}")
+            from huggingface_hub import snapshot_download
+
+            snapshot_download(repo_id=repo, local_dir=str(local))
+        # bfloat16 は Ampere（RTX 30 の世代）から。それより前の GPU は float16 にする
+        major = torch.cuda.get_device_capability(0)[0]
+        dtype = torch.bfloat16 if major >= 8 else torch.float16
+        log(f"Qwen3-ASR を読み込んでいます…（{repo}、{dtype}）")
+        started = time.time()
+        self.model = qwen_asr.Qwen3ASRModel.from_pretrained(
+            str(local), dtype=dtype, device_map="cuda:0",
+            max_inference_batch_size=QWEN_BATCH, max_new_tokens=QWEN_MAX_TOKENS)
+        self.provider = "cuda"
+        self.label = f"Qwen3-ASR {repo.rsplit('/', 1)[-1].removeprefix('Qwen3-ASR-')}"
+        self.lock = threading.Lock()
+        log(f"Qwen3-ASR を読み込みました（{self.label}、{time.time() - started:.1f} 秒）")
+
+    def run(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
+            prompt: str | None) -> list[str]:
+        """区間ごとの文（聞き取れなければ空）。登録した言葉は context（手がかりの文）として渡す。"""
+        clips, index = [], []
+        for i, (start, end) in enumerate(segments):
+            samples = clip(audio, start, end)
+            if len(samples) >= int(0.3 * RATE):
+                clips.append((samples, RATE))
+                index.append(i)
+        out = [""] * len(segments)
+        if not clips:
+            return out
+        with self.lock:
+            results = self.model.transcribe(audio=clips, context="、".join(hints[:40]), language=QWEN_LANGUAGE)
+        for i, result in zip(index, results):
+            out[i] = str(getattr(result, "text", "") or "").strip()
+        return out
+
+
 # MARK: - 多数決
 
 
@@ -563,10 +651,90 @@ _kakasi = None
 _kakasi_lock = threading.Lock()
 
 
-def reading(text: str) -> str:
-    """文の読み（ひらがな）。漢字とかなの書き方の違いで食い違いにしないため。句読点・空白は除く。"""
-    global _kakasi
+_KANJI_DIGITS = "零一二三四五六七八九"
+
+
+def kanji_number(digits: str) -> str:
+    """"2026" → "二千二十六" のように、数字（0〜9 だけの並び）を漢数字にする。
+    0 で始まるもの（電話番号など）と 17 桁以上のものは、1 文字ずつ置き換える（「零九零」）。"""
+    if not digits.isdigit() or not digits.isascii():
+        return digits
+    if (len(digits) > 1 and digits[0] == "0") or len(digits) > 16:
+        return "".join(_KANJI_DIGITS[int(d)] for d in digits)
+    number = int(digits)
+    if number == 0:
+        return "零"
+    out = ""
+    for unit, big in ((10 ** 12, "兆"), (10 ** 8, "億"), (10 ** 4, "万"), (1, "")):
+        group, number = divmod(number, unit)
+        if not group:
+            continue
+        part = ""
+        for value, name in ((1000, "千"), (100, "百"), (10, "十")):
+            d, group = divmod(group, value)
+            if d:
+                part += ("" if d == 1 else _KANJI_DIGITS[d]) + name
+        if group:
+            part += _KANJI_DIGITS[group]
+        out += part + big
+    return out
+
+
+def kanji_numbers(text: str) -> str:
+    """文の中の数字を漢数字にする（「3時」と「三時」、「1人」と「一人」を同じ読みにするため）。
+    「1,000」の区切りの点は外し、「3.5」は「三点五」にする。比べるときだけに使い、返す文は変えない。"""
+    text = re.sub(r"(?<![0-9])[0-9]{1,3}(?:,[0-9]{3})+(?![0-9])", lambda m: m.group(0).replace(",", ""), text)
+    text = re.sub(r"([0-9]+)\.([0-9]+)", lambda m: kanji_number(m.group(1)) + "点"
+                  + "".join(_KANJI_DIGITS[int(d)] for d in m.group(2)), text)
+    return re.sub(r"[0-9]+", lambda m: kanji_number(m.group(0)), text)
+
+
+# MARK: - 言いよどみ（えーと・あのー など）
+# 多数決で文どうしを比べるときだけ、はっきりした言いよどみを除く（返す文はそのまま）。
+# 「あのー」と書くモデルと書かないモデルがあるだけで、同じ文が「食い違い」に見えないようにするため。
+# 「あの」（あの人）・「その」・「うん」（はい の意味）・「ええ」（はい の意味）・「ううん」（いいえ の意味）・
+# 「なんか」は、中身のある言葉のことが多いので除かない。
+
+_LONG = "ー〜～~"
+# 言葉の切れ目（文の頭・句読点・空白・かっこ）
+_EDGE = r"\s、。，．,.!?！？…‥・「」『』()（）"
+_BEFORE = rf"(?<![^{_EDGE}])"          # 前が文の頭か切れ目
+_AFTER = rf"(?=[{_EDGE}]|$)"           # 後ろが切れ目か文の終わり
+_TAIL = rf"[{_EDGE}]*"                 # 言いよどみの後ろの句読点も一緒に除く
+_FILLER_PATTERNS = [
+    # どこにあっても言いよどみとしか読めないもの（えーと・えーっと・えっと・ええっと・あのー・うーん）
+    re.compile(rf"(?:え[{_LONG}]+っ?と[{_LONG}]*|ええっと[{_LONG}]*|えっと[{_LONG}]*|あの[{_LONG}]+|う[{_LONG}]+ん){_TAIL}"),
+    # 言葉の頭にあるときだけ（えー・そのー・んー・んーと）
+    re.compile(rf"{_BEFORE}(?:え[{_LONG}]+|その[{_LONG}]+|ん[{_LONG}]+と?){_TAIL}"),
+    # 前後が切れ目のときだけ（「まあ、」「あー、」「えと、」。「まあまあ」「あーいう」「えとう」は除かない）
+    re.compile(rf"{_BEFORE}(?:まあ|まぁ|ま[{_LONG}]+|あ[{_LONG}]+|えと){_AFTER}{_TAIL}"),
+]
+
+
+def strip_fillers(text: str) -> str:
+    """はっきりした言いよどみ（えーと・えっと・あのー・うーん・んー・文の頭の「えー」・切れ目にある「まあ」など）を除いた文。"""
     text = unicodedata.normalize("NFKC", text)
+    for _ in range(4):  # 「えーと、あのー、」のように続くものも除く
+        before = text
+        for pattern in _FILLER_PATTERNS:
+            text = pattern.sub("", text)
+        if text == before:
+            break
+    return text
+
+
+def vote_reading(text: str) -> str:
+    """多数決で比べるための読み。言いよどみを除き、数字は漢数字にそろえる。
+    言いよどみしか無い文（「えーと」だけ）は、除かずに比べる。"""
+    stripped = reading(strip_fillers(text))
+    return stripped or reading(text)
+
+
+def reading(text: str) -> str:
+    """文の読み（ひらがな）。漢字とかなの書き方の違いで食い違いにしないため。句読点・空白は除く。
+    数字は漢数字にしてから読む（「3時」も「三時」も「さんじ」）。"""
+    global _kakasi
+    text = kanji_numbers(unicodedata.normalize("NFKC", text))
     try:
         with _kakasi_lock:
             if _kakasi is None:
@@ -583,8 +751,8 @@ def reading(text: str) -> str:
 
 
 def similarity(a: str, b: str) -> float:
-    """2つの文の読みがどれだけ同じか（0〜1）。"""
-    ra, rb = reading(a), reading(b)
+    """2つの文の読みがどれだけ同じか（0〜1）。言いよどみの有り無しと、数字と漢数字の違いは数えない。"""
+    ra, rb = vote_reading(a), vote_reading(b)
     if not ra or not rb:
         return 0.0
     if ra == rb:
@@ -702,11 +870,12 @@ def rover(text: str, others: dict[str, str]) -> str:
 
 # 同じくらい合っているときに先に選ぶ順（日本語の話し言葉に強く、作り話をしにくいものから）
 # （"_e" は雑音を除いた音でもう一度聞いた票。同じモデルなので、もとの票より後にする）
-PRIORITY = ["haas", "reazon", "whisper", "kotoba", "mine", "haas_e", "reazon_e", "cloud"]
+PRIORITY = ["haas", "reazon", "whisper", "kotoba", "mine", "qwen", "haas_e", "reazon_e", "cloud"]
 # Whisper の書き方を使ってよい近さ（読みがほぼ同じなら、ヒントを渡した Whisper の漢字の書き方のほうが名前に強い）
 SURFACE_SIMILAR = 0.85
 # Whisper だけが書いた文は、ほかが何も聞き取っていなければ作り話とみなす
-INVENTING = {"whisper", "kotoba", "mine", "cloud"}
+# （Qwen3-ASR も言語モデルで文を作るので同じに扱う）
+INVENTING = {"whisper", "kotoba", "mine", "qwen", "cloud"}
 
 
 def parse_weights(text: str | None) -> dict[str, float]:
@@ -721,7 +890,8 @@ def parse_weights(text: str | None) -> dict[str, float]:
     return weights
 
 
-def vote(hypotheses: dict[str, str], weights: dict[str, float] | None = None) -> dict | None:
+def vote(hypotheses: dict[str, str], weights: dict[str, float] | None = None,
+         sims_out: dict | None = None) -> dict | None:
     """モデルごとの文から1つを選ぶ。選んだ文・確からしさ（0〜1）・候補（ほかの違う文）を返す。何も選べなければ None。
 
     選ぶのは、読みがほかのモデルといちばん近い文（何も書かなかったモデルは 0 として数える）。
@@ -744,6 +914,9 @@ def vote(hypotheses: dict[str, str], weights: dict[str, float] | None = None) ->
     for i, a in enumerate(heard):
         for b in heard[i + 1:]:
             sims[(a, b)] = sims[(b, a)] = similarity(hypotheses[a], hypotheses[b])
+    # 測った近さを、モデルの組ごとの見立て（pair_stats）でもう一度測らずに使えるよう渡す
+    if sims_out is not None:
+        sims_out.update(sims)
     # 答え合わせでよく当たるモデルの票は重く数える（重みが無ければ、どれも 1）
     w = {k: (weights or {}).get(k, 1.0) for k in names}
     scores = {k: (w[k] * 0.01 + sum(w[o] * sims.get((k, o), 0.0) for o in names if o != k))
@@ -773,6 +946,52 @@ def vote(hypotheses: dict[str, str], weights: dict[str, float] | None = None) ->
     return {"text": text, "engine": chosen, "confidence": round(confidence, 2), "alternatives": alternatives}
 
 
+def _voter_order(name: str) -> tuple[int, str]:
+    return (PRIORITY.index(name) if name in PRIORITY else len(PRIORITY), name)
+
+
+def pair_stats(rows: list[tuple[dict[str, str], dict | None]]) -> dict:
+    """区間ごとの (モデルごとの文, vote() が測った近さ) から、食い違いの見立てを作る（文の中身は入れない）。
+
+    pairs:      モデルの組ごとの、言いよどみを除いた読みの近さの平均（両方が何か書いた区間だけ）
+    pair_lines: その平均に使った区間の数
+    silent:     ほかのモデルは何か書いたのに、そのモデルは何も書かなかった区間の数（1 以上のものだけ）
+    heard_lines: どれかのモデルが何か書いた区間の数
+    組の名前は PRIORITY の順に "haas-reazon" の形。近さは vote() が測ったものを使い、無い組だけ測る。"""
+    totals: dict[tuple[str, str], list[float]] = {}
+    silent: dict[str, int] = {}
+    heard_lines = 0
+    for hypotheses, known in rows:
+        names = sorted(hypotheses, key=_voter_order)
+        heard = [k for k in names if (hypotheses[k] or "").strip()]
+        if not heard:
+            continue
+        heard_lines += 1
+        for k in names:
+            if k not in heard:
+                silent[k] = silent.get(k, 0) + 1
+        for i, a in enumerate(heard):
+            for b in heard[i + 1:]:
+                sim = (known or {}).get((a, b))
+                if sim is None:
+                    sim = similarity(hypotheses[a], hypotheses[b])
+                entry = totals.setdefault((a, b), [0.0, 0])
+                entry[0] += float(sim)
+                entry[1] += 1
+    keys = sorted(totals, key=lambda p: (_voter_order(p[0]), _voter_order(p[1])))
+    return {"pairs": {f"{a}-{b}": round(totals[(a, b)][0] / totals[(a, b)][1], 2) for a, b in keys},
+            "pair_lines": {f"{a}-{b}": int(totals[(a, b)][1]) for a, b in keys},
+            "silent": {k: silent[k] for k in sorted(silent, key=_voter_order)},
+            "heard_lines": heard_lines}
+
+
+def pair_stats_line(stats: dict) -> str:
+    """記録に書く1行（数だけ。文の中身は書かない）"""
+    pairs = "・".join(f"{k} {v:.2f}" for k, v in stats.get("pairs", {}).items()) or "（なし）"
+    silent = "・".join(f"{k} {v}" for k, v in stats.get("silent", {}).items()) or "なし"
+    return f"  モデルの組の近さ: {pairs}／何も書かなかった: {silent}（声のある区間 {stats.get('heard_lines', 0)}）"
+
+
 class Ensemble:
     """読み込めたモデルを全部動かし、区間ごとに多数決する。"""
 
@@ -789,9 +1008,10 @@ class Ensemble:
     def transcribe(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str] | None = None,
                    prompt: str | None = None, votes: bool = False,
                    weights: dict[str, float] | None = None, extra_from: int | None = None,
-                   enhance: bool = False) -> list[dict]:
+                   enhance: bool = False, stats: dict | None = None) -> list[dict]:
         """extra_from を渡すと、その番号から後ろの区間（PC が見つけた、iPhone が聞き逃した声）の行に "extra": true を付け、
-        全部の行を時間の順に並べ直す。enhance なら、雑音を除いた音を Haas-ja・ReazonSpeech でもう一度聞いた票も加える。"""
+        全部の行を時間の順に並べ直す。enhance なら、雑音を除いた音を Haas-ja・ReazonSpeech でもう一度聞いた票も加える。
+        stats に dict を渡すと、モデルの組ごとの近さ（pair_stats）を入れて返す。"""
         denoised = None
         if enhance and any(isinstance(e, Engine) for e in self.engines):
             try:
@@ -817,9 +1037,12 @@ class Ensemble:
         if not results:
             raise RuntimeError("どのモデルでも文字にできませんでした")
         lines = []
+        rows: list[tuple[dict[str, str], dict]] = []
         for i, (start, end) in enumerate(segments):
             hypotheses = {name: got[i][0] if i < len(got) else "" for name, got in results.items()}
-            picked = vote(hypotheses, weights)
+            known: dict = {}
+            picked = vote(hypotheses, weights, known)
+            rows.append((hypotheses, known))
             if not picked:
                 continue
             line = {"start": round(start, 2), "end": round(end, 2), "text": picked["text"]}
@@ -840,6 +1063,11 @@ class Ensemble:
             lines.append(line)
         if extra_from is not None:
             lines.sort(key=lambda line: (line["start"], line["end"]))
+        if stats is not None:
+            try:
+                stats.update(pair_stats(rows))
+            except Exception as error:  # noqa: BLE001 — 見立てが作れなくても、文字にした行は返す
+                log(f"モデルの組の近さを測れませんでした: {error!r}")
         return lines
 
     @staticmethod
@@ -851,10 +1079,21 @@ class Ensemble:
         return [(text, None) for text in engine.run(audio, segments, hints, prompt)]
 
 
-def load_engines(names: list[str], threads: int, provider: str, whisper: str, device: str) -> Ensemble:
-    """頼まれたモデルを読み込む。読み込めなかったモデルは飛ばす（Haas-ja だけでも動く）。"""
+def load_engines(names: list[str], threads: int, provider: str, whisper: str, device: str,
+                 qwen: str | None = None) -> Ensemble:
+    """頼まれたモデルを読み込む。読み込めなかったモデルは飛ばす（Haas-ja だけでも動く）。
+    qwen に Qwen3-ASR のモデルの名前を渡したときだけ、"qwen" も読み込む（使えなければ一言だけ記録して飛ばす）。"""
     engines = []
     for name in names:
+        if name == "qwen":
+            if qwen:
+                try:
+                    engines.append(QwenEngine(qwen))
+                except Unavailable as error:
+                    log(f"Qwen3-ASR は使いません: {error}")
+                except Exception as error:  # noqa: BLE001
+                    log(f"Qwen3-ASR を読み込めませんでした（このモデル抜きで続けます）: {error!r}")
+            continue
         try:
             if name == "haas":
                 engines.append(Engine(threads, provider))
@@ -978,28 +1217,36 @@ EXTRA_OVERLAP = 0.5      # iPhone の区間と半分より多く重なるもの�
 EXTRA_PAD = 0.1          # 言い始め・言い終わりが切れないよう、前後を少し広げる
 
 
-def extra_speech(audio: np.ndarray, segments: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """iPhone の区間の外にある、声らしい大きな音の区間（モデルは使わない、音の大きさだけで決める）。
-
-    30ms ごとの大きさ（dB）を測り、周りの音（小さいほうから 20%）より 10dB 大きい所を拾う。
-    0.3 秒より短い切れ目はつなぎ、0.4 秒より短いものは捨てる。iPhone の区間と半分より多く重なるものも捨てる。
-    少しだけ重なるものは、重なった所を除いた残りを返す（同じ所を2回文字にしないため）。
-    """
+def loud_regions(audio: np.ndarray) -> list[tuple[float, float]]:
+    """声らしい大きな音の区間（モデルは使わない、音の大きさだけで決める。Silero VAD が使えないときの代わり）。
+    30ms ごとの大きさ（dB）を測り、周りの音（小さいほうから 20%）より 10dB 大きい所を拾う。"""
     frame = int(EXTRA_FRAME * RATE)
     count = len(audio) // frame
     if count < 2:
         return []
-    duration = len(audio) / RATE
     frames = np.asarray(audio[:count * frame], dtype=np.float64).reshape(count, frame)
     db = 20.0 * np.log10(np.sqrt(np.mean(frames * frames, axis=1)) + 1e-10)
     threshold = max(float(np.percentile(db, EXTRA_NOISE_PCT)) + EXTRA_MARGIN_DB, EXTRA_MIN_DB)
     loud = (db > threshold).astype(np.int8)
     edges = np.flatnonzero(np.diff(np.concatenate([[0], loud, [0]])))
+    return [(float(a * EXTRA_FRAME), float(b * EXTRA_FRAME)) for a, b in zip(edges[0::2], edges[1::2])]
+
+
+def extra_speech(audio: np.ndarray, segments: list[tuple[float, float]],
+                 regions: list[tuple[float, float]] | None = None) -> list[tuple[float, float]]:
+    """iPhone の区間の外にある、声らしい区間。
+
+    regions（声の区間。Silero VAD などで見つけたもの）を渡さなければ、音の大きさだけで探す（loud_regions）。
+    0.3 秒より短い切れ目はつなぎ、0.4 秒より短いものは捨てる。iPhone の区間と半分より多く重なるものも捨てる。
+    少しだけ重なるものは、重なった所を除いた残りを返す（同じ所を2回文字にしないため）。
+    """
+    duration = len(audio) / RATE
+    if regions is None:
+        regions = loud_regions(audio)
     merged: list[list[float]] = []
-    for a, b in zip(edges[0::2], edges[1::2]):
-        start, end = a * EXTRA_FRAME, b * EXTRA_FRAME
+    for start, end in sorted((float(a), float(b)) for a, b in regions if b > a):
         if merged and start - merged[-1][1] < EXTRA_GAP:
-            merged[-1][1] = end
+            merged[-1][1] = max(merged[-1][1], end)
         else:
             merged.append([start, end])
     given = sorted((a, b) for a, b in segments if b > a)
@@ -1041,9 +1288,11 @@ def extra_speech(audio: np.ndarray, segments: list[tuple[float, float]]) -> list
 
 
 RELEASES = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
-# 3D-Speaker の ERes2Net（iPhone の WeSpeaker 型とは違う作りのモデル、Apache-2.0）。
+# 3D-Speaker の CAM++（iPhone の WeSpeaker ResNet34 とは違う作りのモデル、Apache-2.0）。
+# 版 4 までは中国語の声だけで学んだ ERes2Net（3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx）だった。
+# 版 5 からは、いろいろな国の人の声（VoxCeleb）で学んだものにする。LIFELOG_SPEAKER_MODEL で前のものにも戻せる。
 # 置き場所の名前 "speaker-recongition-models" の綴りの誤りは、元のまま（直すと取ってこられない）
-SPEAKER_MODEL = os.environ.get("LIFELOG_SPEAKER_MODEL", "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
+SPEAKER_MODEL = os.environ.get("LIFELOG_SPEAKER_MODEL", "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx")
 SPEAKER_URL = f"{RELEASES}/speaker-recongition-models/{SPEAKER_MODEL}"
 SPEAKER_DIR = HOME / "speaker"
 SPEAKER_MIN = 0.5  # これより短い区間は声の特徴を出さない（null）
@@ -1075,7 +1324,7 @@ def download_speaker() -> Path:
     path = SPEAKER_DIR / SPEAKER_MODEL
     if path.exists() and path.stat().st_size > 1_000_000:
         return path
-    log(f"話し手の声の特徴を出すモデル（{SPEAKER_MODEL}、約40MB）を取ってきます。初回だけです。置き場所: {SPEAKER_DIR}")
+    log(f"話し手の声の特徴を出すモデル（{SPEAKER_MODEL}、約30MB）を取ってきます。初回だけです。置き場所: {SPEAKER_DIR}")
     fetch(SPEAKER_URL, path)
     return path
 
@@ -1269,6 +1518,93 @@ class Denoiser:
         return out
 
 
+# MARK: - 声のある所を探す（vad=union の Silero VAD）
+# Silero VAD（MIT、約0.6MB）を sherpa-onnx の VoiceActivityDetector で動かす。読み込めなければ音の大きさで探す。
+
+VAD_MODEL = "silero_vad.onnx"
+VAD_URL = f"{RELEASES}/asr-models/{VAD_MODEL}"
+VAD_DIR = HOME / "vad"
+VAD_THRESHOLD = 0.5       # これより声らしければ声とみなす
+VAD_MIN_SILENCE = 0.3     # これより短い切れ目はつなぐ（EXTRA_GAP と同じ）
+VAD_MIN_SPEECH = 0.25     # これより短い声は捨てる（あとで EXTRA_MIN でもう一度ふるう）
+VAD_MAX_SPEECH = MAX_SEGMENT
+
+
+def download_vad() -> Path:
+    path = VAD_DIR / VAD_MODEL
+    if path.exists() and path.stat().st_size > 100_000:
+        return path
+    log(f"声のある所を探すモデル（{VAD_MODEL}、約0.6MB）を取ってきます。初回だけです。置き場所: {VAD_DIR}")
+    fetch(VAD_URL, path)
+    return path
+
+
+class SileroVad:
+    """音声全体から、声のある区間（秒）を探す。"""
+
+    def __init__(self, threads: int) -> None:
+        import sherpa_onnx
+
+        path = download_vad()
+        self.config = sherpa_onnx.VadModelConfig()
+        self.config.silero_vad.model = str(path)
+        self.config.silero_vad.threshold = VAD_THRESHOLD
+        self.config.silero_vad.min_silence_duration = VAD_MIN_SILENCE
+        self.config.silero_vad.min_speech_duration = VAD_MIN_SPEECH
+        self.config.silero_vad.max_speech_duration = VAD_MAX_SPEECH
+        self.config.sample_rate = RATE
+        self.config.num_threads = max(1, min(threads, 2))
+        self.config.provider = "cpu"
+        if not self.config.validate():
+            raise RuntimeError(f"声のある所を探すモデルの設定が正しくありません: {self.config}")
+        self.window = int(self.config.silero_vad.window_size) or 512
+        self.vad = sherpa_onnx.VoiceActivityDetector(self.config, buffer_size_in_seconds=60)
+        self.name = path.stem
+        self.lock = threading.Lock()
+        log(f"声のある所を探すモデルを読み込みました（{self.name}）")
+
+    def regions(self, audio: np.ndarray) -> list[tuple[float, float]]:
+        """声のある区間 [(始まり, 終わり), …]（秒、音声の頭から）"""
+        samples = np.ascontiguousarray(audio, dtype=np.float32)
+        found: list[tuple[float, float]] = []
+        with self.lock:
+            self.vad.reset()
+
+            def take() -> None:
+                while not self.vad.empty():
+                    segment = self.vad.front
+                    start = int(segment.start) / RATE
+                    found.append((start, start + len(segment.samples) / RATE))
+                    self.vad.pop()
+
+            for i in range(0, len(samples) - self.window + 1, self.window):
+                self.vad.accept_waveform(samples[i:i + self.window])
+                take()
+            self.vad.flush()
+            take()
+            self.vad.reset()
+        return sorted(found)
+
+
+def find_extra(audio: np.ndarray, segments: list[tuple[float, float]], threads: int = 1) -> list[tuple[float, float]]:
+    """vad=union の、iPhone が聞き逃した声の区間。Silero VAD で探し、使えなければ音の大きさで探す。"""
+    global _vad_failed
+    regions = None
+    # 読み込めなかったら、しばらくは取ってこようとしない（毎回待たせないため）
+    if "vad" in _extras or time.time() - _vad_failed > VAD_RETRY:
+        try:
+            regions = extra_model("vad", threads).regions(audio)
+        except Exception as error:  # noqa: BLE001 — モデルが無くても、音の大きさで探す
+            _vad_failed = time.time()
+            log(f"Silero VAD を使えませんでした（音の大きさで探します）: {error!r}")
+            regions = None
+    return extra_speech(audio, segments, regions)
+
+
+VAD_RETRY = 600.0
+_vad_failed = 0.0
+
+
 # MARK: - あなた向けのモデルの材料（/train-sample・/train-status）
 # 直した文と、その声を PC の中だけに貯める。train_personal.py がこれで Whisper を学び直す。
 
@@ -1357,11 +1693,11 @@ def train_status() -> dict:
 
 _extras: dict[str, object] = {}
 _extras_lock = threading.Lock()
-EXTRA_KINDS = {"speaker": SpeakerModel, "scene": SceneModel, "enhance": Denoiser}
+EXTRA_KINDS = {"speaker": SpeakerModel, "scene": SceneModel, "enhance": Denoiser, "vad": SileroVad}
 
 
 def extra_model(kind: str, threads: int):
-    """"speaker"・"scene"・"enhance" のモデル。初回だけ取ってきて読み込む（失敗したら次に頼まれたときにやり直す）。"""
+    """"speaker"・"scene"・"enhance"・"vad" のモデル。初回だけ取ってきて読み込む（失敗したら次に頼まれたときにやり直す）。"""
     with _extras_lock:
         if kind not in _extras:
             _extras[kind] = EXTRA_KINDS[kind](threads)
@@ -1369,11 +1705,19 @@ def extra_model(kind: str, threads: int):
 
 
 def prepare_enhance() -> None:
-    """起動したときに、雑音を除くモデルを裏で用意しておく（/hello の features に "enhance" を出すため）。"""
+    """起動したときに、雑音を除くモデルと Silero VAD を裏で用意しておく（/hello の features に出すため）。"""
     try:
         extra_model("enhance", ENHANCE_THREADS)
     except Exception as error:  # noqa: BLE001 — 用意できなくても、ほかはいつもどおり動く
         log(f"雑音を除くモデルを用意できませんでした（enhance=1 は使えません）: {error!r}")
+    global _vad_failed
+    try:
+        extra_model("vad", 1)
+    except Exception as error:  # noqa: BLE001 — 用意できなくても、vad=union は音の大きさで探す
+        _vad_failed = time.time()
+        log(f"Silero VAD を用意できませんでした（vad=union は音の大きさで探します）: {error!r}")
+    # この PC の中の Ollama（/llm）があるか、ここで一度確かめておく
+    LLM.available(force=True)
 
 
 def features(engines: list | None = None) -> list[str]:
@@ -1390,6 +1734,9 @@ def features(engines: list | None = None) -> list[str]:
                                                   "OfflineZipformerAudioTaggingModelConfig")):
             found.append("scene")
     found.append("vad")
+    # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）
+    if "vad" in _extras:
+        found.append("silero")
     # /train-sample・/train-status（あなた向けのモデルの材料を貯める）
     found.append("train")
     if WORD_TIMES:
@@ -1399,7 +1746,167 @@ def features(engines: list | None = None) -> list[str]:
         found.append("enhance")
     if any(getattr(e, "name", "") == "mine" for e in engines or []):
         found.append("personal")
+    # POST /llm（この PC の中の Ollama が答え、モデルが入っているときだけ）
+    if LLM.available():
+        found.append("llm")
     return found
+
+
+# MARK: - この PC の中の言語モデル（POST /llm、Ollama に取り次ぐ）
+# iPhone の「仕事の文脈」の文を、この PC の中で動く Ollama に作ってもらう。この PC の外には送らない。
+
+OLLAMA_URL = "http://127.0.0.1:11434"
+# 日本語の読み書きができる 8B のモデル（Ollama の qwen3:8b、約5.2GB、Apache-2.0）。--llm-model で変えられる
+LLM_MODEL = "qwen3:8b"
+LLM_BODY_LIMIT = 1_000_000   # /llm に送ってよい大きさ（1MB まで）
+LLM_PROMPT_MAX = 200_000     # 頼む文の長さの上限（文字）
+LLM_DEFAULT_TOKENS = 1024
+LLM_MAX_TOKENS = 8192
+LLM_TIMEOUT = 600.0          # CPU で動かすと遅いので長めに待つ
+LLM_CHECK_EVERY = 60.0       # Ollama があるかを確かめ直す間（秒）
+# 合言葉が違うときなどに読み捨てる中身の上限。これより大きいものは読まずに接続を閉じる
+DRAIN_LIMIT = 200_000_000
+DRAIN_TIMEOUT = 30.0
+
+
+def is_local_url(url: str) -> bool:
+    """この PC の中（127.0.0.1・localhost・::1）を指す http の宛先か"""
+    parsed = urlparse(url)
+    return parsed.scheme == "http" and (parsed.hostname or "") in ("127.0.0.1", "localhost", "::1")
+
+
+def parse_llm_request(data: bytes) -> dict:
+    """/llm の中身 {"prompt": "…", "json": true|false, "max_tokens": N} を読む。おかしければ ValueError。"""
+    try:
+        body = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ValueError("中身が JSON ではありません") from error
+    if not isinstance(body, dict):
+        raise ValueError("中身が JSON ではありません")
+    prompt = body.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("prompt がありません")
+    if len(prompt) > LLM_PROMPT_MAX:
+        raise ValueError(f"prompt が長すぎます（{LLM_PROMPT_MAX} 文字まで）")
+    as_json = body.get("json", False)
+    if not isinstance(as_json, bool):
+        raise ValueError("json は true か false です")
+    tokens = body.get("max_tokens", LLM_DEFAULT_TOKENS)
+    if isinstance(tokens, bool) or not isinstance(tokens, (int, float)):
+        raise ValueError("max_tokens は数です")
+    return {"prompt": prompt, "json": as_json, "max_tokens": int(min(LLM_MAX_TOKENS, max(1, tokens)))}
+
+
+def ollama_chat_body(model: str, prompt: str, as_json: bool, max_tokens: int, think: bool = True) -> dict:
+    """Ollama の /api/chat に送る中身。考える過程（thinking）は書かせない。json なら "format": "json"。"""
+    body: dict = {"model": model, "messages": [{"role": "user", "content": prompt}], "stream": False,
+                  "options": {"num_predict": max_tokens}}
+    if think:
+        body["think"] = False
+    if as_json:
+        body["format"] = "json"
+    return body
+
+
+def strip_think(text: str) -> str:
+    """答えの頭に付くことのある <think>…</think>（考える過程）を除く"""
+    return re.sub(r"^\s*<think>.*?</think>\s*", "", text or "", flags=re.S).strip()
+
+
+def model_listed(names: list[str], wanted: str) -> bool:
+    """Ollama に入っているモデルの名前の一覧に、wanted があるか（"qwen3" は "qwen3:latest" と同じ）"""
+    def plain(name: str) -> str:
+        return name if ":" in name else name + ":latest"
+
+    return plain(wanted) in {plain(n) for n in names}
+
+
+class LocalLLM:
+    """この PC の中の Ollama に取り次ぐ。宛先はこの PC の中だけ（それ以外は受け付けない）。"""
+
+    def __init__(self, url: str = OLLAMA_URL, model: str = LLM_MODEL, enabled: bool = True) -> None:
+        if not is_local_url(url):
+            raise ValueError(f"Ollama の宛先はこの PC の中（http://127.0.0.1:…）にしてください: {url}")
+        import urllib.request
+
+        self.url = url.rstrip("/")
+        self.model = model
+        self.enabled = enabled
+        # プロキシの設定があっても使わない（この PC の中にだけつなぐ）
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self.ok = False
+        self.checked = 0.0
+        self.warned = False
+        self.lock = threading.Lock()
+        self.supports_think = True
+
+    def call(self, path: str, body: dict | None = None, timeout: float = 5.0) -> dict:
+        import urllib.request
+
+        data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(self.url + path, data=data, method="GET" if body is None else "POST",
+                                         headers={"Content-Type": "application/json"})
+        with self.opener.open(request, timeout=timeout) as response:
+            return json.loads(response.read() or b"{}")
+
+    def available(self, force: bool = False) -> bool:
+        """Ollama が答え、モデルが入っているか。force でなければ前に確かめた答えをすぐ返し、
+        LLM_CHECK_EVERY 秒より古ければ裏で確かめ直す（/hello を待たせないため）。"""
+        if not self.enabled:
+            return False
+        if not force:
+            if time.time() - self.checked >= LLM_CHECK_EVERY and not self.lock.locked():
+                threading.Thread(target=self.available, kwargs={"force": True}, daemon=True).start()
+            return self.ok
+        with self.lock:
+            return self.check()
+
+    def check(self) -> bool:
+        """Ollama に、入っているモデルの一覧を聞く（self.lock を持って呼ぶ）"""
+        before = self.ok
+        try:
+            tags = self.call("/api/tags", timeout=2.0)
+            names = [str(m.get("name") or m.get("model") or "") for m in tags.get("models") or []]
+            self.ok = model_listed(names, self.model)
+            if not self.ok and not self.warned:
+                # Ollama はあるのにモデルが無いときだけ、一度言う（Ollama が無いのは普通なので黙っている）
+                self.warned = True
+                log(f"Ollama に {self.model} が入っていません（/llm は使えません。ollama pull {self.model} で入れます）")
+        except Exception:  # noqa: BLE001 — Ollama が無ければ使わないだけ
+            self.ok = False
+        self.checked = time.time()
+        if self.ok and not before:
+            log(f"この PC の言語モデルを使えます（Ollama の {self.model}）")
+        return self.ok
+
+    def generate(self, prompt: str, as_json: bool, max_tokens: int) -> str:
+        """頼んだ文への答え。Ollama が無い・モデルが無いときは RuntimeError。"""
+        if not self.enabled:
+            raise RuntimeError("この PC の言語モデルは使わない設定です")
+        if not self.available(force=time.time() - self.checked >= LLM_CHECK_EVERY):
+            raise RuntimeError(f"Ollama が動いていないか、{self.model} が入っていません")
+        import urllib.error
+
+        try:
+            answer = self.call("/api/chat", ollama_chat_body(self.model, prompt, as_json, max_tokens,
+                                                             self.supports_think), timeout=LLM_TIMEOUT)
+        except urllib.error.HTTPError as error:
+            # 古い Ollama・考える過程を持たないモデルが "think" を断ったときは、付けずにもう一度
+            if error.code != 400 or not self.supports_think:
+                raise
+            self.supports_think = False
+            answer = self.call("/api/chat", ollama_chat_body(self.model, prompt, as_json, max_tokens, False),
+                               timeout=LLM_TIMEOUT)
+        except OSError:
+            self.ok = False
+            self.checked = time.time()
+            raise
+        if answer.get("error"):
+            raise RuntimeError(str(answer["error"]))
+        return strip_think(str((answer.get("message") or {}).get("content") or answer.get("response") or ""))
+
+
+LLM = LocalLLM(enabled=False)
 
 
 # MARK: - 受け付け
@@ -1419,6 +1926,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        if status >= 400:
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(data)
 
@@ -1427,8 +1936,29 @@ class Handler(BaseHTTPRequestHandler):
         if secrets.compare_digest(given, self.key):
             return True
         log(f"合言葉の違う接続を断りました: {self.client_address[0]}")
+        # 送られてくる音声を読み捨ててから断る。読まずに断ると、iPhone には 401 ではなく「接続が切れた」と見える
+        self.discard_body()
         self.send_json(401, {"error": "合言葉が違います"})
         return False
+
+    def discard_body(self) -> None:
+        """送られてきた中身を読み捨てる（DRAIN_LIMIT まで）。読み切れないもの・長さの分からないものは、答えたあと接続を閉じる。"""
+        self.close_connection = True
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return
+        if length <= 0 or length > DRAIN_LIMIT:
+            return
+        try:
+            self.connection.settimeout(DRAIN_TIMEOUT)
+            while length > 0:
+                chunk = self.rfile.read(min(length, 1 << 20))
+                if not chunk:
+                    break
+                length -= len(chunk)
+        except OSError:
+            pass
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
@@ -1447,21 +1977,54 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"app": "LifeLogPC", "version": VERSION, "model": self.engine.label,
                              "provider": self.engine.provider,
                              "engines": [e.name for e in self.engine.engines],
+                             # 話し手のモデルのファイルの名前。変わったら、iPhone は登録した声を測り直す
+                             "speaker_model": SPEAKER_MODEL,
                              "features": features(self.engine.engines)})
+
+    def llm(self, data: bytes) -> None:
+        """POST /llm  {"prompt": "…", "json": true|false, "max_tokens": N} → {"text": "…"}。
+        この PC の中で動く Ollama にだけ取り次ぐ（ほかの所には送らない）。"""
+        try:
+            request = parse_llm_request(data)
+        except ValueError as error:
+            self.send_json(400, {"error": str(error)})
+            return
+        started = time.time()
+        try:
+            text = LLM.generate(request["prompt"], request["json"], request["max_tokens"])
+        except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
+            log(f"言語モデルで答えを作れませんでした: {error!r}")
+            self.send_json(503, {"error": f"言語モデルで答えを作れませんでした: {error}"})
+            return
+        # 頼まれた文と答えの中身は記録に書かない
+        log(f"{self.client_address[0]} から /llm: {len(request['prompt'])} 文字 → {len(text)} 文字、"
+            f"{time.time() - started:.1f} 秒（{LLM.model}）")
+        self.send_json(200, {"text": text})
 
     def do_POST(self) -> None:
         url = urlparse(self.path)
-        if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample"):
+        if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample", "/llm"):
+            self.discard_body()
             self.send_json(404, {"error": "not found"})
             return
         if not self.authorized():
             return
-        length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0 or length > 200_000_000:
-            self.send_json(400, {"error": "音声がありません"})
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        limit = LLM_BODY_LIMIT if url.path == "/llm" else DRAIN_LIMIT
+        if length <= 0 or length > limit:
+            self.discard_body()
+            if url.path == "/llm":
+                self.send_json(400 if length <= 0 else 413, {"error": "中身がありません" if length <= 0 else "長すぎます"})
+            else:
+                self.send_json(400, {"error": "音声がありません"})  # 前の版と同じ答え
             return
         data = self.rfile.read(length)
-        if url.path == "/transcribe":
+        if url.path == "/llm":
+            self.llm(data)
+        elif url.path == "/transcribe":
             self.transcribe(data, url.query)
         elif url.path == "/train-sample":
             self.train_sample(data, url.query)
@@ -1520,6 +2083,7 @@ class Handler(BaseHTTPRequestHandler):
     def transcribe(self, data: bytes, query_text: str) -> None:
         started = time.time()
         extra: list[tuple[float, float]] = []
+        stats: dict = {}
         try:
             audio = load_audio(data)
             duration = len(audio) / RATE
@@ -1534,16 +2098,16 @@ class Handler(BaseHTTPRequestHandler):
             # vad=union: iPhone が聞き逃した声も PC で探して、一緒に文字にする
             if (query.get("vad") or [""])[0] == "union":
                 try:
-                    extra = extra_speech(audio, segments)
+                    extra = find_extra(audio, segments)
                 except Exception as error:  # noqa: BLE001 — 探せなくても、iPhone の区間だけで続ける
                     log(f"聞き逃した声を探せませんでした（iPhone の区間だけで続けます）: {error!r}")
                     extra = []
             if extra:
                 lines = self.engine.transcribe(audio, segments + extra, hints=hints, prompt=prompt, weights=weights,
-                                               extra_from=len(segments), enhance=enhance)
+                                               extra_from=len(segments), enhance=enhance, stats=stats)
             else:
                 lines = self.engine.transcribe(audio, segments, hints=hints, prompt=prompt, weights=weights,
-                                               enhance=enhance)
+                                               enhance=enhance, stats=stats)
         except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
             log(f"文字にできませんでした: {error!r}")
             self.send_json(500, {"error": str(error)})
@@ -1558,8 +2122,12 @@ class Handler(BaseHTTPRequestHandler):
         timed = sum(1 for line in lines if line.get("words"))
         log(f"  多数決: {len(self.engine.engines)} モデル" + ("（雑音を除いた票も）" if enhance else "")
             + f"、食い違いの大きい行 {unsure}、言葉の時刻のある行 {timed}")
-        self.send_json(200, {"lines": lines, "seconds": round(took, 2),
-                             "engines": [e.name for e in self.engine.engines]})
+        reply: dict = {"lines": lines, "seconds": round(took, 2), "engines": [e.name for e in self.engine.engines]}
+        if stats:
+            # モデルの組ごとの近さと、何も書かなかった区間の数（数だけ。文の中身は記録に書かない）
+            log(pair_stats_line(stats))
+            reply.update(stats)
+        self.send_json(200, reply)
 
 
 def addresses() -> list[str]:
@@ -1755,13 +2323,229 @@ def check_vote() -> None:
         and parse_weights("haas_e:1.5,reazon_e:0.8") == {"haas_e": 1.5, "reazon_e": 0.8}
     print(("OK " if ok else "NG ") + json.dumps({"enhanced": enhanced}, ensure_ascii=False))
     failed += 0 if ok else 1
+    # 言いよどみ・数字の書き方の違いは食い違いに数えない（版 5）
+    failed += check_fillers()
+    # モデルの組ごとの近さ・何も書かなかった数（食い違いの多さの見立て）
+    failed += check_pairs()
     # 聞き逃した声の探し方（vad=union）もモデル無しで確かめられる
     failed += check_extra_speech()
     # 言葉ごとの時刻と、あなた向けのモデルの材料の保存もモデル無しで確かめる
     failed += check_words()
     failed += check_train_sample()
+    # /llm（Ollama への取り次ぎ）を、作り物の Ollama で確かめる
+    failed += check_llm()
     if failed:
         sys.exit(1)
+
+
+def check_fillers() -> int:
+    """言いよどみを除く・数字をそろえる決まりを確かめる（モデル無し）。NG の数を返す。"""
+    failed = 0
+    cases = [
+        ("えーと、明日の会議は三時です", "明日の会議は三時です"),
+        ("えーっと明日", "明日"),
+        ("えっと、あのー、来週の件ですが", "来週の件ですが"),
+        ("明日のえーと会議", "明日の会議"),
+        ("うーん、まあ、いいと思います", "いいと思います"),
+        ("んーと、それは", "それは"),
+        ("えー、本日は", "本日は"),
+        ("そのー、つまり", "つまり"),
+        ("あー、そうか", "そうか"),
+        # 中身のある言葉は除かない（あの人・その件・まあまあ・あーいう・うん・ううん・ええ・えとう）
+        ("あの人が来た", "あの人が来た"),
+        ("その件は", "その件は"),
+        ("まあまあです", "まあまあです"),
+        ("あーいうのは", "あーいうのは"),
+        ("うん、そうだね", "うん、そうだね"),
+        ("ううん、違う", "ううん、違う"),
+        ("ええ、そうです", "ええ、そうです"),
+        ("えとうさんが来た", "えとうさんが来た"),
+    ]
+    for text, want in cases:
+        got = strip_fillers(text)
+        ok = got == want
+        print(("OK " if ok else "NG ") + f"言いよどみを除く: {text} → {got}")
+        failed += 0 if ok else 1
+    numbers = {"3": "三", "10": "十", "15": "十五", "300": "三百", "1000": "千", "2026": "二千二十六",
+               "12000": "一万二千", "100000000": "一億", "0": "零", "090": "零九零"}
+    got_numbers = {k: kanji_number(k) for k in numbers}
+    ok = got_numbers == numbers and kanji_numbers("1,000円と3.5キロ") == "千円と三点五キロ"
+    print(("OK " if ok else "NG ") + f"数字を漢数字に: {got_numbers}、{kanji_numbers('1,000円と3.5キロ')}")
+    failed += 0 if ok else 1
+    # 言いよどみ・数字の違いだけなら、ほぼ同じとみなす。言いよどみしか無い文は、除かずに比べる
+    same = [("えーと、明日の会議は三時です", "明日の会議は3時です"), ("あのー、来週の資料ですが", "来週の資料ですが"),
+            ("えっと1人で行きます", "一人で行きます"), ("えーと", "えーと")]
+    # 本当に違う文は、言いよどみを除いても違うまま
+    different = [("明日の予算の話", "あしたの洋服の話"), ("えーと、明日の予算の話", "あしたの洋服の話"),
+                 ("今日は晴れ", "今日は雨"), ("三時に行く", "四時に行く"), ("えーと", "あのー")]
+    sims = {f"{a}／{b}": round(similarity(a, b), 2) for a, b in same + different}
+    ok = all(similarity(a, b) >= 0.95 for a, b in same) \
+        and all(similarity(a, b) < SURFACE_SIMILAR for a, b in different)
+    print(("OK " if ok else "NG ") + "近さ: " + json.dumps(sims, ensure_ascii=False))
+    failed += 0 if ok else 1
+    # 多数決：言いよどみの有り無しだけが違う 4 つのモデルは、確からしさが高くなる（版 4 では 0.5 より低かった）
+    picked = vote({"haas": "えーと、明日の会議は三時です", "reazon": "明日の会議は3時です",
+                   "whisper": "明日の会議は三時です", "kotoba": "あのー、明日の会議は三時です"})
+    ok = bool(picked) and picked["confidence"] >= 0.9 and not picked["alternatives"] \
+        and picked["text"] in ("明日の会議は三時です", "えーと、明日の会議は三時です")
+    print(("OK " if ok else "NG ") + "言いよどみだけ違う多数決: " + json.dumps(picked, ensure_ascii=False))
+    failed += 0 if ok else 1
+    return failed
+
+
+def check_pairs() -> int:
+    """モデルの組ごとの近さ（pair_stats）を確かめる（モデル無し）。NG の数を返す。"""
+    failed = 0
+    rows = [
+        # vote() が測った近さがあれば、それを使う（ここでは、わざと 0.5 を渡して測り直していないことを見る）
+        ({"whisper": "今日は会議です", "haas": "今日は会議です", "reazon": "今日は会議です"},
+         {("haas", "reazon"): 0.5, ("reazon", "haas"): 0.5}),
+        # 言いよどみだけ違えば 1。whisper は何も書かなかった
+        ({"haas": "えーと、明日の会議は三時です", "reazon": "明日の会議は3時です", "whisper": ""}, None),
+        # 誰も書かなかった区間は数えない
+        ({"haas": "", "reazon": "", "whisper": ""}, None),
+        # whisper だけが書いた（haas・reazon が何も書かなかった）
+        ({"haas": "", "reazon": "", "whisper": "ご視聴ありがとうございました"}, None),
+    ]
+    got = pair_stats(rows)
+    want = {"pairs": {"haas-reazon": 0.75, "haas-whisper": 1.0, "reazon-whisper": 1.0},
+            "pair_lines": {"haas-reazon": 2, "haas-whisper": 1, "reazon-whisper": 1},
+            "silent": {"haas": 1, "reazon": 1, "whisper": 1}, "heard_lines": 3}
+    line = pair_stats_line(got)
+    ok = got == want and "えーと" not in line and "会議" not in line and "haas-reazon 0.75" in line \
+        and pair_stats([]) == {"pairs": {}, "pair_lines": {}, "silent": {}, "heard_lines": 0}
+    print(("OK " if ok else "NG ") + f"モデルの組の近さ: {json.dumps(got, ensure_ascii=False)}／記録: {line.strip()}")
+    failed += 0 if ok else 1
+
+    # 多数決と一緒に測る：vote() が測った近さをそのまま使い、transcribe の stats に入る
+    class Fake:
+        provider = "cpu"
+
+        def __init__(self, name: str, texts: list[str]) -> None:
+            self.name = self.label = name
+            self.texts = texts
+
+        def run(self, audio, segments, hints, prompt):
+            return self.texts[:len(segments)]
+
+    ensemble = Ensemble([Fake("haas", ["今日は会議です", "明日の予算の話"]),
+                         Fake("reazon", ["今日は会議です", "あしたの洋服の話"]),
+                         Fake("whisper", ["", "飛鳥の羊羹の話"])])
+    stats: dict = {}
+    lines = ensemble.transcribe(np.zeros(4 * RATE, dtype=np.float32), [(0.0, 2.0), (2.0, 4.0)], stats=stats)
+    ensemble.pool.shutdown(wait=False)
+    sims = {}
+    vote({"haas": "明日の予算の話", "reazon": "あしたの洋服の話", "whisper": "飛鳥の羊羹の話"}, None, sims)
+    ok = len(lines) == 2 and stats["silent"] == {"whisper": 1} and stats["heard_lines"] == 2 \
+        and stats["pair_lines"] == {"haas-reazon": 2, "haas-whisper": 1, "reazon-whisper": 1} \
+        and stats["pairs"]["haas-reazon"] == round((1.0 + sims[("haas", "reazon")]) / 2, 2) \
+        and stats["pairs"]["haas-whisper"] == round(sims[("haas", "whisper")], 2)
+    print(("OK " if ok else "NG ") + f"多数決と一緒に測った組の近さ: {json.dumps(stats, ensure_ascii=False)}")
+    failed += 0 if ok else 1
+    return failed
+
+
+def check_llm() -> int:
+    """/llm を、作り物の Ollama（この PC の中、空いた番号）で確かめる（本物の Ollama は使わない）。NG の数を返す。"""
+    import http.client
+
+    global LLM
+    failed = 0
+    # 中身の読み方
+    good = parse_llm_request(json.dumps({"prompt": "こんにちは", "json": True, "max_tokens": 99999}).encode())
+    bad = []
+    for raw in (b"not json", b"[]", json.dumps({"prompt": ""}).encode(), json.dumps({"prompt": "a", "json": "yes"}).encode(),
+                json.dumps({"prompt": "a", "max_tokens": "x"}).encode()):
+        try:
+            parse_llm_request(raw)
+            bad.append(False)
+        except ValueError:
+            bad.append(True)
+    body = ollama_chat_body("m", "p", True, 10)
+    ok = good == {"prompt": "こんにちは", "json": True, "max_tokens": LLM_MAX_TOKENS} and all(bad) \
+        and body["format"] == "json" and body["think"] is False and body["stream"] is False \
+        and body["options"] == {"num_predict": 10} and "format" not in ollama_chat_body("m", "p", False, 10) \
+        and strip_think("<think>考え中</think>\n答え") == "答え" and strip_think("答え") == "答え" \
+        and model_listed(["qwen3:8b", "llama3:latest"], "qwen3:8b") and model_listed(["llama3:latest"], "llama3") \
+        and not model_listed(["qwen3:4b"], "qwen3:8b") \
+        and is_local_url("http://127.0.0.1:11434") and is_local_url("http://localhost:11434") \
+        and not is_local_url("http://192.168.1.2:11434") and not is_local_url("https://example.com")
+    try:
+        LocalLLM(url="http://example.com:11434")
+        ok = False
+    except ValueError:
+        pass
+    print(("OK " if ok else "NG ") + f"/llm の中身の読み方・Ollama に送る中身: {good}")
+    failed += 0 if ok else 1
+
+    # 作り物の Ollama
+    seen: list[dict] = []
+
+    class FakeOllama(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args) -> None:
+            pass
+
+        def reply(self, body: dict) -> None:
+            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self) -> None:
+            self.reply({"models": [{"name": "qwen3:8b"}]})
+
+        def do_POST(self) -> None:
+            request = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+            seen.append(request)
+            content = '{"answer": 1}' if request.get("format") == "json" else "<think>…</think>はい、" + request["model"]
+            self.reply({"message": {"role": "assistant", "content": content}, "done": True})
+
+    fake = ThreadingHTTPServer(("127.0.0.1", 0), FakeOllama)
+    threading.Thread(target=fake.serve_forever, daemon=True).start()
+    saved = (LLM, getattr(Handler, "key", None))
+    server = Server(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    def call(payload: dict | bytes, key: str = "check-key") -> tuple[int, dict]:
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=30)
+        try:
+            data = payload if isinstance(payload, bytes) else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            connection.request("POST", "/llm", body=data, headers={"Authorization": f"Bearer {key}",
+                                                                   "Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read() or b"{}")
+        finally:
+            connection.close()
+
+    try:
+        Handler.key = "check-key"
+        LLM = LocalLLM(url=f"http://127.0.0.1:{fake.server_address[1]}", model="qwen3:8b", enabled=True)
+        plain = call({"prompt": "こんにちは"})
+        as_json = call({"prompt": "JSON で", "json": True, "max_tokens": 50})
+        wrong = call({"prompt": "こんにちは"}, key="wrong")
+        broken = call(b"{")
+        listed = "llm" in features()
+        LLM = LocalLLM(url=f"http://127.0.0.1:{fake.server_address[1]}", model="gemma3:12b", enabled=True)
+        missing = call({"prompt": "こんにちは"})
+        unlisted = "llm" not in features()
+        LLM = LocalLLM(enabled=False)
+        off = "llm" not in features()
+        ok = plain == (200, {"text": "はい、qwen3:8b"}) and as_json == (200, {"text": '{"answer": 1}'}) \
+            and wrong[0] == 401 and broken[0] == 400 and missing[0] == 503 and listed and unlisted and off \
+            and len(seen) == 2 and seen[1]["format"] == "json" and seen[1]["options"] == {"num_predict": 50} \
+            and "format" not in seen[0] and seen[0]["options"] == {"num_predict": LLM_DEFAULT_TOKENS}
+        print(("OK " if ok else "NG ") + f"/llm を作り物の Ollama で: {plain} {as_json} 合言葉違い {wrong[0]} "
+              f"壊れた中身 {broken[0]} モデルなし {missing[0]} features に llm: {listed}／{not unlisted}／{not off}")
+        failed += 0 if ok else 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        fake.shutdown()
+        fake.server_close()
+        LLM, Handler.key = saved
+    return failed
 
 
 def check_words() -> int:
@@ -1862,6 +2646,8 @@ def check_train_sample() -> int:
                                    headers={"Authorization": f"Bearer {key}"})
                 response = connection.getresponse()
                 return response.status, json.loads(response.read() or b"{}")
+            except OSError as error:  # 接続が切られたとき（前の版の、合言葉違いの大きな音声）
+                return 0, {"error": repr(error)}
             finally:
                 connection.close()
 
@@ -1872,8 +2658,14 @@ def check_train_sample() -> int:
             other = call(f"/train-sample?start=0.5&end=2.0&text={urllib.parse.quote('今日も会議です')}", data)
             bad = call(f"/train-sample?start=2.0&end=1.0&text={words}", data)
             empty = call("/train-sample?start=0.5&end=2.0&text=", data)
-            # 合言葉が違うと、音声を読む前に断る（送り途中で切られるので、ここでは音声を付けずに試す）
+            # 合言葉が違うと断る。送られた音声（ここでは約 3MB）を読み捨ててから答えるので、送り途中で切られず 401 が届く
             stranger = call("/train-status", key="wrong")
+            big = data * 30
+            stranger_post = call(f"/train-sample?start=0.5&end=2.0&text={words}", big, key="wrong")
+            no_key = call(f"/transcribe?segments=0-1", big, key="")
+            print(("OK " if stranger_post == (401, {"error": "合言葉が違います"}) and no_key[0] == 401 else "NG ")
+                  + f"合言葉違いで {len(big) // 1_000_000}MB を送ると: {stranger_post}、合言葉なし: {no_key[0]}")
+            failed += 0 if stranger_post == (401, {"error": "合言葉が違います"}) and no_key[0] == 401 else 1
             status = call("/train-status")
             rows = read_samples(PERSONAL_DATA)
             frames = 0
@@ -1932,6 +2724,12 @@ def check_extra_speech() -> int:
     # 無音だけ・短すぎる音声でも落ちない
     ok = extra_speech(np.zeros(5 * RATE, dtype=np.float32), []) == [] and extra_speech(np.zeros(10, np.float32), []) == []
     print(("OK " if ok else "NG ") + "無音・短い音声では何も返さない")
+    failed += 0 if ok else 1
+    # Silero VAD などで見つけた声の区間を渡したときも、同じ決まり（つなぐ・短いものを捨てる・iPhone の区間を除く）
+    regions = [(2.0, 3.0), (6.0, 6.5), (6.7, 7.2), (5.0, 5.15), (8.0, 9.0)]
+    got = extra_speech(np.zeros(10 * RATE, dtype=np.float32), [(8.0, 9.0)], regions)
+    ok = near(got, [(2.0, 3.0), (6.0, 7.2)]) and extra_speech(np.zeros(10 * RATE, np.float32), [], []) == []
+    print(("OK " if ok else "NG ") + f"見つけた声の区間を渡すと: {got}")
     return failed + (0 if ok else 1)
 
 
@@ -1941,9 +2739,21 @@ def check_extras(path: str, threads: int) -> None:
     audio = load_audio(Path(path).read_bytes())
     duration = len(audio) / RATE
     found = extra_speech(audio, [])
-    print(f"音声 {duration:.1f} 秒。iPhone の区間が無いとき、声らしい所: {found}")
+    print(f"音声 {duration:.1f} 秒。iPhone の区間が無いとき、声らしい所（音の大きさ）: {found}")
     if found:
         print(f"  最初の区間を iPhone の区間にすると: {extra_speech(audio, found[:1])}")
+    # Silero VAD（vad=union の声の探し方）を取ってきて、その音声と無音で試す
+    started = time.time()
+    vad = extra_model("vad", threads)
+    regions = vad.regions(audio)
+    silero = find_extra(audio, [])
+    print(f"Silero VAD: {vad.name}（{time.time() - started:.1f} 秒）声の区間 {[(round(a, 2), round(b, 2)) for a, b in regions]}"
+          f" → 聞き逃した声 {silero}")
+    ok = len(regions) >= 1 and all(0 <= a < b <= duration + 0.05 for a, b in regions) and len(silero) >= 1 \
+        and vad.regions(np.zeros(3 * RATE, dtype=np.float32)) == [] and find_extra(audio, [(0.0, duration)]) == [] \
+        and vad.regions(audio) == regions
+    print(("OK " if ok else "NG ") + "Silero VAD で声の区間が見つかる（無音では見つからない・何度やっても同じ）")
+    failed += 0 if ok else 1
     # 区間ごとに1つずつ答えが返るか。短すぎる区間（0.2 秒）は null になるはず
     ranges = parse_ranges(",".join(f"{a}-{b}" for a, b in found[:3]) + f",0-0.2,0-{duration:.2f}" if found
                           else f"0-0.2,0-{duration:.2f}", duration)
@@ -1957,8 +2767,9 @@ def check_extras(path: str, threads: int) -> None:
     if len(vectors) >= 2:
         print(f"  最初の2つの近さ（cos）: {float(vectors[0] @ vectors[1]):.3f}")
     ok = len(embeddings) == len(ranges) and embeddings[-2] is None and embeddings[-1] is not None \
-        and len(embeddings[-1]) == speaker.dim and abs(np.linalg.norm(embeddings[-1]) - 1) < 1e-3
-    print(("OK " if ok else "NG ") + "区間ごとに声の特徴が出る（短い区間は null、長さは 1）")
+        and len(embeddings[-1]) == speaker.dim and abs(np.linalg.norm(embeddings[-1]) - 1) < 1e-3 \
+        and speaker.name == Path(SPEAKER_MODEL).stem
+    print(("OK " if ok else "NG ") + f"区間ごとに声の特徴が出る（短い区間は null、長さは 1、モデルは {SPEAKER_MODEL}）")
     failed += 0 if ok else 1
     started = time.time()
     scene = extra_model("scene", threads)
@@ -2042,9 +2853,17 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=max(1, min(8, (os.cpu_count() or 4) // 2)))
     parser.add_argument("--port", type=int, default=PORT, help=f"待ち受ける番号（既定 {PORT}）")
     parser.add_argument("--provider", default="cpu", help="Haas-ja・ReazonSpeech を動かす場所: cpu（既定）または cuda")
-    parser.add_argument("--engines", default="haas,reazon,whisper,kotoba,mine",
-                        help="使うモデル（haas,reazon,whisper,kotoba,mine のうち。kotoba・mine は GPU のときだけ、"
-                             "mine は train_personal.py で作ったあとだけ動く）")
+    parser.add_argument("--engines", default="haas,reazon,whisper,kotoba,mine,qwen",
+                        help="使うモデル（haas,reazon,whisper,kotoba,mine,qwen のうち。kotoba・mine は GPU のときだけ、"
+                             "mine は train_personal.py で作ったあとだけ、qwen は --qwen のときだけ動く）")
+    parser.add_argument("--qwen", action="store_true",
+                        help="Qwen3-ASR の票も加える（NVIDIA の GPU と、別に入れる torch・qwen-asr の部品が要る。"
+                             "config.json の \"qwen\": true でも同じ）")
+    parser.add_argument("--qwen-model", default=None,
+                        help=f"Qwen3-ASR のモデル（既定 {QWEN_MODEL}。Qwen/Qwen3-ASR-1.7B も使える）")
+    parser.add_argument("--llm-model", default=None,
+                        help=f"/llm に使う Ollama のモデル（既定 {LLM_MODEL}。config.json の \"llm_model\" でも同じ）")
+    parser.add_argument("--no-llm", action="store_true", help="/llm（この PC の中の Ollama への取り次ぎ）を使わない")
     parser.add_argument("--whisper", default="auto",
                         help="Whisper の大きさ: auto（GPU なら large-v3、無ければ large-v3-turbo）・large-v3・large-v3-turbo・small・off")
     parser.add_argument("--device", default="auto", help="Whisper を動かす場所: auto（既定）・cuda・cpu")
@@ -2067,14 +2886,28 @@ def main() -> None:
     if args.no_words:
         WORD_TIMES = False
     names = [n.strip() for n in args.engines.split(",") if n.strip()]
+    config = load_config()
+    # Qwen3-ASR は、--qwen か config.json の "qwen": true のときだけ（モデルは --qwen-model か "qwen_model"）
+    qwen = None
+    if args.qwen or config.get("qwen") is True:
+        qwen = args.qwen_model or str(config.get("qwen_model") or QWEN_MODEL)
+    global LLM
+    try:
+        LLM = LocalLLM(url=str(config.get("ollama_url") or OLLAMA_URL),
+                       model=args.llm_model or str(config.get("llm_model") or LLM_MODEL),
+                       enabled=not args.no_llm and config.get("llm") is not False)
+    except ValueError as error:
+        log(f"/llm は使いません: {error}")
+        LLM = LocalLLM(enabled=False)
 
     def factory() -> Ensemble:
-        return load_engines(names, args.threads, args.provider, args.whisper, args.device)
+        return load_engines(names, args.threads, args.provider, args.whisper, args.device, qwen)
 
     if args.download:
         engine = factory()
         print(f"用意できたモデル: {engine.label}（{engine.provider}）")
-        wanted = [n for n in names if n not in ("kotoba", "mine") and not (n == "whisper" and args.whisper == "off")]
+        wanted = [n for n in names if n not in ("kotoba", "mine", "qwen")
+                  and not (n == "whisper" and args.whisper == "off")]
         if len([e for e in engine.engines if e.name in wanted]) < len(wanted):
             sys.exit(1)
         return
