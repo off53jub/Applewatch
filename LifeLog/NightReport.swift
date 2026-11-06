@@ -116,6 +116,21 @@ enum Tally {
         if n("personal.sent") > 0 {
             rows.append(("あなた向けのモデルの材料", "PC に渡した \(n("personal.sent")) 行", nil))
         }
+        // どのモデルどうしが合わないか（PC の版 5 から。近い順ではなく、合わない順に）
+        let pairs = s.keys.filter { $0.hasPrefix("pair.") && $0.hasSuffix(".n") }.compactMap { key -> (String, Double)? in
+            let name = String(key.dropFirst(5).dropLast(2))
+            let count = n(key)
+            guard count > 0 else { return nil }
+            return (name, Double(n("pair." + name + ".s")) / 1000 / Double(count))
+        }.sorted { $0.1 < $1.1 }
+        if !pairs.isEmpty {
+            rows.append(("モデルの組の読みの近さ", pairs.prefix(8).map { $0.0 + " " + String(format: "%.2f", $0.1) }.joined(separator: "・"),
+                         nil))
+        }
+        let silent = s.keys.filter { $0.hasPrefix("silent.") }.sorted { n($0) > n($1) }
+        if !silent.isEmpty {
+            rows.append(("何も書かなかった行", silent.map { String($0.dropFirst(7)) + " \(n($0))" }.joined(separator: "・"), nil))
+        }
         if n("learn.updated") > 0 {
             rows.append(("直した記録から学んだ", "値を合わせ直した \(n("learn.updated")) 回", nil))
         }

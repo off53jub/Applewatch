@@ -266,7 +266,7 @@ final class HomePC {
     /// PC の LifeLog PC の版（hello で分かる。古い PC は 1）
     var version: Int?
     /// このアプリが前提にしている PC の版（多数決・ヒント・重み）
-    nonisolated static let expectedVersion = 4
+    nonisolated static let expectedVersion = 5
 
     /// 声の区間の長さに対する処理の時間（直近をならした値。1 より大きいと録音に追いつかない）。2026-11-06
     var speed: Double? = UserDefaults.standard.object(forKey: "homePCSpeed") as? Double {
@@ -336,8 +336,19 @@ final class HomePC {
                 let lines: [Line]
                 let seconds: Double
                 let engines: [String]?
+                /// モデルの組ごとの読みの近さの平均と、何も書かなかった行の数（版 5 から。中身は入っていない）
+                let pairs: [String: Double]?
+                let pair_lines: [String: Int]?
+                let silent: [String: Int]?
             }
             let reply = try JSONDecoder().decode(Reply.self, from: data)
+            // 区切りごとの平均を、行の数で重み付けして足す
+            for (pair, value) in reply.pairs ?? [:] {
+                let count = max(1, reply.pair_lines?[pair] ?? 1)
+                Tally.add("pair." + pair + ".s", Int((value * 1000).rounded()) * count)
+                Tally.add("pair." + pair + ".n", count)
+            }
+            for (engine, count) in reply.silent ?? [:] { Tally.add("silent." + engine, count) }
             Tally.add("pc.vadExtra", reply.lines.filter { $0.extra == true }.count)
             failedAt = nil
             downSince = nil
