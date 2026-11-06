@@ -341,10 +341,10 @@ extension Pipeline {
         for item in usable {
             guard let mine = try? await Summarizer.$modelOverride.withValue(current, operation: {
                 try await Summarizer.correct([item.heard], keywords: [], previous: nil, alternatives: nil, apiKey: key)
-            }).first,
+            })?.first,
                   let theirs = try? await Summarizer.$modelOverride.withValue(trial, operation: {
                       try await Summarizer.correct([item.heard], keywords: [], previous: nil, alternatives: nil, apiKey: key)
-                  }).first else { continue }
+                  })?.first else { continue }
             let a = Benchmark.errors(mine.isEmpty ? item.heard : mine, right: item.right)
             let b = Benchmark.errors(theirs.isEmpty ? item.heard : theirs, right: item.right)
             score.baseErrors += a.errors
