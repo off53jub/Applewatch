@@ -66,6 +66,8 @@ final class WatchRecorder: NSObject {
         sender.onChange = { [weak self] in
             Task { @MainActor in self?.refreshStatus() }
         }
+        // iPhone から中身が届いた・「済み」を押したら、文字盤も出し直す（2026-11-07。WatchWidgets.swift）
+        board.onChange = { [weak self] in self?.updateWidgets() }
         // iPhone が音を調べて見つけたこと（マイクが隠れている・音が割れている）を、震わせて知らせる
         sender.onAlert = { [weak self] text in
             Task { @MainActor in self?.alert(text) }
@@ -224,6 +226,8 @@ final class WatchRecorder: NSObject {
         link = sender.linkText()
         lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
         meetingOn = UserDefaults.standard.bool(forKey: "meetingOn")
+        // 録音を始めた・止めた・送っていない数が変わったら、文字盤も出し直す（変わったときだけ書く。2026-11-07）
+        updateWidgets()
         let center = UNUserNotificationCenter.current()
         // 時計の空きが少なくなったら知らせる（録音と控えが置けなくなる前に）
         if let free = WatchSender.freeSpace(), free < 300 * 1024 * 1024,

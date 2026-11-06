@@ -16,6 +16,9 @@ struct WatchInfo: Codable, Equatable {
         var from: String? = nil
         /// 今日までのもの・過ぎたもの
         var late: Bool = false
+        /// 期限を過ぎたもの・相手を待っているもの（文字盤の数に使う。違えば省く。2026-11-07）
+        var overdue: Bool? = nil
+        var waiting: Bool? = nil
     }
 
     struct Event: Codable, Equatable {
@@ -59,6 +62,10 @@ struct WatchInfo: Codable, Equatable {
     var last: Talk? = nil
     var status: Status
     var morning: Brief? = nil
+    /// 今日までの頼まれごとの数と、そのうち期限を過ぎた数（相手を待っているものは数えない。15件より多くても数える。
+    /// 文字盤に出す。2026-11-07。WidgetBridge.taskCounts）
+    var dueCount: Int? = nil
+    var overdueCount: Int? = nil
 
     /// 時計に送る applicationContext の名前
     static let contextKey = "watchInfo"
@@ -92,7 +99,9 @@ struct WatchInfo: Codable, Equatable {
             return TaskItem(id: item.id, what: clip(item.what, 80),
                             due: dueLabel(item, now: now, calendar: calendar),
                             from: item.from.map { clip($0, 20) },
-                            late: bucket == .late || bucket == .today)
+                            late: bucket == .late || bucket == .today,
+                            overdue: bucket == .late ? true : nil,
+                            waiting: item.isWaiting ? true : nil)
         }
     }
 
@@ -198,6 +207,8 @@ extension Pipeline {
     /// 時計の「済み」と「聞く」を受け、時計に送る中身を1分ごとに確かめて、変わっていたら送る。
     func setUpWatchApp() {
         receiver.onTaskDone = { [weak self] id in self?.watchTaskDone(id) }
+        // 時計の様子（録音中か）が届いたら、iPhone のウィジェットも出し直す（2026-11-07。WidgetBridge.swift）
+        receiver.onWatchContext = { [weak self] in self?.updateWidgets() }
         receiver.onQuestion = { [weak self] question in
             guard let self else { return "iPhone の LifeLog の準備ができていません。" }
             return await self.answerFromWatch(question)
@@ -220,6 +231,8 @@ extension Pipeline {
 
     /// 時計に中身を送る。変わっていなければ送らない。force でなければ1分に1回まで（間に合わなかった分は次の確かめで送る）
     func pushWatchInfo(force: Bool = false) {
+        // iPhone のウィジェットの中身も確かめる（時計が無くても。変わったときだけ書く。2026-11-07。WidgetBridge.swift）
+        updateWidgets()
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
@@ -244,6 +257,9 @@ extension Pipeline {
                                                       processed: diagnostics.runs.last?.start.timeIntervalSince1970))
         info.tasks = WatchInfo.taskItems(open, now: now)
         info.openCount = open.count
+        let counts = WidgetBridge.taskCounts(open, now: now)
+        info.dueCount = counts.due
+        info.overdueCount = counts.overdue
         info.next = nextEventForWatch(now: now)
         info.last = lastTalkForWatch()
         let today = watchDayKey.string(from: now)
