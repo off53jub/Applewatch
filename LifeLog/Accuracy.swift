@@ -26,8 +26,9 @@ extension HomePC {
             guard line.words.count >= 2 else { out.append(line); continue }
             // 言葉ごとの話し手（どの区間にも入らない言葉は、前の言葉の人）
             var who: [String?] = line.words.map(speaker)
+            // 先頭のほうでどの区間にも入らない言葉は、最初に分かった人にする（見直しで直した）
+            if let k = who.firstIndex(where: { $0 != nil }) { for i in 0..<k { who[i] = who[k] } }
             for i in who.indices where who[i] == nil && i > 0 { who[i] = who[i - 1] }
-            if who.first == nil, let first = who.first(where: { $0 != nil }) { who[0] = first }
             // 同じ人の続き（run）にまとめる
             var runs: [(id: String?, words: [Word])] = []
             for (w, id) in zip(line.words, who) {
@@ -327,10 +328,15 @@ extension Pipeline {
     /// 直す前より誤りが減ったかを数える。30問以上で、別のモデルが1割以上良ければ、直しにそのモデルを使う。
     /// 職場の会話の行は Groq に送らない（ふだんの直しと同じ決まり）。
     private func measureCorrection(_ items: [(heard: String, right: String, context: SpeakerLabeler.Context)]) async {
-        guard let key = settings.groqKey ?? settings.apiKey else { return }
+        // Groq のキーだけ（ほかのサービスのキーを Groq に送らない）。端末内のモデルで作る設定のときは比べない（見直しで直した）
+        guard let key = settings.groqKey, !Summarizer.usesLocal(apiKey: key) else { return }
         let usable = items.filter { $0.context != .work }
         guard !usable.isEmpty else { return }
         let available = await Summarizer.availableModels(apiKey: key)
+        // 使っているモデルが Groq から無くなっていたら、初めのモデルに戻す
+        if !available.isEmpty, !available.contains(Summarizer.correctionModel) {
+            UserDefaults.standard.removeObject(forKey: Summarizer.correctionModelKey)
+        }
         let current = Summarizer.correctionModel
         let others = Summarizer.correctionCandidates.filter { $0 != current && (available.isEmpty || available.contains($0)) }
         var saved = Benchmark.saved
@@ -339,12 +345,15 @@ extension Pipeline {
         let trial = others[night % others.count]
         var score = saved.correction[trial] ?? Benchmark.Score()
         for item in usable {
-            guard let mine = try? await Summarizer.$modelOverride.withValue(current, operation: {
-                try await Summarizer.correct([item.heard], keywords: [], previous: nil, alternatives: nil, apiKey: key)
-            })?.first,
-                  let theirs = try? await Summarizer.$modelOverride.withValue(trial, operation: {
-                      try await Summarizer.correct([item.heard], keywords: [], previous: nil, alternatives: nil, apiKey: key)
-                  })?.first else { continue }
+            // どちらも Groq のそのモデルで作れたときだけ数える（失敗して端末内のモデルに回ったものは数えない）
+            func fix(_ model: String) async -> String? {
+                try? await Summarizer.$strictCloud.withValue(true) {
+                    try await Summarizer.$modelOverride.withValue(model) {
+                        try await Summarizer.correct([item.heard], keywords: [], previous: nil, alternatives: nil, apiKey: key)
+                    }
+                }?.first
+            }
+            guard let mine = await fix(current), let theirs = await fix(trial) else { continue }
             let a = Benchmark.errors(mine.isEmpty ? item.heard : mine, right: item.right)
             let b = Benchmark.errors(theirs.isEmpty ? item.heard : theirs, right: item.right)
             score.baseErrors += a.errors

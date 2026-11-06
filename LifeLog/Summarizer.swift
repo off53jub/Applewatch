@@ -39,6 +39,8 @@ enum Summarizer {
                                        "qwen/qwen3-32b", "llama-3.3-70b-versatile"]
     /// 物差しで比べるときだけ、使うモデルを決める
     @TaskLocal static var modelOverride: String?
+    /// 物差しで比べるときは、Groq だけで作る（失敗しても端末内・PC のモデルに回さない）
+    @TaskLocal static var strictCloud = false
 
     /// Groq に今あるモデルの名前（1日に1回だけ聞く。聞けなければ空）
     static func availableModels(apiKey: String) async -> Set<String> {
@@ -718,6 +720,7 @@ enum Summarizer {
     /// Groq が使えなかったとき（混んでいる・無料枠を超えた・通信できない）は、端末内の言語モデルが使えればそちらで作る。
     /// 端末内で作れなかったとき（読めない答え・断られた）は、外に出してよい中身なら Groq で作る。
     private static func chat(model: String, apiKey: String, maxWait: Double = 90, prompt: String) async throws -> [String: Any] {
+        if strictCloud { return try await groq(model: model, apiKey: apiKey, maxWait: maxWait, prompt: prompt) }
         // 職場の会話は、本人がオンにしていれば家の PC の言語モデルで作る（外のサービスには送らない。2026-11-06）
         if sensitive, !forceLocal, pcLLMForWork, let pc = pcLLM,
            let text = try? await pc(system, prompt),

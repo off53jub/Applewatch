@@ -2555,7 +2555,7 @@ final class Pipeline {
                     lastEngine += "＋クラウドの票" + (changed > 0 ? "（\(changed) 行を選び直した）" : "")
                 }
                 // 有料の票（本人がオンにしたときだけ。職場の会話は送らない。2026-11-06）
-                if ensemble, PaidVote.isOn, !asleep, places.registeredContext(at: start) != .work,
+                if ensemble, PaidVote.isOn, !asleep, context != .work, places.registeredContext(at: start) != .work,
                    calendar.context(at: start) != .work, lines.contains(where: { ($0.confidence ?? 1) < HomePC.cloudVoteBelow }) {
                     let before = lines.map(\.text)
                     lines = await PaidVote.addVotes(lines, audio: url)

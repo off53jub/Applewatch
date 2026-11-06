@@ -375,7 +375,8 @@ final class ConversationLog {
 
     /// 閉じたのに、見出しが付いていない会話か。
     private static func needsTitle(_ c: Conversation) -> Bool {
-        c.closed && c.title == nil && c.media == nil && c.titleSkipped != true
+        // 作り直しを待っている会話（分けた後ろの会話など）は、作り直しのほうで見出しを付ける（二重に付けない）
+        c.closed && c.title == nil && c.media == nil && c.titleSkipped != true && c.resummarize != true
             && c.lines.reduce(0) { $0 + $1.text.count } >= minimumCharacters
     }
 
@@ -857,7 +858,14 @@ final class ConversationLog {
         guard let k = closed.firstIndex(where: { $0.start == start }), k > 0 else { return nil }
         let prev = closed[k - 1], cur = closed[k]
         let gap = max(0, cur.start.timeIntervalSince(prev.end))
-        _ = try? await docs.deleteParagraphs([], headings: [Self.headingText(cur)], day: day)
+        // 2つの見出しを消し、つないだ会話の見出し（前の見出しと要点のまま・時間だけ広げる）を入れ直す。
+        // あとで作り直せたら置き換わる（作り直せなくても見出しは残る）
+        _ = try? await docs.deleteParagraphs([], headings: [Self.headingText(prev), Self.headingText(cur)], day: day)
+        var joined = prev
+        joined.lines = (prev.lines + cur.lines).sorted { $0.time < $1.time }
+        joined.end = max(prev.end, cur.end)
+        try? await docs.insert(heading: Self.headingText(joined), body: joined.points.map { "・" + $0 + "\n" }.joined(),
+                               at: joined.docIndex, before: joined.lines.first.map(Self.docLine), style: "HEADING_2", day: day)
         // 消しているあいだに変わっていてもよいように、読み直してから直す
         var log = load(day)
         guard let i = log.conversations.firstIndex(where: { $0.start == prev.start }),
@@ -885,7 +893,20 @@ final class ConversationLog {
         let before = c.lines[k - 1]
         let spoken = before.end.flatMap { end in before.offset.map { end - $0 } } ?? Double(before.text.count) * 0.17
         let gap = max(0, time.timeIntervalSince(before.time) - spoken)
+        // 元の見出しを消し、2つの会話の見出しをすぐ入れ直す（前は元の見出しと要点のまま、後ろは時間と相手だけ）。
+        // あとで作り直せたら置き換わる
         _ = try? await docs.deleteParagraphs([], headings: [Self.headingText(c)], day: day)
+        var head = c
+        head.lines = Array(c.lines[..<k])
+        head.end = head.lines.last?.time ?? head.start
+        var tail = Conversation(start: time, end: max(c.end, time), docIndex: c.docIndex)
+        tail.lines = Array(c.lines[k...])
+        tail.closed = true
+        tail.place = c.place
+        try? await docs.insert(heading: Self.headingText(head), body: head.points.map { "・" + $0 + "\n" }.joined(),
+                               at: head.docIndex, before: head.lines.first.map(Self.docLine), style: "HEADING_2", day: day)
+        try? await docs.insert(heading: Self.headingText(tail), body: "",
+                               at: tail.docIndex, before: tail.lines.first.map(Self.docLine), style: "HEADING_2", day: day)
         var log = load(day)
         guard let i = log.conversations.firstIndex(where: { $0.start == start }),
               let cut = log.conversations[i].lines.firstIndex(where: { $0.time == time }), cut > 0 else { return nil }
@@ -900,6 +921,9 @@ final class ConversationLog {
         second.place = first.place
         second.scene = first.scene
         second.resummarize = true
+        // 人物ノートと議事録は、元の会話で済んでいれば、分けた後ろの会話でもう一度作らない
+        second.notesWritten = first.notesWritten
+        second.minutes = first.minutes
         log.conversations[i] = first
         log.conversations.append(second)
         log.redoSummary = true
@@ -1629,12 +1653,11 @@ final class ConversationLog {
 
     /// ほかの端末の1日分を合わせる。会話ごとに番号（rev）の大きいほうを残し、同じなら中身で決める（どちらの端末でも同じ結果になるように）。
     /// この端末で続いている会話には触らない。変わったら true。
-    /// 送ってきた端末の版がこの端末より古いときは、向こうに無い項目（古い版が知らない項目）を手元の値で埋める（2026-11-06）。
+    /// 送ってきた端末の版が知らない項目（SyncFill の一覧にあるものだけ）は、手元の値で埋める（2026-11-06）。myBuild は使っていない（前の呼び方のため残す）
     @discardableResult
     func mergeRemote(_ remote: SyncDay, day: String, myBuild: Int = AppBuild.current) -> Bool {
         var log = load(day)
         var changed = false
-        let older = (remote.build ?? 0) < myBuild
         var tombs: [Date: Int] = [:]
         for r in log.removed ?? [] { tombs[r.start] = max(tombs[r.start] ?? 0, r.rev) }
         for r in remote.removed where r.rev > (tombs[r.start] ?? 0) {
@@ -1646,7 +1669,7 @@ final class ConversationLog {
                 let lc = log.conversations[i]
                 guard lc.closed else { continue }
                 let lr = lc.rev ?? 0, rr = rc.rev ?? 0
-                let taken = older ? SyncFill.filled(rc, keeping: lc) : rc
+                let taken = SyncFill.filledConversation(rc, keeping: lc, senderBuild: remote.build)
                 if rr > lr {
                     log.conversations[i] = taken
                     changed = true

@@ -70,28 +70,35 @@ enum PaidVote {
     static func addVotes(_ lines: [HomePC.Line], audio url: URL, below: Double = HomePC.cloudVoteBelow) async -> [HomePC.Line] {
         guard isOn, let key else { return lines }
         let unsure = lines.indices.filter { (lines[$0].confidence ?? 1) < below && !lines[$0].votes.isEmpty }
-        guard let first = unsure.first, let last = unsure.last else { return lines }
-        let from = max(0, lines[first].offset - 1), to = lines[last].end + 1
-        guard usedSeconds + (to - from) <= Double(capMinutes) * 60 else { return lines }
-        guard let clip = await AudioClip.extract(url, from: from, to: to) else { return lines }
-        defer { try? FileManager.default.removeItem(at: clip) }
-        guard let words = try? await transcribe(clip, key: key) else { return lines }
-        addUsed(to - from)
-        CloudLog.add(service: "ElevenLabs（文字起こし）", what: "食い違いの大きい行の音声（\(Int(to - from)) 秒）", work: false,
-                     size: Int((try? FileManager.default.attributesOfItem(atPath: clip.path)[.size] as? Int) ?? 0))
-        Tally.add("paid.lines", unsure.count)
-        var out = lines
+        // 食い違った行の所だけを送る（続いている行どうし＝間が2秒より短いものは1つにまとめる。見直しで直した）
+        var groups: [[Int]] = []
         for i in unsure {
-            let line = lines[i]
-            let text = words.filter { w in
-                guard let start = w.start, w.type != "audio_event" else { return false }
-                let t = start + from
-                return t >= line.offset - 0.3 && t < line.end + 0.3
-            }.map(\.text).joined().trimmingCharacters(in: .whitespaces)
-            guard !text.isEmpty else { continue }
-            var votes = line.votes
-            votes["eleven"] = text
-            out[i] = HomePC.revote(line, votes: votes)
+            if let last = groups.last?.last, lines[i].offset - lines[last].end < 2 { groups[groups.count - 1].append(i) } else { groups.append([i]) }
+        }
+        var out = lines
+        for group in groups {
+            guard let first = group.first, let last = group.last else { continue }
+            let from = max(0, lines[first].offset - 0.5), to = lines[last].end + 0.5
+            guard usedSeconds + (to - from) <= Double(capMinutes) * 60 else { break }
+            guard let clip = await AudioClip.extract(url, from: from, to: to) else { continue }
+            defer { try? FileManager.default.removeItem(at: clip) }
+            guard let words = try? await transcribe(clip, key: key) else { continue }
+            addUsed(to - from)
+            CloudLog.add(service: "ElevenLabs（文字起こし）", what: "食い違いの大きい行の音声（\(Int(to - from)) 秒）", work: false,
+                         size: Int((try? FileManager.default.attributesOfItem(atPath: clip.path)[.size] as? Int) ?? 0))
+            Tally.add("paid.lines", group.count)
+            for i in group {
+                let line = lines[i]
+                let text = words.filter { w in
+                    guard let start = w.start, w.type != "audio_event" else { return false }
+                    let t = start + from
+                    return t >= line.offset - 0.3 && t < line.end + 0.3
+                }.map(\.text).joined().trimmingCharacters(in: .whitespaces)
+                guard !text.isEmpty else { continue }
+                var votes = line.votes
+                votes["eleven"] = text
+                out[i] = HomePC.revote(line, votes: votes)
+            }
         }
         return out
     }
