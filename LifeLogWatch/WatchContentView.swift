@@ -1,8 +1,68 @@
 import SwiftUI
 
+/// 時計の画面。上下にめくる7枚（2026-11-07）:
+/// 録音 / 頼まれごと / 次の予定 / さっきの会話 / 聞く / 朝の読み上げ / 様子。
+/// 録音の画面は前と同じ。ほかの画面の中身は iPhone から届く（iPhone が離れていても、前に届いた分を出す）。
 struct WatchContentView: View {
     @Environment(WatchRecorder.self) private var recorder
     @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        TabView {
+            RecordPage()
+            TasksPage()
+            NextEventPage()
+            LastTalkPage()
+            AskPage()
+            MorningPage()
+            StatusPage()
+        }
+        .tabViewStyle(.verticalPage)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { recorder.refreshStatus() }
+        }
+        .onAppear { recorder.refreshStatus() }
+    }
+}
+
+/// 時刻の言い方（「10:30」）
+private func clock(_ seconds: Double) -> String {
+    Date(timeIntervalSince1970: seconds).formatted(date: .omitted, time: .shortened)
+}
+
+/// 日付つきの時刻（今日なら時刻だけ）
+private func when(_ seconds: Double) -> String {
+    let date = Date(timeIntervalSince1970: seconds)
+    return Calendar.current.isDateInToday(date)
+        ? date.formatted(date: .omitted, time: .shortened)
+        : date.formatted(.dateTime.month().day().hour().minute())
+}
+
+/// 画面の見出し
+private struct PageTitle: View {
+    let text: String
+    let symbol: String
+
+    var body: some View {
+        Label(text, systemImage: symbol)
+            .font(.headline)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// まだ iPhone から何も届いていないとき
+private struct NothingYet: View {
+    var body: some View {
+        Text("まだ iPhone から届いていません。iPhone の LifeLog を開くと届きます。")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+    }
+}
+
+// MARK: - 録音（前と同じ）
+
+private struct RecordPage: View {
+    @Environment(WatchRecorder.self) private var recorder
 
     var body: some View {
         ScrollView {
@@ -81,9 +141,219 @@ struct WatchContentView: View {
                 .multilineTextAlignment(.center)
             }
         }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { recorder.refreshStatus() }
+    }
+}
+
+// MARK: - 頼まれごと
+
+private struct TasksPage: View {
+    @Environment(WatchRecorder.self) private var recorder
+
+    var body: some View {
+        let board = recorder.board
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                PageTitle(text: "頼まれごと（\(board.openCount)）", symbol: "checklist")
+                if board.info == nil {
+                    NothingYet()
+                } else if board.tasks.isEmpty {
+                    Text("まだのものはありません。").font(.footnote).foregroundStyle(.secondary)
+                }
+                ForEach(board.tasks) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.what)
+                            .font(.footnote)
+                        let sub = [item.due, item.from].compactMap { $0 }.joined(separator: "・")
+                        if !sub.isEmpty {
+                            Text(sub)
+                                .font(.caption2)
+                                .foregroundStyle(item.late == true ? .orange : .secondary)
+                        }
+                        Button {
+                            board.markDone(item.id)
+                        } label: {
+                            Label("済み", systemImage: "checkmark")
+                                .font(.caption2)
+                        }
+                        .tint(.green)
+                    }
+                    .padding(.vertical, 2)
+                    Divider()
+                }
+            }
         }
-        .onAppear { recorder.refreshStatus() }
+    }
+}
+
+// MARK: - 次の予定
+
+private struct NextEventPage: View {
+    @Environment(WatchRecorder.self) private var recorder
+
+    var body: some View {
+        let board = recorder.board
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                PageTitle(text: "次の予定", symbol: "calendar")
+                if board.info == nil {
+                    NothingYet()
+                } else if let event = board.info?.next {
+                    Text(event.title).font(.footnote).bold()
+                    Text(clock(event.start) + (event.end.map { "〜" + clock($0) } ?? ""))
+                        .font(.caption2)
+                    if let place = event.place {
+                        Text(place).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if let people = event.people, !people.isEmpty {
+                        Text("会う人: " + people.joined(separator: "、")).font(.caption2)
+                    }
+                    if let brief = event.brief {
+                        Text(brief)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("12時間以内の予定はありません。").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - さっきの会話
+
+private struct LastTalkPage: View {
+    @Environment(WatchRecorder.self) private var recorder
+
+    var body: some View {
+        let board = recorder.board
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                PageTitle(text: "さっきの会話", symbol: "text.bubble")
+                if board.info == nil {
+                    NothingYet()
+                } else if let talk = board.info?.last {
+                    Text(when(talk.start) + (talk.end.map { "〜" + clock($0) } ?? ""))
+                        .font(.caption2)
+                    if let title = talk.title {
+                        Text(title).font(.footnote).bold()
+                    }
+                    if let people = talk.people, !people.isEmpty {
+                        Text(people.joined(separator: "、")).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    ForEach(Array((talk.points ?? []).enumerated()), id: \.offset) { _, point in
+                        Text("・" + point).font(.caption2)
+                    }
+                } else {
+                    Text("まだ閉じた会話はありません。").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 聞く
+
+private struct AskPage: View {
+    @Environment(WatchRecorder.self) private var recorder
+    @State private var text = ""
+
+    var body: some View {
+        let board = recorder.board
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                PageTitle(text: "記録に聞く", symbol: "questionmark.bubble")
+                // 押すと、音声入力（話して入れる）か文字で入れられる
+                TextField("聞きたいこと", text: $text)
+                    .onSubmit { send() }
+                Button {
+                    send()
+                } label: {
+                    Label("聞く", systemImage: "paperplane")
+                }
+                .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
+                if let question = board.question {
+                    Text("質問: " + question).font(.caption2).foregroundStyle(.secondary)
+                }
+                if !board.askState.isEmpty, board.answer == nil {
+                    HStack(spacing: 4) {
+                        if board.asking { ProgressView().frame(width: 16, height: 16) }
+                        Text(board.askState).font(.caption2)
+                    }
+                }
+                if let answer = board.answer {
+                    Text(answer).font(.footnote)
+                }
+            }
+        }
+    }
+
+    private func send() {
+        recorder.board.ask(text)
+        text = ""
+    }
+}
+
+// MARK: - 朝の読み上げ
+
+private struct MorningPage: View {
+    @Environment(WatchRecorder.self) private var recorder
+
+    var body: some View {
+        let board = recorder.board
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                PageTitle(text: "朝の読み上げ", symbol: "sun.max")
+                if board.info == nil {
+                    NothingYet()
+                } else if let brief = board.info?.morning {
+                    Button {
+                        board.reader.toggle(brief.text)
+                    } label: {
+                        Label(board.reader.speaking ? "止める" : "読み上げる",
+                              systemImage: board.reader.speaking ? "stop.circle" : "speaker.wave.2")
+                    }
+                    Text(brief.text).font(.footnote)
+                } else {
+                    Text("まだ今日の分がありません。iPhone の LifeLog を開くと作ります。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 様子
+
+private struct StatusPage: View {
+    @Environment(WatchRecorder.self) private var recorder
+
+    var body: some View {
+        let board = recorder.board
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                PageTitle(text: "様子", symbol: "waveform.path.ecg")
+                Text(recorder.link).font(.caption2)
+                Text("時計から送っていない録音 \(recorder.unsent) 個")
+                    .font(.caption2)
+                    .foregroundStyle(recorder.unsent >= 4 ? .orange : .primary)
+                if let status = board.info?.status {
+                    if let pending = status.pending {
+                        Text("iPhone の文字起こし待ち \(pending) 件").font(.caption2)
+                    }
+                    if let processed = status.processed {
+                        Text("最後に文字にした " + when(processed)).font(.caption2)
+                    }
+                }
+                if let made = board.info?.made {
+                    Text("iPhone から届いた " + when(made))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if recorder.lowPower {
+                    Text("低電力モード: 15分ほどごとにまとめて送ります").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }

@@ -43,6 +43,8 @@ final class WatchRecorder: NSObject {
     @ObservationIgnored private var lowSpaceAlerted = Date.distantPast
 
     private let sender: WatchSender
+    /// 頼まれごと・次の予定・聞く・朝の読み上げの画面の中身（2026-11-07）
+    let board: WatchBoard
     private let engine = AVAudioEngine()
     private let writer: ChunkWriter
 
@@ -59,6 +61,7 @@ final class WatchRecorder: NSObject {
         let sender = WatchSender()
         self.sender = sender
         writer = ChunkWriter(sender: sender)
+        board = WatchBoard(sender: sender)
         super.init()
         sender.onChange = { [weak self] in
             Task { @MainActor in self?.refreshStatus() }
