@@ -72,7 +72,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        UIBackgroundModes: [audio, fetch, processing]
+        # remote-notification: 家の PC からの見えない通知で起きる（2026-11-07）
+        UIBackgroundModes: [audio, fetch, processing, remote-notification]
         # アクションボタンなどで、アプリを開かずに録音を始めたときの表示
         NSSupportsLiveActivities: true
         BGTaskSchedulerPermittedIdentifiers:
