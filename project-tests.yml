@@ -13,6 +13,18 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog.tests
+  # 全部の画面を開いて写真を撮る（2026-11-06。アプリは Debug・シミュレーターで、見本の記録を入れて動かす）
+  LifeLogUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [LifeLogUITests]
+    dependencies:
+      - target: LifeLog
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog.uitests
+        TEST_TARGET_NAME: LifeLog
 schemes:
   LifeLogTests:
     build:
@@ -21,3 +33,10 @@ schemes:
         LifeLogTests: [test]
     test:
       targets: [LifeLogTests]
+  LifeLogUITests:
+    build:
+      targets:
+        LifeLog: all
+        LifeLogUITests: [test]
+    test:
+      targets: [LifeLogUITests]
