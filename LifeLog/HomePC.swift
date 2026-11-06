@@ -103,9 +103,10 @@ final class HomePC {
         defer { session.finishTasksAndInvalidate() }
         let (data, response) = try await session.data(for: try request("hello"))
         try Self.check(response, data: data)
-        struct Hello: Decodable { let model: String; let provider: String; let version: Int? }
+        struct Hello: Decodable { let model: String; let provider: String; let version: Int?; let features: [String]? }
         let hello = try JSONDecoder().decode(Hello.self, from: data)
         version = hello.version ?? 1
+        features = Set(hello.features ?? [])
         return "\(hello.model)（\(hello.provider == "cuda" ? "GPU" : "CPU")）"
     }
 
@@ -127,6 +128,41 @@ final class HomePC {
     /// 区切りを PC で文字にする。local は端末内の文字起こし（声のある区間を決めるのに使う）。
     func transcribe(_ url: URL, local: [Transcriber.Line], hints: [String] = []) async throws -> [Line] {
         try await transcribe(url, segments: HaasEngine.segments(from: local), hints: hints)
+    }
+
+    /// PC ができること（"speakers"・"scene"・"vad"。版 3 から。2026-11-06）
+    var features: Set<String> = []
+
+    // MARK: - 複数のモデルで決める（2026-11-06）
+
+    /// 区間ごとの声の特徴（PC の話者モデル。iPhone とは別の種類）。短すぎる区間は nil
+    func speakerEmbeddings(_ url: URL, segments: [(start: TimeInterval, end: TimeInterval)]) async throws -> [[Float]?] {
+        struct Reply: Decodable { let embeddings: [[Float]?] }
+        let data = try await post("speakers", url: url, segments: segments)
+        return try JSONDecoder().decode(Reply.self, from: data).embeddings
+    }
+
+    /// 区間ごとの音の種類（PC の音の分類モデル。上位5つ）
+    func sceneTags(_ url: URL, segments: [(start: TimeInterval, end: TimeInterval)]) async throws -> [[(name: String, prob: Double)]] {
+        struct Tag: Decodable { let name: String; let prob: Double }
+        struct Reply: Decodable { let tags: [[Tag]] }
+        let data = try await post("scene", url: url, segments: segments)
+        return try JSONDecoder().decode(Reply.self, from: data).tags.map { $0.map { (name: $0.name, prob: $0.prob) } }
+    }
+
+    private func post(_ path: String, url: URL, segments: [(start: TimeInterval, end: TimeInterval)]) async throws -> Data {
+        var upload = try request(path)
+        var components = URLComponents(url: upload.url!, resolvingAgainstBaseURL: false)
+        let list = segments.map { String(format: "%.2f-%.2f", $0.start, $0.end) }.joined(separator: ",")
+        components?.queryItems = [URLQueryItem(name: "segments", value: list)]
+        upload.url = components?.url
+        upload.httpMethod = "POST"
+        upload.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
+        let session = makeSession(timeout: 180)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.upload(for: upload, fromFile: url)
+        try Self.check(response, data: data)
+        return data
     }
 
     /// つながらなくなった時刻（つながったら nil。家の PC の見張り。2026-11-06）
@@ -174,6 +210,8 @@ final class HomePC {
                 words.append(word)
             }
             if !words.isEmpty { items.append(URLQueryItem(name: "hints", value: words.joined(separator: "\n"))) }
+            // PC でも声の区間を探し、iPhone が拾い漏らした声も文字にする（2つの VAD のどちらかが声とした所は捨てない。2026-11-06）
+            if features.contains("vad") { items.append(URLQueryItem(name: "vad", value: "union")) }
             if let previous, !previous.isEmpty { items.append(URLQueryItem(name: "prompt", value: String(previous.suffix(120)))) }
             // 答え合わせから学んだ、モデルごとの当たりやすさ（多数決の票の重み）
             if let weights = UserDefaults.standard.string(forKey: AnswerKey.weightsKey), !weights.isEmpty {

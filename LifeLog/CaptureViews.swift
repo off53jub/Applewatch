@@ -134,7 +134,13 @@ struct NewVoicesSection: View {
                         PersonView(id: note.personID)
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            if let place = note.unusualPlace {
+                            if let other = note.pcSuggests {
+                                let name = { (id: String) in pipeline.people.first { $0.id == id }?.displayName ?? "人物\(id)" }
+                                Text("記録では \(name(note.personID)) ですが、PC の声のモデルでは \(name(other)) の声に近い行です")
+                                Button("\(name(other)) に直す") { Task { await pipeline.applyPCSuggestion(note) } }
+                                    .font(.callout)
+                                    .buttonStyle(.bordered)
+                            } else if let place = note.unusualPlace {
                                 Text("\(pipeline.people.first { $0.id == note.personID }?.displayName ?? "人物\(note.personID)") の声が、ふだん話さない「\(place)」で聞こえました。合っていますか？")
                             } else {
                                 Text(note.claimed.map { "人物\(note.personID) が「\($0)」と名乗りました" }
@@ -249,6 +255,7 @@ struct ConfirmBoxView: View {
                     NavigationLink("今日の人物Nを整理") { UnnamedVoicesView(day: day) }
                 }
             }
+            SplitWordsSection()
             if pipeline.misheardCount > 0 {
                 Section("5. 聞き間違いかも（\(pipeline.misheardCount)）") {
                     NavigationLink("直す・そのまま") { MisheardView() }
@@ -262,5 +269,46 @@ struct ConfirmBoxView: View {
         }
         .navigationTitle("確認箱")
         .onAppear { reviewCount = pipeline.voiceReview().count }
+    }
+}
+
+/// 多数決でモデルが何度も割れた言葉（2026-11-06）。どちらかを登録すると、次から4つのモデル全部のヒントになる
+struct SplitWordsSection: View {
+    @Environment(Pipeline.self) private var pipeline
+    @State private var version = 0
+
+    var body: some View {
+        let pairs = Array(pipeline.splitWordCandidates().prefix(5))
+        if !pairs.isEmpty {
+            Section {
+                ForEach(pairs) { pair in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("「\(pair.chosen)」と「\(pair.other)」で、モデルが \(pair.days) 日割れました")
+                        HStack {
+                            Button("「\(pair.chosen)」を登録") { register(pair.chosen, pair) }
+                            Button("「\(pair.other)」を登録") { register(pair.other, pair) }
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.callout)
+                        Button("どちらでもない・登録しない") {
+                            SplitWords.dismiss(pair)
+                            version += 1
+                        }
+                        .font(.caption)
+                    }
+                }
+            } header: {
+                Text("割れやすい言葉（\(pairs.count)）")
+            } footer: {
+                Text("正しい書き方を登録すると、聞き取りのヒント（家の PC の4つのモデル・iPhone・クラウド）と直しに使います。")
+            }
+            .id(version)
+        }
+    }
+
+    private func register(_ word: String, _ pair: SplitWords.Pair) {
+        pipeline.vocabulary.add(word, to: .always)
+        SplitWords.dismiss(pair)
+        version += 1
     }
 }

@@ -78,6 +78,8 @@ struct NewVoiceBox: Codable {
         var dismissed: Bool?
         /// 名前のある人の声が、ふだん話さない場所で聞こえた（取り違えかも）なら、その場所（2026-11-06）
         var unusualPlace: String? = nil
+        /// PC の話者モデルでは、この人（番号）の声に近かった（2026-11-06）
+        var pcSuggests: String? = nil
     }
 
     var notes: [Note] = []
@@ -209,6 +211,8 @@ extension Pipeline {
         // 直近2日の、名前の無い声の「〇〇です」
         let known = Set(box.notes.map(\.id))
         let days = Array(recordedDays().prefix(2))
+        // 多数決でモデルが割れた言葉を数える（何日も割れたら、言葉の登録の候補にする。MultiModel）
+        for day in days { SplitWords.count(day: day, lines: conversations(on: day).flatMap(\.lines)) }
         for day in days {
             for line in conversations(on: day).flatMap(\.lines) {
                 guard let id = line.speakerID, id != SpeakerLabeler.selfID, line.media == nil,
@@ -250,6 +254,14 @@ extension Pipeline {
         let total = history.reduce(0) { $0 + $1.count }
         let here = history.filter { $0.place == place }.reduce(0) { $0 + $1.count }
         return total >= 10 && here <= 1 && lines <= 3
+    }
+
+    /// 割れやすい言葉の候補（もう登録した言葉は除く）
+    func splitWordCandidates() -> [SplitWords.Pair] {
+        var known = Set<String>()
+        for group in Vocabulary.Group.allCases { known.formUnion(vocabulary.words(in: group)) }
+        known.formUnion(vocabulary.fixes.map(\.right))
+        return SplitWords.candidates(known: known)
     }
 
     func dismissNewVoice(_ id: String) {

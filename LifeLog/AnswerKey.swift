@@ -644,6 +644,15 @@ extension Pipeline {
     /// 答え合わせがたまったら、「確かめたほうがよい行」の線を当たる値に寄せる（本人の希望でお任せ。2026-11-06）。
     /// 一度に動かすのは 0.05 まで（急に変わらないように）。
     func tuneFromAnswers() {
+        // 確からしさの手がかりを束ねる重みも学ぶ（30問から。2026-11-06）
+        let data = answerKey.samples.compactMap { s -> (x: [Double], wrong: Bool)? in
+            guard s.isAnswered, s.skipped != true, let right = s.rightText else { return nil }
+            let r = AnswerKey.normalized(right), t = AnswerKey.normalized(s.text)
+            let wrong = Double(AnswerKey.editDistance(t, r)) > Double(max(r.count, 1)) * 0.1
+            return (Calibration.features(confidence: s.confidence, noisy: s.noisy == true, rubbed: false,
+                                         split: s.votes != nil, length: s.text.count), wrong)
+        }
+        if let weights = Calibration.train(data) { Calibration.save(weights) }
         guard let best = AnswerKey.bestUncertainLine(answerKey.samples) else { return }
         let now = ConversationLog.Line.uncertainBelow
         let next = now + max(-0.05, min(0.05, best - now))

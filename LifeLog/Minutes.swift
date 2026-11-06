@@ -88,6 +88,19 @@ extension Pipeline {
         } catch {
             return .failure(error)
         }
+        // もう1つの言語モデル（iPhone の中）でも作り、決まったこと・宿題のうち片方だけが挙げたものに「要確認」を付ける（2026-11-06）
+        var unsureDecisions = Set<Int>(), unsureTodos = Set<Int>()
+        if MultiModel.secondOpinionOK,
+           !Summarizer.$sensitive.withValue(isWorkTime(c.start), operation: { Summarizer.usesLocal(apiKey: key) }),
+           let second = try? await Summarizer.$forceLocal.withValue(true, operation: {
+               try await Summarizer.minutes(transcript, timeRange: range, event: event?.title, attendees: attendees, apiKey: key)
+           }) {
+            for (i, d) in made.decisions.enumerated() where !MultiModel.agrees(d, with: second.decisions) { unsureDecisions.insert(i) }
+            let otherTodos = second.todos.map { $0.who + " " + $0.what }
+            for (i, t) in made.todos.enumerated() where !MultiModel.agrees(t.who + " " + t.what, with: otherTodos) {
+                unsureTodos.insert(i)
+            }
+        }
 
         let title = (event?.title).flatMap { $0.isEmpty ? nil : $0 } ?? c.title ?? "会議"
         let name = "議事録 " + Self.minutesName.string(from: c.start) + " " + title
@@ -100,11 +113,14 @@ extension Pipeline {
             body += "● " + topic.title + "\n" + topic.points.map { "・" + $0 + "\n" }.joined()
         }
         if !made.decisions.isEmpty {
-            body += "\n◆ 決まったこと\n" + made.decisions.map { "・" + $0 + "\n" }.joined()
+            body += "\n◆ 決まったこと\n" + made.decisions.enumerated().map { i, d in
+                "・" + d + (unsureDecisions.contains(i) ? MultiModel.unsureMark : "") + "\n"
+            }.joined()
         }
         if !made.todos.isEmpty {
-            body += "\n◆ 宿題\n" + made.todos.map { todo in
-                "・" + (todo.who.isEmpty ? "" : todo.who + "：") + todo.what + (todo.due.isEmpty ? "" : "（\(todo.due)まで）") + "\n"
+            body += "\n◆ 宿題\n" + made.todos.enumerated().map { i, todo in
+                "・" + (todo.who.isEmpty ? "" : todo.who + "：") + todo.what + (todo.due.isEmpty ? "" : "（\(todo.due)まで）")
+                    + (unsureTodos.contains(i) ? MultiModel.unsureMark : "") + "\n"
             }.joined()
         }
         if !made.next.isEmpty { body += "\n◆ 次回\n・" + made.next + "\n" }
