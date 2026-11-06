@@ -139,7 +139,14 @@ HOME/asc/ に App Store Connect の API キー（`AuthKey_<KEYID>.p8` と `confi
   - speaker → アプリの中で本人が1行の話し手を直すときと同じしかた。名前のある人を新しく作ったり、まとめたり、
     名前を変えたりしない（名前の無い「人物N」も PC からは作らない）。
 - 当てたら `POST /edits/ack {"results":[{"id":12,"status":"applied","reason":null}]}`（status は
-  `applied`・`skipped`・`failed`）。当てた日は、次に `/records/<day>` を送り直す。
+  `applied`・`skipped`・`failed`）。答えは `{"ok": true, "updated": n}`（知らない id は数えない）。
+  当てた日は、早めに `/records/<day>` を送り直す。
+- `GET /edits` は1回に 500 件まで（続きの印は無い）。返ってきた最後の id を after にして、0件になるまで呼ぶ。
+- 「自分」の speakerID は、いつも `me`。
+- PC は、iPhone で当てた直しを、その日の記録が届き直すまで次の直しの base に入れる（記録が届くまでに作った直しが
+  食い違いで飛ばされないように）。同じ行の直しが重なったときは、iPhone が読みに来る前なら同じ種類の新しいほうだけ残す。
+- 同じ日に同じ時刻の行が2つあると、PC はその行を直せない（iPhone も、同じ時刻の行が2つあれば当てずに skipped）。
+- 記録の日時を数で送ると 400。8MB は 8MiB として受ける。
 
 ## 2. 文字盤とウィジェット — App Group `group.com.off53jub.lifelog`
 
