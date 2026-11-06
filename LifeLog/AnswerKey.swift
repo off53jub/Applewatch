@@ -110,11 +110,35 @@ final class AnswerKey {
     }
 
     /// 答えたものから、モデルごとの重みを決め直して保存する（足りなければ消す＝どれも同じ重み）
+    /// 正しい文が分かっている行（答え合わせの答えと、手で直した行）。重みと精度の物差しの材料（2026-11-06）
+    struct Truth: Sendable {
+        let right: String
+        let votes: [String: String]?
+        let noisy: Bool
+        let audio: String
+        let offset: TimeInterval
+        let end: TimeInterval?
+        let time: Date
+    }
+
+    /// 答え合わせのほかに材料にする、手で直した行（Pipeline が入れる）
+    var extraTruths: [Truth] = []
+
+    /// 答え合わせで答えた行を Truth にしたもの
+    var answeredTruths: [Truth] {
+        samples.compactMap { s in
+            guard s.isAnswered, s.skipped != true, let right = s.rightText,
+                  !right.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            return Truth(right: right, votes: s.votes, noisy: s.noisy == true, audio: s.audio, offset: s.offset, end: nil, time: s.time)
+        }
+    }
+
     func updateWeights() {
         // 全体のものと、騒がしい行・静かな行で分けたもの（2026-11-06。分けた側が足りなければ全体のものを使う）
-        for (suffix, part) in [("", samples), (".noisy", samples.filter { $0.noisy == true }),
-                               (".quiet", samples.filter { $0.noisy != true })] {
-            let weights = Self.weights(part)
+        // 答え合わせの答えに、手で直した行も足す（2026-11-06）
+        let all = answeredTruths + extraTruths
+        for (suffix, part) in [("", all), (".noisy", all.filter(\.noisy)), (".quiet", all.filter { !$0.noisy })] {
+            let weights = Self.weights(truths: part)
             if weights.isEmpty {
                 UserDefaults.standard.removeObject(forKey: Self.weightsKey + suffix)
             } else {
@@ -129,9 +153,17 @@ final class AnswerKey {
 
     /// モデルごとの文字の誤り率（食い違った行の答えから）。答えた数とあわせて
     nonisolated static func engineErrors(_ samples: [Sample]) -> [String: (error: Double, count: Int)] {
+        engineErrors(truths: samples.compactMap { s in
+            guard s.isAnswered, s.skipped != true, let right = s.rightText else { return nil }
+            return Truth(right: right, votes: s.votes, noisy: s.noisy == true, audio: s.audio, offset: s.offset, end: nil, time: s.time)
+        })
+    }
+
+    nonisolated static func engineErrors(truths: [Truth]) -> [String: (error: Double, count: Int)] {
         var errors: [String: (e: Int, n: Int, count: Int)] = [:]
-        for s in samples where s.isAnswered && s.skipped != true {
-            guard let right = s.rightText, let votes = s.votes else { continue }
+        for s in truths {
+            guard let votes = s.votes else { continue }
+            let right = s.right
             let r = normalized(right)
             guard !r.isEmpty else { continue }
             for (engine, text) in votes {
@@ -147,7 +179,14 @@ final class AnswerKey {
 
     /// 重み＝全体の誤り率の平均 ÷ そのモデルの誤り率（0.5〜2.0）。答えた食い違いの行が足りなければ空
     nonisolated static func weights(_ samples: [Sample]) -> [String: Double] {
-        let errors = engineErrors(samples).filter { $0.value.count >= weightsNeed }
+        weights(truths: samples.compactMap { s in
+            guard s.isAnswered, s.skipped != true, let right = s.rightText else { return nil }
+            return Truth(right: right, votes: s.votes, noisy: s.noisy == true, audio: s.audio, offset: s.offset, end: nil, time: s.time)
+        })
+    }
+
+    nonisolated static func weights(truths: [Truth]) -> [String: Double] {
+        let errors = engineErrors(truths: truths).filter { $0.value.count >= weightsNeed }
         guard errors.count >= 2 else { return [:] }
         let mean = errors.values.map(\.error).reduce(0, +) / Double(errors.count)
         return errors.mapValues { min(2.0, max(0.5, mean / max($0.error, 0.02))) }
@@ -651,6 +690,9 @@ extension Pipeline {
     /// 答え合わせがたまったら、「確かめたほうがよい行」の線を当たる値に寄せる（本人の希望でお任せ。2026-11-06）。
     /// 一度に動かすのは 0.05 まで（急に変わらないように）。
     func tuneFromAnswers() {
+        // 手で直した行も、多数決の重みの材料にする（2026-11-06）
+        answerKey.extraTruths = manualTruths()
+        answerKey.updateWeights()
         // 話者の線と、頼まれごとの候補も、直した記録から学ぶ（2026-11-06）
         if SpeakerTuning.tune() { Tally.add("learn.updated") }
         if TaskLearning.train(tasks.items) { Tally.add("learn.updated") }

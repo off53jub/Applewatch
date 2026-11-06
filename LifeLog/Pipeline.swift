@@ -2197,8 +2197,10 @@ final class Pipeline {
                                                      noisy: lines.contains { $0.noisy == true }), homePC.engineCount > 1 {
                 ensembleDone = true
                 NightlyRecheck.markEnsembleDone(target.audio)
+                // 同じ時間をもう1台（iPhone と時計）でも録っていれば、食い違った行はその音声の文も票にする（2026-11-06）
+                let voted = await addOtherMicVotes(pc, audio: url, hints: words)
                 for i in lines.indices {
-                    let inSpan = pc.filter { $0.offset >= spans[i].start - 0.5 && $0.offset < spans[i].end - 0.2 }
+                    let inSpan = voted.filter { $0.offset >= spans[i].start - 0.5 && $0.offset < spans[i].end - 0.2 }
                     let text = inSpan.map(\.text).joined()
                     guard !text.isEmpty, text != texts[i] else { continue }
                     let sure = inSpan.compactMap(\.confidence).min() ?? 0
@@ -2543,6 +2545,14 @@ final class Pipeline {
                     lines = HomePC.addCloudVote(lines, cloud: cloud.lines)
                     let changed = zip(before, lines).filter { $0 != $1.text }.count
                     lastEngine += "＋クラウドの票" + (changed > 0 ? "（\(changed) 行を選び直した）" : "")
+                }
+                // 有料の票（本人がオンにしたときだけ。職場の会話は送らない。2026-11-06）
+                if ensemble, PaidVote.isOn, !asleep, places.registeredContext(at: start) != .work,
+                   calendar.context(at: start) != .work, lines.contains(where: { ($0.confidence ?? 1) < HomePC.cloudVoteBelow }) {
+                    let before = lines.map(\.text)
+                    lines = await PaidVote.addVotes(lines, audio: url)
+                    let changed = zip(before, lines).filter { $0 != $1.text }.count
+                    if changed > 0 { lastEngine += "＋ElevenLabs の票（\(changed) 行を選び直した）" }
                 }
                 pcLines = ensemble ? lines : nil
                 entries = lines.map { ($0.offset, $0.text, nil) }

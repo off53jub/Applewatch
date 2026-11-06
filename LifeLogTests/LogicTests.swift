@@ -1310,4 +1310,41 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(talks.map(\.lines.count), [2, 1])
         XCTAssertEqual(talks.last?.start, b)
     }
+
+    // MARK: - モデルの追加と材料の広げ方（2026-11-06）
+
+    func testOtherMicPicksClosestOtherDevice() {
+        let dir = URL(fileURLWithPath: "/tmp")
+        let phone = dir.appendingPathComponent("20261106-103200.m4a")
+        let start = Storage.startDate(of: phone)!
+        let kept = [dir.appendingPathComponent("20261106-103000-w.m4a"),   // 2分前（時計）
+                    dir.appendingPathComponent("20261106-103230-w.m4a"),   // 30秒後（時計）→ これ
+                    dir.appendingPathComponent("20261106-103300.m4a"),     // 同じ iPhone
+                    dir.appendingPathComponent("20261106-103210-i.m4a"),   // 取り込んだ音声
+                    dir.appendingPathComponent("20261106-110000-w.m4a")]   // 遠い
+        XCTAssertEqual(AudioClip.otherMic(for: phone, start: start, fromWatch: false, in: kept)?.lastPathComponent,
+                       "20261106-103230-w.m4a")
+        let watch = dir.appendingPathComponent("20261106-103230-w.m4a")
+        XCTAssertEqual(AudioClip.otherMic(for: watch, start: Storage.startDate(of: watch)!, fromWatch: true, in: kept)?.lastPathComponent,
+                       "20261106-103300.m4a")
+    }
+
+    func testWeightsFromTruths() {
+        var truths: [AnswerKey.Truth] = []
+        for i in 0..<10 {
+            truths.append(AnswerKey.Truth(right: "明日の会議は三時から", votes: ["haas": "明日の会議は三時から", "reazon": "明日の会議は散事から"],
+                                          noisy: i % 2 == 0, audio: "a.m4a", offset: Double(i), end: nil, time: .now))
+        }
+        let w = AnswerKey.weights(truths: truths)
+        XCTAssertGreaterThan(w["haas"] ?? 0, w["reazon"] ?? 0)
+        XCTAssertEqual(AnswerKey.weights(truths: Array(truths.prefix(5))), [:])
+    }
+
+    func testBenchmarkSavedReadsOlderData() throws {
+        // correction が無かったころの形も読める
+        let old = Data(#"{"scores":{},"history":[],"night":3}"#.utf8)
+        let saved = try JSONDecoder().decode(Benchmark.Saved.self, from: old)
+        XCTAssertEqual(saved.night, 3)
+        XCTAssertTrue(saved.correction.isEmpty)
+    }
 }

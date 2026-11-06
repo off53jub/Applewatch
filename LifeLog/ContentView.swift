@@ -570,6 +570,7 @@ private struct SettingsView: View {
     @State private var exportNote: String?
     @AppStorage(Storage.japanTimeKey) private var japanTime = false
     @AppStorage("secondOpinion") private var secondOpinion = true
+    @AppStorage(Summarizer.pcLLMKey) private var pcLLMForWork = false
     /// LocalModel.modeKey と同じ名前
     @AppStorage("localModelMode") private var localModelMode = LocalModel.Mode.fallback.rawValue
     @AppStorage(Pipeline.autoAsideKey) private var autoAside = true
@@ -583,6 +584,9 @@ private struct SettingsView: View {
                     Toggle("開くときに Face ID", isOn: $appLock)
                     Toggle("毎朝、前の日の点検を知らせる", isOn: $morningCheck)
                     Toggle("もう1つの言語モデルでも見比べる（充電中か開いているとき）", isOn: $secondOpinion)
+                    // 2026-11-06
+                    Toggle("職場の会話は、家の PC の言語モデルで作る（PC に Ollama があるとき）", isOn: $pcLLMForWork)
+                    NavigationLink("有料の票（ElevenLabs）") { PaidVoteView() }
                     Toggle("日付と時刻を日本時間で（海外にいるとき）", isOn: $japanTime)
                     if japanTime != Storage.japanTimeApplied {
                         Text("アプリを一度終えて開き直すと変わります。").font(.caption).foregroundStyle(.orange)

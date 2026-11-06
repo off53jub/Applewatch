@@ -103,10 +103,14 @@ final class HomePC {
         defer { session.finishTasksAndInvalidate() }
         let (data, response) = try await session.data(for: try request("hello"))
         try Self.check(response, data: data)
-        struct Hello: Decodable { let model: String; let provider: String; let version: Int?; let features: [String]? }
+        struct Hello: Decodable {
+            let model: String; let provider: String; let version: Int?; let features: [String]?
+            let speaker_model: String?
+        }
         let hello = try JSONDecoder().decode(Hello.self, from: data)
         version = hello.version ?? 1
         features = Set(hello.features ?? [])
+        speakerModel = hello.speaker_model
         return "\(hello.model)（\(hello.provider == "cuda" ? "GPU" : "CPU")）"
     }
 
@@ -186,6 +190,28 @@ final class HomePC {
         let data = try await post("scene", url: url, segments: segments)
         return try JSONDecoder().decode(Reply.self, from: data).tags.map { $0.map { (name: $0.name, prob: $0.prob) } }
     }
+
+    // MARK: - 家の PC の言語モデル（PC の版 5 から。2026-11-06）
+
+    /// PC の言語モデル（Ollama）に頼む。JSON の文字列を返す。PC が使えない・その働きが無いときは失敗
+    func llm(system: String, prompt: String) async throws -> String {
+        guard shouldTry, features.contains("llm") else { throw Failure.notConfigured }
+        struct Reply: Decodable { let text: String }
+        var request = try request("llm")
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "prompt": system + "\n\n" + prompt, "json": true, "max_tokens": 2000,
+        ] as [String: Any])
+        let session = makeSession(timeout: 180)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: request)
+        try Self.check(response, data: data)
+        return try JSONDecoder().decode(Reply.self, from: data).text
+    }
+
+    /// PC の話者モデルの名前（版 5 から。変わったら、名前のある人の声を測り直す）
+    var speakerModel: String?
 
     // MARK: - あなた向けのモデルの材料（PC の版 4 から。2026-11-06）
 

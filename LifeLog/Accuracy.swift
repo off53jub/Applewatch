@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 // 精度を上げるしくみ（2026-11-06）
@@ -149,6 +150,18 @@ enum Benchmark {
         /// 今の設定だけの、日ごとの誤りの割合（新しい60日分）
         var history: [Point] = []
         var night = 0
+        /// 直しの言語モデルの比べ（試すモデル → 今のモデルとの誤りの数。2026-11-06）
+        var correction: [String: Score] = [:]
+
+        init() {}
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            scores = try c.decodeIfPresent([String: Score].self, forKey: .scores) ?? [:]
+            history = try c.decodeIfPresent([Point].self, forKey: .history) ?? []
+            night = try c.decodeIfPresent(Int.self, forKey: .night) ?? 0
+            correction = try c.decodeIfPresent([String: Score].self, forKey: .correction) ?? [:]
+        }
     }
 
     struct Point: Codable, Equatable {
@@ -208,47 +221,85 @@ enum Benchmark {
             rows.append((v.label, String(format: "誤り %.1f%% → %.1f%%（%d 問）", base, variant, score.count)
                 + (decided == true ? "・使う" : decided == false ? "・使わない" : "・まだ決めない"), nil))
         }
+        // 直しの言語モデル（2026-11-06）
+        rows.append(("直しの言語モデル", Summarizer.correctionModel, nil))
+        for model in s.correction.keys.sorted() {
+            guard let score = s.correction[model], score.chars > 0 else { continue }
+            let base = Double(score.baseErrors) / Double(score.chars) * 100
+            let other = Double(score.variantErrors) / Double(score.chars) * 100
+            rows.append(("比べたモデル " + model, String(format: "直したあとの誤り 今 %.1f%% → %.1f%%（%d 問）", base, other, score.count), nil))
+        }
         return rows
     }
 }
 
 extension Pipeline {
+    /// 手で直した行（直近30日）を、正しい文が分かっている行として集める（重みと精度の物差しの材料。2026-11-06）
+    func manualTruths(days: Int = 30) -> [AnswerKey.Truth] {
+        var out: [AnswerKey.Truth] = []
+        for day in recordedDays().prefix(days) {
+            for c in conversations(on: day) {
+                for line in c.lines where line.checked == true && line.media == nil {
+                    guard let audio = line.audio, let offset = line.offset,
+                          line.text.trimmingCharacters(in: .whitespaces).count >= 2 else { continue }
+                    out.append(AnswerKey.Truth(right: line.text, votes: line.votes, noisy: line.noisy == true,
+                                               audio: audio, offset: offset, end: line.end, time: line.time))
+                }
+            }
+        }
+        return out
+    }
+
+    /// 音声の一部だけを切り出して PC に送る（5分の音声を丸ごと送らない。2026-11-06）。
+    /// 切り出せなければ元の音声のまま。返すのは送るファイル・区間のずれ・あとで消す一時ファイル
+    private func clipped(_ url: URL, start: TimeInterval, end: TimeInterval) async -> (url: URL, shift: TimeInterval, temp: URL?) {
+        let from = max(0, start - 1)
+        if let clip = await AudioClip.extract(url, from: from, to: end + 1) { return (clip, from, clip) }
+        return (url, 0, nil)
+    }
+
     /// 精度の物差しを1晩分動かす（夜の聞き直しのあと。家の PC につながるときだけ）。
-    /// 答え合わせの行を limit 個（夜ごとにずらす）、今の設定と、夜ごとに回す試す設定の両方で文字にし直して比べる。
+    /// 正しい文が分かっている行（答え合わせの答えと手で直した行）を limit 個（夜ごとにずらす）、
+    /// 今の設定と、夜ごとに回す試す設定の両方で文字にし直して比べる。直しの言語モデルも同じ行で比べる。
     func measureAccuracy(limit: Int = 12) async {
         guard homePC.shouldTry else { return }
         _ = try? await homePC.hello()
         guard homePC.engineCount > 1 || homePC.features.contains("vad") else { return }
-        let answered = answerKey.samples.filter { s in
-            s.isAnswered && s.skipped != true && !(s.rightText ?? "").trimmingCharacters(in: .whitespaces).isEmpty
-        }.sorted { $0.id < $1.id }
-        guard !answered.isEmpty else { return }
+        let truths = (answerKey.answeredTruths + manualTruths()).sorted { ($0.time, $0.offset) < ($1.time, $1.offset) }
+        guard !truths.isEmpty else { return }
         var saved = Benchmark.saved
         let night = saved.night
         saved.night += 1
         let variants = Benchmark.Variant.allCases.filter { $0 != .enhance || homePC.features.contains("enhance") }
         let variant = variants.isEmpty ? nil : variants[night % variants.count]
-        let first = (night * limit) % answered.count
-        let picks = (0..<min(limit, answered.count)).map { answered[(first + $0) % answered.count] }
+        let first = (night * limit) % truths.count
+        let picks = (0..<min(limit, truths.count)).map { truths[(first + $0) % truths.count] }
         var baseErrors = 0, baseChars = 0, count = 0
         var score = variant.flatMap { saved.scores[$0.rawValue] } ?? Benchmark.Score()
-        for sample in picks {
-            guard let right = sample.rightText, let url = await archive.playableURL(for: sample.audio) else { continue }
-            let span = Benchmark.span(offset: sample.offset, chars: right.count)
-            let hints = keywords(for: vocabularyContext(at: sample.time))
+        var heardTexts: [(heard: String, right: String, context: SpeakerLabeler.Context)] = []
+        for truth in picks {
+            guard let url = await archive.playableURL(for: truth.audio) else { continue }
+            let span = Benchmark.span(offset: truth.offset, chars: truth.right.count)
+            let end = truth.end.map { max($0, span.start + 0.5) } ?? span.end
+            let clip = await clipped(url, start: span.start, end: end)
+            defer { if let temp = clip.temp { try? FileManager.default.removeItem(at: temp) } }
+            let segment = (start: span.start - clip.shift, end: end - clip.shift)
+            let context = vocabularyContext(at: truth.time)
+            let hints = keywords(for: context)
             func listen(_ v: Benchmark.Variant?) async -> String? {
                 guard let lines = try? await homePC.transcribe(
-                    url, segments: [span], hints: v == .noHints ? [] : hints, noisy: sample.noisy == true,
+                    clip.url, segments: [segment], hints: v == .noHints ? [] : hints, noisy: truth.noisy,
                     enhance: v == .enhance ? true : nil, weights: v == .noWeights ? false : nil, unionVAD: false) else { return nil }
-                return lines.filter { $0.offset >= span.start - 0.5 && $0.offset <= span.end }.map(\.text).joined()
+                return lines.filter { $0.offset >= segment.start - 0.5 && $0.offset <= segment.end }.map(\.text).joined()
             }
             guard let base = await listen(nil) else { continue }
-            let b = Benchmark.errors(base, right: right)
+            let b = Benchmark.errors(base, right: truth.right)
             baseErrors += b.errors
             baseChars += b.chars
             count += 1
+            heardTexts.append((base, truth.right, context))
             if let variant, let other = await listen(variant) {
-                let o = Benchmark.errors(other, right: right)
+                let o = Benchmark.errors(other, right: truth.right)
                 score.baseErrors += b.errors
                 score.variantErrors += o.errors
                 score.chars += b.chars
@@ -269,34 +320,65 @@ extension Pipeline {
         }
         Benchmark.saved = saved
         Tally.add("bench.lines", count)
+        await measureCorrection(heardTexts)
+    }
+
+    /// 直しの言語モデルを物差しで比べる（2026-11-06）。PC が書いた文を、今の直しのモデルと、夜ごとに回す別のモデルで直し、
+    /// 直す前より誤りが減ったかを数える。30問以上で、別のモデルが1割以上良ければ、直しにそのモデルを使う。
+    /// 職場の会話の行は Groq に送らない（ふだんの直しと同じ決まり）。
+    private func measureCorrection(_ items: [(heard: String, right: String, context: SpeakerLabeler.Context)]) async {
+        guard let key = settings.groqKey ?? settings.apiKey else { return }
+        let usable = items.filter { $0.context != .work }
+        guard !usable.isEmpty else { return }
+        let available = await Summarizer.availableModels(apiKey: key)
+        let current = Summarizer.correctionModel
+        let others = Summarizer.correctionCandidates.filter { $0 != current && (available.isEmpty || available.contains($0)) }
+        var saved = Benchmark.saved
+        let night = saved.night
+        guard !others.isEmpty else { return }
+        let trial = others[night % others.count]
+        var score = saved.correction[trial] ?? Benchmark.Score()
+        for item in usable {
+            guard let mine = try? await Summarizer.$modelOverride.withValue(current, operation: {
+                try await Summarizer.correct([item.heard], keywords: [], previous: nil, alternatives: nil, apiKey: key)
+            }).first,
+                  let theirs = try? await Summarizer.$modelOverride.withValue(trial, operation: {
+                      try await Summarizer.correct([item.heard], keywords: [], previous: nil, alternatives: nil, apiKey: key)
+                  }).first else { continue }
+            let a = Benchmark.errors(mine.isEmpty ? item.heard : mine, right: item.right)
+            let b = Benchmark.errors(theirs.isEmpty ? item.heard : theirs, right: item.right)
+            score.baseErrors += a.errors
+            score.variantErrors += b.errors
+            score.chars += a.chars
+            score.count += 1
+            score.last = .now
+        }
+        saved.correction[trial] = score
+        Benchmark.saved = saved
+        if Benchmark.decision(score) == true {
+            UserDefaults.standard.set(trial, forKey: Summarizer.correctionModelKey)
+            saved.correction = [:]
+            Benchmark.saved = saved
+            Tally.add("learn.updated")
+        }
     }
 
     /// あなた向けのモデルの材料（手で直した行と、答え合わせで答えた行）を、家の PC に渡す（PC の版 4 から）。
-    /// 1晩に40個まで。渡したものは覚えておき、2度は渡さない。音声は PC にだけ渡す。
+    /// 1晩に40個まで。渡したものは覚えておき、2度は渡さない。音声はその行の所だけ切り出して PC にだけ渡す。
     func sendPersonalSamples(limit: Int = 40) async {
         guard homePC.shouldTry, (homePC.version ?? 0) >= 4 else { return }
         let key = "personalSent"
         var sent = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
-        var material: [(audio: String, start: TimeInterval, end: TimeInterval, text: String)] = []
-        for s in answerKey.samples where s.isAnswered && s.skipped != true {
-            guard let right = s.rightText?.trimmingCharacters(in: .whitespaces), right.count >= 2 else { continue }
-            let span = Benchmark.span(offset: s.offset, chars: right.count)
-            material.append((s.audio, span.start, span.end, right))
-        }
-        for day in recordedDays().prefix(30) {
-            for c in conversations(on: day) {
-                for line in c.lines where line.checked == true && line.media == nil {
-                    guard let audio = line.audio, let offset = line.offset, line.text.count >= 2 else { continue }
-                    let span = Benchmark.span(offset: offset, chars: line.text.count)
-                    material.append((audio, span.start, line.end ?? span.end, line.text))
-                }
-            }
-        }
         var done = 0
-        for m in material where done < limit {
-            let id = m.audio + "|" + String(format: "%.1f", m.start) + "|" + m.text
-            guard !sent.contains(id), let url = await archive.playableURL(for: m.audio) else { continue }
-            guard (try? await homePC.sendTrainSample(url, start: m.start, end: m.end, text: m.text)) != nil else { break }
+        for t in answerKey.answeredTruths + manualTruths() where done < limit {
+            let span = Benchmark.span(offset: t.offset, chars: t.right.count)
+            let end = t.end ?? span.end
+            let id = t.audio + "|" + String(format: "%.1f", span.start) + "|" + t.right
+            guard !sent.contains(id), let url = await archive.playableURL(for: t.audio) else { continue }
+            let clip = await clipped(url, start: span.start, end: end)
+            defer { if let temp = clip.temp { try? FileManager.default.removeItem(at: temp) } }
+            guard (try? await homePC.sendTrainSample(clip.url, start: span.start - clip.shift, end: end - clip.shift,
+                                                     text: t.right)) != nil else { break }
             sent.insert(id)
             done += 1
         }
@@ -307,6 +389,80 @@ extension Pipeline {
         if let status = try? await homePC.trainStatus() {
             UserDefaults.standard.set(status.count, forKey: "personalCount")
             UserDefaults.standard.set(status.model, forKey: "personalModel")
+        }
+    }
+}
+
+extension Pipeline {
+    /// もう1台のマイクの票（2026-11-06）。同じ時間に、もう片方の端末（iPhone なら時計、時計なら iPhone）で録った区切りが
+    /// 手元にあれば、食い違いの大きい行の所をその音声でも PC で文字にし、もう1票として選び直す。
+    func addOtherMicVotes(_ lines: [HomePC.Line], audio url: URL, hints: [String]) async -> [HomePC.Line] {
+        let unsure = lines.indices.filter { (lines[$0].confidence ?? 1) < HomePC.cloudVoteBelow && !lines[$0].votes.isEmpty }
+        guard !unsure.isEmpty, !Storage.isImported(url), let start = Storage.startDate(of: url) else { return lines }
+        let fromWatch = Storage.isFromWatch(url)
+        guard let other = AudioClip.otherMic(for: url, start: start, fromWatch: fromWatch, in: Storage.keptAudio()),
+              let otherStart = Storage.startDate(of: other) else { return lines }
+        // もう片方の音声の中の時刻 = この音声の中の時刻 - shift
+        let shift = otherStart.timeIntervalSince(start)
+        let length = AudioClip.duration(of: other)
+        let targets = unsure.filter { lines[$0].offset - shift >= 0 && lines[$0].end - shift <= length + 0.5 }
+        guard let lo = targets.map({ lines[$0].offset - shift }).min(),
+              let hi = targets.map({ lines[$0].end - shift }).max() else { return lines }
+        let clip = await clipped(other, start: lo, end: hi)
+        defer { if let temp = clip.temp { try? FileManager.default.removeItem(at: temp) } }
+        let move = shift + clip.shift
+        guard let heard = try? await homePC.transcribe(
+            clip.url, segments: targets.map { (start: max(0, lines[$0].offset - move), end: lines[$0].end - move) },
+            hints: hints, unionVAD: false) else { return lines }
+        var out = lines
+        var added = 0
+        for i in targets {
+            let s = lines[i].offset - move, e = lines[i].end - move
+            let text = heard.filter { $0.offset >= s - 0.5 && $0.offset < e + 0.3 }.map(\.text).joined()
+            guard !text.isEmpty else { continue }
+            var votes = out[i].votes
+            votes["othermic"] = text
+            out[i] = HomePC.revote(out[i], votes: votes)
+            added += 1
+        }
+        Tally.add("othermic.lines", added)
+        return out
+    }
+}
+
+/// 音声の一部を切り出す（2026-11-06）
+enum AudioClip {
+    /// 音声の長さ（秒）。読めなければ 0
+    static func duration(of url: URL) -> TimeInterval {
+        guard let file = try? AVAudioFile(forReading: url) else { return 0 }
+        return Double(file.length) / file.processingFormat.sampleRate
+    }
+
+    /// 同じ時間に、もう片方の端末で録った区切り（始まりが5分半以内のもの。取り込んだ音声は除く）
+    static func otherMic(for url: URL, start: Date, fromWatch: Bool, in kept: [URL]) -> URL? {
+        kept.filter { o in
+            Storage.isFromWatch(o) != fromWatch && !Storage.isImported(o) && o.lastPathComponent != url.lastPathComponent
+                && (Storage.startDate(of: o).map { abs($0.timeIntervalSince(start)) < 330 } ?? false)
+        }.min { a, b in
+            abs((Storage.startDate(of: a) ?? .distantPast).timeIntervalSince(start))
+                < abs((Storage.startDate(of: b) ?? .distantPast).timeIntervalSince(start))
+        }
+    }
+
+    /// from〜to 秒を切り出した一時ファイル（m4a・中身はそのまま）。できなければ nil
+    static func extract(_ url: URL, from: TimeInterval, to: TimeInterval) async -> URL? {
+        guard to > from else { return nil }
+        let asset = AVURLAsset(url: url)
+        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else { return nil }
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("clip-\(UUID().uuidString).m4a")
+        export.timeRange = CMTimeRange(start: CMTime(seconds: from, preferredTimescale: 600),
+                                       end: CMTime(seconds: to, preferredTimescale: 600))
+        do {
+            try await export.export(to: out, as: .m4a)
+            return out
+        } catch {
+            try? FileManager.default.removeItem(at: out)
+            return nil
         }
     }
 }

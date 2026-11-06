@@ -104,6 +104,12 @@ enum Tally {
         if n("talk.joined") + n("talk.split") > 0 {
             rows.append(("会話の区切りの手直し", "つないだ \(n("talk.joined"))・分けた \(n("talk.split"))", nil))
         }
+        if n("othermic.lines") > 0 {
+            rows.append(("もう1台のマイクの票", "\(n("othermic.lines")) 行（iPhone と時計の両方で録った時間）", nil))
+        }
+        if n("paid.lines") > 0 {
+            rows.append(("有料の票（ElevenLabs）", "\(n("paid.lines")) 行・今月 \(Int(PaidVote.usedSeconds / 60)) 分", nil))
+        }
         if n("bench.lines") > 0 {
             rows.append(("精度の物差しで測った行", "\(n("bench.lines")) 行", nil))
         }

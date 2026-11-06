@@ -111,6 +111,12 @@ extension Pipeline {
 
     /// 名前のある人（自分も）の声を PC の話者モデルで測っておく（声のひとこまから。まだの人だけ）
     private func pcReferences() async -> [String: [[Float]]] {
+        // PC の話者モデルが替わったら、前のモデルで測った声は使えないので測り直す（2026-11-06）
+        let model = homePC.speakerModel ?? "eres2net-zh"
+        if UserDefaults.standard.string(forKey: "pcVoiceRefsModel") != model {
+            PCVoiceRefs.save([:])
+            UserDefaults.standard.set(model, forKey: "pcVoiceRefsModel")
+        }
         var refs = PCVoiceRefs.load()
         for person in people where person.isNamed && !person.samples.isEmpty && refs[person.id] == nil {
             var list: [[Float]] = []

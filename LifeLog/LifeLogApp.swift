@@ -37,6 +37,8 @@ struct LifeLogApp: App {
         // Siri・ショートカットから記録を聞く（2026-11-06）
         Recall.recent = { pipeline.recentWords() }
         Recall.lastTalk = { pipeline.lastTalk(with: $0) }
+        // 職場の会話を家の PC の言語モデルで作るとき（本人がオンにしたときだけ。2026-11-06）
+        Summarizer.pcLLM = { system, prompt in try await pipeline.homePC.llm(system: system, prompt: prompt) }
         _pipeline = State(initialValue: pipeline)
     }
 
