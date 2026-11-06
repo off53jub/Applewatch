@@ -12,7 +12,8 @@ on:
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 40
+    # Apple の受け付け結果を最大 35 分待つ分も含める
+    timeout-minutes: 80
     # リリースに IPA を残すため（main に入ったときだけ使う）
     permissions:
       contents: write
