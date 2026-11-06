@@ -180,6 +180,8 @@ final class ConversationLog {
         var removed: [Removed]
         var summaryWritten: Bool
         var summary: Summarizer.Day?
+        /// 送った端末のアプリの版（2026-11-06。これより前のアプリは送らないので nil）
+        var build: Int? = nil
     }
 
     /// これだけ話が途切れたら、別の会話とみなす
@@ -1546,15 +1548,17 @@ final class ConversationLog {
     func syncPayload(_ day: String) -> SyncDay {
         let log = load(day)
         return SyncDay(conversations: log.conversations.filter(\.closed), removed: log.removed ?? [],
-                       summaryWritten: log.summaryWritten, summary: log.summary)
+                       summaryWritten: log.summaryWritten, summary: log.summary, build: AppBuild.current)
     }
 
     /// ほかの端末の1日分を合わせる。会話ごとに番号（rev）の大きいほうを残し、同じなら中身で決める（どちらの端末でも同じ結果になるように）。
     /// この端末で続いている会話には触らない。変わったら true。
+    /// 送ってきた端末の版がこの端末より古いときは、向こうに無い項目（古い版が知らない項目）を手元の値で埋める（2026-11-06）。
     @discardableResult
-    func mergeRemote(_ remote: SyncDay, day: String) -> Bool {
+    func mergeRemote(_ remote: SyncDay, day: String, myBuild: Int = AppBuild.current) -> Bool {
         var log = load(day)
         var changed = false
+        let older = (remote.build ?? 0) < myBuild
         var tombs: [Date: Int] = [:]
         for r in log.removed ?? [] { tombs[r.start] = max(tombs[r.start] ?? 0, r.rev) }
         for r in remote.removed where r.rev > (tombs[r.start] ?? 0) {
@@ -1566,13 +1570,14 @@ final class ConversationLog {
                 let lc = log.conversations[i]
                 guard lc.closed else { continue }
                 let lr = lc.rev ?? 0, rr = rc.rev ?? 0
+                let taken = older ? SyncFill.filled(rc, keeping: lc) : rc
                 if rr > lr {
-                    log.conversations[i] = rc
+                    log.conversations[i] = taken
                     changed = true
                 } else if rr == lr {
-                    let a = Self.content(lc), b = Self.content(rc)
+                    let a = Self.content(lc), b = Self.content(taken)
                     if a != b && a.lexicographicallyPrecedes(b) {
-                        log.conversations[i] = rc
+                        log.conversations[i] = taken
                         changed = true
                     }
                 }

@@ -147,6 +147,14 @@ extension Pipeline {
         add("設定", "待機モード", onOff(standbyOn))
         add("設定", "音がしないあいだは書かない", onOff(skipSilence))
         add("設定", "iPhone と iPad の同期", onOff(sync.isOn))
+        if sync.isOn {
+            // 版が古い端末があると、新しい版で足した項目が同期で抜けやすい（手元の値で埋めて守るが、入れ直すのがいちばん）
+            let older = AppBuild.olderPeers()
+            add("設定", "同期の相手のアプリの版",
+                older.isEmpty ? (AppBuild.peers.isEmpty ? "まだ分からない" : "同じか新しい")
+                    : older.map { "端末 \($0.device): " + ($0.build == 0 ? "かなり古い" : "\($0.build)") }.joined(separator: "、") + "（新しい IPA を入れ直す）",
+                older.isEmpty)
+        }
         add("設定", "音声をドライブにも保存", onOff(audioBackupOn))
         add("設定", "会う前のおさらい", onOff(Self.meetingBriefOn))
 
@@ -196,6 +204,23 @@ extension Pipeline {
         let review = voiceReview().count
         add("人", "見直したい声のひとこま", "\(review) 個", review == 0)
         add("人", "自分の声", hasSelfVoice ? "登録済み" : "まだ", hasSelfVoice)
+
+        // 直した記録から学んだ値（2026-11-06）
+        let shift = Double(SpeakerTuning.shift)
+        add("学んだ値", "話者の近さの線", shift == 0 ? "そのまま（直し \(SpeakerTuning.fixes.count) 回）"
+            : (shift > 0 ? "ゆるく " : "厳しく ") + String(format: "%.2f", abs(shift)) + "（直し \(SpeakerTuning.fixes.count) 回から）")
+        let taught = TaskLearning.examples(tasks.items).count
+        add("学んだ値", "頼まれごとの候補の並び", TaskLearning.weights != nil ? "採りそうな順（採用・却下 \(taught) 件から）"
+            : "まだ（採用・却下 \(taught) / 30 件）")
+        add("学んだ値", "確かめたほうがよい行", String(format: "線 %.2f", ConversationLog.Line.uncertainBelow)
+            + (Calibration.weights != nil ? "・手がかりを束ねて判断" : ""))
+
+        // 仕組みごとの効き目（直近7日。数だけ。2026-11-06）
+        let report = Tally.report(Tally.sums(days: 7))
+        if report.isEmpty {
+            add("効き目（直近7日）", "まだ数えていません", "夜の聞き直しや、複数のモデルの見比べが動くと数えます")
+        }
+        for row in report { add("効き目（直近7日）", row.label, row.value, row.ok) }
 
         // 最近のエラー
         for problem in diagnostics.problems.suffix(15).reversed() {

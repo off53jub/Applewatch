@@ -62,3 +62,102 @@ jobs:
             grep -E "error:|failed|XCTAssert" "$RUNNER_TEMP/test.log" | sort -u | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
           fi
           exit $status
+
+  # 全部の画面を開いて写真を撮る（2026-11-06）。見本の記録（作り物）を入れたシミュレーターで、タブと設定の行を1つずつ開く。
+  # 開いたとたんに落ちる画面があれば失敗にする。写真は成果物「画面の写真」に残し、main ではリリースにも一覧の画像を付ける。
+  screens:
+    runs-on: macos-26
+    timeout-minutes: 80
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode を選ぶ
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      # TestFlight と同じ版の Haas-ja の Swift 部品（アプリをビルドするのに要る）
+      - name: Haas-ja の Swift 部品を取ってくる
+        run: |
+          set -e
+          rev=62f542657b454afa7873424e3dfb6d7a1d9c270d
+          base=https://huggingface.co/Sanami/haas-ja-coreml/resolve/$rev
+          mkdir -p Vendor/HaasCore/Sources/HaasCore LifeLog/Haas
+          for f in Audio Frontend HaasASR Tokenizer; do
+            curl -fsSL "$base/swift/Sources/HaasCore/$f.swift" -o "Vendor/HaasCore/Sources/HaasCore/$f.swift"
+          done
+          curl -fsSL "$base/swift/Resources/frontend.bin" -o LifeLog/Haas/frontend.bin
+          curl -fsSL "$base/swift/Resources/vocab.json" -o LifeLog/Haas/vocab.json
+          cat > Vendor/HaasCore/Package.swift <<'SWIFT'
+          // swift-tools-version:5.9
+          import PackageDescription
+
+          let package = Package(
+              name: "HaasCoreML",
+              platforms: [.macOS(.v14), .iOS(.v17)],
+              products: [.library(name: "HaasCore", targets: ["HaasCore"])],
+              targets: [.target(name: "HaasCore", path: "Sources/HaasCore")]
+          )
+          SWIFT
+
+      - name: テスト用のプロジェクトを生成
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec project-tests.yml
+
+      - name: 全部の画面を開いて写真を撮る
+        id: tour
+        run: |
+          udid=$(xcrun simctl list devices available | grep -m1 -E "^[[:space:]]+iPhone" | grep -oE "[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}")
+          echo "シミュレーター: $udid"
+          set +e
+          xcodebuild test             -project LifeLog.xcodeproj -scheme LifeLogUITests             -destination "id=$udid"             -resultBundlePath "$RUNNER_TEMP/screens.xcresult"             CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/ui.log" | grep -E "error:|Test Case|failed|落ちた|XCTAssert"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -E "error:|落ちた|XCTAssert" "$RUNNER_TEMP/ui.log" | sort -u | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
+          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: 写真を取り出して一覧の画像にする
+        if: always()
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/raw" "$RUNNER_TEMP/screens"
+          if [ -d "$RUNNER_TEMP/screens.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/screens.xcresult" --output-path "$RUNNER_TEMP/raw"
+            python3 -m venv "$RUNNER_TEMP/venv"
+            "$RUNNER_TEMP/venv/bin/pip" install --quiet pillow || true
+            "$RUNNER_TEMP/venv/bin/python" .github/scripts/screens.py "$RUNNER_TEMP/raw" "$RUNNER_TEMP/screens"
+          fi
+          ls "$RUNNER_TEMP/screens" | head -100
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: 画面の写真
+          path: ${{ runner.temp }}/screens
+          if-no-files-found: warn
+
+      - name: リリースに一覧の画像を付ける
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls "$RUNNER_TEMP"/screens/sheet-*.jpg >/dev/null 2>&1 || { echo "一覧の画像が無い"; exit 0; }
+          # 同じコミットのリリースは「TestFlight」のワークフローが作る。できるまで最大40分待つ
+          for i in $(seq 1 80); do
+            tag=$(gh api "repos/${{ github.repository }}/releases?per_page=20" --jq '.[] | select(.target_commitish=="${{ github.sha }}") | .tag_name' | head -1)
+            if [ -n "$tag" ]; then
+              gh release upload "$tag" "$RUNNER_TEMP"/screens/sheet-*.jpg --repo "${{ github.repository }}" --clobber
+              echo "リリース $tag に付けた"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::warning::同じコミットのリリースが見つからなかった"
+
+      - name: 落ちた画面があれば失敗にする
+        if: steps.tour.outputs.status != '0'
+        run: exit 1

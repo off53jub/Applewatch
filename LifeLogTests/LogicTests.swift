@@ -1057,4 +1057,163 @@ final class LogicTests: XCTestCase {
         }.map(\.what)
         XCTAssertEqual(order, ["両方", "見比べていない", "片方だけ"])
     }
+
+    // MARK: - 版が違う端末と、前の形のファイル（2026-11-06）
+
+    func testOlderDeviceDoesNotDropNewFields() throws {
+        let log = try freshLog()
+        let start = Date(timeIntervalSinceReferenceDate: 915_150_000.123456789)
+        var mine = conversation(start, title: "朝", rev: 1)
+        mine.scene = "電車"
+        mine.lines = [ConversationLog.Line(time: start, speaker: "自分", text: "おはよう", rubbed: true)]
+        // 新しい版の端末から来たものは、そのまま入れる
+        XCTAssertTrue(log.mergeRemote(.init(conversations: [mine], removed: [], summaryWritten: false, summary: nil, build: 200),
+                                      day: day, myBuild: 200))
+        // 古い版の端末が書き直した（［場面］とこすれの印を知らない）
+        var old = conversation(start, title: "朝の話", rev: 2)
+        old.lines = [ConversationLog.Line(time: start, speaker: "自分", text: "おはようございます")]
+        XCTAssertTrue(log.mergeRemote(.init(conversations: [old], removed: [], summaryWritten: false, summary: nil),
+                                      day: day, myBuild: 200))
+        let got = try XCTUnwrap(log.conversations(on: day).first)
+        XCTAssertEqual(got.title, "朝の話")
+        XCTAssertEqual(got.scene, "電車")
+        XCTAssertEqual(got.lines.first?.text, "おはようございます")
+        XCTAssertEqual(got.lines.first?.rubbed, true)
+        XCTAssertEqual(got.start, start)
+        XCTAssertEqual(log.conversations(on: day).count, 1)
+        // 同じか新しい版の端末から、項目を消したものが来たら、消したほうを使う
+        var newer = conversation(start, title: "朝の話", rev: 3)
+        newer.lines = got.lines
+        XCTAssertTrue(log.mergeRemote(.init(conversations: [newer], removed: [], summaryWritten: false, summary: nil, build: 201),
+                                      day: day, myBuild: 200))
+        XCTAssertNil(log.conversations(on: day).first?.scene)
+    }
+
+    func testFillMatchesLinesByTime() {
+        let remote: [String: Any] = ["lines": [["time": 2.0, "text": "b"], ["time": 1.0, "text": "a"], ["time": 3.0, "text": "c"]]]
+        let local: [String: Any] = ["scene": "店", "lines": [["time": 1.0, "text": "A", "rubbed": true], ["time": 2.0, "text": "B"]]]
+        let merged = SyncFill.merge(remote, local) as? [String: Any]
+        XCTAssertEqual(merged?["scene"] as? String, "店")
+        let lines = merged?["lines"] as? [[String: Any]]
+        XCTAssertEqual(lines?.map { $0["text"] as? String }, ["b", "a", "c"])
+        XCTAssertEqual(lines?[1]["rubbed"] as? Bool, true)
+        XCTAssertNil(lines?[0]["rubbed"])
+    }
+
+    func testOlderPeers() {
+        let key = "syncPeerBuilds"
+        let saved = UserDefaults.standard.dictionary(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        UserDefaults.standard.removeObject(forKey: key)
+        AppBuild.note(device: "ipad", build: nil)
+        AppBuild.note(device: "phone2", build: 130)
+        XCTAssertEqual(AppBuild.olderPeers(than: 125).map(\.device), ["ipad"])
+        XCTAssertEqual(AppBuild.olderPeers(than: 131).map(\.device), ["ipad", "phone2"])
+    }
+
+    /// 前の版のアプリが書いたファイルを、今の版で読めるか（読めないと、登録や記録が消えたように見える）
+    private func decodes<T: Decodable>(_ type: T.Type, _ json: String, file: StaticString = #filePath, line: UInt = #line) -> T? {
+        do { return try JSONDecoder().decode(T.self, from: Data(json.utf8)) } catch {
+            XCTFail("前の形の \(T.self) が読めない: \(error)", file: file, line: line)
+            return nil
+        }
+    }
+
+    func testOldestFilesStillRead() {
+        // 1日の記録（2026-10-30 の最初の形。行は時刻・話者・文だけ）
+        let day = decodes(ConversationLog.Day.self, #"""
+        {"conversations":[{"start":783000000,"end":783000300,"docIndex":12,
+          "lines":[{"time":783000000,"speaker":"自分","text":"おはよう"},{"time":783000010,"text":"はい"}],
+          "title":"朝","points":["あいさつ"],"place":"家","closed":true}],"summaryWritten":false}
+        """#)
+        XCTAssertEqual(day?.conversations.first?.lines.count, 2)
+        XCTAssertNil(day?.conversations.first?.scene)
+        // 同期で送る1日分（版を送らない前のアプリ）
+        let sync = decodes(ConversationLog.SyncDay.self, #"{"conversations":[],"removed":[],"summaryWritten":true}"#)
+        XCTAssertNil(sync?.build)
+        // 人（people.json の最初の形）
+        let people = decodes([SpeakerLabeler.Person].self, #"""
+        [{"id":"me","voices":[{"embedding":[0.1,0.2],"pinned":true,"added":783000000}],"seconds":120,
+          "lastHeard":783000000,"samples":[{"audio":"a.m4a","start":1,"end":3}]},
+         {"id":"3","name":"田中","voices":[],"seconds":0,"lastHeard":783000000,"samples":[]}]
+        """#)
+        XCTAssertEqual(people?.count, 2)
+        XCTAssertEqual(people?.last?.name, "田中")
+        // 頼まれごと（2026-11-04 の最初の形）
+        let tasks = decodes([TaskBook.Item].self, #"""
+        [{"id":"A","what":"資料を送る","said":783000000,"source":"conversation","state":"candidate","updated":783000000}]
+        """#)
+        XCTAssertEqual(tasks?.first?.what, "資料を送る")
+        // 正解帳（2026-11-05 の最初の形）
+        let answers = decodes([AnswerKey.Sample].self, #"""
+        [{"id":"x","week":"2026-W45","day":"2026-11-05","time":783000000,"text":"機会があれば","audio":"a.m4a","offset":3}]
+        """#)
+        XCTAssertEqual(answers?.count, 1)
+        // 誤変換の直し（2026-10-31 の最初の形）
+        let fix = decodes(Vocabulary.Fix.self, #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","wrong":"機械","right":"機会","group":"always"}"#)
+        XCTAssertEqual(fix?.right, "機会")
+    }
+
+    // MARK: - 直した記録から学ぶ・効き目を数える（2026-11-06）
+
+    func testSpeakerShiftFollowsFixes() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        func fixes(wrong: Int, missed: Int) -> [SpeakerTuning.Fix] {
+            Array(repeating: SpeakerTuning.Fix(at: now, wasNamed: true, toNamed: true), count: wrong)
+                + Array(repeating: SpeakerTuning.Fix(at: now, wasNamed: false, toNamed: true), count: missed)
+        }
+        // 少ないうちは動かさない
+        XCTAssertEqual(SpeakerTuning.nextShift(current: 0, fixes: fixes(wrong: 0, missed: 5), now: now), 0)
+        // 逃してばかり → ゆるく、同じ人にしすぎ → 厳しく
+        XCTAssertEqual(SpeakerTuning.nextShift(current: 0, fixes: fixes(wrong: 1, missed: 11), now: now), 0.01, accuracy: 0.0001)
+        XCTAssertEqual(SpeakerTuning.nextShift(current: 0, fixes: fixes(wrong: 12, missed: 1), now: now), -0.01, accuracy: 0.0001)
+        // 偏りが小さければ動かさない・幅の上限を超えない
+        XCTAssertEqual(SpeakerTuning.nextShift(current: 0.02, fixes: fixes(wrong: 6, missed: 6), now: now), 0.02, accuracy: 0.0001)
+        XCTAssertEqual(SpeakerTuning.nextShift(current: 0.04, fixes: fixes(wrong: 0, missed: 20), now: now), 0.04, accuracy: 0.0001)
+        // 30日より前の直しは数えない
+        let old = fixes(wrong: 0, missed: 20).map { SpeakerTuning.Fix(at: now.addingTimeInterval(-40 * 86400), wasNamed: $0.wasNamed, toNamed: $0.toNamed) }
+        XCTAssertEqual(SpeakerTuning.nextShift(current: 0, fixes: old, now: now), 0)
+    }
+
+    func testTaskLearningUsesOnlyDecidedCandidates() {
+        var items: [TaskBook.Item] = []
+        for i in 0..<20 {
+            var yes = TaskBook.Item(what: "資料\(i)", said: .now, source: .conversation, state: .open, work: true)
+            yes.agreed = true
+            yes.fromCandidate = true
+            var no = TaskBook.Item(what: "雑談\(i)", said: .now, source: .conversation, state: .rejected, work: false)
+            no.agreed = false
+            no.fromCandidate = true
+            items += [yes, no]
+        }
+        // 確かめ待ちを通っていないもの（手で書いたもの）は材料にしない
+        items.append(TaskBook.Item(what: "手で", said: .now, source: .manual, state: .open))
+        XCTAssertEqual(TaskLearning.examples(items).count, 40)
+        let w = Calibration.train(TaskLearning.examples(items))
+        XCTAssertNotNil(w)
+        var good = TaskBook.Item(what: "新しい", said: .now, source: .conversation, state: .candidate, work: true)
+        good.agreed = true
+        var bad = TaskBook.Item(what: "新しい", said: .now, source: .conversation, state: .candidate, work: false)
+        bad.agreed = false
+        XCTAssertGreaterThan(TaskLearning.acceptChance(good, weights: w) ?? 0, TaskLearning.acceptChance(bad, weights: w) ?? 1)
+    }
+
+    func testTallyCountsAndReports() {
+        Tally.reset()
+        let now = Date()
+        Tally.add("pc.speakerChecked", 30, at: now)
+        Tally.add("pc.speakerDiffer", 12, at: now)
+        Tally.add("fix.proposed", 4, at: now)
+        Tally.add("fix.kept", 3, at: now)
+        Tally.add("fix.dropped", 1, at: now)
+        Tally.add("task.agreed", 2, at: now.addingTimeInterval(-10 * 86400))
+        let sums = Tally.sums(days: 7, now: now)
+        XCTAssertEqual(sums["pc.speakerChecked"], 30)
+        XCTAssertNil(sums["task.agreed"])
+        let rows = Tally.report(sums)
+        // 食い違いが3割を超えたら気をつけたい印
+        XCTAssertEqual(rows.first { $0.label.hasPrefix("話者") }?.ok, false)
+        XCTAssertTrue(rows.contains { $0.label == "誤変換の直し" && $0.value.contains("75%") })
+        Tally.reset()
+    }
 }

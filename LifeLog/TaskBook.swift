@@ -82,6 +82,8 @@ final class TaskBook {
         var reminderID: String? = nil
         /// 2つの言語モデルが両方拾った（true）・片方だけ（false）・見比べていない（nil）。2026-11-06
         var agreed: Bool? = nil
+        /// 確かめ待ちから、本人が採った・却下した（頼まれごとの候補の学びに使う。2026-11-06。前の記録には無い）
+        var fromCandidate: Bool? = nil
 
         /// 時刻まで入れた期限
         var dueMoment: Date? {
@@ -214,7 +216,14 @@ final class TaskBook {
     /// 確かめ待ち（新しいものから）
     /// 確かめ待ち。2つの言語モデルが両方拾ったものを先に（2026-11-06）、その中は新しい順
     var candidates: [Item] {
-        items.filter { $0.state == .candidate }.sorted { a, b in
+        // 採用・却下から学んだら、採りそうな順（2026-11-06）
+        if let weights = TaskLearning.weights {
+            return items.filter { $0.state == .candidate }.sorted { a, b in
+                let x = TaskLearning.acceptChance(a, weights: weights) ?? 0, y = TaskLearning.acceptChance(b, weights: weights) ?? 0
+                return x != y ? x > y : a.said > b.said
+            }
+        }
+        return items.filter { $0.state == .candidate }.sorted { a, b in
             let x = a.agreed == true ? 0 : a.agreed == false ? 2 : 1
             let y = b.agreed == true ? 0 : b.agreed == false ? 2 : 1
             return x != y ? x < y : a.said > b.said
@@ -327,6 +336,7 @@ final class TaskBook {
         guard let i = items.firstIndex(where: { $0.id == item.id }) else { return }
         var copy = item
         copy.updated = .now
+        if items[i].state == .candidate && copy.state != .candidate { copy.fromCandidate = true }
         items[i] = copy
         save()
     }
@@ -334,6 +344,7 @@ final class TaskBook {
     func set(_ id: String, _ state: State) {
         guard let i = items.firstIndex(where: { $0.id == id }) else { return }
         let wasDone = items[i].state == .done
+        if items[i].state == .candidate && state != .candidate { items[i].fromCandidate = true }
         items[i].state = state
         items[i].doneAt = state == .done ? .now : nil
         items[i].updated = .now
@@ -522,6 +533,11 @@ extension Pipeline {
                     for i in items.indices where items[i].source == .conversation {
                         items[i].agreed = MultiModel.agrees(items[i].what + " " + (items[i].quote ?? ""), with: others)
                     }
+                    Tally.add("second.ran")
+                    Tally.add("task.agreed", items.filter { $0.agreed == true }.count)
+                    Tally.add("task.alone", items.filter { $0.agreed == false }.count)
+                } else if !items.isEmpty, !MultiModel.secondOpinionOK {
+                    Tally.add("second.skipped")
                 }
                 found += items
             }

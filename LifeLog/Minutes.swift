@@ -100,6 +100,11 @@ extension Pipeline {
             for (i, t) in made.todos.enumerated() where !MultiModel.agrees(t.who + " " + t.what, with: otherTodos) {
                 unsureTodos.insert(i)
             }
+            Tally.add("second.ran")
+            Tally.add("minutes.items", made.decisions.count + made.todos.count)
+            Tally.add("minutes.unsure", unsureDecisions.count + unsureTodos.count)
+        } else if !MultiModel.secondOpinionOK {
+            Tally.add("second.skipped")
         }
 
         let title = (event?.title).flatMap { $0.isEmpty ? nil : $0 } ?? c.title ?? "会議"

@@ -1179,6 +1179,14 @@ final class Pipeline {
             try? await speakers.teach(url, from: start, to: max(end, start + 1), personID: id)
         }
         let old = line.speakerID
+        // 直したことを、話者の線の学びに残す（名前のある人か、だけ）
+        if old != id {
+            let named = { (pid: String?) -> Bool in
+                guard let pid else { return false }
+                return pid == SpeakerLabeler.selfID || (self.people.first { $0.id == pid }?.isNamed ?? false)
+            }
+            SpeakerTuning.record(wasNamed: named(old), toNamed: named(id))
+        }
         switch scope {
         case .line:
             await relabel(to: id) { $0.time == line.time && $0.text == line.text && $0.audio == line.audio }
@@ -2277,8 +2285,10 @@ final class Pipeline {
                 }
             }
             NightlyRecheck.markNightDone(target.audio)
+            Tally.add("night.lines", lines.count)
             processed += 1
         }
+        Tally.add("night.changed", changedLines)
         // 家の PC の別の種類のモデルで、話者と場面を見比べる（2026-11-06）
         await crossCheckWithPC()
         nightlyResult = "\(Date.now.formatted(date: .abbreviated, time: .shortened)) に \(processed) 区切りを聞き直し、\(changedLines) 行を直しました。"
@@ -2645,6 +2655,8 @@ final class Pipeline {
            }) {
             // 直した行は、もう1つの言語モデル（iPhone の中）も同じように直したか、家の PC のほかのモデルの文に合うときだけ使う（2026-11-06）
             let changedAny = entries.indices.contains { fixed[$0] != entries[$0].text && !fixed[$0].isEmpty }
+            let proposed = entries.indices.filter { fixed[$0] != entries[$0].text && !fixed[$0].isEmpty }.count
+            if changedAny, !MultiModel.secondOpinionOK { Tally.add("second.skipped") }
             if changedAny, MultiModel.secondOpinionOK,
                !Summarizer.$sensitive.withValue(context == .work, operation: { Summarizer.usesLocal(apiKey: key) }),
                let second = try? await Summarizer.$forceLocal.withValue(true, operation: {
@@ -2653,6 +2665,12 @@ final class Pipeline {
                }), second.count == fixed.count {
                 fixed = Self.agreedFixes(original: entries.map(\.text), first: fixed, second: second,
                                          alternatives: others ?? [])
+                // 効き目を数える（直した行・両方が合って使った行・元に戻した行）
+                let kept = entries.indices.filter { fixed[$0] != entries[$0].text && !fixed[$0].isEmpty }.count
+                Tally.add("second.ran")
+                Tally.add("fix.proposed", proposed)
+                Tally.add("fix.kept", kept)
+                Tally.add("fix.dropped", proposed - kept)
             }
             for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
                 if originals[i] == nil { originals[i] = entries[i].text }

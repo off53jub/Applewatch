@@ -9,14 +9,26 @@ struct LifeLogApp: App {
     /// 自動テスト（CI）で動いているときは、画面と裏の処理を動かさない
     private static let testing = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
+    /// 画面の自動確認（CI のシミュレーターで、見本の記録を入れて全部の画面を開く）。配る IPA では常に false
+    private static let demo: Bool = {
+        #if DEBUG && targetEnvironment(simulator)
+        return DemoData.isOn
+        #else
+        return false
+        #endif
+    }()
+
     init() {
         // 日本時間で区切る設定なら、ほかの何よりも先に時間帯を日本にする（2026-11-06）
         Storage.applyTimeZoneSetting()
         // 「控えから戻す」で選んだ控えは、登録を読む前に入れ替える
-        if !Self.testing { BackupKeeper.applyPendingRestore() }
+        if !Self.testing && !Self.demo { BackupKeeper.applyPendingRestore() }
+        #if DEBUG && targetEnvironment(simulator)
+        if Self.demo { DemoData.install() }
+        #endif
         let pipeline = Pipeline()
         // 裏での処理は、起動が終わる前に登録しておく必要がある
-        if !Self.testing {
+        if !Self.testing && !Self.demo {
             pipeline.registerBackgroundWork()
             Pipeline.scheduleBackgroundWork()
         }
@@ -39,6 +51,7 @@ struct LifeLogApp: App {
                     .modifier(AppLock())
                     .onOpenURL { GIDSignIn.sharedInstance.handle($0) }
                     .task {
+                        guard !Self.demo else { return }
                         if let action = LifeLogActions.pending {
                             LifeLogActions.pending = nil
                             await pipeline.handle(action)
@@ -48,7 +61,7 @@ struct LifeLogApp: App {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            guard !Self.testing else { return }
+            guard !Self.testing, !Self.demo else { return }
             // 開いたときに、溜まった音声の処理と、終わった会話の見出し付けを進める
             if phase == .active {
                 pipeline.appBecameActive()

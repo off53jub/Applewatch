@@ -134,6 +134,7 @@ extension Pipeline {
                     let ends = Self.lineEnds(sorted.map { (offset: $0.offset ?? 0, chars: $0.text.count) })
                     let spans = sorted.indices.map { (start: sorted[$0].offset ?? 0, end: ends[$0]) }
                     guard let embeddings = try? await homePC.speakerEmbeddings(url, segments: spans) else { continue }
+                    Tally.add("pc.speakerChecked", embeddings.compactMap { $0 }.count)
                     for (line, embedding) in zip(sorted, embeddings) {
                         guard let embedding, let assigned = line.speakerID,
                               let other = PCVoiceRefs.disagreement(embedding, assigned: assigned, refs: refs) else { continue }
@@ -142,6 +143,7 @@ extension Pipeline {
                         var note = NewVoiceBox.Note(id: id, time: line.time, personID: assigned, claimed: nil, quote: line.text)
                         note.pcSuggests = other
                         box.notes.append(note)
+                        Tally.add("pc.speakerDiffer")
                     }
                 }
                 checked.append(key)
@@ -170,8 +172,10 @@ extension Pipeline {
                     let spans = group.map { (start: max(0, ($0.offset ?? 0) - 2), end: ($0.offset ?? 0) + 8) }
                     if let result = try? await homePC.sceneTags(url, segments: spans) { tags += result }
                 }
+                if !tags.isEmpty { Tally.add("pc.sceneChecked") }
                 if let scene = SceneVote.decide(pcTags: tags, phoneSounds: c.lines.compactMap(\.sound)) {
                     setScene(scene, start: c.start, day: day)
+                    Tally.add("pc.sceneSet")
                 }
                 checked.append(key)
                 done += 1
@@ -191,6 +195,7 @@ extension Pipeline {
         guard let i = lines.firstIndex(where: { $0.time == note.time && $0.speakerID == note.personID }) else { return }
         let next = i + 1 < lines.count ? lines[i + 1] : nil
         await fixSpeaker(of: lines[i], next: next, to: target, scope: .line)
+        Tally.add("pc.speakerAccepted")
         dismissNewVoice(note.id)
     }
 }

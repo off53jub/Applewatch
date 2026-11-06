@@ -54,9 +54,10 @@ actor SpeakerLabeler {
             }
         }
         /// これより近ければ同じ人（コサイン距離。0 が同じ、1 が無関係）
-        var accept: Float { [0.32, 0.40, 0.48][rawValue] }
+        /// 本人の手直しから少しずつ合わせる（SpeakerTuning。±0.04 まで。2026-11-06）
+        var accept: Float { [0.32, 0.40, 0.48][rawValue] + SpeakerTuning.shift }
         /// 別の場の人や、2番目の候補と差が小さいときは、これより近いときだけ選ぶ
-        var strictLimit: Float { [0.24, 0.30, 0.36][rawValue] }
+        var strictLimit: Float { [0.24, 0.30, 0.36][rawValue] + SpeakerTuning.shift }
         /// 声を覚え足すのは、これより近くて3秒以上話していたときだけ
         var learn: Float { strictLimit - 0.05 }
     }
