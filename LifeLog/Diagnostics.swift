@@ -208,7 +208,7 @@ extension Pipeline {
         // 直した記録から学んだ値（2026-11-06）
         let shift = Double(SpeakerTuning.shift)
         add("学んだ値", "話者の近さの線", shift == 0 ? "そのまま（直し \(SpeakerTuning.fixes.count) 回）"
-            : String(format: "%@ %.2f（直し %d 回から）", shift > 0 ? "ゆるく" : "厳しく", abs(shift), SpeakerTuning.fixes.count))
+            : (shift > 0 ? "ゆるく " : "厳しく ") + String(format: "%.2f", abs(shift)) + "（直し \(SpeakerTuning.fixes.count) 回から）")
         let taught = TaskLearning.examples(tasks.items).count
         add("学んだ値", "頼まれごとの候補の並び", TaskLearning.weights != nil ? "採りそうな順（採用・却下 \(taught) 件から）"
             : "まだ（採用・却下 \(taught) / 30 件）")

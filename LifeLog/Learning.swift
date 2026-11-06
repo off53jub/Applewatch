@@ -84,7 +84,7 @@ enum TaskLearning {
     /// 学ぶ材料（確かめ待ちから、本人が採った・却下したもの）
     static func examples(_ items: [TaskBook.Item]) -> [(x: [Double], wrong: Bool)] {
         items.filter { $0.fromCandidate == true && $0.state != .candidate }
-            .map { (features($0), $0.state == .rejected) }
+            .map { (x: features($0), wrong: $0.state == .rejected) }
     }
 
     static var weights: [Double]? {

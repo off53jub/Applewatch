@@ -78,6 +78,6 @@ enum AppBuild {
 
     /// この端末より古い版の相手（端末の番号と版）
     static func olderPeers(than mine: Int = current) -> [(device: String, build: Int)] {
-        peers.filter { $0.value < mine }.map { ($0.key, $0.value) }.sorted { $0.device < $1.device }
+        peers.filter { $0.value < mine }.map { (device: $0.key, build: $0.value) }.sorted { $0.device < $1.device }
     }
 }
