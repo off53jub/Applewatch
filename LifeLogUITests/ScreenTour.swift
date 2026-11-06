@@ -30,7 +30,7 @@ final class ScreenTour: XCTestCase {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         for _ in 0..<4 {
             let alert = springboard.alerts.firstMatch
-            guard alert.waitForExistence(timeout: 1.5) else { return }
+            guard alert.waitForExistence(timeout: 0.7) else { return }
             var tapped = false
             for name in ["許可しない", "Don’t Allow", "Don't Allow", "後で", "Not Now", "OK", "閉じる", "Close"] {
                 let b = alert.buttons[name]

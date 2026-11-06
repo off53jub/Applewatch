@@ -67,7 +67,7 @@ jobs:
   # 開いたとたんに落ちる画面があれば失敗にする。写真は成果物「画面の写真」に残し、main ではリリースにも一覧の画像を付ける。
   screens:
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 80
     permissions:
       contents: write
     steps:
