@@ -42,6 +42,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
+        # アプリのアイコン（TestFlight に上げるのに要る。2026-11-07）
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     # ヘルスケアを読む許可（署名したときだけ効く。署名なしの IPA には入らない）
     entitlements:
       path: LifeLog/LifeLog.entitlements
@@ -55,6 +57,13 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
+        # 画面の向き（TestFlight に上げるのに要る。iPhone は縦だけ、iPad は全部。2026-11-07）
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UIBackgroundModes: [audio, fetch, processing]
         # アクションボタンなどで、アプリを開かずに録音を始めたときの表示
         NSSupportsLiveActivities: true
@@ -97,6 +106,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.off53jub.lifelog.watchkitapp
         GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: LifeLogWatch/Info.plist
       properties:
@@ -105,7 +115,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.off53jub.lifelog
-        WKBackgroundModes: [audio]
+        # 裏での録音（WKBackgroundModes の audio は App Store では受け付けられないので、UIBackgroundModes で書く。2026-11-07）
+        UIBackgroundModes: [audio]
         NSMicrophoneUsageDescription: 会話を録音して iPhone に送るためにマイクを使います。
   # コントロールセンター・ロック画面・アクションボタンに置く LifeLog のボタン
   LifeLogWidgets:
