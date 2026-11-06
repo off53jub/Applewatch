@@ -323,6 +323,7 @@ final class Pipeline {
         receiver.onNewPerson = { [weak self] time in self?.markNewPerson(at: time) }
         receiver.onMeeting = { [weak self] on in self?.setMeeting(on) }
         receiver.onAsk = { [weak self] _ in self?.recentWords() ?? "" }
+        setUpWatchApp()  // 時計のアプリ: 済み・聞く・時計に送る中身（2026-11-07。WatchInfo.swift）
         // 時計に起こされたら、待機モードを確かめて、届いた区切りを文字にする（2026-11-06）
         receiver.onWake = { [weak self] in
             guard let self else { return }
@@ -1390,6 +1391,7 @@ final class Pipeline {
         updateHold()
         if email != nil { Task { await sync.run() } }
         if UIDevice.current.userInterfaceIdiom != .pad { Task { await scheduleMeetingBriefs() } }
+        morningBriefOnActive()  // 朝の読み上げ（まだなら作る）と時計に送る中身（2026-11-07。MorningBrief.swift）
         liveAutoOff?.cancel()
         liveAutoOff = nil
         // ボタンで始めた録音の Live Activity は、古ければ出し直す（8時間で iOS に終わらせられるため）。
@@ -2334,6 +2336,7 @@ final class Pipeline {
         await refreshSemanticIndex()
         nightlyResult = "\(Date.now.formatted(date: .abbreviated, time: .shortened)) に \(processed) 区切りを聞き直し、\(changedLines) 行を直しました。"
             + (processed < targets.count ? "（残りは次の充電中に続けます）" : "")
+        await makeMorningBriefAtNight()  // 朝の読み上げを作る（2026-11-07。MorningBrief.swift）
     }
 
     /// 2つの言語モデルの直しを見比べる（2026-11-06）。直した行は、もう片方もほぼ同じに直したか、
