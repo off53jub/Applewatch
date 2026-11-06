@@ -229,12 +229,15 @@ final class HomePC {
                 struct Line: Decodable {
                     let start: Double; let end: Double; let text: String
                     let confidence: Double?; let alternatives: [String]?; let votes: [String: String]?
+                    /// PC の声の区間だけが声とした所（iPhone の区間には無かった。2026-11-06）
+                    let extra: Bool?
                 }
                 let lines: [Line]
                 let seconds: Double
                 let engines: [String]?
             }
             let reply = try JSONDecoder().decode(Reply.self, from: data)
+            Tally.add("pc.vadExtra", reply.lines.filter { $0.extra == true }.count)
             failedAt = nil
             downSince = nil
             engineCount = reply.engines?.count ?? 1

@@ -151,7 +151,10 @@ struct NewVoicesSection: View {
                         }
                     }
                     .swipeActions {
-                        Button("消す") { pipeline.dismissNewVoice(note.id) }
+                        Button("消す") {
+                            if note.pcSuggests != nil { Tally.add("pc.speakerRejected") }
+                            pipeline.dismissNewVoice(note.id)
+                        }
                     }
                 }
             } header: {

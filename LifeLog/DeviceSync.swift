@@ -116,9 +116,10 @@ final class DeviceSync {
             default:
                 guard kind.hasPrefix("day-") else { break }
                 let day = String(kind.dropFirst(4))
-                if let copy = try? decoder.decode(ConversationLog.SyncDay.self, from: data),
-                   conversations.mergeRemote(copy, day: day) {
-                    days += 1
+                if let copy = try? decoder.decode(ConversationLog.SyncDay.self, from: data) {
+                    // 相手の版を覚える（古い版の端末があれば自己点検で知らせる）
+                    AppBuild.note(device: parsed.device, build: copy.build)
+                    if conversations.mergeRemote(copy, day: day) { days += 1 }
                 }
             }
             // 読めなかったファイルも、同じ版は読み直さない（次に書き直されたら読む）

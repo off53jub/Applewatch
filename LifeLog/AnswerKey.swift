@@ -644,6 +644,9 @@ extension Pipeline {
     /// 答え合わせがたまったら、「確かめたほうがよい行」の線を当たる値に寄せる（本人の希望でお任せ。2026-11-06）。
     /// 一度に動かすのは 0.05 まで（急に変わらないように）。
     func tuneFromAnswers() {
+        // 話者の線と、頼まれごとの候補も、直した記録から学ぶ（2026-11-06）
+        if SpeakerTuning.tune() { Tally.add("learn.updated") }
+        if TaskLearning.train(tasks.items) { Tally.add("learn.updated") }
         // 確からしさの手がかりを束ねる重みも学ぶ（30問から。2026-11-06）
         let data = answerKey.samples.compactMap { s -> (x: [Double], wrong: Bool)? in
             guard s.isAnswered, s.skipped != true, let right = s.rightText else { return nil }
