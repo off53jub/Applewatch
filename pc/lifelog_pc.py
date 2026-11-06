@@ -475,6 +475,8 @@ class WhisperEngine:
             try:
                 prepare_cuda()
             except Exception as error:  # noqa: BLE001 — GPU が使えなければ CPU で続ける
+                if self.name in ("kotoba", "mine"):
+                    raise RuntimeError(f"GPU の部品を用意できないので使いません: {error!r}") from error
                 log(f"GPU の部品を用意できませんでした。CPU で動かします: {error!r}")
                 use_gpu = False
         if self.name == "kotoba":
@@ -493,6 +495,9 @@ class WhisperEngine:
                                           download_root=str(WHISPER_DIR))
                 self.provider = "cuda"
             except Exception as error:  # noqa: BLE001
+                if self.name in ("kotoba", "mine"):
+                    # 追加の票は GPU のときだけ。CPU で動かすと録音に追いつかなくなる（2026-11-06。5分の区切りに816秒かかっていた）
+                    raise RuntimeError(f"GPU で読み込めないので使いません: {error!r}") from error
                 log(f"GPU で読み込めませんでした。CPU で動かします: {error!r}")
                 if model == "large-v3":
                     model = "large-v3-turbo"
