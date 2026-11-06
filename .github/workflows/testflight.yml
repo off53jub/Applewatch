@@ -70,7 +70,22 @@ jobs:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
         run: |
           mkdir -p "$RUNNER_TEMP/asc"
-          printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc/key.p8"
+          # 貼り付けで改行が消えた・先頭と末尾の行が無い・空白が混じった、でも読めるように、鍵の形に整えて置く（2026-11-06）
+          body=$(printf '%s' "$ASC_KEY_P8" | tr -d '\r' | sed -e 's/-----BEGIN PRIVATE KEY-----//' -e 's/-----END PRIVATE KEY-----//' | tr -d ' \n\t')
+          {
+            echo "-----BEGIN PRIVATE KEY-----"
+            printf '%s' "$body" | fold -w 64
+            echo
+            echo "-----END PRIVATE KEY-----"
+          } > "$RUNNER_TEMP/asc/key.p8"
+          # 中身は出さずに、鍵として読めるかだけ確かめる
+          if openssl pkey -in "$RUNNER_TEMP/asc/key.p8" -noout 2>/dev/null; then
+            echo "API キーは鍵として読めました（${#body} 文字）"
+          else
+            # 読めなければ TestFlight には送らず、今までどおり署名なしの IPA だけ作る（リリースは止めない）
+            echo "::warning::ASC_KEY_P8 が鍵として読めません（${#body} 文字）。.p8 ファイルの中身を、BEGIN と END の行も含めてそのまま貼ってください。今回は TestFlight に送らず、署名なしの IPA だけ作ります"
+            echo "HAS_ASC=false" >> "$GITHUB_ENV"
+          fi
 
       - name: アーカイブ（署名は書き出し時にクラウドで行う）
         env:
