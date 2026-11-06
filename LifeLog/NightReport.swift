@@ -94,6 +94,22 @@ enum Tally {
             rows.append(("夜の聞き直し", "聞き直した行 \(n("night.lines"))・書き直した行 \(n("night.changed"))"
                 + pct(n("night.changed"), n("night.lines")), nil))
         }
+        if n("split.lines") > 0 {
+            rows.append(("話者の替わり目で分けた行", "\(n("split.lines")) 行（PC の言葉ごとの時刻から）", nil))
+        }
+        if n("ground.checked") > 0 {
+            rows.append(("言語モデルの書いたものの根拠", "確かめた \(n("ground.checked"))・根拠が見つからず外した要点 \(n("ground.dropped"))"
+                + "・要確認にした項目 \(n("ground.flagged"))", nil))
+        }
+        if n("talk.joined") + n("talk.split") > 0 {
+            rows.append(("会話の区切りの手直し", "つないだ \(n("talk.joined"))・分けた \(n("talk.split"))", nil))
+        }
+        if n("bench.lines") > 0 {
+            rows.append(("精度の物差しで測った行", "\(n("bench.lines")) 行", nil))
+        }
+        if n("personal.sent") > 0 {
+            rows.append(("あなた向けのモデルの材料", "PC に渡した \(n("personal.sent")) 行", nil))
+        }
         if n("learn.updated") > 0 {
             rows.append(("直した記録から学んだ", "値を合わせ直した \(n("learn.updated")) 回", nil))
         }

@@ -1416,6 +1416,10 @@ final class Pipeline {
         checkStall()
         // 家の PC が長くつながらない・版が古いなら知らせる
         checkHomePC()
+        // アプリを開いていれば、閉じたばかりの会話の話し手を PC の声のモデルでも見比べる（2026-11-06）
+        if UIApplication.shared.applicationState == .active, homePC.shouldTry {
+            Task { await crossCheckDaytime() }
+        }
         if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
         Self.scheduleBackgroundWork()
         // 夜に充電していれば、1日分を聞き直す
@@ -2039,6 +2043,7 @@ final class Pipeline {
 
     /// 議事録を作った会話に、そのドキュメントの名前を記す
     func setScene(_ scene: String, start: Date, day: String) { conversations.setScene(scene, start: start, day: day) }
+    func markSpeakerDoubt(_ other: String, time: Date, day: String) { conversations.markSpeakerDoubt(other, time: time, day: day) }
 
     func markMinutes(_ name: String, start: Date, day: String) {
         conversations.setMinutes(name, start: start, day: day)
@@ -2188,7 +2193,8 @@ final class Pipeline {
             var ensembleDone = NightlyRecheck.isEnsembleDone(target.audio)
             let doneDuringDay = ensembleDone
             if !ensembleDone, homePC.shouldTry,
-               let pc = try? await homePC.transcribe(url, local: local, hints: words), homePC.engineCount > 1 {
+               let pc = try? await homePC.transcribe(url, local: local, hints: words,
+                                                     noisy: lines.contains { $0.noisy == true }), homePC.engineCount > 1 {
                 ensembleDone = true
                 NightlyRecheck.markEnsembleDone(target.audio)
                 for i in lines.indices {
@@ -2291,6 +2297,9 @@ final class Pipeline {
         Tally.add("night.changed", changedLines)
         // 家の PC の別の種類のモデルで、話者と場面を見比べる（2026-11-06）
         await crossCheckWithPC()
+        // 精度の物差し（答え合わせの行を今の設定で文字にし直して測る）と、自分向けのモデルの材料を PC に渡す
+        await measureAccuracy()
+        await sendPersonalSamples()
         nightlyResult = "\(Date.now.formatted(date: .abbreviated, time: .shortened)) に \(processed) 区切りを聞き直し、\(changedLines) 行を直しました。"
             + (processed < targets.count ? "（残りは次の充電中に続けます）" : "")
     }
@@ -2496,6 +2505,8 @@ final class Pipeline {
         var second: [CloudTranscriber.Line]?
         /// 家の PC の多数決の行（行ごとの確からしさと候補つき）。PC を使わなかったら nil
         var pcLines: [HomePC.Line]?
+        /// 話者の替わり目で行を分けるために先に聞き分けた区間（同じ区切りで2回聞き分けないように使い回す）
+        var labeledSegments: [SpeakerLabeler.Segment]?
         /// クラウドの Whisper の結果は、多数決の票と騒がしい所の補いで1回だけ取る
         var cloudFetched = false
         var cloudResult: CloudTranscriber.Transcript?
@@ -2510,8 +2521,19 @@ final class Pipeline {
         if !usedHaas, homePC.shouldTry {
             // 家の PC（無料）。Haas-ja・ReazonSpeech・Whisper の多数決（古い PC は Haas-ja だけ）。
             // PC が切れているときや届かないときは、この区切りはほかの方法で
-            if var lines = try? await homePC.transcribe(url, segments: haasSegments, hints: keywords, previous: previous) {
+            if var lines = try? await homePC.transcribe(url, segments: haasSegments, hints: keywords, previous: previous,
+                                                         noisy: noisy) {
                 let ensemble = homePC.engineCount > 1
+                // 話者が替わった所で行を分ける（PC が言葉ごとの時刻を返したときだけ。2026-11-06）
+                if speakerLabelsOn, lines.contains(where: { $0.words.count >= 2 }),
+                   let segments = try? await speakers.label(url, context: places.context(at: start), strictness: speakerStrictness,
+                                                            selfLevel: officeFilter.selfLevel(watch: fromWatch),
+                                                            expected: expectedSpeakers(at: start, fromWatch: fromWatch)) {
+                    labeledSegments = segments
+                    let before = lines.count
+                    lines = HomePC.splitAtSpeakerChanges(lines, segments: segments)
+                    Tally.add("split.lines", lines.count - before)
+                }
                 lastEngine = ensemble ? "家の PC（\(homePC.engineCount) つのモデルの多数決）" : "Haas-ja（家の PC）"
                 // 食い違った行は、クラウドの Whisper にも聞いてもう1票にする（設定「クラウドの票も足す」）
                 if ensemble, homePC.cloudVote, !asleep, !silent, settings.shouldUseCloud, let key = settings.apiKey,
@@ -2697,9 +2719,15 @@ final class Pipeline {
             }
         }
         let offsets = Self.fillOffsets(entries.map { ($0.offset, $0.text) }, duration: duration)
+        // 行の終わり（PC の多数決の行は PC が返した終わり、ほかは次の行の始まり）
+        let knownEnds: [TimeInterval?] = entries.indices.map { i in
+            guard let pcLines, pcLines.count == entries.count else { return nil }
+            return pcLines[i].end > offsets[i] ? pcLines[i].end : nil
+        }
         let names = await speakerNames(for: offsets, in: url, context: places.context(at: start),
                                        selfLevel: officeFilter.selfLevel(watch: fromWatch),
-                                       expected: expectedSpeakers(at: start, fromWatch: fromWatch))
+                                       expected: expectedSpeakers(at: start, fromWatch: fromWatch),
+                                       segments: labeledSegments, ends: knownEnds)
         // この区切りで聞こえた名前のある人を覚えておく（次の区切りで、その人の言葉をヒントにする）
         var heardPeople: [String] = []
         for segment in names.compactMap({ $0 }) where segment.personID != SpeakerLabeler.selfID
@@ -2744,6 +2772,7 @@ final class Pipeline {
             }
             line.sound = SoundScene.label(from: offsets[i], to: end, in: scene)
             if noisy { line.noisy = true }
+            if i < knownEnds.count, let known = knownEnds[i] { line.end = (known * 100).rounded() / 100 }
             // 時計のこすれ・風の音が強かった行は、確からしさを下げる（確かめたほうがよい行に入りやすくなる）
             if let soundCheck, soundCheck.rubbed(from: offsets[i], to: end) {
                 line.rubbed = true
@@ -2775,6 +2804,20 @@ final class Pipeline {
     }
 
     /// その時刻に使う言葉の組。登録した場所にいればその場所で、分からなければ時刻（平日8〜19時は職場）で決める。
+    /// 会話を前の会話とつなぐ（本人が押したとき）。つないだ間の長さを区切りの学びに残す（2026-11-06）
+    func joinConversation(start: Date, day: String) async {
+        guard let gap = await conversations.joinWithPrevious(start: start, day: day) else { return }
+        ConversationGap.record(joined: true, gap: gap)
+        Tally.add("talk.joined")
+    }
+
+    /// 会話をその行の前で分ける（本人が押したとき）
+    func splitConversation(start: Date, at time: Date, day: String) async {
+        guard let gap = await conversations.split(start: start, at: time, day: day) else { return }
+        ConversationGap.record(joined: false, gap: gap)
+        Tally.add("talk.split")
+    }
+
     func vocabularyContext(at time: Date) -> SpeakerLabeler.Context {
         places.registeredContext(at: time) ?? calendar.context(at: time) ?? Vocabulary.context(byTime: time)
     }
@@ -2815,16 +2858,22 @@ final class Pipeline {
     /// 各行を、その時間にいちばん長く話していた人に結びつける。聞き分けがオフ・失敗したときは nil。
     private func speakerNames(for offsets: [TimeInterval], in url: URL,
                               context: SpeakerLabeler.Context?, selfLevel: Float?,
-                              expected: Set<String> = []) async -> [SpeakerLabeler.Segment?] {
+                              expected: Set<String> = [], segments known: [SpeakerLabeler.Segment]? = nil,
+                              ends: [TimeInterval?] = []) async -> [SpeakerLabeler.Segment?] {
         let none = [SpeakerLabeler.Segment?](repeating: nil, count: offsets.count)
-        guard speakerLabelsOn,
-              let segments = try? await speakers.label(url, context: context, strictness: speakerStrictness,
-                                                       selfLevel: selfLevel, expected: expected),
-              !segments.isEmpty else { return none }
+        guard speakerLabelsOn else { return none }
+        var found = known
+        if found == nil {
+            found = try? await speakers.label(url, context: context, strictness: speakerStrictness,
+                                              selfLevel: selfLevel, expected: expected)
+        }
+        guard let segments = found, !segments.isEmpty else { return none }
         let chunkEnd = Self.duration(of: url)
         return offsets.indices.map { i in
             let from = offsets[i]
-            let to = i + 1 < offsets.count ? offsets[i + 1] : chunkEnd
+            let next = i + 1 < offsets.count ? offsets[i + 1] : chunkEnd
+            // 行の終わりが分かっていれば、そこまで（次の行までの間の別の人の声を数えない。2026-11-06）
+            let to = i < ends.count ? min(next, ends[i] ?? next) : next
             // 行の時間に、いちばん長く話していた人（同じ人の区間は足し合わせる）
             var total: [String: TimeInterval] = [:]
             for segment in segments { total[segment.personID, default: 0] += overlap(segment, from, to) }

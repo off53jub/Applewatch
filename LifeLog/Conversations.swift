@@ -39,6 +39,10 @@ final class ConversationLog {
         var history: [Edit]? = nil
         /// 時計のこすれ・風の音が強かった行（聞き取りの重みを下げる。2026-11-06）
         var rubbed: Bool? = nil
+        /// 音声の中で、この行が終わる位置（秒）。PC の言葉ごとの時刻などで分かったときだけ（2026-11-06。前の記録には無い）
+        var end: TimeInterval? = nil
+        /// 2つの声のモデルで話し手が食い違った行の、もう片方のモデルが言う人の番号（2026-11-06。前の記録には無い）
+        var speakerDoubt: String? = nil
 
         /// 書き換え1回分
         struct Edit: Codable, Hashable {
@@ -185,7 +189,8 @@ final class ConversationLog {
     }
 
     /// これだけ話が途切れたら、別の会話とみなす
-    static let gap: TimeInterval = 180
+    /// 本人が会話をつないだ・分けたところから学ぶ（ConversationGap。90〜600秒。2026-11-06）
+    static var gap: TimeInterval { ConversationGap.current }
     /// 画面で1つに見せる会話どうしの、間の長さの上限
     private static let sameTalkGap: TimeInterval = 900
     /// 短すぎる会話（テレビの音や独り言など）には見出しを付けない
@@ -843,6 +848,65 @@ final class ConversationLog {
         return fixes.count
     }
 
+    // MARK: - 会話をつなぐ・分ける（本人が押したとき。2026-11-06）
+
+    /// 閉じた会話を、そのすぐ前の閉じた会話とつなぐ。つないだ2つの間の長さ（秒）を返す（区切りの学びに使う）。
+    /// 後ろの会話の見出しはドキュメントから消し、つないだ会話の見出しと要点・1日のまとめは、あとで作り直す。
+    func joinWithPrevious(start: Date, day: String) async -> TimeInterval? {
+        let closed = load(day).conversations.filter(\.closed).sorted { $0.start < $1.start }
+        guard let k = closed.firstIndex(where: { $0.start == start }), k > 0 else { return nil }
+        let prev = closed[k - 1], cur = closed[k]
+        let gap = max(0, cur.start.timeIntervalSince(prev.end))
+        _ = try? await docs.deleteParagraphs([], headings: [Self.headingText(cur)], day: day)
+        // 消しているあいだに変わっていてもよいように、読み直してから直す
+        var log = load(day)
+        guard let i = log.conversations.firstIndex(where: { $0.start == prev.start }),
+              let j = log.conversations.firstIndex(where: { $0.start == cur.start }) else { return nil }
+        let later = log.conversations[j]
+        var merged = log.conversations[i]
+        merged.lines = (merged.lines + later.lines).sorted { $0.time < $1.time }
+        merged.end = max(merged.end, later.end)
+        merged.resummarize = true
+        merged.minutes = merged.minutes ?? later.minutes
+        merged.scene = merged.scene ?? later.scene
+        log.conversations[i] = merged
+        log.removed = (log.removed ?? []) + [Removed(start: later.start, rev: (later.rev ?? 0) + 1)]
+        log.conversations.remove(at: j)
+        log.redoSummary = true
+        save(log, day: day)
+        return gap
+    }
+
+    /// 閉じた会話を、その行の前で2つに分ける。分けた所の、前の行との間の長さ（秒。前の行の長さは文字数で見積もる）を返す。
+    /// 前の見出しはドキュメントから消し、2つの会話の見出しと要点・1日のまとめは、あとで作り直す。
+    func split(start: Date, at time: Date, day: String) async -> TimeInterval? {
+        guard let c = load(day).conversations.first(where: { $0.start == start && $0.closed }),
+              let k = c.lines.firstIndex(where: { $0.time == time }), k > 0 else { return nil }
+        let before = c.lines[k - 1]
+        let spoken = before.end.flatMap { end in before.offset.map { end - $0 } } ?? Double(before.text.count) * 0.17
+        let gap = max(0, time.timeIntervalSince(before.time) - spoken)
+        _ = try? await docs.deleteParagraphs([], headings: [Self.headingText(c)], day: day)
+        var log = load(day)
+        guard let i = log.conversations.firstIndex(where: { $0.start == start }),
+              let cut = log.conversations[i].lines.firstIndex(where: { $0.time == time }), cut > 0 else { return nil }
+        var first = log.conversations[i]
+        let lines = first.lines
+        first.lines = Array(lines[..<cut])
+        first.end = first.lines.last?.time ?? first.start
+        first.resummarize = true
+        var second = Conversation(start: time, end: max(c.end, time), docIndex: first.docIndex)
+        second.lines = Array(lines[cut...])
+        second.closed = true
+        second.place = first.place
+        second.scene = first.scene
+        second.resummarize = true
+        log.conversations[i] = first
+        log.conversations.append(second)
+        log.redoSummary = true
+        save(log, day: day)
+        return gap
+    }
+
     /// 本人が AI の質問に答えた会話の見出しと要点を、あとで作り直す（閉じた会話だけ）
     func markResummarize(start: Date, day: String) {
         var log = load(day)
@@ -858,6 +922,18 @@ final class ConversationLog {
         guard let i = log.conversations.firstIndex(where: { $0.start == start }) else { return }
         log.conversations[i].scene = scene
         save(log, day: day)
+    }
+
+    /// 2つの声のモデルで話し手が食い違った行に印を付ける（2026-11-06。記録の話し手は変えない）
+    func markSpeakerDoubt(_ other: String, time: Date, day: String) {
+        var log = load(day)
+        for i in log.conversations.indices {
+            guard let k = log.conversations[i].lines.firstIndex(where: { $0.time == time }) else { continue }
+            guard log.conversations[i].lines[k].speakerDoubt != other else { return }
+            log.conversations[i].lines[k].speakerDoubt = other
+            save(log, day: day)
+            return
+        }
     }
 
     func setMinutes(_ name: String, start: Date, day: String) {

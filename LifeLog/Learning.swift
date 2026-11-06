@@ -65,6 +65,66 @@ enum SpeakerTuning {
     }
 }
 
+/// 会話の区切り（これだけ話が途切れたら別の会話）の長さを、本人が会話をつないだ・分けたところから学ぶ（2026-11-06）。
+/// - つないだ: 2つの間の長さが今の線より長かった → 線を長く
+/// - 分けた: 分けた所の間の長さが今の線より短かった → 線を短く（その間で分かれるところまで下げられるときだけ）
+/// 直近60日に3回以上あり、片方が2倍より多いときだけ、1日に1回 30秒動かす（90〜600秒）。
+enum ConversationGap {
+    struct Event: Codable, Equatable {
+        let at: Date
+        let joined: Bool
+        let gap: Double
+    }
+
+    static let key = "conversationGap", logKey = "conversationGapLog"
+    static let initial: TimeInterval = 180, low: TimeInterval = 90, high: TimeInterval = 600, step: TimeInterval = 30
+
+    static var current: TimeInterval {
+        let v = UserDefaults.standard.double(forKey: key)
+        return v > 0 ? v : initial
+    }
+
+    static var events: [Event] {
+        guard let data = UserDefaults.standard.data(forKey: logKey) else { return [] }
+        return (try? JSONDecoder().decode([Event].self, from: data)) ?? []
+    }
+
+    static func record(joined: Bool, gap: Double, at date: Date = .now) {
+        let list = Array((events + [Event(at: date, joined: joined, gap: gap)]).suffix(200))
+        if let data = try? JSONEncoder().encode(list) { UserDefaults.standard.set(data, forKey: logKey) }
+    }
+
+    static func next(current: TimeInterval, events: [Event], now: Date = .now) -> TimeInterval {
+        let recent = events.filter { now.timeIntervalSince($0.at) < 60 * 86400 }
+        let joins = recent.filter { $0.joined && $0.gap > current }.map(\.gap).sorted()
+        let splits = recent.filter { !$0.joined && $0.gap < current }.map(\.gap).sorted()
+        if joins.count >= 3, joins.count > splits.count * 2 {
+            let median = joins[joins.count / 2]
+            return min(high, max(current, min(current + step, median + step)))
+        }
+        if splits.count >= 3, splits.count > joins.count * 2 {
+            let median = splits[splits.count / 2]
+            let lower = max(low, current - step)
+            // 下げても分けた所で分かれないなら下げない
+            return median >= lower ? lower : current
+        }
+        return current
+    }
+
+    /// 学ぶ。変えたら true（同じ日には1回だけ）
+    @discardableResult
+    static func tune(now: Date = .now) -> Bool {
+        let dayKey = "conversationGapTunedDay"
+        let today = String(Int(now.timeIntervalSince1970 / 86400))
+        guard UserDefaults.standard.string(forKey: dayKey) != today else { return false }
+        UserDefaults.standard.set(today, forKey: dayKey)
+        let value = next(current: current, events: events, now: now)
+        guard value != current else { return false }
+        UserDefaults.standard.set(value, forKey: key)
+        return true
+    }
+}
+
 /// 頼まれごとの候補を、本人の採用・却下から学ぶ（30件から）。確かめ待ちの並びを「採りそうな順」にする。
 /// 消したり隠したりはしない（並べ替えだけ）。
 enum TaskLearning {

@@ -212,8 +212,26 @@ extension Pipeline {
         let taught = TaskLearning.examples(tasks.items).count
         add("学んだ値", "頼まれごとの候補の並び", TaskLearning.weights != nil ? "採りそうな順（採用・却下 \(taught) 件から）"
             : "まだ（採用・却下 \(taught) / 30 件）")
+        add("学んだ値", "会話の区切り", "\(Int(ConversationGap.current)) 秒（つなぐ・分ける \(ConversationGap.events.count) 回から）")
+        add("学んだ値", "多数決の重み（騒がしい・静か）",
+            [("騒がしい", ".noisy"), ("静か", ".quiet")].map { label, suffix in
+                label + ": " + (UserDefaults.standard.string(forKey: AnswerKey.weightsKey + suffix) ?? "全体のもの")
+            }.joined(separator: "／"))
         add("学んだ値", "確かめたほうがよい行", String(format: "線 %.2f", ConversationLog.Line.uncertainBelow)
             + (Calibration.weights != nil ? "・手がかりを束ねて判断" : ""))
+
+        // 精度の物差し（答え合わせの行を今の設定で文字にし直した誤りの割合。2026-11-06）
+        let bench = Benchmark.report()
+        if bench.isEmpty {
+            add("精度の物差し", "まだ測っていません", "答え合わせをして、夜に家の PC につながると測ります")
+        }
+        for row in bench { add("精度の物差し", row.label, row.value, row.ok) }
+        if homePC.isConfigured {
+            let count = UserDefaults.standard.integer(forKey: "personalCount")
+            let model = UserDefaults.standard.bool(forKey: "personalModel")
+            add("精度の物差し", "あなた向けのモデル", model ? "PC で使っている（材料 \(count) 行）"
+                : "まだ（PC にたまった材料 \(count) 行。300 行と NVIDIA の GPU で学べる）")
+        }
 
         // 仕組みごとの効き目（直近7日。数だけ。2026-11-06）
         let report = Tally.report(Tally.sums(days: 7))

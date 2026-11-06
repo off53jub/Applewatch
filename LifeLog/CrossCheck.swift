@@ -97,6 +97,18 @@ extension Pipeline {
         if homePC.features.contains("scene") { await crossCheckScenes(limit: limit) }
     }
 
+    /// 昼の見比べ（2026-11-06）。アプリを開いていて家の PC につながるとき、閉じたばかりの会話の話し手を PC の声のモデルでも測る。
+    /// 20分に1回まで・1回に2つの会話まで。夜と同じく、食い違った行は確認箱と行の「？」に出し、記録は変えない
+    func crossCheckDaytime() async {
+        let key = "speakerCrossCheckedDay"
+        if let last = UserDefaults.standard.object(forKey: key) as? Date, Date.now.timeIntervalSince(last) < 20 * 60 { return }
+        guard homePC.shouldTry else { return }
+        UserDefaults.standard.set(Date.now, forKey: key)
+        _ = try? await homePC.hello()
+        guard homePC.features.contains("speakers") else { return }
+        await crossCheckSpeakers(limit: 2)
+    }
+
     /// 名前のある人（自分も）の声を PC の話者モデルで測っておく（声のひとこまから。まだの人だけ）
     private func pcReferences() async -> [String: [[Float]]] {
         var refs = PCVoiceRefs.load()
@@ -132,7 +144,8 @@ extension Pipeline {
                     guard let url = await archive.playableURL(for: audio) else { continue }
                     let sorted = group.sorted { ($0.offset ?? 0) < ($1.offset ?? 0) }
                     let ends = Self.lineEnds(sorted.map { (offset: $0.offset ?? 0, chars: $0.text.count) })
-                    let spans = sorted.indices.map { (start: sorted[$0].offset ?? 0, end: ends[$0]) }
+                    // 行の終わりが分かっていれば、それを使う（2026-11-06）
+                    let spans = sorted.indices.map { (start: sorted[$0].offset ?? 0, end: sorted[$0].end ?? ends[$0]) }
                     guard let embeddings = try? await homePC.speakerEmbeddings(url, segments: spans) else { continue }
                     Tally.add("pc.speakerChecked", embeddings.compactMap { $0 }.count)
                     for (line, embedding) in zip(sorted, embeddings) {
@@ -144,6 +157,8 @@ extension Pipeline {
                         note.pcSuggests = other
                         box.notes.append(note)
                         Tally.add("pc.speakerDiffer")
+                        // 記録の行にも印（話し手の名前のあとに「？」）
+                        markSpeakerDoubt(other, time: line.time, day: day)
                     }
                 }
                 checked.append(key)

@@ -524,6 +524,13 @@ extension Pipeline {
                 }
                 scanned.append(id)
                 var items = taskItems(result, in: c, lines: lines, marks: marks, day: day, work: work)
+                // もとの会話に根拠が見つからない頼まれごとは、帳に直接入れず確かめ待ちにする（2026-11-06）
+                let said = lines.map(\.text)
+                for i in items.indices where items[i].source == .conversation
+                    && Grounding.unsupported(items[i].what + " " + (items[i].quote ?? ""), in: said) {
+                    items[i].state = .candidate
+                    Tally.add("ground.flagged")
+                }
                 // もう1つの言語モデル（iPhone の中）にも拾わせ、両方が拾ったものを先に出す（2026-11-06）
                 if MultiModel.secondOpinionOK, !Summarizer.$sensitive.withValue(work, operation: { Summarizer.usesLocal(apiKey: key) }),
                    let second = try? await Summarizer.$forceLocal.withValue(true, operation: {

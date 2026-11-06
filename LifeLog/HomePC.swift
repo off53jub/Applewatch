@@ -121,13 +121,50 @@ final class HomePC {
         var alternatives: [String]
         /// モデルごとの文（haas・reazon・whisper、iPhone で足した cloud）
         var votes: [String: String]
+        /// 言葉ごとの時刻（PC の版 4 から。選ばれた文の言葉をつなぐと text になる。分からなければ空）
+        var words: [Word] = []
 
         var cloudLine: CloudTranscriber.Line { CloudTranscriber.Line(offset: offset, text: text) }
     }
 
+    /// 言葉1つと、その始まり・終わり（区切りの中の秒）
+    struct Word: Sendable, Equatable, Decodable {
+        let start: Double
+        let end: Double
+        let text: String
+
+        init(start: Double, end: Double, text: String) {
+            self.start = start
+            self.end = end
+            self.text = text
+        }
+
+        /// PC は [始まり, 終わり, "言葉"] の形で返す
+        init(from decoder: Decoder) throws {
+            var c = try decoder.unkeyedContainer()
+            start = try c.decode(Double.self)
+            end = try c.decode(Double.self)
+            text = try c.decode(String.self)
+        }
+    }
+
     /// 区切りを PC で文字にする。local は端末内の文字起こし（声のある区間を決めるのに使う）。
-    func transcribe(_ url: URL, local: [Transcriber.Line], hints: [String] = []) async throws -> [Line] {
-        try await transcribe(url, segments: HaasEngine.segments(from: local), hints: hints)
+    func transcribe(_ url: URL, local: [Transcriber.Line], hints: [String] = [], noisy: Bool = false) async throws -> [Line] {
+        try await transcribe(url, segments: HaasEngine.segments(from: local), hints: hints, noisy: noisy)
+    }
+
+    /// 騒がしい区切りでは、雑音を消した音も PC で文字にして多数決の票に足す（PC の版 4 から。2026-11-06）。
+    /// 精度の物差しで「いつも足すほうが良い」と分かったら、静かな区切りでも足す
+    static var enhanceAlways: Bool { UserDefaults.standard.bool(forKey: "benchAdopt.enhance") }
+    /// 精度の物差しで「重みを送らないほうが良い」と分かったら送らない
+    static var skipWeights: Bool { UserDefaults.standard.bool(forKey: "benchAdopt.noWeights") }
+
+    /// 多数決の重み。騒がしい・静かな行で分けて学んだものがあればそれを、無ければ全体のもの（2026-11-06）
+    static func weightsText(noisy: Bool) -> String? {
+        let key = AnswerKey.weightsKey + (noisy ? ".noisy" : ".quiet")
+        if let text = UserDefaults.standard.string(forKey: key), !text.isEmpty { return text }
+        if let text = UserDefaults.standard.string(forKey: AnswerKey.weightsKey), !text.isEmpty { return text }
+        return nil
     }
 
     /// PC ができること（"speakers"・"scene"・"vad"。版 3 から。2026-11-06）
@@ -148,6 +185,37 @@ final class HomePC {
         struct Reply: Decodable { let tags: [[Tag]] }
         let data = try await post("scene", url: url, segments: segments)
         return try JSONDecoder().decode(Reply.self, from: data).tags.map { $0.map { (name: $0.name, prob: $0.prob) } }
+    }
+
+    // MARK: - あなた向けのモデルの材料（PC の版 4 から。2026-11-06）
+
+    /// 直した文とその音声の区間を PC に渡す（PC の中だけに置く。学び直しは PC で本人が動かす）。PC にたまった数を返す
+    func sendTrainSample(_ url: URL, start: TimeInterval, end: TimeInterval, text: String) async throws -> Int {
+        struct Reply: Decodable { let count: Int }
+        var upload = try request("train-sample")
+        var components = URLComponents(url: upload.url!, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "start", value: String(format: "%.2f", start)),
+                                  URLQueryItem(name: "end", value: String(format: "%.2f", end)),
+                                  URLQueryItem(name: "text", value: text)]
+        upload.url = components?.url
+        upload.httpMethod = "POST"
+        upload.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
+        let session = makeSession(timeout: 60)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.upload(for: upload, fromFile: url)
+        try Self.check(response, data: data)
+        return try JSONDecoder().decode(Reply.self, from: data).count
+    }
+
+    /// PC にたまった材料の数と、学び直したモデルがあるか
+    func trainStatus() async throws -> (count: Int, model: Bool) {
+        struct Reply: Decodable { let count: Int; let model: Bool }
+        let session = makeSession(timeout: 8)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: try request("train-status"))
+        try Self.check(response, data: data)
+        let reply = try JSONDecoder().decode(Reply.self, from: data)
+        return (reply.count, reply.model)
     }
 
     private func post(_ path: String, url: URL, segments: [(start: TimeInterval, end: TimeInterval)]) async throws -> Data {
@@ -172,7 +240,7 @@ final class HomePC {
     /// PC の LifeLog PC の版（hello で分かる。古い PC は 1）
     var version: Int?
     /// このアプリが前提にしている PC の版（多数決・ヒント・重み）
-    nonisolated static let expectedVersion = 2
+    nonisolated static let expectedVersion = 4
 
     /// 声の区間の長さに対する処理の時間（直近をならした値。1 より大きいと録音に追いつかない）。2026-11-06
     var speed: Double? = UserDefaults.standard.object(forKey: "homePCSpeed") as? Double {
@@ -189,8 +257,10 @@ final class HomePC {
     }
 
     /// hints は聞き取ってほしい言葉（PC の Whisper のヒントになる）、previous は前の区切りの終わりの文。
+    /// noisy は騒がしい区切りか（重みの選び方と、雑音を消した音も聞くかに使う）。enhance と weights は精度の物差しが試すときだけ指定する
     func transcribe(_ url: URL, segments: [(start: TimeInterval, end: TimeInterval)],
-                    hints: [String] = [], previous: String? = nil) async throws -> [Line] {
+                    hints: [String] = [], previous: String? = nil, noisy: Bool = false,
+                    enhance: Bool? = nil, weights: Bool? = nil, unionVAD: Bool = true) async throws -> [Line] {
         guard !segments.isEmpty else { return [] }
         do {
             // 先に短く確かめる。PC が切れていたら、長く待たずにほかの方法へ
@@ -211,11 +281,14 @@ final class HomePC {
             }
             if !words.isEmpty { items.append(URLQueryItem(name: "hints", value: words.joined(separator: "\n"))) }
             // PC でも声の区間を探し、iPhone が拾い漏らした声も文字にする（2つの VAD のどちらかが声とした所は捨てない。2026-11-06）
-            if features.contains("vad") { items.append(URLQueryItem(name: "vad", value: "union")) }
+            if unionVAD, features.contains("vad") { items.append(URLQueryItem(name: "vad", value: "union")) }
+            if features.contains("enhance"), enhance ?? (noisy || Self.enhanceAlways) {
+                items.append(URLQueryItem(name: "enhance", value: "1"))
+            }
             if let previous, !previous.isEmpty { items.append(URLQueryItem(name: "prompt", value: String(previous.suffix(120)))) }
             // 答え合わせから学んだ、モデルごとの当たりやすさ（多数決の票の重み）
-            if let weights = UserDefaults.standard.string(forKey: AnswerKey.weightsKey), !weights.isEmpty {
-                items.append(URLQueryItem(name: "weights", value: weights))
+            if weights ?? !Self.skipWeights, let text = Self.weightsText(noisy: noisy) {
+                items.append(URLQueryItem(name: "weights", value: text))
             }
             components?.queryItems = items
             upload.url = components?.url
@@ -231,6 +304,8 @@ final class HomePC {
                     let confidence: Double?; let alternatives: [String]?; let votes: [String: String]?
                     /// PC の声の区間だけが声とした所（iPhone の区間には無かった。2026-11-06）
                     let extra: Bool?
+                    /// 言葉ごとの時刻（版 4 から）
+                    let words: [Word]?
                 }
                 let lines: [Line]
                 let seconds: Double
@@ -253,7 +328,7 @@ final class HomePC {
                 + "）"
             return reply.lines.map {
                 Line(offset: $0.start, end: $0.end, text: $0.text, confidence: $0.confidence,
-                     alternatives: $0.alternatives ?? [], votes: $0.votes ?? [:])
+                     alternatives: $0.alternatives ?? [], votes: $0.votes ?? [:], words: $0.words ?? [])
             }
         } catch {
             failedAt = .now

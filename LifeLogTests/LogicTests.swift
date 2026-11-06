@@ -1216,4 +1216,98 @@ final class LogicTests: XCTestCase {
         XCTAssertTrue(rows.contains { $0.label == "誤変換の直し" && $0.value.contains("75%") })
         Tally.reset()
     }
+
+    // MARK: - 精度を上げるしくみ（2026-11-06）
+
+    func testSplitAtSpeakerChanges() {
+        typealias W = HomePC.Word
+        let words = [W(start: 0.0, end: 0.4, text: "明日"), W(start: 0.4, end: 0.9, text: "行きます"),
+                     W(start: 1.2, end: 1.5, text: "はい"), W(start: 1.5, end: 2.0, text: "了解です")]
+        let line = HomePC.Line(offset: 0, end: 2.0, text: "明日行きますはい了解です", confidence: 0.9,
+                               alternatives: ["x"], votes: ["haas": "a"], words: words)
+        let segments = [SpeakerLabeler.Segment(start: 0, end: 1.0, personID: "me", name: "自分"),
+                        SpeakerLabeler.Segment(start: 1.1, end: 2.1, personID: "3", name: "花子")]
+        let out = HomePC.splitAtSpeakerChanges([line], segments: segments)
+        XCTAssertEqual(out.map(\.text), ["明日行きます", "はい了解です"])
+        XCTAssertEqual(out.last?.offset ?? 0, 1.2, accuracy: 0.001)
+        XCTAssertTrue(out.allSatisfy { $0.votes.isEmpty && $0.alternatives.isEmpty })
+        // 一人だけなら分けない・言葉の時刻が無ければ分けない
+        XCTAssertEqual(HomePC.splitAtSpeakerChanges([line], segments: [segments[0]]).count, 1)
+        var plain = line
+        plain.words = []
+        XCTAssertEqual(HomePC.splitAtSpeakerChanges([plain], segments: segments).count, 1)
+        // 短すぎる替わり（0.4秒未満）では分けない
+        let blip = [SpeakerLabeler.Segment(start: 0, end: 1.15, personID: "me", name: "自分"),
+                    SpeakerLabeler.Segment(start: 1.15, end: 1.5, personID: "3", name: "花子"),
+                    SpeakerLabeler.Segment(start: 1.5, end: 2.1, personID: "me", name: "自分")]
+        XCTAssertEqual(HomePC.splitAtSpeakerChanges([line], segments: blip).count, 1)
+    }
+
+    func testWordDecodesFromArray() throws {
+        let data = Data(#"[[0.5, 1.25, "明日"], [1.25, 2, "行く"]]"#.utf8)
+        let words = try JSONDecoder().decode([HomePC.Word].self, from: data)
+        XCTAssertEqual(words, [HomePC.Word(start: 0.5, end: 1.25, text: "明日"), HomePC.Word(start: 1.25, end: 2, text: "行く")])
+    }
+
+    func testGroundingFindsSupport() {
+        let lines = ["[自分] 見積もりは金曜までに田中さんに送ります", "[花子] 会議室は三階を予約しました", "[自分] ありがとう"]
+        XCTAssertFalse(Grounding.unsupported("見積もりを金曜までに送る", in: lines))
+        XCTAssertFalse(Grounding.unsupported("三階の会議室を予約", in: lines))
+        XCTAssertTrue(Grounding.unsupported("来月の社員旅行の行き先を決定", in: lines))
+        // 中身の言葉が少なすぎて測れないものは外さない
+        XCTAssertFalse(Grounding.unsupported("はい", in: lines))
+    }
+
+    func testBenchmarkDecision() {
+        var s = Benchmark.Score(baseErrors: 100, variantErrors: 85, chars: 1000, count: 29)
+        XCTAssertNil(Benchmark.decision(s))
+        s.count = 30
+        XCTAssertEqual(Benchmark.decision(s), true)
+        s.variantErrors = 95
+        XCTAssertNil(Benchmark.decision(s))
+        s.variantErrors = 110
+        XCTAssertEqual(Benchmark.decision(s), false)
+        let e = Benchmark.errors("今日は良い転機", right: "今日は良い天気")
+        XCTAssertEqual(e.errors, 2)
+        XCTAssertEqual(e.chars, 7)
+    }
+
+    func testConversationGapLearns() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        func joins(_ gaps: [Double]) -> [ConversationGap.Event] { gaps.map { .init(at: now, joined: true, gap: $0) } }
+        func splits(_ gaps: [Double]) -> [ConversationGap.Event] { gaps.map { .init(at: now, joined: false, gap: $0) } }
+        XCTAssertEqual(ConversationGap.next(current: 180, events: joins([200, 260]), now: now), 180)
+        XCTAssertEqual(ConversationGap.next(current: 180, events: joins([200, 260, 300]), now: now), 210)
+        XCTAssertEqual(ConversationGap.next(current: 180, events: splits([160, 170, 155]), now: now), 150)
+        // 分けた所の間が短すぎるなら、下げても分かれないので下げない
+        XCTAssertEqual(ConversationGap.next(current: 180, events: splits([20, 30, 25]), now: now), 180)
+        XCTAssertEqual(ConversationGap.next(current: 600, events: joins([900, 900, 900]), now: now), 600)
+    }
+
+    func testJoinAndSplitConversations() async throws {
+        let log = try freshLog()
+        let a = Date(timeIntervalSince1970: 915_150_000), b = a.addingTimeInterval(400)
+        var first = conversation(a, title: "1", rev: 1)
+        first.lines = [ConversationLog.Line(time: a, speaker: "自分", text: "おはよう"),
+                       ConversationLog.Line(time: a.addingTimeInterval(20), speaker: "自分", text: "今日は")]
+        first.end = a.addingTimeInterval(20)
+        var second = conversation(b, title: "2", rev: 1)
+        second.lines = [ConversationLog.Line(time: b, speaker: "花子", text: "続きです")]
+        second.end = b
+        log.mergeRemote(.init(conversations: [first, second], removed: [], summaryWritten: false, summary: nil, build: 999),
+                        day: day, myBuild: 1)
+        let gap = await log.joinWithPrevious(start: b, day: day)
+        XCTAssertEqual(gap ?? 0, 380, accuracy: 0.001)
+        var talks = log.conversations(on: day)
+        XCTAssertEqual(talks.count, 1)
+        XCTAssertEqual(talks.first?.lines.count, 3)
+        XCTAssertEqual(talks.first?.resummarize, true)
+        // 消した会話は、ほかの端末にも消したと伝わる
+        XCTAssertEqual(log.syncPayload(day).removed.map(\.start), [b])
+        // 分け直す
+        _ = await log.split(start: a, at: b, day: day)
+        talks = log.conversations(on: day)
+        XCTAssertEqual(talks.map(\.lines.count), [2, 1])
+        XCTAssertEqual(talks.last?.start, b)
+    }
 }
