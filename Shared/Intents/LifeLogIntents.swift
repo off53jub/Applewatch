@@ -44,8 +44,9 @@ struct RecordingActivityAttributes: ActivityAttributes {
 /// 録音を始める・止める。録音の印として扱われるよう AudioRecordingIntent にし、
 /// Live Activity のボタンから押されてもアプリの中で動くよう LiveActivityIntent にもする。
 struct ToggleRecordingIntent: AudioRecordingIntent, LiveActivityIntent {
-    static let title: LocalizedStringResource = "iPhone の録音を始める・止める"
-    static let description: IntentDescription? = IntentDescription("LifeLog を開かずに、iPhone の録音を始めるか止めます。ロックしたままでも動きます。")
+    // Apple の決まりで、ショートカットの名前と説明に機種の名前（iPhone など）は書けない（ITMS-90626）
+    static let title: LocalizedStringResource = "録音を始める・止める"
+    static let description: IntentDescription? = IntentDescription("LifeLog を開かずに、この端末の録音を始めるか止めます。ロックしたままでも動きます。")
     /// ロックを外さなくても（Face ID なしで）動く
     static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
 
