@@ -180,7 +180,8 @@ h2{font-size:15px;margin:0 0 8px;color:var(--sub)}section{background:var(--card)
 table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:4px 6px;border-top:1px solid var(--line);vertical-align:top}
 th{color:var(--sub);font-weight:600}.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .ok{color:var(--ok)}.ng{color:var(--ng)}.warn{color:var(--warn)}.sub{color:var(--sub);font-size:13px}
-.kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px}.kv div:nth-child(odd){color:var(--sub)}
+.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px 12px}.kv div{min-width:0;overflow-wrap:anywhere}
+.kv div:nth-child(odd){color:var(--sub)}td{overflow-wrap:anywhere}
 .log{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;margin:0}
 .scroll{overflow-x:auto}button{font:inherit;padding:10px 16px;border-radius:10px;border:0;background:var(--btn);color:#fff;margin:0 8px 8px 0}
 #msg{min-height:1.5em}
