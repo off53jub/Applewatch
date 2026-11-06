@@ -278,6 +278,7 @@ extension Pipeline {
         entry.held = recordingHeld
         ledger.note(entry)
         checkWatchBattery()
+        notePCWatchState(state)  // 家の PC への様子に、時計から最後に知らせが来た時刻と控えの数（2026-11-07。PCDiag.swift）
     }
 
     /// 時計の電池が、夜（21時）までに 10% を切りそうなら、1日1回知らせる
@@ -586,10 +587,13 @@ extension Pipeline {
             UserDefaults.standard.set(Date.now, forKey: "homePCAlert")
             Self.post(id: "home-pc", title: "家の PC につながりません",
                       body: "\(since.formatted(date: .omitted, time: .shortened)) からつながっていません。PC が止まっていないか、LifeLog PC が動いているかを確かめてください（そのあいだは iPhone とクラウドで文字にしています）。")
-        } else if let version = homePC.version, version < HomePC.expectedVersion {
+        } else if let version = homePC.version, version < HomePC.expectedVersion,
+                  PCVersionNotice.shouldWarn(pc: version, app: HomePC.expectedVersion, now: .now) {
+            // 同じ版の組み合わせなら7日に1回まで（新しい働きは features を見て使うので、古いままでも文字起こしは使える。2026-11-07）
             UserDefaults.standard.set(Date.now, forKey: "homePCAlert")
+            PCVersionNotice.noteWarned(pc: version, app: HomePC.expectedVersion, now: .now)
             Self.post(id: "home-pc", title: "家の PC の LifeLog PC が古い版です",
-                      body: "PC は版 \(version)、アプリは版 \(HomePC.expectedVersion) を前提にしています。GitHub の成果物 LifeLogPC から新しいものに入れ替えてください。")
+                      body: "PC は版 \(version)、アプリは版 \(HomePC.expectedVersion) を前提にしています。文字起こしは今のままでも使えます。新しい働き（実機の様子・見えない通知・PC で記録を直す など）は、GitHub の成果物 LifeLogPC から新しいものに入れ替えると使えます（この知らせは7日に1回まで）。")
         }
     }
 }

@@ -47,6 +47,19 @@ enum Tally {
         return out
     }
 
+    /// 日ごとの数（今日から count 日。家の PC に送る様子に使う。2026-11-07）
+    static func days(_ count: Int = 2, now: Date = .now) -> [String: [String: Int]] {
+        lock.lock()
+        defer { lock.unlock() }
+        let all = loadLocked()
+        var out: [String: [String: Int]] = [:]
+        for back in 0..<max(1, count) {
+            let day = dayKey(now.addingTimeInterval(-Double(back) * 86400))
+            if let counts = all[day] { out[day] = counts }
+        }
+        return out
+    }
+
     /// テスト用に消す
     static func reset() {
         lock.lock()

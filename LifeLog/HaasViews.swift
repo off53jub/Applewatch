@@ -92,6 +92,9 @@ struct HomePCView: View {
                 Text("新しい LifeLog PC は、Haas-ja・ReazonSpeech・Whisper large-v3 の3つで声の区間ごとに文字にし、読みがいちばん合う文を選びます。3つが食い違った行は、オンにすると「高精度で文字起こし」のクラウド（Groq など）にも聞いてもう1票にします（その区切りの分だけ無料枠を使います）。それでも食い違う行は、ほかのモデルの文を候補にして言語モデルに見比べてもらい、記録では「？」付きになります。外にいて PC に届かなかった区切りは、夜の聞き直しで PC の3つのモデルで書き直します。")
             }
 
+            // 実機の様子・見えない通知・PC で記録を直す（PC の版 7 から。2026-11-07。PCDiag.swift）
+            PCLinkSection()
+
             Section {
                 Button(working ? "試しています…" : "つながるか試す") {
                     run { await pipeline.homePC.testConnection() }

@@ -409,6 +409,7 @@ final class Pipeline {
         content.title = "時計の録音が届いていません"
         content.body = "15分以上、時計の LifeLog から知らせがありません。時計の電池や LifeLog を確かめてください（iPhone から離れているだけなら、そのままで大丈夫です）。"
         content.sound = .default
+        content.interruptionLevel = UrgentNotice.level(for: watchAlertID)  // 即時（集中モードでも出る。2026-11-07）
         UNUserNotificationCenter.current().add(UNNotificationRequest(
             identifier: watchAlertID, content: content,
             trigger: UNTimeIntervalNotificationTrigger(timeInterval: wait, repeats: false)))
@@ -423,6 +424,7 @@ final class Pipeline {
         content.title = title
         content.body = body
         content.sound = .default
+        content.interruptionLevel = UrgentNotice.level(for: id)  // 録音が止まった知らせは即時（2026-11-07。Push.swift）
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 
@@ -1392,6 +1394,7 @@ final class Pipeline {
         if email != nil { Task { await sync.run() } }
         if UIDevice.current.userInterfaceIdiom != .pad { Task { await scheduleMeetingBriefs() } }
         morningBriefOnActive()  // 朝の読み上げ（まだなら作る）と時計に送る中身（2026-11-07。MorningBrief.swift）
+        pcLinkOnActive()  // 家の PC に様子を送り、記録と直しをやり取りする（2026-11-07。PCDiag.swift）
         liveAutoOff?.cancel()
         liveAutoOff = nil
         // ボタンで始めた録音の Live Activity は、古ければ出し直す（8時間で iOS に終わらせられるため）。
@@ -1435,6 +1438,8 @@ final class Pipeline {
         checkStall()
         // 家の PC が長くつながらない・版が古いなら知らせる
         checkHomePC()
+        // 家の PC に様子（1時間に1回）を送り、記録と直し（10分に1回）をやり取りする（PC の版 7 から。2026-11-07。PCDiag.swift）
+        pcLinkTick()
         // アプリを開いていれば、閉じたばかりの会話の話し手を PC の声のモデルでも見比べる（2026-11-06）
         if UIApplication.shared.applicationState == .active, homePC.shouldTry {
             Task { await crossCheckDaytime() }
@@ -1644,6 +1649,38 @@ final class Pipeline {
             UserDefaults.standard.set(id, forKey: key)
         }
     }
+
+    // MARK: - 家の PC（版 7）への入口（PCDiag.swift・Push.swift・PCRecords.swift から使う。2026-11-07）
+
+    /// 時計が録音中か（時計が知らせてくる）
+    var isWatchRecording: Bool { watchRecording }
+    /// 文字起こしの列が動いているか
+    var isQueueRunning: Bool { queueTask != nil }
+
+    /// 文字起こしの列が動いていれば、終わるまで待つ（記録を直す前に。書き足しと重ならないように）
+    func waitForQueue() async {
+        if let queueTask { await queueTask.value }
+    }
+
+    /// その日の記録を、端末間の同期と同じ形（閉じた会話だけ）で
+    func recordsPayload(_ day: String) -> ConversationLog.SyncDay { conversations.syncPayload(day) }
+
+    /// 家の PC で直した行の文を当てる（処理中なら待つ）。直した行の数
+    func editTextFromPC(_ changes: [ConversationLog.TextChange], day: String) async throws -> Int {
+        await waitForQueue()
+        let fixed = try await conversations.editText(changes, day: day)
+        if fixed > 0 { recordsVersion += 1 }
+        return fixed
+    }
+
+    /// 人の一覧を読み直す（裏で起こされたときは、まだ読んでいないことがある）
+    func reloadPeople() async {
+        people = await speakers.people()
+        hasSelfVoice = await speakers.hasSelfVoice
+    }
+
+    /// 家の PC の直しで記録が変わったので、画面を出し直す
+    func recordsChangedByPC() { recordsVersion += 1 }
 
     /// 頼まれごと帳を、ドライブの「頼まれごと帳」ドキュメント（読む用）と、
     /// 同期フォルダの「頼まれごと帳.json」（家の PC が読む用。同期では読まない名前）に書く。
@@ -2183,6 +2220,7 @@ final class Pipeline {
         }
         guard !targets.isEmpty else {
             if force { nightlyResult = "聞き直す音声がありません（聞き直していない1日分の音声が手元にありません）。" }
+            notePCNightly(done: true)  // 聞き直す音声が無い＝夜の処理は済んだ（家の PC への様子。2026-11-07）
             return
         }
         nightlyProgress = (0, targets.count)
@@ -2336,6 +2374,7 @@ final class Pipeline {
         await refreshSemanticIndex()
         nightlyResult = "\(Date.now.formatted(date: .abbreviated, time: .shortened)) に \(processed) 区切りを聞き直し、\(changedLines) 行を直しました。"
             + (processed < targets.count ? "（残りは次の充電中に続けます）" : "")
+        notePCNightly(done: processed >= targets.count)  // 夜の処理を済ませた日（家の PC への様子。2026-11-07）
         await makeMorningBriefAtNight()  // 朝の読み上げを作る（2026-11-07。MorningBrief.swift）
     }
 
