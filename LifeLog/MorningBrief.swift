@@ -186,6 +186,11 @@ enum MorningBrief {
     static func headline(_ text: String) -> String {
         sentences(text).prefix(2).joined()
     }
+
+    /// 読む頼まれごと。休みの日は仕事以外だけ（印の無い古いものは仕事とみなす。2026-11-07）
+    static func tasksToRead(_ items: [TaskBook.Item], dayOff: Bool) -> [TaskBook.Item] {
+        dayOff ? TaskBook.filter(items, .life) : items
+    }
 }
 
 /// 作った朝の読み上げ（1つだけ持つ）
@@ -361,8 +366,10 @@ extension Pipeline {
                                                        people: Array(found.all.prefix(4)),
                                                        note: lastTalkNote(for: found.known, before: .now)))
         }
-        // 頼まれごと（その日までのもの・過ぎたもの。人に頼んで待っているものは除く）
-        for item in tasks.todo {
+        // 頼まれごと（その日までのもの・過ぎたもの。人に頼んで待っているものは除く）。
+        // 休みの日（土日・祝日・有休など）は、仕事の頼まれごとを読まない（2026-11-07）
+        let dayOff = isDayOff(start)
+        for item in MorningBrief.tasksToRead(tasks.todo, dayOff: dayOff) {
             switch TaskBook.bucket(item, now: start, calendar: cal) {
             case .late:
                 input.overdue.append(item.what)
@@ -375,7 +382,7 @@ extension Pipeline {
         }
         // 点検
         if pendingCount > 0 { input.checks.append("iPhone に文字起こし待ちが\(pendingCount)件あります") }
-        let waiting = tasks.candidates.count
+        let waiting = MorningBrief.tasksToRead(tasks.candidates, dayOff: dayOff).count
         if waiting > 0 { input.checks.append("頼まれごとの確かめ待ちが\(waiting)件あります") }
         return (input, work, summary != nil)
     }

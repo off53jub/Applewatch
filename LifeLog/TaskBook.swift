@@ -8,7 +8,8 @@ import ImageIO
 import Vision
 
 /// 頼まれごと帳。仕事で頼まれたこと・引き受けたことを1か所にため、済むまで追いかける。
-/// 会話（仕事中と★を付けた会話）・議事録の宿題から拾ったものは「確かめ待ち」に入り、本人が「入れる」と決めたものだけ帳に載る。
+/// 2026-11-07 から、仕事以外（家族・友だち・お店などとの会話）のやること・約束も同じ帳に入れ、`work` で「仕事」と「仕事以外」に分ける。
+/// 会話（仕事中・仕事以外・★を付けた会話）・議事録の宿題から拾ったものは「確かめ待ち」に入り、本人が「入れる」と決めたものだけ帳に載る。
 /// ★の近くで拾ったもの・手で書いたものは、はじめから帳に載る。写真から読み取ったものは確かめ待ち。
 /// 中身は `tasks.json` に端末ごとに持つ（同期はしない）。iPhone はドライブの「頼まれごと帳」と同期フォルダの「頼まれごと帳.json」にも写す。
 @MainActor
@@ -60,7 +61,7 @@ final class TaskBook {
         var offset: TimeInterval? = nil
         var source: Source
         var state: State
-        /// 仕事中に拾った
+        /// 仕事のものか（仕事中に拾った・仕事に入れた）。false は仕事以外。nil（古いもの）は仕事とみなす（isWork）
         var work: Bool? = nil
         /// 自分用のメモ
         var memo: String? = nil
@@ -98,6 +99,54 @@ final class TaskBook {
 
         /// 相手を待っているもの（人に頼んだもの・「待ち」にしたもの）
         var isWaiting: Bool { progress == .waiting || (kindOrDefault == .delegated && progress != .started) }
+
+        /// 仕事のものか。印の無い古いもの（work が nil）は仕事とみなす（ほぼ仕事の時間に拾ったもの。2026-11-07）
+        nonisolated var isWork: Bool { work ?? true }
+    }
+
+    /// タスクタブの「仕事｜仕事以外｜全部」（2026-11-07）
+    enum Scope: String, CaseIterable, Identifiable {
+        case work, life, all
+
+        nonisolated var id: String { rawValue }
+
+        nonisolated var label: String {
+            switch self {
+            case .work: "仕事"
+            case .life: "仕事以外"
+            case .all: "全部"
+            }
+        }
+
+        nonisolated func includes(_ item: Item) -> Bool {
+            switch self {
+            case .work: item.isWork
+            case .life: !item.isWork
+            case .all: true
+            }
+        }
+    }
+
+    /// その方のものだけにする（並びはそのまま）
+    nonisolated static func filter(_ items: [Item], _ scope: Scope) -> [Item] {
+        scope == .all ? items : items.filter { scope.includes($0) }
+    }
+
+    /// 1つの方の、ページごとの一覧
+    struct Lists {
+        var candidates: [Item]
+        var todo: [Item]
+        var waiting: [Item]
+        var open: [Item]
+        var done: [Item]
+        /// まだのもの・確かめ待ちの数（切り替えの数字）
+        var count: Int { open.count + candidates.count }
+    }
+
+    func lists(_ scope: Scope) -> Lists {
+        let open = Self.filter(self.open, scope)
+        return Lists(candidates: Self.filter(candidates, scope), todo: open.filter { !$0.isWaiting },
+                     waiting: open.filter(\.isWaiting), open: open, done: Self.filter(done, scope))
     }
 
     /// 繰り返し
@@ -466,7 +515,7 @@ extension Pipeline {
     private static let taskBookHashKey = "taskBookWritten"
 
     static var taskRemindOn: Bool { UserDefaults.standard.object(forKey: taskRemindKey) as? Bool ?? true }
-    /// 土日は知らせない（2026-11-06）
+    /// 休みの日（土日・祝日・有休など）は何も知らせない（2026-11-06 に土日で始め、2026-11-07 から休みの日全部。名前はそのまま）
     static let taskWeekendOffKey = "taskWeekendOff"
     static var taskWeekendOff: Bool { UserDefaults.standard.bool(forKey: taskWeekendOffKey) }
     /// タスクタブの数字を、期限切れ（今日までを含む）だけにする（2026-11-06。既定は確かめ待ちも足す）
@@ -480,24 +529,44 @@ extension Pipeline {
         return f
     }()
 
-    /// 仕事の時間か（職場にいた時間か、平日の8時〜19時。職場の場所を登録していなくても拾えるように）
-    private func taskTime(_ time: Date) -> Bool {
+    /// 仕事の時間か（職場にいた時間か、休みでない日の8時〜19時。職場の場所を登録していなくても拾えるように）。
+    /// 休みの日（土日・祝日・有休など）の8〜19時は、職場にいなければ仕事の時間とみなさない（2026-11-07）
+    func taskTime(_ time: Date) -> Bool {
         if isWorkTime(time) { return true }
-        let cal = Calendar.current
-        let hour = cal.component(.hour, from: time)
-        return !cal.isDateInWeekend(time) && hour >= 8 && hour < 19
+        let hour = Calendar.current.component(.hour, from: time)
+        return hour >= 8 && hour < 19 && !isDayOff(time)
     }
 
-    /// 閉じた会話（直近3日）のうち、仕事の時間の会話と★を付けた会話から、頼まれごとを拾う。1回に3つまで。
+    /// 仕事以外の会話を見る数（無料枠を使い切らないように。1回に2つ・1日に10まで。2026-11-07）
+    static let taskLifePerRun = 2
+    static let taskLifePerDay = 10
+    private static let taskLifeCountKey = "taskLifeCount"
+
+    /// 今日あといくつ仕事以外の会話を見てよいか（saved は「yyyy-MM-dd|数」）
+    static func taskLifeLeft(saved: String?, today: String) -> Int {
+        guard let saved, saved.hasPrefix(today + "|"), let used = Int(saved.dropFirst(today.count + 1)) else { return taskLifePerDay }
+        return max(0, taskLifePerDay - used)
+    }
+
+    /// 閉じた会話（直近3日）から、やること・約束を拾う。
+    /// 仕事の時間の会話（ほかの人の行があるもの）と★を付けた会話は1回に3つまで、
+    /// 仕事以外の会話（家族・友だち・お店など。ほかの人の行と自分の行があるもの）は1回に2つ・1日に10まで（2026-11-07）。
+    /// 仕事の時間の会話は「職場の会話は端末内で」のとき外に送らない。仕事以外の会話は、ほかの仕事以外の会話と同じ扱い。
     /// 同じ会話は1回だけ見る（言語モデルが使えなかったときは、次の機会にやり直す）。
     func findTasks() async {
         guard let key = llmKey else { return }
         var scanned = UserDefaults.standard.stringArray(forKey: Self.taskScannedKey) ?? []
         defer { UserDefaults.standard.set(Array(scanned.suffix(800)), forKey: Self.taskScannedKey) }
+        let today = TaskBook.dayFormat.string(from: .now)
+        var lifeUsed = Self.taskLifePerDay - Self.taskLifeLeft(saved: UserDefaults.standard.string(forKey: Self.taskLifeCountKey),
+                                                               today: today)
+        defer { UserDefaults.standard.set(today + "|" + String(lifeUsed), forKey: Self.taskLifeCountKey) }
         var budget = 3
+        var lifeBudget = min(Self.taskLifePerRun, Self.taskLifePerDay - lifeUsed)
         var found: [TaskBook.Item] = []
         scan: for day in recordedDays().prefix(3) {
             for c in conversations(on: day) where c.closed && c.media == nil {
+                guard budget > 0 || lifeBudget > 0 else { break scan }
                 let id = day + "|" + String(Int(c.start.timeIntervalSince1970))
                 guard !scanned.contains(id) else { continue }
                 let lines = c.lines.filter { $0.media == nil }
@@ -505,12 +574,24 @@ extension Pipeline {
                 let work = taskTime(c.start)
                 // ほかの人の行が無い会話（ひとりごと）は、★が無ければ見ない
                 let others = lines.contains { $0.speakerID != SpeakerLabeler.selfID }
-                guard !marks.isEmpty || (work && others && lines.count >= 3) else {
+                // 仕事以外の会話は、本人も話しているものだけ（周りの人どうしの話・テレビは見ない）
+                let selfSpoke = lines.contains { $0.speakerID == SpeakerLabeler.selfID }
+                let workTalk = work && others && lines.count >= 3
+                let lifeTalk = !work && others && selfSpoke && lines.count >= 4
+                guard !marks.isEmpty || workTalk || lifeTalk else {
                     scanned.append(id)
                     continue
                 }
-                guard budget > 0 else { break scan }
-                budget -= 1
+                // ★の無い仕事以外の会話は、仕事以外の分の上限で数える（足りなければ次の機会に）
+                let life = marks.isEmpty && !work
+                if life {
+                    guard lifeBudget > 0 else { continue }
+                    lifeBudget -= 1
+                    lifeUsed += 1
+                } else {
+                    guard budget > 0 else { continue }
+                    budget -= 1
+                }
                 let transcript = lines.map { line in
                     Self.taskClock.string(from: line.time) + " " + (line.speaker.map { "[\($0)] " } ?? "") + line.promptText
                 }.joined(separator: "\n")
@@ -555,8 +636,10 @@ extension Pipeline {
         let opened = added.count - waiting
         var body = opened > 0 ? "帳に \(opened) 件入れました。" : ""
         if waiting > 0 { body += "確かめてほしいものが \(waiting) 件あります。" }
+        let lifeCount = added.filter { !$0.isWork }.count
+        if lifeCount > 0 { body += "（うち仕事以外 \(lifeCount) 件）" }
         body += "\n・" + added.prefix(3).map(\.what).joined(separator: "\n・")
-        Self.notifyTasks(title: "頼まれごとを見つけました", body: body)
+        Self.notifyTasks(title: lifeCount == added.count ? "やること・約束を見つけました" : "頼まれごとを見つけました", body: body)
     }
 
     /// 拾ったものを帳の形にする。★の前後2分で拾ったものははじめから帳に、★の近くで何も拾えなければ「★を付けたところ」を確かめ待ちに。
@@ -619,7 +702,8 @@ extension Pipeline {
     }
 
     /// 写真の文字を読み取り（iPhone の中で）、やることを拾って確かめ待ちに入れる。結果の一文を返す。
-    func addTasks(fromPhoto image: UIImage) async -> String {
+    /// work は、拾ったものを仕事に入れるか（タスクタブで開いている方。2026-11-07）
+    func addTasks(fromPhoto image: UIImage, work: Bool) async -> String {
         let text = await Self.recognizeText(image)
         guard !text.isEmpty else { return "文字を読み取れませんでした。明るいところで、まっすぐ撮ってみてください。" }
         let now = Date.now
@@ -635,12 +719,13 @@ extension Pipeline {
         if found.isEmpty {
             // 拾えなければ、読み取った文字を1件にして、本人に直してもらう
             let first = text.split(separator: "\n").first.map(String.init) ?? text
-            items = [TaskBook.Item(what: String(first.prefix(60)), said: now, quote: quote, source: .photo, state: .candidate)]
+            items = [TaskBook.Item(what: String(first.prefix(60)), said: now, quote: quote, source: .photo, state: .candidate,
+                                   work: work)]
         } else {
             items = found.map { f in
                 TaskBook.Item(what: f.what, from: f.from.isEmpty ? nil : f.from, dueText: f.dueText.isEmpty ? nil : f.dueText,
                               due: TaskBook.dueDate(f.dueDay), said: now,
-                              quote: f.quote.isEmpty ? quote : f.quote, source: .photo, state: .candidate,
+                              quote: f.quote.isEmpty ? quote : f.quote, source: .photo, state: .candidate, work: work,
                               kind: TaskBook.Kind.parse(f.kind))
             }
         }
@@ -670,40 +755,88 @@ extension Pipeline {
         Task { await scheduleTaskReminders() }
     }
 
+    /// 朝夕の知らせの題と文
+    struct TaskNotice: Equatable {
+        var title: String
+        var body: String
+    }
+
+    /// 朝夕の知らせの文を作る（2026-11-07）。出すものが無ければ nil。
+    /// 出勤日は仕事と仕事以外の両方（数は「仕事 ○ 件・仕事以外 ○ 件」と分ける）。
+    /// 休みの日（offDay）は仕事以外だけ。休み明けの出勤日の朝（afterOff）は、休みのあいだ止めていた仕事の分もまとめて、5件まで並べる。
+    /// end はその日の終わり（これより前が期限のものを「今日までのもの・過ぎたもの」に数える）。
+    static func taskNotice(open: [TaskBook.Item], candidates: [TaskBook.Item], end: Date, morning: Bool,
+                           offDay: Bool, afterOff: Bool) -> TaskNotice? {
+        let shown = offDay ? TaskBook.filter(open, .life) : open
+        let checks = offDay ? TaskBook.filter(candidates, .life) : candidates
+        guard !shown.isEmpty || !checks.isEmpty else { return nil }
+        let mine = shown.filter { !$0.isWaiting }
+        let late = mine.filter { ($0.due ?? .distantFuture) < end }
+        // 人に頼んで、期限を過ぎても済んでいないもの（相手に確かめる）
+        let follow = shown.filter { $0.isWaiting && ($0.due ?? .distantFuture) < end }
+        var body: String
+        if offDay {
+            body = "仕事以外 まだ \(mine.count) 件"
+        } else {
+            let work = mine.filter(\.isWork).count
+            body = "まだ 仕事 \(work) 件・仕事以外 \(mine.count - work) 件"
+        }
+        if !late.isEmpty { body += "（今日までのもの・過ぎたもの \(late.count) 件）" }
+        if !checks.isEmpty { body += "・確かめ待ち \(checks.count) 件" }
+        let catchUp = afterOff && morning && !offDay
+        let urgentFirst = late.sorted { ($0.urgent == true) && ($1.urgent != true) }
+        for item in (urgentFirst + mine.filter { !late.contains($0) }).prefix(catchUp ? 5 : 3) {
+            // 先の日の知らせなので「明日まで」ではなく日付で
+            body += "\n・" + item.what + (item.due.map { "（" + taskDueFormat.string(from: $0) + "まで）" } ?? "")
+        }
+        for item in follow.prefix(2) {
+            body += "\n・確かめる: " + item.what + (item.from.map { "（" + $0 + "へ）" } ?? "")
+        }
+        if offDay, open.contains(where: { $0.isWork }) { body += "\n仕事の分は、休み明けの朝に知らせます。" }
+        let title: String
+        if offDay {
+            title = morning ? "今日のやること（仕事以外）" : "まだ済んでいないこと（仕事以外）"
+        } else if catchUp {
+            title = "休み明けの頼まれごと（休みのあいだの分も）"
+        } else {
+            title = morning ? "今日の頼まれごと" : "まだ済んでいない頼まれごと"
+        }
+        return TaskNotice(title: title, body: body)
+    }
+
     /// 朝と夕方（既定は8時と18時）に、まだ済んでいない頼まれごとを知らせる。7日先まで iOS に頼んでおき、帳が変わるたびに頼み直す。
+    /// 休みの日（土日・祝日・有休など）は仕事以外の分だけ、休み明けの出勤日の朝に仕事の分もまとめて出す（2026-11-07）。
     func scheduleTaskReminders() async {
         let center = UNUserNotificationCenter.current()
         let old = await center.pendingNotificationRequests().map(\.identifier).filter { $0.hasPrefix(Self.taskNotifyPrefix) }
         center.removePendingNotificationRequests(withIdentifiers: old)
         let open = tasks.open
-        let waiting = tasks.candidates.count
-        guard Self.taskRemindOn, !open.isEmpty || waiting > 0 else { return }
+        let candidates = tasks.candidates
+        guard Self.taskRemindOn, !open.isEmpty || !candidates.isEmpty else { return }
         let cal = Calendar.current
         let now = Date.now
+        let today = cal.startOfDay(for: now)
+        // 前の日から7日先まで、休みの日か（休み明けを見分けるため前の日も）
+        var off: [Int: Bool] = [:]
+        for offset in -1..<7 {
+            guard let day = cal.date(byAdding: .day, value: offset, to: today) else { continue }
+            off[offset] = isDayOff(day)
+        }
         for offset in 0..<7 {
-            guard let day = cal.date(byAdding: .day, value: offset, to: cal.startOfDay(for: now)) else { continue }
-            if Self.taskWeekendOff, cal.isDateInWeekend(day) { continue }
+            guard let day = cal.date(byAdding: .day, value: offset, to: today) else { continue }
+            let offDay = off[offset] ?? cal.isDateInWeekend(day)
+            // 「休みの日は知らせない」のときは、休みの日は何も出さない
+            if Self.taskWeekendOff, offDay { continue }
+            let afterOff = !offDay && off[offset - 1] == true
             for (minutes, morning) in [(Self.taskMorning, true), (Self.taskEvening, false)] {
                 let at = day.addingTimeInterval(TimeInterval(minutes * 60))
                 guard at > now.addingTimeInterval(30) else { continue }
-                let end = day.addingTimeInterval(86400)
-                let mine = open.filter { !$0.isWaiting }
-                let late = mine.filter { ($0.due ?? .distantFuture) < end }
-                // 人に頼んで、期限を過ぎても済んでいないもの（相手に確かめる）
-                let follow = open.filter { $0.isWaiting && ($0.due ?? .distantFuture) < end }
-                var body = "まだ \(mine.count) 件" + (late.isEmpty ? "" : "（今日までのもの・過ぎたもの \(late.count) 件）")
-                if waiting > 0 { body += "・確かめ待ち \(waiting) 件" }
-                let urgentFirst = late.sorted { ($0.urgent == true) && ($1.urgent != true) }
-                for item in (urgentFirst + mine.filter { !late.contains($0) }).prefix(3) {
-                    // 先の日の知らせなので「明日まで」ではなく日付で
-                    body += "\n・" + item.what + (item.due.map { "（" + Self.taskDueFormat.string(from: $0) + "まで）" } ?? "")
-                }
-                for item in follow.prefix(2) {
-                    body += "\n・確かめる: " + item.what + (item.from.map { "（" + $0 + "へ）" } ?? "")
-                }
+                let end = cal.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)
+                guard let notice = Self.taskNotice(open: open, candidates: candidates, end: end, morning: morning,
+                                                   offDay: offDay, afterOff: afterOff) else { continue }
                 let content = UNMutableNotificationContent()
-                content.title = morning ? "今日の頼まれごと" : "まだ済んでいない頼まれごと"
-                content.body = body
+                content.title = notice.title
+                content.body = notice.body
                 content.sound = .default
                 let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: at)
                 try? await center.add(UNNotificationRequest(
@@ -759,6 +892,12 @@ extension Pipeline {
     }
 
     private func taskParagraphs() -> [(text: String, style: String?)] {
+        Self.taskBookParagraphs(open: tasks.open, candidates: tasks.candidates, done: tasks.done)
+    }
+
+    /// ドライブの「頼まれごと帳」の中身。「仕事」と「仕事以外」の見出しで分け、その中を まだ・確かめ待ち・済み に（2026-11-07）
+    static func taskBookParagraphs(open: [TaskBook.Item], candidates: [TaskBook.Item],
+                                   done: [TaskBook.Item]) -> [(text: String, style: String?)] {
         var p: [(text: String, style: String?)] = [("頼まれごと帳", "HEADING_1"),
                                                   ("アプリが自動で書き直します（ここを直してもアプリには戻りません）。", nil)]
         func line(_ item: TaskBook.Item) -> String {
@@ -771,15 +910,21 @@ extension Pipeline {
             if let memo = item.memo, !memo.isEmpty { notes.append("メモ: " + memo) }
             return text + " — " + notes.joined(separator: "・")
         }
-        p.append(("まだ（\(tasks.open.count) 件）", "HEADING_2"))
-        p += tasks.open.map { (line($0), nil) }
-        if !tasks.candidates.isEmpty {
-            p.append(("確かめ待ち（\(tasks.candidates.count) 件）", "HEADING_2"))
-            p += tasks.candidates.map { (line($0), nil) }
-        }
-        if !tasks.done.isEmpty {
-            p.append(("済み（30日以内）", "HEADING_2"))
-            p += tasks.done.map { (line($0), nil) }
+        for scope in [TaskBook.Scope.work, .life] {
+            let still = TaskBook.filter(open, scope)
+            let checks = TaskBook.filter(candidates, scope)
+            let finished = TaskBook.filter(done, scope)
+            p.append((scope.label, "HEADING_2"))
+            p.append(("まだ（\(still.count) 件）", "HEADING_3"))
+            p += still.map { (line($0), nil) }
+            if !checks.isEmpty {
+                p.append(("確かめ待ち（\(checks.count) 件）", "HEADING_3"))
+                p += checks.map { (line($0), nil) }
+            }
+            if !finished.isEmpty {
+                p.append(("済み（30日以内）", "HEADING_3"))
+                p += finished.map { (line($0), nil) }
+            }
         }
         return p
     }
@@ -825,7 +970,7 @@ struct TasksTab: View {
     }
 }
 
-/// やることの画面。「やる」「待ち」「人」「済み」で切り替える。右上の＋で書き足す・写真から読み取る。
+/// やることの画面。上で「仕事｜仕事以外｜全部」、その下で「やる」「待ち」「人」「済み」を切り替える。右上の＋で書き足す・写真から読み取る。
 /// 頼まれごと・自分でやること・人に頼んだこと・約束を、1か所で追いかける。
 struct TaskBookView: View {
     enum Page: String, CaseIterable, Identifiable {
@@ -836,6 +981,8 @@ struct TaskBookView: View {
     @Environment(Pipeline.self) private var pipeline
     @State private var player = ClipPlayer()
     @State private var page = Page.todo
+    /// 仕事｜仕事以外｜全部（最後に選んだものを覚える。2026-11-07）
+    @AppStorage("taskScope") private var scope = TaskBook.Scope.all
     @State private var editing: TaskBook.Item?
     @State private var photoItem: PhotosPickerItem?
     @State private var choosingPhoto = false
@@ -852,15 +999,21 @@ struct TaskBookView: View {
 
     var body: some View {
         let book = pipeline.tasks
+        let lists = book.lists(scope)
         List {
             Section {
-                Picker("見る", selection: $page) {
-                    ForEach(Page.allCases) { p in Text(title(p, book)).tag(p) }
+                Picker("仕事か", selection: $scope) {
+                    ForEach(TaskBook.Scope.allCases) { s in Text(scopeTitle(s, book)).tag(s) }
                 }
                 .pickerStyle(.segmented)
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
+                Picker("見る", selection: $page) {
+                    ForEach(Page.allCases) { p in Text(title(p, lists)).tag(p) }
+                }
+                .pickerStyle(.segmented)
             }
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+            .listRowSeparator(.hidden)
             if let note {
                 Section { Text(note).font(.footnote).foregroundStyle(.secondary) }
             }
@@ -868,10 +1021,10 @@ struct TaskBookView: View {
                 Section { HStack { ProgressView(); Text("写真の文字を読み取っています…") } }
             }
             switch page {
-            case .todo: todoPage(book)
-            case .waiting: waitingPage(book)
-            case .people: peoplePage(book)
-            case .done: donePage(book)
+            case .todo: todoPage(lists)
+            case .waiting: waitingPage(lists)
+            case .people: peoplePage(lists)
+            case .done: donePage(lists)
             }
         }
         .navigationTitle("タスク")
@@ -882,10 +1035,10 @@ struct TaskBookView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button("書き足す", systemImage: "square.and.pencil") {
-                        editing = TaskBook.Item(what: "", said: .now, source: .manual, state: .open, work: true)
+                        editing = TaskBook.Item(what: "", said: .now, source: .manual, state: .open, work: newIsWork())
                     }
                     Button("人に頼んだことを書く", systemImage: "arrow.turn.up.right") {
-                        editing = TaskBook.Item(what: "", said: .now, source: .manual, state: .open, work: true,
+                        editing = TaskBook.Item(what: "", said: .now, source: .manual, state: .open, work: newIsWork(),
                                                 kind: .delegated)
                     }
                     Button("写真を撮って読み取る", systemImage: "camera") { takingPhoto = true }
@@ -929,11 +1082,11 @@ struct TaskBookView: View {
                         if remindOn {
                             DatePicker("朝", selection: timeBinding($morning), displayedComponents: .hourAndMinute)
                             DatePicker("夕方", selection: timeBinding($evening), displayedComponents: .hourAndMinute)
-                            Toggle("土日は知らせない", isOn: $weekendOff)
+                            Toggle("休みの日は何も知らせない", isOn: $weekendOff)
                         }
                         Toggle("タブの数字は期限切れだけ", isOn: $badgeLateOnly)
                     } footer: {
-                        Text("まだ済んでいないものの数と、期限の近いもの、期限を過ぎた「人に頼んだこと」を知らせます。仕事中（職場にいた時間か平日の8〜19時）の会話と、時計の★を付けた会話から拾います。頼まれた瞬間に★を押すと、確実に入ります。ドライブの「頼まれごと帳」にも写します。")
+                        Text("まだ済んでいないものの数（仕事と仕事以外に分けて）と、期限の近いもの、期限を過ぎた「人に頼んだこと」を知らせます。休みの日（土日・カレンダーの祝日・「有休」「休み」などの終日の予定）は仕事以外の分だけを知らせ、仕事の分は休み明けの朝にまとめて知らせます。カレンダーを使っていなければ、休みの日は土日だけです。\n仕事中（職場にいた時間か、休みでない日の8〜19時）の会話と、時計の★を付けた会話からは仕事のものを、それ以外の、ほかの人と話した会話からは仕事以外のものを拾います。頼まれた瞬間に★を押すと、確実に入ります。ドライブの「頼まれごと帳」にも写します。")
                     }
                 }
                 .navigationTitle("知らせ")
@@ -963,7 +1116,7 @@ struct TaskBookView: View {
         }
     }
 
-    private func title(_ p: Page, _ book: TaskBook) -> String {
+    private func title(_ p: Page, _ book: TaskBook.Lists) -> String {
         switch p {
         case .todo: let n = book.todo.count + book.candidates.count; return n > 0 ? "やる \(n)" : "やる"
         case .waiting: return book.waiting.isEmpty ? "待ち" : "待ち \(book.waiting.count)"
@@ -971,10 +1124,25 @@ struct TaskBookView: View {
         }
     }
 
+    /// 「仕事 5」「仕事以外 2」「全部 7」（まだのもの・確かめ待ちの数）
+    private func scopeTitle(_ s: TaskBook.Scope, _ book: TaskBook) -> String {
+        let n = book.lists(s).count
+        return n > 0 ? "\(s.label) \(n)" : s.label
+    }
+
+    /// 手で足すもの・写真から拾うものを、仕事に入れるか（開いている方。「全部」のときは、今が仕事の時間なら仕事）
+    private func newIsWork() -> Bool {
+        switch scope {
+        case .work: true
+        case .life: false
+        case .all: pipeline.taskTime(.now)
+        }
+    }
+
     // MARK: ページ
 
     @ViewBuilder
-    private func todoPage(_ book: TaskBook) -> some View {
+    private func todoPage(_ book: TaskBook.Lists) -> some View {
         if !book.candidates.isEmpty {
             Section {
                 ForEach(book.candidates) { item in
@@ -1028,7 +1196,7 @@ struct TaskBookView: View {
     }
 
     @ViewBuilder
-    private func waitingPage(_ book: TaskBook) -> some View {
+    private func waitingPage(_ book: TaskBook.Lists) -> some View {
         if book.waiting.isEmpty {
             Section {
                 Text("待っているものはありません").foregroundStyle(.secondary)
@@ -1045,7 +1213,7 @@ struct TaskBookView: View {
     }
 
     @ViewBuilder
-    private func peoplePage(_ book: TaskBook) -> some View {
+    private func peoplePage(_ book: TaskBook.Lists) -> some View {
         let people = TaskBook.byPerson(book.open)
         if people.isEmpty {
             Section {
@@ -1064,7 +1232,7 @@ struct TaskBookView: View {
     }
 
     @ViewBuilder
-    private func donePage(_ book: TaskBook) -> some View {
+    private func donePage(_ book: TaskBook.Lists) -> some View {
         if book.done.isEmpty {
             Section { Text("30日以内に済んだものはありません").foregroundStyle(.secondary) }
         } else {
@@ -1145,7 +1313,8 @@ struct TaskBookView: View {
 
     private func read(_ image: UIImage) async {
         reading = true
-        note = await pipeline.addTasks(fromPhoto: image)
+        let work = newIsWork()
+        note = await pipeline.addTasks(fromPhoto: image, work: work)
         reading = false
     }
 
@@ -1195,6 +1364,9 @@ struct TaskRow: View {
                 }
                 if let n = item.postponed, n > 0 {
                     Text("延期\(n)回").foregroundStyle(n >= 3 ? Color.red : Color.secondary)
+                }
+                if !item.isWork {
+                    Label("仕事以外", systemImage: "house").labelStyle(.titleAndIcon).foregroundStyle(.green)
                 }
             }
             .font(.caption)
@@ -1278,6 +1450,8 @@ struct TaskEditView: View {
                     ForEach(TaskBook.Progress.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 Toggle("急ぎ・大事", isOn: Binding(get: { item.urgent == true }, set: { item.urgent = $0 ? true : nil }))
+                // 印の無い古いものは仕事とみなす（2026-11-07）
+                Toggle("仕事のこと", isOn: Binding(get: { item.isWork }, set: { item.work = $0 }))
             }
             Section("期限") {
                 Toggle("期限がある", isOn: $hasDue)
