@@ -21,8 +21,11 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
+import numpy as np
+
 import dashboard
 import diag
+import gpu
 import jobqueue
 import ops
 from v6checks import KEY, Client, say, tone_wav
@@ -44,6 +47,17 @@ def run(main) -> int:
         failed += check_wait(main, root / "wait")
     failed += check_push_skip()
     failed += check_screens()
+    failed += check_gpu_lock(main)
+    failed += check_crash_guard(main)
+    return failed
+
+
+def run_crash(main) -> int:
+    """--check-crash: 2026-11-07 の落ち方の直し（GPU のモデルは1度に1つ・使っている最中に下ろさない・
+    落ちたあとの守り）だけを確かめる"""
+    main.isolate_home()
+    failed = check_isolated(main) + check_gpu_lock(main) + check_crash_guard(main)
+    print(("NG の数: " + str(failed)) if failed else "GPU のロック: 全部 OK", flush=True)
     return failed
 
 
@@ -486,4 +500,320 @@ def check_screens() -> int:
     failed += say(ok, f"実機の様子（画面と summary.md）に、iPhone から届いた区間ごとの時間を出す（分からない区間は省く）: {lines[-1:]}")
     empty = diag.pc_latency(None)
     failed += say(empty == ["まだでき上がった仕事がありません"], "まだ仕事が無いときの summary.md の行")
+    return failed
+
+
+# MARK: - GPU のロック（2026-11-07 11:22 に ctranslate2.dll の中で落ちたことへの直し）
+
+
+class GpuState:
+    """作り物の GPU。今いくつ GPU で動いているか・下ろしたあとに使われたか・使っている最中に下ろされたかを数える"""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+        self.calls = 0
+        self.after_free = 0
+        self.unload_busy = 0
+        self.loads = 0
+
+    def enter(self) -> None:
+        with self.lock:
+            self.active += 1
+            self.calls += 1
+            self.max_active = max(self.max_active, self.active)
+
+    def leave(self) -> None:
+        with self.lock:
+            self.active -= 1
+
+
+class FakeCT2:
+    """faster-whisper の WhisperModel の作り物。本物と同じく、transcribe のあと pieces を読む間に GPU を使う。
+    .model.unload_model() は CTranslate2 の Whisper の代わり"""
+
+    class Piece:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.no_speech_prob = 0.0
+            self.avg_logprob = -0.1
+            self.words = None
+            self.seek = 0
+
+    class Inner:
+        def __init__(self, owner) -> None:
+            self.owner = owner
+
+        def unload_model(self) -> None:
+            owner = self.owner
+            if owner.running:
+                owner.state.unload_busy += 1
+            owner.freed = True
+
+    def __init__(self, state: GpuState, text: str, seconds: float = 0.02) -> None:
+        self.state = state
+        self.text = text
+        self.seconds = seconds
+        self.running = 0
+        self.freed = False
+        self.model = FakeCT2.Inner(self)
+
+    def _busy(self) -> None:
+        if self.freed:
+            self.state.after_free += 1
+        self.running += 1
+        self.state.enter()
+        try:
+            time.sleep(self.seconds)
+        finally:
+            self.state.leave()
+            self.running -= 1
+
+    def transcribe(self, audio, **kwargs):
+        self._busy()  # 音の特徴・encode の代わり
+
+        def pieces():
+            self._busy()  # generate（文を作る）の代わり
+            yield FakeCT2.Piece(self.text)
+
+        return pieces(), None
+
+
+class FakeCpu:
+    """CPU のモデル（haas）の作り物。GPU のモデルが動いている間にも動けたかを数える"""
+    name = label = "haas"
+    provider = "cpu"
+
+    def __init__(self, state: GpuState) -> None:
+        self.state = state
+        self.lock = threading.Lock()
+        self.overlap = 0
+
+    def run(self, audio, segments, hints, prompt):
+        with self.lock:
+            out = []
+            for _ in segments:
+                time.sleep(0.01)
+                if self.state.active > 0:
+                    self.overlap += 1
+                out.append("作り物")
+            return out
+
+
+def fake_gpu_engine(main, name: str, state: GpuState, shared=True):
+    """本物の WhisperEngine（run_timed は本物のまま）に、作り物の WhisperModel を持たせる（読み込みはしない）"""
+    kinds = {"whisper": main.WhisperEngine, "kotoba": main.KotobaEngine, "mine": main.MineEngine}
+    engine = object.__new__(kinds[name])
+    lock = gpu.GPU_LOCK if shared else None
+    # 本物の読み込み（WhisperEngine.__init__）と同じく、GPU に載せる間も GPU_LOCK を持つ
+    with (lock or threading.Lock()):
+        state.enter()
+        state.loads += 1
+        time.sleep(0.05)
+        state.leave()
+    engine.model = FakeCT2(state, "作り物")
+    engine.provider = "cuda"
+    engine.label = name
+    engine.lock = threading.Lock()
+    engine.gpu_lock = lock
+    return engine
+
+
+def check_gpu_lock(main) -> int:
+    failed = 0
+    saved = (main.log, main.WORD_TIMES)
+    logged: list[str] = []
+    try:
+        main.log = logged.append
+        main.WORD_TIMES = False
+        audio = np.zeros(6 * main.RATE, dtype=np.float32)
+        segments = [(0.0, 2.0), (2.0, 4.0), (4.0, 6.0)]
+
+        # 1. 比べるため: GPU_LOCK を使わない（前のまま）と、whisper と kotoba が GPU で同時に動く（この確かめで見つけられる）
+        before = GpuState()
+        old = main.Ensemble([fake_gpu_engine(main, "whisper", before, shared=False),
+                             fake_gpu_engine(main, "kotoba", before, shared=False)])
+        old.transcribe(audio, segments)
+        failed += say(before.max_active >= 2,
+                      f"比べるため: GPU_LOCK が無いと、GPU のモデルが同時に動く（同時に {before.max_active} つ）")
+
+        # 2. /transcribe・後で受け取る仕事・多数決のスレッドが重なり、その最中に GPU の時間割が下ろす・戻すを3回
+        state = GpuState()
+        cpu = FakeCpu(state)
+        ensemble = main.Ensemble([cpu, fake_gpu_engine(main, "whisper", state), fake_gpu_engine(main, "kotoba", state)])
+        messages: list[str] = []
+        plan = gpu.GpuPlan(lambda: ensemble, lambda name: fake_gpu_engine(main, name, state), messages.append,
+                           free_mb=lambda: None)
+        errors: list[str] = []
+        results: list[int] = []
+        stop = threading.Event()
+
+        def caller(n: int) -> None:
+            while not stop.is_set():
+                try:
+                    lines = ensemble.transcribe(audio, segments, hints=[], prompt=None)
+                    results.append(len(lines))
+                except Exception as error:  # noqa: BLE001
+                    errors.append(repr(error))
+                time.sleep(0.005 * n)
+
+        callers = [threading.Thread(target=caller, args=(n,), daemon=True) for n in range(4)]
+        for thread in callers:
+            thread.start()
+        cycles = []
+        for _ in range(3):
+            time.sleep(0.25)
+            down = plan.unload("night")
+            time.sleep(0.15)
+            back = plan.restore()
+            cycles.append((down, back))
+        time.sleep(0.25)
+        stop.set()
+        for thread in callers:
+            thread.join(30)
+        names = [e.name for e in ensemble.engines]
+        ok = state.max_active == 1 and state.calls > 20 and not errors and len(results) >= 8 \
+            and all(down == ["whisper", "kotoba"] and back == ["whisper", "kotoba"] for down, back in cycles) \
+            and names == ["haas", "whisper", "kotoba"]
+        failed += say(ok, f"GPU_LOCK: 4 つのスレッドの文字起こしと、下ろす・戻す（3 回）が重なっても、GPU で動くのは同時に "
+                          f"{state.max_active} つだけ（GPU の仕事 {state.calls} 回・読み込み {state.loads} 回・文字起こし "
+                          f"{len(results)} 回・失敗 {len(errors)}・今のモデル {names}）")
+        ok = state.unload_busy == 0 and state.after_free == 0
+        failed += say(ok, f"使っている最中には下ろさない（{state.unload_busy} 回）・下ろしたモデルはもう使わない（{state.after_free} 回）")
+        gone = sum(1 for m in logged if "GPU から下ろしたので使えません" in m)
+        failed += say(cpu.overlap > 0,
+                      f"CPU のモデル（haas）は GPU_LOCK を待たない（GPU が動いている間に {cpu.overlap} 区間）・"
+                      f"下ろす前に選ばれていた票はその回だけ抜く（{gone} 回）")
+
+        # 3. 作り物のモデル（--fake-models）も、GPU の作り物どうしは同時に動かない
+        seen = {"active": 0, "max": 0}
+        guard = threading.Lock()
+
+        class Watch(ops.FakeEngine):
+            def run(self, audio, segments, hints, prompt):
+                with self.lock, (self.gpu_lock or threading.Lock()):
+                    with guard:
+                        seen["active"] += 1
+                        seen["max"] = max(seen["max"], seen["active"])
+                    time.sleep(0.05)
+                    with guard:
+                        seen["active"] -= 1
+                return super().run(audio, segments, hints, prompt)
+
+        fakes = main.Ensemble([Watch("whisper", "cuda"), Watch("kotoba", "cuda")])
+        threads = [threading.Thread(target=fakes.transcribe, args=(audio, segments)) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+        fake = ops.FakeEngine("whisper", "cuda")
+        failed += say(seen["max"] == 1 and fake.gpu_lock is gpu.GPU_LOCK and ops.FakeEngine("haas").gpu_lock is None,
+                      f"--fake-models の GPU の作り物も GPU_LOCK で1つずつ（同時に {seen['max']} つ）")
+    finally:
+        main.log, main.WORD_TIMES = saved
+    return failed
+
+def check_crash_guard(main) -> int:
+    """落ちたあとの守り: 同じ仕事で2回止まったら CPU のモデルだけ・3回なら飛ばす。GPU で2回止まったら、その起動は CPU だけ"""
+    failed = 0
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        # 1. 仕事ごと: 文字にしている最中（working）のまま止まった仕事を、起動し直すたびに読み込む
+        seen: list[tuple[str, bool]] = []
+        queue_dir = root / "jobs"
+
+        def runner(path, params, name):
+            seen.append((name, bool(params.get("cpu_only"))))
+            return {"lines": []}, {}
+
+        logs: list[str] = []
+        queue = jobqueue.JobQueue(queue_dir, runner, logs.append)
+        put(queue, "20261107-093037-w.m4a")
+        stops = []
+        for _ in range(3):
+            meta_path = queue.meta_path("20261107-093037-w.m4a")
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta["status"] = "working"  # 文字にしている最中に落ちた
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+            queue = jobqueue.JobQueue(queue_dir, runner, logs.append)
+            got = queue.jobs["20261107-093037-w.m4a"]
+            stops.append((got.get("status"), got.get("interrupted")))
+        ok = stops == [("queued", 1), ("queued", 2), ("failed", 3)] \
+            and "飛ばしました" in (queue.jobs["20261107-093037-w.m4a"].get("error") or "") \
+            and any("CPU のモデルだけで" in m for m in logs) and any("飛ばします" in m for m in logs)
+        failed += say(ok, f"同じ仕事で止まった回数を数え、2 回目は CPU のモデルだけ・3 回目は飛ばす {stops}")
+        # step が runner に cpu_only を渡す（2 回止まった仕事だけ）
+        seen.clear()
+        queue2 = jobqueue.JobQueue(root / "jobs2", runner, logs.append)
+        put(queue2, "a.m4a")
+        put(queue2, "b.m4a")
+        meta_path = queue2.meta_path("b.m4a")
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta.update(status="working", interrupted=1)
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        queue2 = jobqueue.JobQueue(root / "jobs2", runner, logs.append)
+        while queue2.step():
+            pass
+        saved_params = json.loads(queue2.meta_path("b.m4a").read_text(encoding="utf-8")).get("params") or {}
+        ok = sorted(seen) == [("a.m4a", False), ("b.m4a", True)] and "cpu_only" not in saved_params
+        failed += say(ok, f"2 回止まった仕事だけ runner に cpu_only を渡す（保存はしない） {sorted(seen)}")
+
+        # 2. 起動ごと: GPU のモデルで文字にしている最中に止まったら、次の起動で分かる。2 回で GPU を使わない
+        home = root / "home"
+        home.mkdir()
+        messages: list[str] = []
+        guard = gpu.CrashGuard(home, messages.append)
+        first = guard.startup()
+        guard.enter()
+        busy = guard.busy_path.exists()
+        guard.leave()
+        cleared = not guard.busy_path.exists()
+        guard.enter()  # ここで落ちたことにする（消さない）
+        again = gpu.CrashGuard(home, messages.append)
+        second = again.startup()
+        again.enter()  # また落ちた
+        third = gpu.CrashGuard(home, messages.append)
+        safe = third.startup()
+        ok = not first and busy and cleared and not second and safe and len(third.crashes) == 2 \
+            and not third.busy_path.exists() and any("CPU のモデルだけ" in m for m in messages)
+        failed += say(ok, f"GPU で文字にしている間だけ印を置き（{busy}・{cleared}）、印を残して 2 回止まったら、その起動は GPU を使わない"
+                          f"（1 回目 {second}・2 回目 {safe}）")
+        old = gpu.CrashGuard(home, messages.append, clock=lambda: time.time() + gpu.CrashGuard.WINDOW + 60)
+        failed += say(not old.startup(), "6 時間より前に止まった分は数えない（時間がたって起動し直すと、また GPU を使う）")
+
+        # 3. Ensemble: GPU を使わない起動・cpu_only の仕事では GPU のモデルを呼ばない。GPU を使う回は印を置く
+        state = GpuState()
+        cpu = FakeCpu(state)
+        whisper = fake_gpu_engine(main, "whisper", state)
+        ensemble = main.Ensemble([cpu, whisper])
+        audio = np.zeros(4 * main.RATE, dtype=np.float32)
+        saved = (gpu.GUARD, main.log, main.WORD_TIMES)
+        try:
+            main.log = lambda m: None
+            main.WORD_TIMES = False
+            gpu.GUARD = gpu.CrashGuard(root / "home2", messages.append)
+            (root / "home2").mkdir()
+            gpu.GUARD.startup()
+            marks: list[bool] = []
+            original = whisper.model.transcribe
+
+            def watched(audio, **kwargs):
+                marks.append(gpu.GUARD.busy_path.exists())
+                return original(audio, **kwargs)
+
+            whisper.model.transcribe = watched
+            ensemble.transcribe(audio, [(0.0, 2.0)])
+            normal = state.calls
+            lines = ensemble.transcribe(audio, [(0.0, 2.0)], cpu_only=True)
+            only = state.calls
+            gpu.GUARD.safe = True
+            ensemble.transcribe(audio, [(0.0, 2.0)])
+            safe_calls = state.calls
+            ok = normal > 0 and only == normal and safe_calls == normal and marks and all(marks) \
+                and not gpu.GUARD.busy_path.exists() and lines and set(lines[0].get("votes", {"haas": 1})) == {"haas"}
+            failed += say(ok, f"cpu_only の仕事・GPU を使わない起動では GPU のモデルを呼ばない（GPU の仕事 {normal}→{only}→{safe_calls}）・"
+                              "GPU で文字にしている間だけ印がある")
+        finally:
+            gpu.GUARD, main.log, main.WORD_TIMES = saved
     return failed

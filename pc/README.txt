@@ -299,6 +299,17 @@ nvidia-smi で版を見られます。古いと記録（log.txt）に「CUDA dri
 Whisper と kotoba-whisper は CPU で動きます（遅くなります。Qwen3-ASR は使いません）。
 ドライバーは NVIDIA のサイト（https://www.nvidia.com/ja-jp/drivers/）から、自分の GPU に合うものを入れます。
 
+GPU で落ちたときの守り（2026-11-07 に ctranslate2.dll の中で 0xc0000005 で何度も落ちたため）:
+・GPU のモデル（Whisper・kotoba-whisper・あなた向け・Qwen3-ASR）は、1度に1つだけ動かします（区間ごとに順番。
+  読み込む・下ろすときも）。CPU のモデル（Haas-ja・ReazonSpeech）は待ちません。whisper と kotoba が同時に動かない分、
+  1つの区切りにかかる時間は、2つの時間を足したくらいになります。
+・後で受け取る文字起こしで、同じ区切りを文字にしている最中に 2 回止まったら、その区切りは GPU のモデルを使わずに
+  CPU のモデルだけで文字にします。3 回止まったら、その区切りは失敗にして飛ばします。
+・GPU のモデルで文字にしている間だけ %LOCALAPPDATA%\LifeLogPC\gpu-busy.json を置きます。起動したときに残っていれば
+  「GPU を使っている最中に止まった」と数え（gpu-crashes.json）、6 時間に 2 回あれば、その起動のあいだは GPU のモデルを
+  使わず CPU のモデルだけで文字にします（記録と見守りの画面に出ます）。gpu-crashes.json を消して起動し直すと、また GPU を使います。
+・確かめるとき:  LifeLogPC.exe --check-crash（一時のフォルダと作り物のモデルで。GPU は使いません。--check-v8 にも入っています）
+
 ■ Qwen3-ASR も使う（NVIDIA の GPU が要ります。使わなくても困りません）
 Qwen3-ASR（Alibaba の Qwen、Apache License 2.0、2026 年 1 月公開）の 0.6B を、多数決の5票目「qwen」として加えます。
 torch などの大きな部品が要るので、LifeLogPC.exe には入っていません。Python で動かします。
