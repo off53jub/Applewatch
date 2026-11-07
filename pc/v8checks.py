@@ -8,16 +8,21 @@
 - 新しい区切りから: 待っているものが2つ以上なら、新しく受けたものから
 - 見守りの画面・実機の様子の時間の行
 - 確かめるときは、本物の HOME に書かない
+- 2026-11-07 の落ち方の直し（--check-crash）と、GPU に余裕を作る直し（--check-gpu。run_gpu）
 """
 
 from __future__ import annotations
 
+import gc
 import json
 import re
 import socket
+import sys
 import tempfile
 import threading
 import time
+import types
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote
 
@@ -49,6 +54,7 @@ def run(main) -> int:
     failed += check_screens()
     failed += check_gpu_lock(main)
     failed += check_crash_guard(main)
+    failed += run_gpu(main, summary=False)
     return failed
 
 
@@ -816,4 +822,577 @@ def check_crash_guard(main) -> int:
                               "GPU で文字にしている間だけ印がある")
         finally:
             gpu.GUARD, main.log, main.WORD_TIMES = saved
+    return failed
+
+
+# MARK: - GPU に余裕を作る（2026-11-07。8GB の GPU に large-v3 と kotoba を float16 で載せると、空きが約 600MB だった）
+# 本物の GPU・nvidia-smi・faster-whisper の読み込み・Ollama は使わない。GPU のメモリーは FakeGpu、faster_whisper.WhisperModel は
+# FakeWhisperModel、Ollama はこの PC の中の空いた番号の FakeOllamaGpu、GPU のモデルは --fake-models の作り物（ops.FakeEngine）。
+
+
+class FakeGpu:
+    """作り物の GPU のメモリー（gpu.gpu_memory の代わり）。作り物の WhisperModel が GPU に載ると空きが減り、下ろすと戻る"""
+
+    def __init__(self, total: int = 8192, free: int = 6000) -> None:
+        self.total = total
+        self.free = free
+        self.visible = True   # False なら nvidia-smi で見られないふり
+
+    def read(self, fresh: bool = False, cache: dict | None = None) -> dict | None:
+        if not self.visible:
+            return None
+        return {"used": self.total - self.free, "total": self.total, "free": self.free, "name": "作り物の GPU"}
+
+
+class FakeWhisperModel:
+    """faster_whisper.WhisperModel の作り物（取ってこない・読み込まない）。読み込まれた (モデル, 場所, 形) を覚える。
+    GPU に載ると FakeGpu の空きを減らす（large-v3 は CUDA の初めの分も入れて、kotoba は重みだけ）。.model.unload_model() で戻す"""
+
+    made: list[tuple[str, str, str]] = []
+    gpu: FakeGpu | None = None
+    extra = 0             # 思ったより多く使う分（MB）
+    on_load = None        # 読み込むたびに呼ぶもの（読み込み中の様子を見るため）
+    LARGE = {"float16": 3500, "int8_float16": 2000, "int8": 2000, "int8_float32": 2000}
+    SMALL = {"float16": 1500, "int8_float16": 800, "int8": 800, "int8_float32": 800}
+
+    class Inner:
+        def __init__(self, owner) -> None:
+            self.owner = owner
+
+        def unload_model(self) -> None:
+            self.owner.release()
+
+    def __init__(self, model, device="cpu", compute_type="default", cpu_threads=0, download_root=None, **kwargs) -> None:
+        FakeWhisperModel.made.append((str(model), device, compute_type))
+        if FakeWhisperModel.on_load is not None:
+            FakeWhisperModel.on_load()
+        self.used = 0
+        if device == "cuda" and FakeWhisperModel.gpu is not None:
+            sizes = FakeWhisperModel.SMALL if "kotoba" in str(model) else FakeWhisperModel.LARGE
+            self.used = sizes.get(compute_type, 3500) + FakeWhisperModel.extra
+            FakeWhisperModel.gpu.free -= self.used
+        self.model = FakeWhisperModel.Inner(self)
+
+    def release(self) -> None:
+        if self.used and FakeWhisperModel.gpu is not None:
+            FakeWhisperModel.gpu.free += self.used
+        self.used = 0
+
+
+class FakeOllamaGpu(BaseHTTPRequestHandler):
+    """/api/tags・/api/ps・/api/chat・/api/embed・/api/generate の作り物。頼まれた中身を覚え、載せ方を本物に似せる:
+    options の num_gpu が 0 なら CPU だけ（size_vram 0）、付いていなければ GPU（すでに載っていれば、そのまま。本物の Ollama も
+    num_gpu を付けない頼みでは読み込み直さない）。keep_alive 0 なら下ろす。bge-m3 は言葉を作れない（generate を断る）"""
+
+    calls: list[tuple[str, dict]] = []
+    loaded: dict[str, int] = {}     # 載っているモデル → size_vram（MB のつもり。0 なら CPU だけ）
+    lock = threading.Lock()
+
+    def log_message(self, format: str, *args) -> None:
+        pass
+
+    def reply(self, body: dict) -> None:
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self) -> None:
+        if self.path == "/api/ps":
+            with FakeOllamaGpu.lock:
+                models = [{"name": n, "model": n, "size_vram": v} for n, v in FakeOllamaGpu.loaded.items()]
+            self.reply({"models": models})
+            return
+        self.reply({"models": [{"name": "qwen3:8b"}, {"name": "bge-m3:latest"}, {"name": "llama3:latest"}]})
+
+    def do_POST(self) -> None:
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        name = gpu.plain_model(body.get("model", ""))
+        options = body.get("options") or {}
+        with FakeOllamaGpu.lock:
+            FakeOllamaGpu.calls.append((self.path, body))
+        if self.path == "/api/generate" and name.startswith("bge-m3"):
+            self.reply({"error": '"bge-m3" does not support generate'})
+            return
+        with FakeOllamaGpu.lock:
+            if body.get("keep_alive") == 0:
+                FakeOllamaGpu.loaded.pop(name, None)
+            elif name not in FakeOllamaGpu.loaded or "num_gpu" in options:
+                FakeOllamaGpu.loaded[name] = 0 if options.get("num_gpu") == 0 else 4000
+        if self.path == "/api/chat":
+            self.reply({"message": {"role": "assistant", "content": "はい"}, "done": True})
+        elif self.path == "/api/embed":
+            texts = body.get("input")
+            count = len(texts) if isinstance(texts, list) else 1
+            self.reply({"embeddings": [[1.0, 0.0, 0.0] for _ in range(count)]})
+        else:
+            self.reply({"done": True})
+
+
+def run_gpu(main, summary: bool = True) -> int:
+    """--check-gpu（--check-v8 にも入れる）: GPU に余裕を作る直し。Whisper を載せる形（合計 10GB 未満は int8_float16・
+    config.json の whisper_compute）・載せる前と後の空きの記録・空きが少ないときは載せない・GPU の文字起こしのモデルがあるあいだ
+    この PC の Ollama に num_gpu 0（/llm・bge-m3・学び直しのあとの載せ直し・MCP サーバー）・夜の割り当てでは付けない"""
+    import semantic
+
+    main.isolate_home()  # 本物の HOME（%LOCALAPPDATA%\LifeLogPC）には書かない
+    failed = check_isolated(main) if summary else 0
+    fake_gpu = FakeGpu()
+    module = types.ModuleType("faster_whisper")
+    module.WhisperModel = FakeWhisperModel
+    saved = {"memory": gpu.gpu_memory, "prepare": main.prepare_cuda, "types": main.cuda_compute_types,
+             "nvidia": main.has_nvidia_gpu, "module": sys.modules.get("faster_whisper"), "log": main.log,
+             "before": gpu.BEFORE_LOAD, "after": gpu.AFTER_NIGHT, "state": gpu.STATE_PATH, "llm": main.LLM,
+             "key": getattr(main.Handler, "key", None), "engine": getattr(main.Handler, "engine", None),
+             "semantic": main.App.semantic, "use_semantic": main.App.use_semantic, "cpu": main._ollama_cpu,
+             "settings": dict(ops.O.settings)}
+    logged: list[str] = []
+    config_path = Path(main.CONFIG)
+    try:
+        gc.collect()  # ほかの確かめの GPU の作り物が残っていないように
+        gpu.gpu_memory = fake_gpu.read
+        main.prepare_cuda = lambda: True   # GPU の部品（cuBLAS・cuDNN）を取ってこない
+        # RTX 2070 SUPER（Compute Capability 7.5）で ctranslate2 4.8.5 が返したものと同じ
+        main.cuda_compute_types = lambda: {"float16", "float32", "int8", "int8_float16", "int8_float32"}
+        main.has_nvidia_gpu = lambda: True
+        sys.modules["faster_whisper"] = module
+        main.log = logged.append
+        gpu.BEFORE_LOAD = gpu.AFTER_NIGHT = None
+        gpu.STATE_PATH = None
+        gpu.take_skipped()
+        FakeWhisperModel.gpu = fake_gpu
+        for name, check in (("形と要る空き", check_compute_choice),
+                            ("読み込み", lambda: check_whisper_load(main, fake_gpu, logged, config_path)),
+                            ("Ollama の num_gpu", lambda: check_ollama_num_gpu(main, semantic, logged, config_path))):
+            try:
+                failed += check()
+            except Exception as error:  # noqa: BLE001 — 止まっても NG として数え、残りを確かめる
+                failed += say(False, f"{name}の確かめが途中で止まりました: {error!r}")
+                clear_gpu()
+    finally:
+        gpu.gpu_memory = saved["memory"]
+        main.prepare_cuda, main.cuda_compute_types, main.has_nvidia_gpu = saved["prepare"], saved["types"], saved["nvidia"]
+        if saved["module"] is not None:
+            sys.modules["faster_whisper"] = saved["module"]
+        else:
+            sys.modules.pop("faster_whisper", None)
+        main.log = saved["log"]
+        gpu.BEFORE_LOAD, gpu.AFTER_NIGHT, gpu.STATE_PATH = saved["before"], saved["after"], saved["state"]
+        main.LLM, main.Handler.key = saved["llm"], saved["key"]
+        if saved["engine"] is not None:
+            main.Handler.engine = saved["engine"]
+        main.App.semantic, main.App.use_semantic, main._ollama_cpu = saved["semantic"], saved["use_semantic"], saved["cpu"]
+        ops.O.settings.clear()
+        ops.O.settings.update(saved["settings"])
+        FakeWhisperModel.gpu = None
+        FakeWhisperModel.on_load = None
+        FakeWhisperModel.extra = 0
+        config_path.unlink(missing_ok=True)
+        gpu.take_skipped()
+        clear_gpu()
+    if summary:
+        print(("NG の数: " + str(failed)) if failed else "GPU に余裕を作る直し: 全部 OK", flush=True)
+    return failed
+
+
+def clear_gpu() -> None:
+    """確かめで GPU に載せたことにしたもの（作り物）を全部下ろす（途中で止まったときも、あとの確かめに残さない）"""
+    for engine in list(gpu._ON_GPU):
+        try:
+            gpu.free_engine(engine)
+        except Exception:  # noqa: BLE001
+            pass
+    with gpu._state_lock:
+        gpu._LOADING.clear()
+    gc.collect()
+
+
+def check_compute_choice() -> int:
+    """載せる形・要る空き・Ollama の置き場所の決まり（数だけ。モデルも GPU も使わない）"""
+    failed = 0
+    turing = {"float16", "float32", "int8", "int8_float16", "int8_float32"}   # RTX 2070 SUPER（Compute Capability 7.5）
+    pascal = {"float32", "int8", "int8_float32"}                               # Compute Capability 6.1（float16 が遅い）
+    cases = {"8GB・既定": (gpu.compute_for({}, 8192, turing)[0], "int8_float16"),
+             "10GB ちょうど": (gpu.compute_for({}, 10240, turing)[0], "float16"),
+             "24GB・auto": (gpu.compute_for({"whisper_compute": "auto"}, 24576, turing)[0], "float16"),
+             "合計が分からない": (gpu.compute_for({}, None, turing)[0], "int8_float16"),
+             "8GB に float16 と書いた": (gpu.compute_for({"whisper_compute": "float16"}, 8192, turing)[0], "float16"),
+             "8GB に INT8 と書いた": (gpu.compute_for({"whisper_compute": "INT8"}, 8192, turing)[0], "int8"),
+             "24GB に int8_float16 と書いた": (gpu.compute_for({"whisper_compute": "int8_float16"}, 24576, turing)[0],
+                                              "int8_float16"),
+             "おかしな値": (gpu.compute_for({"whisper_compute": "fp8"}, 8192, turing)[0], "int8_float16"),
+             "float16 が遅い GPU": (gpu.compute_for({}, 8192, pascal)[0], "int8_float32"),
+             "形が分からない GPU": (gpu.compute_for({}, 8192, None)[0], "int8_float16")}
+    got = {k: v[0] for k, v in cases.items()}
+    ok = all(v[0] == v[1] for v in cases.values()) and "auto にしました" in gpu.compute_for({"whisper_compute": "fp8"}, 8192)[1]
+    failed += say(ok, f"Whisper を GPU に載せる形（合計 10GB 未満は int8_float16・config.json の whisper_compute で変える）: {got}")
+    spare = [gpu.free_min_mb({}), gpu.free_min_mb({"gpu_free_min_mb": 1500}), gpu.free_min_mb({"gpu_free_min_mb": "x"}),
+             gpu.free_min_mb({"gpu_free_min_mb": -5}), gpu.free_min_mb({"gpu_free_min_mb": True})]
+    need = {"whisper int8_float16": gpu.need_mb("whisper", "int8_float16"), "whisper float16": gpu.need_mb("whisper", "float16"),
+            "whisper int8": gpu.need_mb("whisper", "int8"), "kotoba int8_float16": gpu.need_mb("kotoba", "int8_float16"),
+            "kotoba float16": gpu.need_mb("kotoba", "float16"), "haas": gpu.need_mb("haas", "float16")}
+    # int8 は、float16 で保存したモデルでは CTranslate2 が int8_float16 にするので、要る空きも同じ
+    ok = spare == [1024, 1500, 1024, 0, 1024] and need["whisper int8_float16"] < need["whisper float16"] \
+        and need["whisper int8"] == need["whisper int8_float16"] and need["kotoba int8_float16"] < need["kotoba float16"] \
+        and need["haas"] == 0 \
+        and gpu.need_with_spare("kotoba", {"gpu_free_min_mb": 500}, 8192) == need["kotoba int8_float16"] + 500 \
+        and gpu.need_with_spare("whisper", {"whisper_compute": "float16"}, 8192) == need["whisper float16"] + 1024
+    failed += say(ok, f"載せて動かすのに要る空き（MB）{need}・残しておく空き（既定・1500・おかしな値・負・true）{spare}")
+    modes = [gpu.ollama_gpu_mode(c) for c in ({}, {"ollama_gpu": "auto"}, {"ollama_gpu": "always"}, {"ollama_gpu": True},
+                                              {"ollama_gpu": "never"}, {"ollama_gpu": False}, {"ollama_gpu": "?"})]
+    extra = [gpu.ollama_options({}, on_gpu=True), gpu.ollama_options({}, on_gpu=False),
+             gpu.ollama_options({"ollama_gpu": "always"}, on_gpu=True), gpu.ollama_options({"ollama_gpu": "never"}, on_gpu=False)]
+    ok = modes == ["auto", "auto", "always", "always", "never", "never", "auto"] \
+        and extra == [{"num_gpu": 0}, {}, {}, {"num_gpu": 0}]
+    failed += say(ok, f"この PC の Ollama の置き場所（config.json の ollama_gpu）: {modes}・足す options {extra}")
+    return failed
+
+
+def check_whisper_load(main, fake_gpu: FakeGpu, logged: list[str], config_path: Path) -> int:
+    """本物の WhisperEngine・KotobaEngine・load_engines・ops.start を、作り物の faster-whisper と作り物の GPU のメモリーで動かす"""
+    failed = 0
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def setting(body: dict | None) -> None:
+        if body is None:
+            config_path.unlink(missing_ok=True)
+        else:
+            config_path.write_text(json.dumps(body), encoding="utf-8")
+
+    def fresh(total: int = 8192, free: int = 6000, visible: bool = True) -> None:
+        fake_gpu.total, fake_gpu.free, fake_gpu.visible = total, free, visible
+        FakeWhisperModel.made.clear()
+        FakeWhisperModel.extra = 0
+        logged.clear()
+
+    def memory_lines() -> list[str]:
+        return [m for m in logged if m.startswith("GPU のメモリー（")]
+
+    def refused(make) -> str | None:
+        try:
+            make()
+        except RuntimeError as error:
+            return str(error)
+        return None
+
+    # 1. 8GB の GPU・既定（auto）: large-v3 も kotoba も int8_float16 で GPU に。載せる前と後の空きを記録に書く
+    setting(None)
+    fresh()
+    whisper = main.WhisperEngine("auto", "cuda", 2)
+    kotoba = main.KotobaEngine("auto", "cuda", 2)
+    lines = memory_lines()
+    names = gpu.asr_state()["names"]
+    ok = FakeWhisperModel.made == [("large-v3", "cuda", "int8_float16"), (main.KOTOBA_REPO, "cuda", "int8_float16")] \
+        and whisper.provider == kotoba.provider == "cuda" and whisper.compute == kotoba.compute == "int8_float16" \
+        and len(lines) == 4 and "空き 6000 MB／全体 8192 MB" in lines[0] and "約 2000 MB" in lines[1] \
+        and "約 800 MB" in lines[3] and names == ["kotoba", "whisper"] and gpu.asr_on_gpu() \
+        and any("int8_float16（GPU のメモリーが合計 8192 MB（10GB 未満）" in m for m in logged)
+    failed += say(ok, f"8GB の GPU（既定）: {FakeWhisperModel.made}・GPU に載っているもの {names}・空き {fake_gpu.free} MB・"
+                      f"記録 {lines}")
+    for engine in (whisper, kotoba):
+        gpu.free_engine(engine)
+    ok = not gpu.asr_on_gpu() and fake_gpu.free == 6000
+    failed += say(ok, f"下ろしたら GPU に載っているものは無い（{gpu.asr_state()}）・空きは {fake_gpu.free} MB に戻る")
+
+    # 2. config.json で float16 にすると、whisper のあとの空き（2500 MB）では kotoba が足りないので、GPU にも CPU にも載せない
+    setting({"whisper_compute": "float16"})
+    fresh()
+    forced = main.WhisperEngine("auto", "cuda", 2)
+    why = refused(lambda: main.KotobaEngine("auto", "cuda", 2))
+    skipped = gpu.take_skipped()
+    ok = FakeWhisperModel.made == [("large-v3", "cuda", "float16")] and forced.compute == "float16" \
+        and why is not None and "GPU には載せません" in why and skipped == ["kotoba"]
+    failed += say(ok, f"whisper_compute を float16 にすると: {FakeWhisperModel.made}・kotoba は「{why}」・あとで載せ直すもの {skipped}")
+    gpu.free_engine(forced)
+    setting(None)
+    fresh(total=24576, free=22000)
+    big = main.WhisperEngine("auto", "cuda", 2)
+    ok = big.compute == "float16" and FakeWhisperModel.made == [("large-v3", "cuda", "float16")]
+    failed += say(ok, f"24GB の GPU は、今までどおり float16: {FakeWhisperModel.made}")
+    gpu.free_engine(big)
+
+    # 3. 空きが少ないとき（ほかのソフトが GPU を使っている）: whisper は CPU（large-v3-turbo）、kotoba は載せない。
+    #    GPU の時間割が戻すとき（gpu_only）は、CPU にも読み込まない（戻せなかったものとして、あとでやり直す）
+    fresh(free=1500)
+    small = main.WhisperEngine("auto", "cuda", 2)
+    why = refused(lambda: main.KotobaEngine("auto", "cuda", 2))
+    skipped = gpu.take_skipped()
+    made = list(FakeWhisperModel.made)
+    FakeWhisperModel.made.clear()
+    only = refused(lambda: main.WhisperEngine("auto", "cuda", 2, gpu_only=True))
+    ok = small.provider == "cpu" and small.compute == "int8" and made == [("large-v3-turbo", "cpu", "int8")] \
+        and why is not None and "GPU には載せません" in why and skipped == ["kotoba"] and not gpu.asr_on_gpu() \
+        and fake_gpu.free == 1500 and any("CPU で動かします" in m for m in logged) \
+        and only is not None and "CPU には読み込みません" in only and FakeWhisperModel.made == []
+    failed += say(ok, f"空きが 1500 MB のとき: whisper は {made}・kotoba は載せない・GPU は使わない・"
+                      f"GPU の時間割が戻すときは CPU にも読み込まない")
+
+    # 4. 載せたら思ったより使って、残しておく 1024 MB より少なくなった: kotoba は下ろす（whisper は残す）
+    fresh(free=5200)
+    first = main.WhisperEngine("auto", "cuda", 2)
+    FakeWhisperModel.extra = 1500
+    why = refused(lambda: main.KotobaEngine("auto", "cuda", 2))
+    skipped = gpu.take_skipped()
+    ok = why is not None and "GPU から下ろしました" in why and fake_gpu.free == 3200 \
+        and gpu.asr_state()["names"] == ["whisper"] and skipped == ["kotoba"]
+    failed += say(ok, f"載せたあとの空きが足りなければ kotoba を下ろす（空き {fake_gpu.free} MB に戻る・載っているもの "
+                      f"{gpu.asr_state()['names']}）")
+    gpu.free_engine(first)
+
+    # 5. nvidia-smi で見られないとき: 空きは記録に書かず、軽いほうの形で載せる
+    fresh(visible=False)
+    blind = main.WhisperEngine("auto", "cuda", 2)
+    ok = blind.provider == "cuda" and blind.compute == "int8_float16" and not memory_lines()
+    failed += say(ok, f"nvidia-smi で見られないときは、空きを記録に書かずに載せる（{FakeWhisperModel.made}）")
+    gpu.free_engine(blind)
+
+    # 6. load_engines: 先に Ollama の LifeLog のモデルを GPU から下ろす口を呼び、読み込み終わるまで「GPU に載っている」とみなす
+    order: list[tuple] = []
+    during: list[bool] = []
+    gpu.BEFORE_LOAD = lambda: order.append((len(FakeWhisperModel.made), gpu.asr_on_gpu()))
+    FakeWhisperModel.on_load = lambda: during.append(gpu.asr_on_gpu())
+    fresh()
+    try:
+        ensemble = main.load_engines(["whisper", "kotoba"], 2, "cpu", "auto", "cuda")
+    finally:
+        gpu.BEFORE_LOAD = None
+        FakeWhisperModel.on_load = None
+    loaded = [(e.name, e.provider, getattr(e, "compute", None)) for e in ensemble.engines]
+    ok = order == [(0, False)] and during == [True, True] \
+        and loaded == [("whisper", "cuda", "int8_float16"), ("kotoba", "cuda", "int8_float16")]
+    failed += say(ok, f"起動のとき: 読み込む前に Ollama を GPU から下ろす口を呼ぶ {order}・読み込み中も GPU に載っているとみなす "
+                      f"{during}・{loaded}")
+    ensemble.pool.shutdown(wait=False)
+    for engine in ensemble.engines:
+        gpu.free_engine(engine)
+
+    # 7. 空きが足りなくて載せなかった kotoba は、GPU の時間割（ops.start）があとで載せる（空きができたら）
+    fresh(free=4500)
+    ensemble = main.load_engines(["whisper", "kotoba"], 2, "cpu", "auto", "cuda")
+    main.Handler.engine = ensemble
+    ops.configure(names=["whisper", "kotoba"], whisper="auto", device="cuda", threads=2, fake=False)
+    first_names = [e.name for e in ensemble.engines]
+    try:
+        ops.start(main, home=Path(main.HOME) / "ops-gpu-check", background=False, ollama_url="http://127.0.0.1:9",
+                  has_gpu=lambda: False, count_samples=lambda: 0)
+        wanted = list(ops.O.gpu.down)
+        early = ops.O.gpu.restore()       # whisper のあとの空き 2500 MB では、まだ載せない
+        fake_gpu.free += 2000             # ほかのソフトが GPU を空けた
+        later = ops.O.gpu.restore()
+    finally:
+        ops.stop()
+    names = [(e.name, e.provider) for e in ensemble.engines]
+    ok = first_names == ["whisper"] and wanted == ["kotoba"] and early == [] and later == ["kotoba"] \
+        and names == [("whisper", "cuda"), ("kotoba", "cuda")] and any("まだ戻しません" in m for m in logged) \
+        and any("空きができたら載せます" in m for m in logged)
+    failed += say(ok, f"起動のときに載せなかった kotoba（{first_names}）は、空きが 2500 MB ではまだ載せず {early}、"
+                      f"4500 MB になったら載せる {later}: {names}")
+    ensemble.pool.shutdown(wait=False)
+    for engine in ensemble.engines:
+        gpu.free_engine(engine)
+    return failed
+
+
+def check_ollama_num_gpu(main, semantic, logged: list[str], config_path: Path) -> int:
+    """作り物の Ollama で: GPU の文字起こしのモデルがあるあいだ（読み込み中も）は num_gpu 0、無ければ付けない"""
+    failed = 0
+    FakeOllamaGpu.calls = []
+    FakeOllamaGpu.loaded = {}
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOllamaGpu)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    home = Path(main.HOME)
+    listener = None
+    fakes: list = []
+
+    def last(path: str) -> dict:
+        with FakeOllamaGpu.lock:
+            return next((dict(b) for p, b in reversed(FakeOllamaGpu.calls) if p == path), {})
+
+    def unloads() -> list[str]:
+        with FakeOllamaGpu.lock:
+            return sorted({gpu.plain_model(b.get("model")) for _, b in FakeOllamaGpu.calls if b.get("keep_alive") == 0})
+
+    try:
+        config_path.unlink(missing_ok=True)
+        main.LLM = main.LocalLLM(url=url, model="qwen3:8b", enabled=True, options=main.ollama_options)
+        main.App.use_semantic = True
+        embedder = semantic.OllamaEmbedder(url, options=main.ollama_options)
+        again = gpu.Ollama(url, logged.append, options=lambda: gpu.ollama_options(main.load_config()))
+
+        # 1. GPU に文字起こしのモデルが無いとき: 今までどおり（num_gpu を付けない）
+        clean = not gpu.asr_on_gpu()
+        main.LLM.generate("作り物の頼み", False, 20)
+        chat = last("/api/chat")
+        embedder.embed(["作り物の行"])
+        embed = last("/api/embed")
+        ok = clean and chat.get("options") == {"num_predict": 20} and "options" not in embed
+        failed += say(ok, f"GPU に文字起こしのモデルが無いとき: /api/chat の options {chat.get('options')}・"
+                          f"/api/embed の options {embed.get('options')}（付けない）")
+
+        # 2. --fake-models の GPU の作り物（whisper・kotoba）が載っている: /llm・bge-m3・学び直しのあとの載せ直しに num_gpu 0。
+        #    下ろすとき（keep_alive 0）には付けない
+        fakes = ops.fake_engines()
+        main.LLM.generate("作り物の頼み", True, 30)
+        chat = last("/api/chat")
+        embedder.embed(["作り物の行", "作り物の行2"])
+        embed = last("/api/embed")
+        again.restore([{"name": "qwen3:8b", "long": True}])
+        load = last("/api/generate")
+        with FakeOllamaGpu.lock:
+            placed = dict(FakeOllamaGpu.loaded)
+            FakeOllamaGpu.calls = []
+        again.unload_all()
+        with FakeOllamaGpu.lock:
+            quiet = bool(FakeOllamaGpu.calls) and all("options" not in b for _, b in FakeOllamaGpu.calls)
+            emptied = FakeOllamaGpu.loaded == {}
+        ok = chat.get("options") == {"num_predict": 30, "num_gpu": 0} and embed.get("options") == {"num_gpu": 0} \
+            and load == {"model": "qwen3:8b", "keep_alive": -1, "options": {"num_gpu": 0}} \
+            and placed == {"qwen3:8b": 0, "bge-m3:latest": 0} and quiet and emptied
+        failed += say(ok, f"GPU の作り物が載っているとき: /api/chat {chat.get('options')}・/api/embed {embed.get('options')}・"
+                          f"載せ直し {load.get('options')}（Ollama の置き場所 {placed}。0 は CPU だけ）・下ろすときは付けない {quiet}")
+
+        # 3. 読み込んでいる最中も付ける。下ろしたら付けない
+        for engine in fakes:
+            gpu.free_engine(engine)
+        with gpu.loading("whisper"):
+            main.LLM.generate("作り物の頼み", False, 5)
+            during = last("/api/chat").get("options")
+        main.LLM.generate("作り物の頼み", False, 5)
+        after = last("/api/chat").get("options")
+        ok = during == {"num_predict": 5, "num_gpu": 0} and after == {"num_predict": 5}
+        failed += say(ok, f"読み込んでいる最中 {during}・下ろしたあと {after}")
+
+        # 4. 夜の割り当て: 下ろしたら GPU を使ってよい（昼に CPU だけで載った LifeLog のモデルは下ろし、ほかのソフトのものには触らない）。
+        #    朝に戻すときは、先に GPU にいる LifeLog のモデルを下ろし、戻したあとはまた num_gpu 0
+        fakes = ops.fake_engines()
+        ensemble = main.Ensemble(fakes)
+        plan = gpu.GpuPlan(lambda: ensemble, lambda name: ops.FakeEngine(name, "cuda"), logged.append, free_mb=lambda: None)
+        gpu.BEFORE_LOAD = main.ollama_make_room
+        gpu.AFTER_NIGHT = main.ollama_after_night
+        with FakeOllamaGpu.lock:
+            FakeOllamaGpu.loaded = {"qwen3:8b": 0, "bge-m3:latest": 0, "llama3:latest": 0}
+            FakeOllamaGpu.calls = []
+        down = plan.unload("night")
+        night_unloads = unloads()
+        main.LLM.generate("作り物の頼み", False, 7)
+        night = last("/api/chat").get("options")
+        with FakeOllamaGpu.lock:
+            FakeOllamaGpu.loaded["llama3:latest"] = 3000   # ほかのソフトが GPU に載せたもの
+            at_night = dict(FakeOllamaGpu.loaded)
+            FakeOllamaGpu.calls = []
+        back = plan.restore()
+        morning_unloads = unloads()
+        main.LLM.generate("作り物の頼み", False, 9)
+        day = last("/api/chat").get("options")
+        with FakeOllamaGpu.lock:
+            placed = dict(FakeOllamaGpu.loaded)
+        ok = down == ["whisper", "kotoba"] and night_unloads == ["bge-m3:latest", "qwen3:8b"] \
+            and night == {"num_predict": 7} and at_night.get("qwen3:8b") == 4000 \
+            and back == ["whisper", "kotoba"] and morning_unloads == ["qwen3:8b"] and day == {"num_predict": 9, "num_gpu": 0} \
+            and placed == {"llama3:latest": 3000, "qwen3:8b": 0} \
+            and any("GPU から下ろしました" in m and "qwen3:8b" in m for m in logged) \
+            and any("CPU だけで載っていた" in m for m in logged)
+        failed += say(ok, f"夜の割り当て: 下ろしたら CPU だけで載っていた {night_unloads} を下ろし、付けない {night}（GPU に載る "
+                          f"{at_night}）・朝に戻す前に GPU の {morning_unloads} だけ下ろし、戻したら {day}（{placed}）")
+
+        # 5. config.json の ollama_gpu: always なら GPU のモデルがあっても付けない（下ろしもしない）・never なら無くても付ける
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({"ollama_gpu": "always"}), encoding="utf-8")
+        main.LLM.generate("作り物の頼み", False, 3)
+        always = last("/api/chat").get("options")
+        with FakeOllamaGpu.lock:
+            FakeOllamaGpu.loaded["qwen3:8b"] = 4000
+            FakeOllamaGpu.calls = []
+        main.ollama_make_room()
+        kept = unloads() == []
+        for engine in list(ensemble.engines):
+            gpu.free_engine(engine)
+        config_path.write_text(json.dumps({"ollama_gpu": "never"}), encoding="utf-8")
+        main.LLM.generate("作り物の頼み", False, 4)
+        never = last("/api/chat").get("options")
+        config_path.unlink(missing_ok=True)
+        ok = always == {"num_predict": 3} and kept and never == {"num_predict": 4, "num_gpu": 0} and not gpu.asr_on_gpu()
+        failed += say(ok, f"ollama_gpu が always なら {always}（GPU から下ろさない {kept}）・never なら GPU のモデルが無くても {never}")
+        ensemble.pool.shutdown(wait=False)
+
+        # 6. MCP サーバー（別のプロセス）: LifeLog PC が書く <home>/gpu-state.json を読み、bge-m3 に num_gpu 0 を付ける
+        import lifelog_mcp
+
+        gpu.STATE_PATH = home / gpu.STATE_FILE
+        gpu.note_change()
+        tools = lifelog_mcp.make_tools(home, url)
+        mcp = tools.index.embedder
+        mcp.embed(["作り物の行"])
+        off = last("/api/embed").get("options")
+        watcher = ops.FakeEngine("whisper", "cuda")
+        state_on = gpu.read_state(home)
+        mcp.embed(["作り物の行"])
+        on = last("/api/embed").get("options")
+        gpu.free_engine(watcher)
+        state_off = gpu.read_state(home)
+        mcp.embed(["作り物の行"])
+        off_again = last("/api/embed").get("options")
+        gpu.STATE_PATH = None
+        ok = off is None and on == {"num_gpu": 0} and off_again is None and state_on.get("asr_gpu") is True \
+            and state_on.get("names") == ["whisper"] and state_off.get("asr_gpu") is False \
+            and gpu.state_options(home / "どこにも無い", {}) == {}
+        failed += say(ok, f"MCP サーバー: gpu-state.json（{state_on.get('names')}）を読んで bge-m3 に {on}・下ろしたら {off_again}・"
+                          f"ファイルが無ければ付けない")
+
+        # 7. --fake-models の受け口（/llm・/index）: GPU の作り物があるあいだは num_gpu 0、夜の割り当てで下ろしたら付けない
+        gpu.BEFORE_LOAD = gpu.AFTER_NIGHT = None
+        main.Handler.key = KEY
+        main.Handler.engine = main.Ensemble(ops.fake_engines())
+        main.App.semantic = semantic.SemanticIndex(home / "semantic-gpu-check.db",
+                                                   semantic.OllamaEmbedder(url, options=main.ollama_options), logged.append)
+        listener = main.Server(("127.0.0.1", 0), main.Handler)
+        threading.Thread(target=listener.serve_forever, daemon=True).start()
+        client = Client(listener.server_address[1])
+        headers = {"Content-Type": "application/json"}
+        prompt = json.dumps({"prompt": "作り物の頼み", "max_tokens": 11}, ensure_ascii=False).encode("utf-8")
+        first = client.call("POST", "/llm", prompt, headers)
+        chat = last("/api/chat").get("options")
+        items = json.dumps({"items": [{"id": "gpu-check-1", "day": "2026-11-07", "time": 1.0, "text": "作り物の行"}]},
+                           ensure_ascii=False).encode("utf-8")
+        indexed = client.call("POST", "/index", items, headers)
+        embed = last("/api/embed").get("options")
+        night_plan = gpu.GpuPlan(lambda: main.Handler.engine, lambda name: ops.FakeEngine(name, "cuda"), logged.append,
+                                 free_mb=lambda: None)
+        night_plan.unload("night")
+        second = client.call("POST", "/llm", prompt, headers)
+        chat_night = last("/api/chat").get("options")
+        listener.shutdown()
+        listener.server_close()
+        listener = None
+        main.Handler.engine.pool.shutdown(wait=False)
+        private = not any("作り物の頼み" in m or "作り物の行" in m for m in logged)
+        ok = first[0] == 200 and chat == {"num_predict": 11, "num_gpu": 0} and indexed[0] == 200 \
+            and embed == {"num_gpu": 0} and second[0] == 200 and chat_night == {"num_predict": 11} and private
+        failed += say(ok, f"--fake-models の受け口: /llm {first[0]} {chat}・/index {indexed[0]} {embed}・夜の割り当てのあと /llm "
+                          f"{second[0]} {chat_night}・記録に頼みの文や行の文を書かない {private}")
+
+        # 8. 見守りの画面: モデルの形と、この PC の Ollama の置き場所
+        page = dashboard._ops_train({"gpu": {"ollama": gpu.ollama_text({}), "memory": {"used": 4000, "total": 8192}}})
+        table = dashboard.render({"engines": [{"name": "whisper", "label": "Whisper large-v3", "provider": "cuda",
+                                               "compute": "int8_float16"}], "gpu": {"nvidia": True, "used": True}})
+        ok = "この PC の Ollama" in page and "GPU を使ってよい" in page and "cuda（int8_float16）" in table
+        failed += say(ok, "見守りの画面に、モデルの形（cuda（int8_float16））と、この PC の Ollama の置き場所を出す")
+    finally:
+        if listener is not None:
+            try:
+                listener.shutdown()
+                listener.server_close()
+            except Exception:  # noqa: BLE001
+                pass
+        server.shutdown()
+        server.server_close()
+        gpu.STATE_PATH = None
+        gpu.BEFORE_LOAD = gpu.AFTER_NIGHT = None
+        config_path.unlink(missing_ok=True)
+        for engine in fakes:
+            gpu.free_engine(engine)
+        gc.collect()
     return failed

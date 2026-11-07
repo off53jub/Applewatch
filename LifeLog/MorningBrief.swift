@@ -187,6 +187,16 @@ enum MorningBrief {
         sentences(text).prefix(2).joined()
     }
 
+    /// 最後に「今日の聞いて直す」の1文を足す（2026-11-07。ReviewNudge.swift）。全部で8文までにするため、その前は7文まで。
+    /// もう入っていれば入れ直す（0行なら外す）
+    static func withReview(_ text: String, count: Int) -> String {
+        let line = ReviewNudge.briefSentence(count: count)
+        guard line != nil || text.contains(ReviewNudge.briefMark) else { return text }
+        let parts = sentences(text).filter { !$0.contains(ReviewNudge.briefMark) }
+        guard let line else { return parts.joined() }
+        return (Array(parts.prefix(maxSentences - 1)) + [line]).joined()
+    }
+
     /// 読む頼まれごと。休みの日は仕事以外だけ（印の無い古いものは仕事とみなす。2026-11-07）
     static func tasksToRead(_ items: [TaskBook.Item], dayOff: Bool) -> [TaskBook.Item] {
         dayOff ? TaskBook.filter(items, .life) : items
@@ -334,6 +344,8 @@ extension Pipeline {
                 }
             }
         }
+        // 最後に「今日の聞いて直す」の1文（数だけ。言語モデルには渡さない。2026-11-07。ReviewNudge.swift）
+        text = MorningBrief.withReview(text, count: reviewNudgeCount(for: start))
         store.save(MorningBriefRecord(day: briefDayKey.string(from: start), text: text, made: .now,
                                       hadSummary: hadSummary, usedModel: usedModel))
         await scheduleMorningBriefNotice()
@@ -402,22 +414,36 @@ extension Pipeline {
         return nil
     }
 
-    /// 朝の読み上げの知らせを、決めた時刻（初めは7時）に頼む。もう過ぎていれば頼まない。iPad では出さない（二重にならないように）
+    /// 朝の読み上げの知らせを、決めた時刻（初めは7時）に頼む。もう過ぎていれば頼まない。iPad では出さない（二重にならないように）。
+    /// 「今日の聞いて直す」も知らせる設定なら、その数を1行足す。朝の読み上げを知らせない設定のときは、聞いて直すだけを同じ時刻に知らせる（2026-11-07）
     func scheduleMorningBriefNotice() async {
         let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [MorningBrief.noticeID])
-        guard MorningBrief.isOn, UIDevice.current.userInterfaceIdiom != .pad,
+        center.removePendingNotificationRequests(withIdentifiers: [MorningBrief.noticeID, ReviewNudge.noticeID])
+        guard MorningBrief.isOn || ReviewNudge.noticeOn, UIDevice.current.userInterfaceIdiom != .pad,
               let record = MorningBriefStore.shared.current,
               let day = briefDayKey.date(from: record.day) else { return }
         let at = day.addingTimeInterval(TimeInterval(MorningBrief.minutes * 60))
         guard at > Date.now.addingTimeInterval(30) else { return }
+        let review = ReviewNudge.noticeOn ? reviewNudgeCount(for: day) : 0
         let content = UNMutableNotificationContent()
-        content.title = "朝の読み上げ"
-        content.body = MorningBrief.headline(record.text)
+        let id: String
+        if MorningBrief.isOn {
+            content.title = "朝の読み上げ"
+            // はじめの2文（読み上げの最後の「聞いて直す」の1文は除く）と、聞いて直すの1行
+            content.body = MorningBrief.headline(MorningBrief.withReview(record.text, count: 0))
+                + (ReviewNudge.noticeLine(count: review).map { "\n" + $0 } ?? "")
+            id = MorningBrief.noticeID
+        } else if review > 0 {
+            content.title = "今日の聞いて直す"
+            content.body = ReviewNudge.noticeBody(count: review)
+            id = ReviewNudge.noticeID
+        } else {
+            return
+        }
         content.sound = .default
         let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: at)
         try? await center.add(UNNotificationRequest(
-            identifier: MorningBrief.noticeID, content: content,
+            identifier: id, content: content,
             trigger: UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)))
     }
 }
@@ -462,17 +488,21 @@ struct MorningBriefSection: View {
     }
 }
 
-/// 設定の「朝の読み上げを知らせる」と時刻
+/// 設定の「朝の読み上げを知らせる」「朝に「今日の聞いて直す」も知らせる」と時刻
 struct MorningBriefSettingsRows: View {
     @Environment(Pipeline.self) private var pipeline
     @AppStorage(MorningBrief.onKey) private var on = true
     @AppStorage(MorningBrief.timeKey) private var minutes = 7 * 60
+    /// 今日の「聞いて直す」の数も朝に知らせる（初めはオン。2026-11-07。ReviewNudge.swift）
+    @AppStorage(ReviewNudge.noticeKey) private var reviewNotice = true
 
     var body: some View {
         Toggle("朝の読み上げを知らせる", isOn: $on)
             .onChange(of: on) { Task { await pipeline.scheduleMorningBriefNotice() } }
-        if on {
-            DatePicker("朝の読み上げの時刻", selection: time, displayedComponents: .hourAndMinute)
+        Toggle("朝に「今日の聞いて直す」も知らせる", isOn: $reviewNotice)
+            .onChange(of: reviewNotice) { Task { await pipeline.scheduleMorningBriefNotice() } }
+        if on || reviewNotice {
+            DatePicker("朝の知らせの時刻", selection: time, displayedComponents: .hourAndMinute)
                 .onChange(of: minutes) { Task { await pipeline.scheduleMorningBriefNotice() } }
         }
     }
