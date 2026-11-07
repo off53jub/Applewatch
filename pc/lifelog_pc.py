@@ -73,7 +73,13 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 - 下書き: 先に haas・reazon だけで文字にして残す（GET はまだのとき "draft"）。その文は多数決でもそのまま使う
 - 待っているものが2つ以上なら、新しく受けたものから文字にする
     LifeLogPC.exe --check-v8   版 8 を、一時フォルダと作り物のモデルで確かめる
-確かめ（--check-vote・--check-v7-ops・--check-v7-records・--check-v8）は、本物の HOME に書かない（isolate_home）。
+確かめ（--check-vote・--check-v7-ops・--check-v7-records・--check-v8・--check-v9）は、本物の HOME に書かない（isolate_home）。
+
+版 9 で足したもの（VERSION は 8 のまま。中身は records.py・recordsui.py・lifelog_mcp.py）:
+- 職場の会話の印（POST /records/<日> の省ける項目 "work"）。印の無い日は「分からない」
+- 記録の画面の「聞いて直す」（/dash/records/review）。直した行・「合っている」行は、PC の音声から材料を作って足す
+- この PC の Claude Code から記録を読む MCP サーバー（LifeLogPC.exe --mcp。職場の会話と分からない会話は返さない）
+    LifeLogPC.exe --check-v9   版 9 を、一時フォルダと作り物の記録で確かめる
 """
 
 from __future__ import annotations
@@ -1764,9 +1770,52 @@ def read_samples(folder: Path) -> list[dict]:
     return rows
 
 
-def save_sample(folder: Path, audio: np.ndarray, start: float, end: float, text: str) -> tuple[int, bool]:
+SAME_SECONDS = 0.6   # 版 9: PC の「聞いて直す」と iPhone から届いた材料を同じ行とみなす、長さの違い（秒）
+
+
+def _from_pc(row: dict) -> bool:
+    return isinstance(row.get("source"), dict) and row["source"].get("origin") == "pc-review"
+
+
+def same_line_sample(rows: list[dict], text: str, seconds: float, source: dict | None) -> bool:
+    """版 9: 同じ行の材料が、もう片方（PC の「聞いて直す」と iPhone）から入っているか。
+    - PC の「聞いて直す」どうし: 同じ日・同じ行の時刻
+    - iPhone から届いたものと「聞いて直す」: 文が同じで、長さの違いが SAME_SECONDS 秒まで
+      （iPhone は区切りの名前を送ってこないので。iPhone が "audio"・"offset" を送ってきたときは、それも合えば同じ）"""
+    mine = isinstance(source, dict) and source.get("origin") == "pc-review"
+    for row in rows:
+        other = row.get("source") if isinstance(row.get("source"), dict) else {}
+        if mine and _from_pc(row):
+            if other.get("day") == source.get("day") and other.get("time") == source.get("time"):
+                return True
+            continue
+        if mine == _from_pc(row):
+            continue  # iPhone どうしは、今までどおりハッシュで見分ける
+        if row.get("text") != text:
+            continue
+        hint = source if not mine else other
+        pc = other if not mine else source
+        if hint and hint.get("audio") and hint.get("offset") is not None:
+            try:
+                near = abs(float(hint["offset"]) - float(pc.get("offset"))) <= 0.5
+            except (TypeError, ValueError):
+                near = False
+            if near and hint["audio"] in (pc.get("audio"), pc.get("line")):
+                return True
+        try:
+            if abs(float(row.get("seconds") or 0) - seconds) <= SAME_SECONDS:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def save_sample(folder: Path, audio: np.ndarray, start: float, end: float, text: str,
+                source: dict | None = None) -> tuple[int, bool]:
     """audio の start〜end 秒を 16kHz モノラルの wav にし、文と一緒に folder に足す。(材料の数, 足したか) を返す。
-    同じ声と文（ハッシュが同じ）は足さない。SAMPLE_LIMIT に達したら足さない。"""
+    同じ声と文（ハッシュが同じ）は足さない。SAMPLE_LIMIT に達したら足さない。
+    版 9: source は出どころ（「聞いて直す」なら {"origin": "pc-review", "day", "time", "audio", "line", "offset"}。
+    iPhone からなら None か {"audio", "offset"}）。同じ行の材料が両方から2重に入らないようにする（same_line_sample）。"""
     text = unicodedata.normalize("NFC", text or "").strip()
     if not text:
         raise ValueError("文がありません")
@@ -1784,7 +1833,8 @@ def save_sample(folder: Path, audio: np.ndarray, start: float, end: float, text:
     digest = hashlib.sha256(text.encode("utf-8") + b"\0" + pcm).hexdigest()
     with _samples_lock:
         rows = read_samples(folder)
-        if any(row.get("hash") == digest for row in rows) or len(rows) >= SAMPLE_LIMIT:
+        if any(row.get("hash") == digest for row in rows) or len(rows) >= SAMPLE_LIMIT \
+                or same_line_sample(rows, text, seconds, source):
             return len(rows), False
         folder.mkdir(parents=True, exist_ok=True)
         name = f"{digest[:24]}.wav"
@@ -1797,9 +1847,19 @@ def save_sample(folder: Path, audio: np.ndarray, start: float, end: float, text:
         part.replace(folder / name)
         row = {"audio": name, "text": text, "seconds": round(seconds, 2), "hash": digest,
                "added": now_iso()}
+        if source:
+            row["source"] = source
         with (folder / "samples.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
         return len(rows) + 1, True
+
+
+MIN_SAMPLES = 300   # 版 9: train_personal.py の MIN_SAMPLES と同じ（学び直しに要る材料の数）
+
+
+def review_sample(path: Path, start: float, end: float, text: str, source: dict) -> tuple[int, bool]:
+    """版 9: 「聞いて直す」で答えた行の音声（PC にある区切りの音声）から、材料を作って足す"""
+    return save_sample(PERSONAL_DATA, load_audio(Path(path).read_bytes()), start, end, text, source)
 
 
 def train_status() -> dict:
@@ -2052,8 +2112,23 @@ def dash_info() -> dict:
             "speed": App.recent.speed("transcribe", 20), "pairs": App.recent.pairs(),
             "update": App.updater.status() if App.updater else {"auto": App.auto_update, "state": "—"},
             "problems": dashboard.problems(lines, 15),
+            # 版 9: 学び直しの材料の数（見守りの画面の「学び直し」と「聞いて直す」への入口）
+            "personal": personal_info(),
             # 版 7（ops）: 実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割（動いていなければ空）
             "ops": ops.dash_info()}
+
+
+def personal_info() -> dict:
+    """版 9: 材料の数と、学び直しに要る数（自動の学び直しの設定があれば、その数）"""
+    need = MIN_SAMPLES
+    auto = ops.train_auto()
+    if isinstance(auto, dict) and isinstance(auto.get("min_samples"), int):
+        need = auto["min_samples"]
+    try:
+        count = len(read_samples(PERSONAL_DATA))
+    except Exception:  # noqa: BLE001
+        count = 0
+    return {"count": count, "need": need, "records": App.records is not None}
 
 
 def start_v6(threads: int) -> None:
@@ -2091,6 +2166,7 @@ def start_v6(threads: int) -> None:
 def start_records() -> None:
     try:
         App.records = records.RecordStore(HOME, log, load_config)
+        App.records.sampler = review_sample   # 版 9: 「聞いて直す」で材料を作る
         App.records.start()
     except Exception as error:  # noqa: BLE001 — 始められなくても、ほかの受け付けは続ける
         App.records = None
@@ -2330,7 +2406,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         # 版 7（records）: 記録の画面・保存した音声（合言葉は見守りの画面と同じ）と、GET /edits（Bearer）
         if recordsui.handles(path):
-            recordsui.http(self, url, "GET", App.records, App.semantic, log)
+            recordsui.http(self, url, "GET", App.records, App.semantic, log, personal_info)
             return
         if path == "/edits":
             records.http_get_edits(self, App.records, url.query, log)
@@ -2447,9 +2523,18 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "start と end（秒）が要ります"})
             return
         text = (query.get("text") or [""])[0]
+        # 版 9: 省ける "audio"（Line.audio）・"offset"（行の位置の秒）。PC の「聞いて直す」と同じ行かを見分けるのに使う
+        source = None
+        hint = (query.get("audio") or [""])[0]
+        try:
+            offset = float((query.get("offset") or [""])[0])
+        except ValueError:
+            offset = None
+        if hint and offset is not None and np.isfinite(offset):
+            source = {"audio": hint[:200], "offset": round(offset, 2)}
         try:
             audio = load_audio(data)
-            count, added = save_sample(PERSONAL_DATA, audio, start, end, text)
+            count, added = save_sample(PERSONAL_DATA, audio, start, end, text, source)
         except ValueError as error:
             self.send_json(400, {"error": str(error)})
             return
@@ -3285,6 +3370,11 @@ def check_enhance(audio: np.ndarray, ranges: list[tuple[float, float]], threads:
 
 
 def main() -> None:
+    # 版 9: MCP サーバー（stdio）。答えの通り道（標準出力）に何も混ぜないよう、ほかの何よりも先に分ける
+    if "--mcp" in sys.argv[1:]:
+        import lifelog_mcp
+
+        sys.exit(lifelog_mcp.main([a for a in sys.argv[1:] if a != "--mcp"]))
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
     parser = argparse.ArgumentParser(description="LifeLog PC（家の PC で3つの音声モデルを動かして多数決で文字にする）")
@@ -3342,6 +3432,12 @@ def main() -> None:
     # 版 8
     parser.add_argument("--check-v8", action="store_true",
                         help="版 8（時間・待ち合わせ・通知・下書き・新しい区切りから）を、一時フォルダと作り物のモデルで確かめる")
+    # 版 9
+    parser.add_argument("--check-v9", action="store_true",
+                        help="版 9（職場の会話の印・聞いて直す・記録を読む MCP サーバー）を、一時フォルダと作り物の記録で確かめる")
+    parser.add_argument("--mcp", action="store_true",
+                        help="この PC の Claude Code から記録を読む MCP サーバー（stdio）として動く。読むだけで、"
+                             "職場の会話は返さない（ほかに --home・--ollama-url を付けられる。くわしくは README.txt）")
     parser.add_argument("--fake-models", action="store_true",
                         help="モデルを読み込まず、作り物のモデルで起動する（受け口・見守りの画面・GPU の時間割を試すとき用。"
                              "文字起こしの答えは作り物）")
@@ -3350,7 +3446,7 @@ def main() -> None:
     if args.startup or args.no_startup:
         set_startup(args.startup)
         return
-    if args.check_vote or args.check_v7_ops or args.check_v7_records or args.check_v8:
+    if args.check_vote or args.check_v7_ops or args.check_v7_records or args.check_v8 or args.check_v9:
         # 版 8: 確かめるときは、本物の HOME（log.txt・データ）に書かない
         isolate_home()
     if args.check_vote:
@@ -3364,6 +3460,10 @@ def main() -> None:
         import v8checks
 
         sys.exit(1 if v8checks.run(sys.modules[__name__]) else 0)
+    if args.check_v9:  # 版 9: 職場の会話の印・聞いて直す・記録を読む MCP サーバー
+        import v9checks
+
+        sys.exit(1 if v9checks.run(sys.modules[__name__]) else 0)
     if args.check_extras:
         check_extras(args.check_extras, max(1, args.threads // 2))
         return

@@ -5,6 +5,8 @@
 - GET  /dash/records/search?q=&mode=  文字で探す（mode=text、全部の日）・意味で探す（mode=meaning、semantic.py。職場の会話も含む）
 - POST /dash/records/edit             行の文を直す・行の話し手を変える（画面の中のボタンだけが付ける印 X-LifeLog-Dash が要る）
 - GET  /dash/audio/<名前>             保存した音声（Range に対応）
+- GET  /dash/records/review           版 9: 聞いて直す（自信の低い行で、PC に音声がある行。新しい日から）
+- POST /dash/records/review           版 9: 聞いて直すの答え（文を直す・話し手を変える・合っている。文と「合っている」は材料にする）
 合言葉は見守りの画面（dashboard.py）と同じ（Basic 認証・クッキー・一度だけ ?key=）。ページはキャッシュさせない。
 外の部品は使わない。画面の文・名前は、すべて HTML として扱わないように書く。
 """
@@ -129,6 +131,13 @@ details>summary{cursor:pointer;color:var(--sub);font-size:13px;padding:4px 0}
 mark{background:var(--mark);color:inherit;border-radius:3px}
 .hit{padding:8px 2px;border-top:1px solid var(--line)}.hit .text{overflow-wrap:anywhere}
 .hit .ctx{color:var(--sub);font-size:13px;overflow-wrap:anywhere}.hit .head{font-size:13px;color:var(--sub)}
+.rv{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:10px 0;background:var(--card)}
+.rv.now{border-color:var(--btn);box-shadow:0 0 0 2px var(--btn) inset}.rv.done{opacity:.55}
+.rv .ctx{color:var(--sub);font-size:13px;overflow-wrap:anywhere;margin:2px 0}
+.rv .say{font-size:17px;margin:4px 0;overflow-wrap:anywhere}.rv .who{font-weight:600}
+.rv textarea{width:100%;font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);resize:vertical}
+.rv select{font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);max-width:100%;min-width:0}
+.rv .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}.rv .votes{font-size:13px;color:var(--sub)}
 """
 
 SCRIPT = """
@@ -181,12 +190,57 @@ document.addEventListener('click',(ev)=>{
 """
 
 
-def page(title: str, body: str, day: str = "") -> str:
+REVIEW_SCRIPT = """
+function cards(){return Array.from(document.querySelectorAll('.rv'));}
+function focusCard(card,autoplay){
+  for(const c of cards())c.classList.toggle('now',c===card);
+  if(!card){const end=document.getElementById('rv-end');if(end){end.hidden=false;end.scrollIntoView({block:'center'});}return;}
+  card.scrollIntoView({block:'center',behavior:'smooth'});
+  if(autoplay){const b=card.querySelector('[data-act=play]');if(b)play(b);}
+}
+function nextCard(card){
+  const all=cards();const i=all.indexOf(card);
+  for(const c of all.slice(i+1))if(!c.classList.contains('done'))return c;
+  for(const c of all)if(!c.classList.contains('done'))return c;
+  return null;
+}
+async function answer(btn,kind){
+  const card=btn.closest('.rv'),msg=card.querySelector('.msg');
+  const body={day:card.dataset.day,time:Number(card.dataset.time),kind:kind};
+  if(kind==='text')body.text=card.querySelector('textarea').value;
+  if(kind==='speaker'){body.speaker=card.querySelector('select').value;if(!body.speaker){msg.textContent='話し手を選んでください';return;}}
+  msg.textContent='送っています…';for(const b of card.querySelectorAll('button'))b.disabled=true;
+  let moved=false;
+  try{
+    const r=await fetch('/dash/records/review',{method:'POST',credentials:'same-origin',
+      headers:{'X-LifeLog-Dash':'1','Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    msg.textContent=(j.message||j.error||('答え '+r.status))+(j.sample_text?' '+j.sample_text:'');
+    if(r.ok&&typeof j.count==='number'){const n=document.getElementById('rv-count');if(n)n.textContent=j.count;}
+    if(r.ok&&j.done){card.classList.add('done');const left=document.getElementById('rv-left');
+      if(left)left.textContent=Math.max(0,Number(left.textContent)-1);focusCard(nextCard(card),true);moved=true;}
+    else if(r.ok&&j.expect){const sel=card.querySelector('select');if(sel)sel.value=j.expect.speaker||'';
+      const who=card.querySelector('.say .who');if(who)who.textContent=j.expect.speaker||'（話し手なし）';}
+  }catch(e){msg.textContent='送れませんでした: '+e;}
+  if(!moved||!card.classList.contains('done'))for(const b of card.querySelectorAll('button'))b.disabled=false;
+}
+document.addEventListener('click',(ev)=>{
+  const btn=ev.target.closest('[data-rv]');if(!btn)return;const act=btn.dataset.rv;
+  if(act==='skip'){const card=btn.closest('.rv');focusCard(nextCard(card),true);}
+  else answer(btn,act);
+});
+document.addEventListener('focusin',(ev)=>{const card=ev.target.closest&&ev.target.closest('.rv');
+  if(card&&!card.classList.contains('now'))for(const c of cards())c.classList.toggle('now',c===card);});
+window.addEventListener('load',()=>{const first=cards()[0];if(first)first.classList.add('now');});
+"""
+
+
+def page(title: str, body: str, day: str = "", script: str = "") -> str:
     return ("<!doctype html><html lang='ja'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<meta name='color-scheme' content='light dark'><meta name='referrer' content='no-referrer'>"
             f"<title>{_e(title)}</title><style>{dashboard.STYLE}{STYLE}</style></head>"
-            f"<body data-day='{_e(day)}'><main>{body}</main><script>{SCRIPT}</script></body></html>")
+            f"<body data-day='{_e(day)}'><main>{body}</main><script>{SCRIPT}{script}</script></body></html>")
 
 
 def search_form(query: str = "", mode: str = "text") -> str:
@@ -241,7 +295,8 @@ def render_index(store: records.RecordStore, index) -> str:
     days = store.days()
     pending = store.edits.pending_days()
     counts = store.edits.counts()
-    parts = ["<nav class='bar'><a href='/dash'>← 見守りの画面</a></nav><h1>記録</h1>",
+    parts = ["<nav class='bar'><a href='/dash'>← 見守りの画面</a><span class='grow'></span>"
+             f"<a href='{PREFIX}/review'>聞いて直す →</a></nav><h1>記録</h1>",
              f"<section>{search_form()}<p class='sub'>意味で探す: 言葉が同じでなくても意味の近い行を探します"
              f"（この PC の Ollama の bge-m3。職場の会話も含みます。{_e(semantic_state(index))}）</p></section>"]
     # 直しの様子
@@ -267,8 +322,11 @@ def render_index(store: records.RecordStore, index) -> str:
                 month = day[:7]
                 items.append(f"<p class='month'>{int(day[:4])}年{int(day[5:7])}月</p><ul class='days'>")
             note = f"<span class='warn'>直し {pending[day]} 件（送る前）</span>" if pending.get(day) else ""
+            work = summary.get("work")
+            work_note = "<span class='sub'>職場の印が届いていません</span>" if work is None and "work" in summary \
+                else (f"<span class='sub'>職場 {work}</span>" if work else "")
             items.append(f"<li><a href='{PREFIX}/{_e(day)}'><span class='d'>{_e(day_label(day))}</span>"
-                         f"<span class='sub'>会話 {summary['conversations']}・行 {summary['lines']}</span>{note}"
+                         f"<span class='sub'>会話 {summary['conversations']}・行 {summary['lines']}</span>{note}{work_note}"
                          f"<span class='sub'>受け取り {_e(stamp(summary.get('received')))}</span></a></li>")
         items.append("</ul>")
         listing = "".join(items)
@@ -330,7 +388,10 @@ def render_day(store: records.RecordStore, day: str) -> str | None:
     parts = [nav, f"<h1>{_e(day_title(day))}</h1>",
              f"<p class='sub'>会話 {len(parsed['conversations'])}・行 {parsed['lines']}・受け取り "
              f"{_e(stamp(summary.get('received')))}。行の右の数は聞き取りの確からしさ（0〜1）です。"
-             f"{UNSURE} より低い行は「不確か」と出します。★ は時計やアプリで付けた印です。</p>",
+             f"{UNSURE} より低い行は「不確か」と出します。★ は時計やアプリで付けた印です。"
+             + ("職場の会話の印は、この日はまだ届いていません（古い iPhone から来た日。職場かどうか分からない会話として扱います）。"
+                if parsed.get("work") is None else "")
+             + "</p>",
              f"<section>{search_form()}</section>"]
     day_summary = parsed.get("summary")
     if day_summary and any(day_summary.get(k) for k in ("flow", "decisions", "todos", "topics")):
@@ -368,6 +429,11 @@ def render_conversation(c: dict, edits: dict[int, list[dict]], available: set[st
                         received: int | None = None) -> str:
     title = c.get("title") or ("（テレビ・動画など）" if c.get("media") else "（見出しなし）")
     chips = []
+    # 版 9: 職場の会話の印（印の無い日は「分からない」）
+    if c.get("work") is True:
+        chips.append("職場")
+    elif c.get("work") is None and not c.get("media"):
+        chips.append("職場かどうか分からない")
     who = records.people(c)
     if who:
         chips.append("相手 " + "・".join(_e(n) for n in who))
@@ -406,6 +472,8 @@ def render_line(line: dict, edits: list[dict], job: str | None, missing: bool, l
             f"<span class='who'>{_e(speaker) if speaker else '（話し手なし）'}</span>"]
     if line.get("marked"):
         head.append("<span class='star' title='印'>★</span>")
+    if line.get("speakerDoubt") and line.get("speakerDoubt") != line.get("speakerID"):
+        head.append("<span class='warn' title='2つの声のモデルで話し手が食い違いました'>？</span>")
     if line.get("media"):
         head.append(f"<span class='chip'>{_e(line['media'])}</span>")
     if line.get("checked"):
@@ -432,6 +500,132 @@ def render_line(line: dict, edits: list[dict], job: str | None, missing: bool, l
     return (f"<div class='{css}' id='t{ms}' data-time='{ms}' data-speaker='{_e(speaker or '')}'{attrs}>"
             f"<div class='head'>{''.join(head)}</div><div class='text'>{_e(line['text'])}</div>"
             f"<div class='edits'>{edit_chips(edits)}</div></div>")
+
+
+# MARK: - 版 9: 聞いて直す
+
+REASONS = {"low": "確からしさが低い", "votes": "モデルの票が食い違う", "speaker": "話し手に「？」"}
+
+
+def render_review(store: records.RecordStore, personal: dict | None = None) -> str:
+    items, total = store.review_queue()
+    personal = personal or {}
+    count = int(personal.get("count") or 0)
+    need = int(personal.get("need") or 300)
+    parts = [f"<nav class='bar'><a href='{PREFIX}'>← 記録の一覧</a><span class='grow'></span><a href='/dash'>見守りの画面</a></nav>",
+             "<h1>聞いて直す</h1>",
+             "<section><p>自信の低い行（確からしさが低い・モデルの票が食い違う・話し手に「？」）で、PC に音声がある行を、"
+             "新しい日から並べています。▶ で聞いて、違っていれば直し、そのままで正しければ「合っている」を押してください。"
+             "答えると次の行へ進み、自動で流します。</p>"
+             f"<p>残り <b id='rv-left'>{total}</b> 行・学び直しの材料 <b id='rv-count'>{count}</b> 個"
+             f"（{need} 個で学び直せます）</p>"
+             "<p class='sub'>文を直した行と「合っている」行は、PC にある音声からその所を切り出して、学び直しの材料に足します"
+             "（PC の中だけ）。文と話し手の直しは、ほかの直しと同じく iPhone に渡します。「合っている」は iPhone には送りません。"
+             "話し手は、記録に出てくる名前と「自分」から選びます。</p></section>"]
+    if not items:
+        parts.append("<section><p>今は聞いて直す行がありません。iPhone が「後で受け取る文字起こし」を受け取ると、"
+                     "その音声が PC に残り、ここに並びます。</p></section>")
+    options = "".join(f"<option value='{_e(s['name'])}'>{_e(s['name'])}</option>" for s in store.speakers())
+    edits_by_day: dict[str, dict[int, list[dict]]] = {}
+    for item in items:
+        day, line, c = item["day"], item["line"], item["conversation"]
+        if day not in edits_by_day:
+            edits_by_day[day] = records.expected_lines(store.edits.for_day(day))
+        state = records.expected_state(line, edits_by_day[day].get(line["time"], []), store.received_ms(day))
+        start = max(0.0, float(line.get("offset") or 0.0))
+        lines = c["lines"]
+        stop = stop_time(lines, item["index"], start)
+        chips = "".join(f"<span class='chip'>{_e(REASONS.get(r, r))}</span>" for r in item["reasons"])
+        if line.get("confidence") is not None:
+            chips += f"<span class='chip'>確からしさ {line['confidence']:.2f}</span>"
+        votes = ""
+        if "votes" in item["reasons"]:
+            votes = "<div class='votes'>票: " + " ／ ".join(
+                f"{_e(k)}「{_e(v)}」" for k, v in sorted((line.get("votes") or {}).items())) + "</div>"
+        before = f"<div class='ctx'>前: {_e(item['before'].get('speaker') or '')} {_e(item['before']['text'])}</div>" \
+            if item.get("before") else ""
+        after = f"<div class='ctx'>後: {_e(item['after'].get('speaker') or '')} {_e(item['after']['text'])}</div>" \
+            if item.get("after") else ""
+        current = state.get("speaker") or ""
+        select = (f"<select aria-label='話し手'><option value=''>（選んでください）</option>"
+                  + options.replace(f"<option value='{_e(current)}'>", f"<option value='{_e(current)}' selected>", 1)
+                  + "</select>") if current else \
+            f"<select aria-label='話し手'><option value='' selected>（選んでください）</option>{options}</select>"
+        title = c.get("title") or "（見出しなし）"
+        parts.append(
+            f"<div class='rv' data-day='{_e(day)}' data-time='{line['time']}' tabindex='-1'>"
+            f"<div class='head sub'><a href='{PREFIX}/{_e(day)}#t{line['time']}'>{_e(day_label(day))} {_e(clock(line['time']))}</a>"
+            f" ・{_e(title)}</div><div class='chips'>{chips}</div>{before}"
+            f"<div class='say'><span class='who'>{_e(state.get('speaker') or '（話し手なし）')}</span> {_e(state['text'])}</div>"
+            f"{after}{votes}"
+            f"<div class='row'><button class='small' data-act='play' data-audio='{_e(item['job'])}' data-start='{start:.2f}' "
+            f"data-stop='{stop:.2f}' data-label='{_e(clock(line['time']))}'>▶ 聞く</button></div>"
+            f"<textarea rows='2' maxlength='{records.TEXT_MAX}' aria-label='正しい文'>{_e(state['text'])}</textarea>"
+            "<div class='row'><button class='small' data-rv='text'>文を直す</button>"
+            "<button class='small' data-rv='ok'>合っている</button>"
+            "<button class='small ghost' data-rv='skip'>飛ばす</button></div>"
+            f"<div class='row'>{select}<button class='small ghost' data-rv='speaker'>話し手を変える</button></div>"
+            "<div class='msg sub' role='status'></div></div>")
+    if total > len(items):
+        parts.append(f"<p class='sub'>ほかに {total - len(items)} 行あります。ここまで答えたら、画面を開き直すと続きが出ます。</p>")
+    parts.append("<section id='rv-end' hidden><p>ここに出した行は、全部答えました。画面を開き直すと続きが出ます。</p></section>")
+    parts.append("<div id='player' class='player' hidden><span id='playing' class='sub'></span>"
+                 "<audio id='audio' controls preload='none'></audio>"
+                 "<button class='small ghost' data-act='close'>閉じる</button></div>")
+    return page("聞いて直す — LifeLog PC", "".join(parts), script=REVIEW_SCRIPT)
+
+
+def post_review(handler, store: records.RecordStore, log, personal=None) -> None:
+    """POST /dash/records/review {"day", "time", "kind": "text"|"speaker"|"ok", "text"|"speaker"}"""
+    if handler.headers.get(dashboard.HEADER) != "1":
+        handler.discard_body()
+        dashboard.send_json(handler, 403, {"error": "この画面のボタンから押してください"})
+        return
+    try:
+        length = int(handler.headers.get("Content-Length") or 0)
+    except ValueError:
+        length = 0
+    if length <= 0 or length > EDIT_LIMIT:
+        handler.discard_body()
+        dashboard.send_json(handler, 400 if length <= 0 else 413, {"error": "中身がありません" if length <= 0 else "長すぎます"})
+        return
+    data = handler.rfile.read(length)
+    try:
+        body = json.loads(data.decode("utf-8"))
+        if not isinstance(body, dict):
+            raise ValueError("中身が JSON のまとまりではありません")
+        kind = body.get("kind")
+        day = body.get("day")
+        moment = body.get("time")
+        value = body.get("text") if kind == "text" else body.get("speaker") if kind == "speaker" else None
+        result = store.review(day, moment, kind, value)
+    except (UnicodeDecodeError, ValueError) as error:
+        message = str(error) if not isinstance(error, json.JSONDecodeError) else "中身が JSON ではありません"
+        dashboard.send_json(handler, 400, {"error": message})
+        return
+    sample = result.get("sample")
+    if sample is None:
+        sample_text = ""
+    elif sample.get("added"):
+        sample_text = f"材料に足しました（全部で {sample.get('count')} 個）。"
+    else:
+        sample_text = f"材料には足しませんでした（{sample.get('reason')}）。"
+    # 文・名前は記録に書かない（日・種類・材料の数だけ）
+    what = {"text": "文を直しました", "speaker": "話し手を変えました", "ok": "合っている"}[kind]
+    log(f"聞いて直す: {day} の行（{what}）" + (f"・材料 {'足した' if sample.get('added') else '足さない'}" if sample else ""))
+    # 文を直した・合っている → 次の行へ。話し手だけ変えたときは、文が合っているかをまだ答えていないので、その行にとどまる
+    still = False
+    if kind == "speaker":
+        line, _, _ = store.find_line(day, moment)
+        still = line is not None and any(r != "speaker" for r in records.doubt_reasons(line, records.REVIEW_UNSURE))
+    state = result["state"]
+    reply = {"ok": True, "message": result["message"], "sample": sample, "sample_text": sample_text, "done": not still,
+             "expect": {"text": state["text"], "speaker": state["speaker"]}}
+    if sample and isinstance(sample.get("count"), int):
+        reply["count"] = sample["count"]
+    if kind == "speaker" and still:
+        reply["message"] += "。文も合っていれば「合っている」を、違えば直して「文を直す」を押してください"
+    dashboard.send_json(handler, 200, reply)
 
 
 # MARK: - 探す
@@ -583,8 +777,9 @@ def _not_found(handler, text: str) -> None:
                                   f"<nav class='bar'><a href='{PREFIX}'>← 記録の一覧</a></nav><section><p>{_e(text)}</p></section>"))
 
 
-def http(handler, url, method: str, store: records.RecordStore | None, index, log) -> None:
-    """記録の画面・音声・直すボタン。合言葉は見守りの画面と同じ。"""
+def http(handler, url, method: str, store: records.RecordStore | None, index, log, personal=None) -> None:
+    """記録の画面・音声・直すボタン。合言葉は見守りの画面と同じ。
+    版 9: personal は材料の数を返す関数（{"count", "need"}。聞いて直すの画面に出す）"""
     ok, set_cookie = dashboard.check(handler.headers, url.query, handler.key)
     if not ok:
         if handler.headers.get("Authorization") or "key=" in url.query:
@@ -607,6 +802,9 @@ def http(handler, url, method: str, store: records.RecordStore | None, index, lo
         return
     try:
         if method == "POST":
+            if path == PREFIX + "/review":   # 版 9
+                post_review(handler, store, log)
+                return
             if path != PREFIX + "/edit":
                 handler.discard_body()
                 dashboard.send_json(handler, 404, {"error": "not found"})
@@ -623,6 +821,9 @@ def http(handler, url, method: str, store: records.RecordStore | None, index, lo
             return
         if path in (PREFIX, PREFIX + "/"):
             _send_page(handler, 200, render_index(store, index))
+            return
+        if path == PREFIX + "/review":   # 版 9
+            _send_page(handler, 200, render_review(store, personal() if callable(personal) else personal))
             return
         if path == PREFIX + "/search":
             query = parse_qs(url.query)
