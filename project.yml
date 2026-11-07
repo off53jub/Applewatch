@@ -92,6 +92,7 @@ targets:
         NSLocalNetworkUsageDescription: 家の PC（LifeLog PC）に録音を送って文字にしてもらうために使います。
         NSFaceIDUsageDescription: 記録（仕事の会話を含む）を人に見られないよう、アプリを開くときに確かめます。
         NSRemindersFullAccessUsageDescription: 選んだ頼まれごとを、リマインダーに入れて期限の時刻に知らせるために使います。
+        NSPhotoLibraryUsageDescription: 会話の時間に撮った写真を、記録の画面で会話の横に並べるために読みます（iPhone の中だけで使い、送りません）。
         NSCameraUsageDescription: メモやホワイトボードを撮って、頼まれごと帳に書き足すために使います（読み取りは iPhone の中でします）。
         # 家の PC へは http で送る（宛先は家の中の住所か Tailscale の住所。Tailscale は通り道が暗号化されている）
         NSAppTransportSecurity:
