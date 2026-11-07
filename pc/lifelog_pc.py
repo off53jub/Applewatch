@@ -110,7 +110,7 @@ import updater
 import records
 import recordsui
 
-VERSION = 7
+VERSION = 8
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
 INSTALL_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 BUILD = updater.read_build(INSTALL_DIR)
