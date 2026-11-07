@@ -100,6 +100,10 @@ class FakeEngine:
         self.model = object()
         # 本物と同じく、GPU の作り物は gpu.GPU_LOCK で1度に1つだけ動く
         self.gpu_lock = gpu.GPU_LOCK if provider == "cuda" else None
+        self.compute = "作り物"
+        if provider == "cuda":
+            # 本物と同じく、GPU の作り物が載っているあいだは、この PC の Ollama を CPU だけで動かす（num_gpu 0）
+            gpu.register(self)
 
     def run(self, audio, segments, hints, prompt):
         with self.lock, (self.gpu_lock or contextlib.nullcontext()):
@@ -124,7 +128,8 @@ def build_engine(name: str):
         return FakeEngine(name, "cuda")
     main = O.main
     kinds = {"whisper": main.WhisperEngine, "kotoba": main.KotobaEngine, "mine": main.MineEngine}
-    return kinds[name](O.settings["whisper"], O.settings["device"], int(O.settings["threads"]))
+    # GPU に載せられないときは CPU で読み込まない（CPU に落ちたものは使わないので。2026-11-07）
+    return kinds[name](O.settings["whisper"], O.settings["device"], int(O.settings["threads"]), gpu_only=True)
 
 
 # MARK: - 始める
@@ -146,10 +151,18 @@ def start(main, home: Path | None = None, background: bool = True, clock=None, a
     O.pusher = apns.Pusher(O.home / "apns", log, O.clock, hosts=apns_hosts, post=apns_post)
     O.feedback = ascfeedback.Feedback(O.home, log, O.clock, base=asc_base or ascfeedback.BASE, opener=asc_opener)
     fake = bool(O.settings.get("fake"))
+    # 戻す前に要る GPU の空き: config.json の whisper_compute と gpu_free_min_mb で決める（2026-11-07）
     O.gpu = gpu.GpuPlan(lambda: main.Handler.engine, build_engine, log, O.clock,
-                        free_mb=free_mb or ((lambda: None) if fake else None))
+                        free_mb=free_mb or ((lambda: None) if fake else None),
+                        need_mb=lambda name: gpu.need_with_spare(name, config()))
+    # 空きが足りないので起動のときに GPU に載せなかったもの（kotoba など）は、空きができたら GPU の時間割が載せる
+    for name in gpu.take_skipped():
+        O.gpu.want(name)
+        log(f"GPU の時間割: {name} は、GPU の空きができたら載せます")
     try:
-        O.ollama = gpu.Ollama(ollama_url or getattr(getattr(main, "LLM", None), "url", None) or gpu.OLLAMA_URL, log)
+        # 学び直しのあとに載せ直すときも、GPU の文字起こしのモデルが載っていれば CPU だけで（num_gpu 0）
+        O.ollama = gpu.Ollama(ollama_url or getattr(getattr(main, "LLM", None), "url", None) or gpu.OLLAMA_URL, log,
+                              options=lambda: gpu.ollama_options(config()))
     except ValueError:
         O.ollama = None
     data = O.home / "personal" / "data"
@@ -221,6 +234,7 @@ def step(now: float | None = None) -> None:
     now = O.clock() if now is None else now
     settings = config()
     O.gpu.tick(working(), settings)
+    gpu.note_change()  # 捨てられて GPU から下りたモデルがあれば、gpu-state.json（MCP サーバーが読む）を書き直す
     if now >= O.next_minute:
         O.next_minute = now + 60
         O.trainer.configure(settings)

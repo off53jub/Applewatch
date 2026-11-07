@@ -95,6 +95,14 @@ jobs:
           python pc/lifelog_pc.py --check-v8 > v8.txt 2>&1 || { cat v8.txt; grep '^NG' v8.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v8.txt | sed 's/^/::notice::--check-v8 の OK の数: /'
 
+      # 2026-11-07: GPU に余裕を作る直し（合計 10GB 未満の GPU では Whisper を int8_float16 で載せる・GPU の文字起こしのモデルが
+      #   あるあいだ Ollama に num_gpu 0・空きが少ないときは載せない・夜の割り当てでは付けない）を、一時フォルダと作り物の
+      #   faster-whisper・作り物の GPU のメモリー・作り物の Ollama で確かめる（--check-v8 にも入っている。GPU も Ollama も使わない）
+      - name: GPU に余裕を作る直しを確かめる
+        run: |
+          python pc/lifelog_pc.py --check-gpu > gpu.txt 2>&1 || { cat gpu.txt; grep '^NG' gpu.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' gpu.txt | sed 's/^/::notice::--check-gpu の OK の数: /'
+
       # 版 9: 職場の会話の印（work）・聞いて直す（並び・直す・合っている・PC の音声から材料・iPhone の材料と2重にしない）・
       #   記録を読む MCP サーバー（作り物の記録で、どの道具からも職場の会話と分からない会話が出ない・HOME に書かない・
       #   標準出力は MCP の答えだけ）を、一時フォルダと作り物の Ollama で確かめる

@@ -225,8 +225,10 @@ def render(info: dict) -> str:
     # モデル
     engines = info.get("engines") or []
     gpu = info.get("gpu") or {}
+    # 動く場所の横に、Whisper の形（float16・int8_float16 など。2026-11-07）
     body = "".join(f"<tr><td>{_e(e.get('name'))}</td><td>{_e(e.get('label'))}</td>"
-                   f"<td class='{'ok' if e.get('provider') == 'cuda' else ''}'>{_e(e.get('provider'))}</td></tr>"
+                   f"<td class='{'ok' if e.get('provider') == 'cuda' else ''}'>{_e(e.get('provider'))}"
+                   + (f"（{_e(e.get('compute'))}）" if e.get("compute") else "") + "</td></tr>"
                    for e in engines) or "<tr><td colspan=3>読み込めたモデルがありません</td></tr>"
     gpu_line = ("<span class='ok'>GPU で動いているモデルがあります</span>" if gpu.get("used")
                 else ("<span class='warn'>NVIDIA の GPU はありますが、使えていません（CPU で動いています）</span>"
@@ -526,7 +528,9 @@ def _ops_train(ops: dict, personal: dict | None = None) -> str:
             ("下ろしているもの", _e("・".join(plan.get("down") or [])) or "—"),
             ("夜の割り当て", f"{_e(night.get('start'))}〜{_e(night.get('end'))} に {_e(night.get('idle_minutes'))} 分仕事が無いとき"
              if night else "使わない設定です"),
-            ("GPU のメモリー", f"{memory['used']} / {memory['total']} MB" if memory.get("total") else "—")]
+            ("GPU のメモリー", f"{memory['used']} / {memory['total']} MB" if memory.get("total") else "—"),
+            # 2026-11-07: GPU の文字起こしのモデルが載っているあいだは、この PC の Ollama を CPU だけで動かす
+            ("この PC の Ollama", _e(plan.get("ollama")) or "—")]
     failed = plan.get("failed") or {}
     if failed:
         rows.append(("戻せなかったもの", "<span class='ng'>" + _e("・".join(f"{k}: {v}" for k, v in failed.items())) + "</span>"))
