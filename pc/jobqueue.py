@@ -76,6 +76,8 @@ class JobQueue:
         self.seq = 0
         self.cleaned = 0.0
         self.thread: threading.Thread | None = None
+        # 版 7（ops）: 仕事が1つ終わったとき（でき上がり・失敗）に呼ぶ口。on_done(名前, 状態) で、状態は done か failed
+        self.on_done: Callable[[str, dict], None] | None = None
         self.load()
 
     # MARK: 置き場所（ファイルの名前は区切りの名前のハッシュ。Windows の決まった名前や大文字小文字の違いでぶつからないように）
@@ -352,6 +354,14 @@ class JobQueue:
                 _unlink(audio)
             _write_json(self.meta_path(name), current)
             self.changed.notify_all()
+            finished = dict(current)
+        # 版 7（ops）: 終わったことを知らせる（見えない通知など）。失敗しても裏の仕事は止めない
+        callback = self.on_done
+        if callback is not None:
+            try:
+                callback(name, finished)
+            except Exception as failure:  # noqa: BLE001
+                self.log(f"後で受け取る文字起こし {name}: 終わったことを知らせられませんでした: {failure!r}")
         return True
 
 

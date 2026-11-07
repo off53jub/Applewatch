@@ -57,6 +57,14 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
     LifeLogPC.exe --llm-model 名前  /llm に使う Ollama のモデルを変える（--no-llm で使わない）
     LifeLogPC.exe --no-auto-update  自分で新しい版に入れ替えない（--no-semantic で意味で探す機能を使わない）
     LifeLogPC.exe --check-semantic  この PC の Ollama で、意味で探す機能を本物のモデルで試す
+
+版 7（ops）で足したもの（中身は ops.py・diag.py・apns.py・ascfeedback.py・trainer.py・gpu.py。決まりは docs/v7-plan.md）:
+- POST /diag  iPhone の実機の様子を端末ごとに置き、HOME/diag/summary.md に今の様子と気になる所を書く（features に "diag"）
+- TestFlight の報告（HOME/asc に App Store Connect のキーがあるときだけ、1日に4回読んで HOME/feedback に置く）
+- 見えない通知（HOME/apns に APNs の鍵があり、チームが分かるとき。features に "push"）
+- 自動の学び直しと GPU の時間割（/train-status の "auto"。features に "autotrain"）
+    LifeLogPC.exe --check-v7-ops   版 7 の見守りを、一時フォルダと作り物の相手で確かめる
+    python lifelog_pc.py --fake-models --port 47715  モデルを読み込まずに起動して、受け口と画面を試す
 """
 
 from __future__ import annotations
@@ -86,13 +94,14 @@ import numpy as np
 # 版 6 の機能（lifelog_pc.py と同じフォルダの部品）
 import dashboard
 import jobqueue
+import ops  # 版 7（ops）: 実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割（中身は ops.py）
 import semantic
 import updater
 # 版 7（records）: 記録・音声の保存・直し（records.py）と、その画面（recordsui.py）
 import records
 import recordsui
 
-VERSION = 6
+VERSION = 7
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
 INSTALL_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 BUILD = updater.read_build(INSTALL_DIR)
@@ -1721,7 +1730,12 @@ def train_status() -> dict:
             trained = None
         if not trained:
             trained = now_iso((PERSONAL_MODEL / "model.bin").stat().st_mtime)
-    return {"count": len(read_samples(PERSONAL_DATA)), "model": personal_model_ready(), "trained": trained}
+    status = {"count": len(read_samples(PERSONAL_DATA)), "model": personal_model_ready(), "trained": trained}
+    # 版 7（ops）: 自動の学び直しの様子（次の予定・前回の結果）。版 7 の見守りが動いているときだけ
+    auto = ops.train_auto()
+    if auto is not None:
+        status["auto"] = auto
+    return status
 
 
 _extras: dict[str, object] = {}
@@ -1790,6 +1804,8 @@ def features(engines: list | None = None) -> list[str]:
     # 版 7（records）: POST /records/<日>（記録を受ける）・GET /edits と POST /edits/ack（PC で直した分を返す）
     if App.records is not None:
         found += ["records", "edits"]
+    # 版 7（ops）: diag（POST /diag）・push（見えない通知を送れるとき）・autotrain（自動の学び直しができるとき）
+    found.extend(ops.features())
     return found
 
 
@@ -1816,8 +1832,9 @@ class App:
 
 
 def busy() -> bool:
-    """文字にしている最中のもの（/transcribe・後で受け取る文字起こし）があるか"""
-    return App.transcribing > 0 or (App.jobs is not None and App.jobs.busy())
+    """文字にしている最中のもの（/transcribe・後で受け取る文字起こし）があるか。
+    版 7（ops）: 学び直している最中も（自分で入れ替えるのは、学び直しが終わるまで待つ）"""
+    return App.transcribing > 0 or (App.jobs is not None and App.jobs.busy()) or ops.busy()
 
 
 def pause_work() -> None:
@@ -1935,7 +1952,9 @@ def dash_info() -> dict:
             "job_counts": App.jobs.counts() if App.jobs else {}, "jobs": App.jobs.recent(20) if App.jobs else [],
             "speed": App.recent.speed("transcribe", 20), "pairs": App.recent.pairs(),
             "update": App.updater.status() if App.updater else {"auto": App.auto_update, "state": "—"},
-            "problems": dashboard.problems(lines, 15)}
+            "problems": dashboard.problems(lines, 15),
+            # 版 7（ops）: 実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割（動いていなければ空）
+            "ops": ops.dash_info()}
 
 
 def start_v6(threads: int) -> None:
@@ -2177,6 +2196,7 @@ class Handler(BaseHTTPRequestHandler):
     def authorized(self) -> bool:
         given = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
         if secrets.compare_digest(given, self.key):
+            ops.seen(self)  # 版 7（ops）: iPhone から最後に来た時刻と、仕事が来たこと（通知の見回り・GPU の時間割）
             return True
         log(f"合言葉の違う接続を断りました: {self.client_address[0]}")
         # 送られてくる音声を読み捨ててから断る。読まずに断ると、iPhone には 401 ではなく「接続が切れた」と見える
@@ -2215,6 +2235,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/edits":
             records.http_get_edits(self, App.records, url.query, log)
+            return
+        if path.startswith("/dash/ops/"):  # 版 7（ops）: TestFlight の報告の詳しい画面・鍵を入れる画面
+            ops.dash_get(self, url)
             return
         if path not in ("/hello", "/train-status", "/jobs", "/index/status") and not path.startswith("/jobs/"):
             self.send_json(404, {"error": "not found"})
@@ -2273,8 +2296,11 @@ class Handler(BaseHTTPRequestHandler):
         if url.path.startswith("/records/") or url.path == "/edits/ack":
             records.http_post(self, App.records, url.path, log)
             return
+        if url.path.startswith("/dash/ops/"):  # 版 7（ops）: 見守りの画面のボタン（鍵を入れる・テスト通知など）
+            ops.dash_post(self, url)
+            return
         if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample", "/llm", "/jobs") \
-                and url.path not in semantic.POSTS:
+                and url.path not in semantic.POSTS and url.path not in ops.POSTS:  # 版 7（ops）: /diag
             self.discard_body()
             self.send_json(404, {"error": "not found"})
             return
@@ -2287,6 +2313,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/jobs":
             # 音声は読みながらファイルに書く（200MB まで）
             jobqueue.http_post(self, App.jobs, url.query, length)
+            return
+        if url.path in ops.POSTS:  # 版 7（ops）: POST /diag（実機の様子。2MB まで）
+            ops.http_diag(self, length)
             return
         small = url.path == "/llm" or url.path in semantic.POSTS
         limit = LLM_BODY_LIMIT if url.path == "/llm" else semantic.BODY_LIMIT if small else DRAIN_LIMIT
@@ -2511,6 +2540,11 @@ def serve(engine_factory, port: int, threads: int = 4) -> None:
     start_records()
     # 版 6: 後で受け取る文字起こし・意味で探す・自分で入れ替える
     start_v6(threads)
+    # 版 7（ops）: 実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割。失敗しても受け付けは始める
+    try:
+        ops.start(sys.modules[__name__])
+    except Exception as error:  # noqa: BLE001
+        log(f"版 7 の見守りを始められませんでした: {error!r}")
     log(f"LifeLog PC 版 {VERSION}（番号 {BUILD}）を始めます")
     print()
     print("=" * 60)
@@ -3201,6 +3235,13 @@ def main() -> None:
     parser.add_argument("--whisper", default="auto",
                         help="Whisper の大きさ: auto（GPU なら large-v3、無ければ large-v3-turbo）・large-v3・large-v3-turbo・small・off")
     parser.add_argument("--device", default="auto", help="Whisper を動かす場所: auto（既定）・cuda・cpu")
+    # 版 7（ops）
+    parser.add_argument("--check-v7-ops", action="store_true",
+                        help="版 7 の見守り（実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割）を、"
+                             "一時フォルダと作り物の相手で確かめる（ネットも GPU も使わない）")
+    parser.add_argument("--fake-models", action="store_true",
+                        help="モデルを読み込まず、作り物のモデルで起動する（受け口・見守りの画面・GPU の時間割を試すとき用。"
+                             "文字起こしの答えは作り物）")
     args = parser.parse_args()
 
     if args.startup or args.no_startup:
@@ -3209,6 +3250,10 @@ def main() -> None:
     if args.check_vote:
         check_vote()
         return
+    if args.check_v7_ops:  # 版 7（ops）
+        import v7checks_ops
+
+        sys.exit(1 if v7checks_ops.run(sys.modules[__name__]) else 0)
     if args.check_extras:
         check_extras(args.check_extras, max(1, args.threads // 2))
         return
@@ -3252,7 +3297,12 @@ def main() -> None:
         v6checks.check_semantic_real(sys.modules[__name__])
         return
 
+    # 版 7（ops）: GPU の時間割で、下ろしたモデルを同じ設定で作り直すため
+    ops.configure(names=names, whisper=args.whisper, device=args.device, threads=args.threads, fake=args.fake_models)
+
     def factory() -> Ensemble:
+        if args.fake_models:  # 版 7（ops）: 試すとき用の作り物のモデル
+            return Ensemble(ops.fake_engines())
         return load_engines(names, args.threads, args.provider, args.whisper, args.device, qwen)
 
     if args.download:
