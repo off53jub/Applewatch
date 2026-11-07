@@ -2,24 +2,39 @@
 
 iPhone は録音の区切りを1つずつ裏で送っておき、PC が文字にし終えたころに答えを取りに来る。
 - 区切りの名前（iPhone のファイルの名前）で見分ける。同じ名前が来たら、失敗したものだけを入れ直す。
-- 1つずつ、来た順に文字にする（裏の仕事は1本だけ）。
+- 1つずつ文字にする（裏の仕事は1本だけ）。版 8 から、待っているものが2つ以上あれば新しく受けたものから。
 - 受けた音声と状態は <home>/jobs/ に置くので、PC を起動し直しても続きから文字にする。
 - 音声は、文字にし終えたら（失敗しても）すぐ消す。答えは、でき上がってから 7 日で消す。
   版 7: 音声を残す先 keep_audio（records.RecordStore.keep_audio）を渡したときは、文字にし終えても消さずに残し、
   iPhone が消したとき（DELETE /jobs/<名前>）と 7 日たって片付けるときに、keep_audio(名前, 音声のファイル, 状態) に移してもらう。
 ここには文字にする仕組みは無い。lifelog_pc.py が渡す runner(音声のファイル, 頼まれた設定, 名前) が文字にする。
+
+版 8（決まりは docs/v8-latency.md）:
+- 時間: POST /jobs の chunk_start・chunk_end・arrived・sent（iPhone の時刻）と、PC の received・started・draft_at・finished を
+  残し、GET /jobs/<名前> と待ち合わせの答えに "timing" として返す（日時は ISO 8601・UTC・ミリ秒つき）。
+- 待ち合わせ（POST /jobs?wait=1）: でき上がりまで答えを待たせ、WAIT_PING 秒ごとに空白を1文字書く。
+  でき上がったら GET と同じ形で答える。WAIT_LIMIT 秒（25 分）たつか、起動し直す・閉じるときは pending を返す。
+  答えを書き終え、iPhone が読み終えて閉じた仕事は「渡した」（"handed": true）と覚え、on_done（「できた」の見えない通知）を
+  呼ばない。途中で切れた・閉じるのが WAIT_CONFIRM 秒のうちに来なかったときは、渡せなかったとして通知する。
+- 下書き: runner が4つ目の引数 draft を受けるなら、draft(答えと同じ形) で下書きを残せる。GET はまだのとき下書きを返す。
+- 新しい区切りから: 待っているものが2つ以上あれば、いちばん新しく受けたものから文字にする。
 """
 
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import re
+import select
+import socket
 import threading
 import time
 from pathlib import Path
 from typing import Callable
+
+import diag  # 版 8: 日時の読み書き（ISO 8601。ミリ秒なし・時差つきも読める）
 
 NAME = re.compile(r"[0-9A-Za-z._-]{1,80}")
 QUEUE_LIMIT = 500            # 待っている（queued・working）ものがこれだけあれば、断る（503）
@@ -27,6 +42,24 @@ LIST_LIMIT = 500             # GET /jobs で返す数の上限
 BODY_LIMIT = 200_000_000     # 音声の大きさの上限（200MB）
 KEEP_SECONDS = 7 * 86400     # でき上がった答えを残しておく長さ
 CLEAN_EVERY = 3600.0         # 古い答えを消すのを確かめる間（秒）
+
+
+def _env_seconds(name: str, default: float) -> float:
+    """試すときだけ、環境変数で秒を短くできる（ふだんは決まりの値）"""
+    try:
+        value = float(os.environ.get(name) or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# 版 8: 待ち合わせ（wait=1）。空白を書く間と、待つ長さの上限（試すときは環境変数で短くできる）
+WAIT_PING = _env_seconds("LIFELOG_JOBWAIT_PING", 15.0)
+WAIT_LIMIT = _env_seconds("LIFELOG_JOBWAIT_LIMIT", 25 * 60.0)
+# 答えを書いたあと、iPhone が読み終えて閉じるのを待つ長さ。閉じなければ渡せたか分からないので、見えない通知も送る
+WAIT_CONFIRM = _env_seconds("LIFELOG_JOBWAIT_CONFIRM", 10.0)
+# 版 8: iPhone が query に付ける時刻（timing にそのまま返す）
+CLIENT_TIMES = ("chunk_start", "chunk_end", "arrived", "sent")
 
 
 def valid_name(name) -> bool:
@@ -50,12 +83,90 @@ def _unlink(path: Path) -> None:
         pass
 
 
+def _takes_four(runner) -> bool:
+    """runner(音声, 設定, 名前, 下書きの口) と呼べるか（版 7 までの runner は3つしか受けない）"""
+    try:
+        inspect.signature(runner).bind(None, None, None, None)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def iso(when) -> str | None:
+    return diag.iso(float(when)) if when else None
+
+
+def parse_times(query: dict) -> dict[str, float]:
+    """POST /jobs の chunk_start・chunk_end・arrived・sent（ISO 8601）を 1970 年からの秒にする。読めないものは省く。"""
+    out: dict[str, float] = {}
+    for key in CLIENT_TIMES:
+        value = (query.get(key) or [None])[0]
+        when = diag.parse_time(value) if isinstance(value, str) and len(value) <= 64 else None
+        if when is not None:
+            out[key] = round(when, 3)
+    return out
+
+
+def timing(meta: dict) -> dict:
+    """"timing" の中身: iPhone の時刻と、PC の received（受け終わり）・started（文字にし始め）・
+    draft_at（下書きができた）・finished（でき上がり）。分からないものは省く。"""
+    out = {k: iso(v) for k, v in (meta.get("times") or {}).items() if k in CLIENT_TIMES and v}
+    for key, field in (("received", "queued_at"), ("started", "started_at"), ("draft_at", "draft_at"),
+                       ("finished", "done_at")):
+        if meta.get(field):
+            out[key] = iso(meta[field])
+    return out
+
+
+def peer_gone(connection) -> bool:
+    """相手が接続を閉じたか（音声は読み終えているので、読めるのに中身が無ければ閉じている）"""
+    try:
+        readable, _, _ = select.select([connection], [], [], 0)
+        if not readable:
+            return False
+        return connection.recv(1, socket.MSG_PEEK) == b""
+    except (OSError, ValueError):
+        return True
+
+
+def delivered(connection, timeout: float | None = None) -> bool:
+    """答えを書き終えたあと、こちらから送るのを閉じて、相手が読み終えて閉じるのを少し待つ。
+    閉じたら True（渡せた）。届いたか分からない（つながりが途中で消えた）ときは False（見えない通知で知らせる）。"""
+    timeout = WAIT_CONFIRM if timeout is None else timeout
+    try:
+        connection.shutdown(socket.SHUT_WR)
+    except OSError:
+        return False
+    deadline = time.time() + timeout
+    try:
+        while True:
+            left = deadline - time.time()
+            if left <= 0:
+                return False
+            readable, _, _ = select.select([connection], [], [], min(left, 0.5))
+            if readable:
+                return connection.recv(4096) == b"" or delivered_more(connection, deadline)
+    except (ConnectionResetError, ConnectionAbortedError):
+        return True   # 読み終えた相手が、すぐ切った
+    except (OSError, ValueError):
+        return False
+
+
+def delivered_more(connection, deadline: float) -> bool:
+    """閉じる前に何か送ってきた（ふつうは無い）。閉じるまで読み捨てて待つ"""
+    while time.time() < deadline:
+        readable, _, _ = select.select([connection], [], [], max(0.0, min(deadline - time.time(), 0.5)))
+        if readable and connection.recv(4096) == b"":
+            return True
+    return False
+
+
 class QueueFull(RuntimeError):
     """待っているものが多すぎる"""
 
 
 class JobQueue:
-    """区切りごとの仕事を、来た順に1つずつ文字にする。"""
+    """区切りごとの仕事を、1つずつ文字にする（版 8 から新しく受けたものから）。"""
 
     def __init__(self, folder: Path, runner: Callable[[Path, dict, str], tuple[dict, dict]],
                  log: Callable[[str], None], limit: int = QUEUE_LIMIT, keep: float = KEEP_SECONDS,
@@ -77,7 +188,13 @@ class JobQueue:
         self.cleaned = 0.0
         self.thread: threading.Thread | None = None
         # 版 7（ops）: 仕事が1つ終わったとき（でき上がり・失敗）に呼ぶ口。on_done(名前, 状態) で、状態は done か failed
+        # 版 8: 待ち合わせで答えを渡した仕事には呼ばない（待っている人がいるあいだは、渡せたかが分かるまで待つ）
         self.on_done: Callable[[str, dict], None] | None = None
+        # 版 8: 待ち合わせ（wait=1）で待っている数と、待っている人がいるあいだに終わった仕事（渡せたかが分かるまで預かる）
+        self.waiters: dict[str, int] = {}
+        self.held: dict[str, dict] = {}
+        # 版 8: runner が下書きの口（4つ目の引数）を受けるか
+        self.runner_drafts = _takes_four(runner)
         self.load()
 
     # MARK: 置き場所（ファイルの名前は区切りの名前のハッシュ。Windows の決まった名前や大文字小文字の違いでぶつからないように）
@@ -93,6 +210,10 @@ class JobQueue:
 
     def result_path(self, name: str) -> Path:
         return self.base(name).with_suffix(".result")
+
+    def draft_path(self, name: str) -> Path:
+        """版 8: 下書き（速いモデルだけで文字にしたもの）。でき上がったら消す"""
+        return self.base(name).with_suffix(".draft")
 
     def load(self) -> None:
         """起動したときに、前に受けた仕事を読み込む。途中だったものは待ちに戻す。"""
@@ -110,6 +231,8 @@ class JobQueue:
             if meta.get("status") == "working":
                 meta["status"] = "queued"
                 meta.pop("started_at", None)
+                meta.pop("draft_at", None)  # 版 8: 下書きも作り直す
+                _unlink(self.draft_path(name))
                 self.log(f"後で受け取る文字起こし {name}: 途中で止まっていたので、もう一度文字にします")
             if meta.get("status") == "queued" and not self.audio_path(name).exists():
                 meta.update(status="failed", error="音声がありません（受け取り途中で止まりました）", done_at=time.time())
@@ -126,6 +249,8 @@ class JobQueue:
         for name, meta in self.jobs.items():
             if meta.get("status") in ("done", "failed") and self.keep_audio is None:
                 _unlink(self.audio_path(name))
+            if meta.get("status") in ("done", "failed"):
+                _unlink(self.draft_path(name))
 
     # MARK: 受け付け
 
@@ -147,15 +272,19 @@ class JobQueue:
     def part_path(self, name: str) -> Path:
         return self.audio_path(name).with_name(self.audio_path(name).name + ".part")
 
-    def commit(self, name: str, params: dict, size: int) -> dict:
-        """受け取った音声を待ちの最後に加える。失敗していた同じ名前のものは置き換える。"""
+    def commit(self, name: str, params: dict, size: int, times: dict | None = None) -> dict:
+        """受け取った音声を待ちの最後に加える。失敗していた同じ名前のものは置き換える。
+        版 8: times は iPhone の時刻（parse_times の答え）。queued_at が received（受け終わり）になる。"""
         with self.lock:
             self.receiving.discard(name)
             os.replace(self.part_path(name), self.audio_path(name))
             _unlink(self.result_path(name))
+            _unlink(self.draft_path(name))
             self.seq += 1
             meta = {"id": name, "status": "queued", "queued_at": round(time.time(), 3), "done_at": None,
                     "seq": self.seq, "params": params, "size": int(size)}
+            if times:
+                meta["times"] = dict(times)
             self.jobs[name] = meta
             _write_json(self.meta_path(name), meta)
             self.changed.notify_all()
@@ -179,19 +308,65 @@ class JobQueue:
         return out
 
     def get(self, name: str) -> dict | None:
-        """GET /jobs/<名前> の答え。知らない名前なら None。"""
+        """GET /jobs/<名前> の答え。知らない名前なら None。
+        版 8: "timing" を付ける。まだ（working）で下書きがあれば "draft"（result と同じ形）も付ける。"""
         with self.lock:
             meta = self.jobs.get(name)
             if meta is None:
                 return None
             out = self.public(meta)
-            if meta.get("status") != "done":
+            out["timing"] = timing(meta)
+            status = meta.get("status")
+            if status == "working" and meta.get("draft_at"):
+                path = self.draft_path(name)
+            elif status == "done":
+                path = self.result_path(name)
+            else:
                 return out
-            path = self.result_path(name)
         try:
-            out["result"] = json.loads(path.read_text(encoding="utf-8"))
+            body = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            out.update(status="failed", error="答えのファイルを読めませんでした")
+            if status == "done":
+                out.update(status="failed", error="答えのファイルを読めませんでした")
+            return out  # 下書きが読めない（でき上がって消えたところ）なら、下書き無しで返す
+        out["result" if status == "done" else "draft"] = body
+        return out
+
+    def save_draft(self, name: str, seq, reply: dict) -> bool:
+        """版 8: 下書きを残す（その仕事を文字にしている最中のときだけ）。残せたら True。"""
+        with self.lock:
+            meta = self.jobs.get(name)
+            if meta is None or meta.get("seq") != seq or meta.get("status") != "working":
+                return False
+            _write_json(self.draft_path(name), reply)
+            meta["draft_at"] = round(time.time(), 3)
+            _write_json(self.meta_path(name), meta)
+            self.changed.notify_all()
+            return True
+
+    def latency(self, limit: int = 50) -> dict:
+        """版 8: 見守りの画面と summary.md に出す、直近 limit 個のでき上がった仕事の時間（秒）。
+        wait = received→started（PC の待ち）、work = started→finished（PC の作業）、draft = started→draft_at、
+        to_pc = sent→received（iPhone から PC へ送るのにかかった時間。iPhone が sent を付けたときだけ）。
+        それぞれ {"median", "max", "count"}。handed は待ち合わせで渡した数。"""
+        import statistics
+
+        with self.lock:
+            metas = sorted((m for m in self.jobs.values() if m.get("status") == "done"),
+                           key=lambda m: float(m.get("done_at") or 0), reverse=True)[:limit]
+            metas = [dict(m) for m in metas]
+        spans: dict[str, list[float]] = {"wait": [], "work": [], "draft": [], "to_pc": []}
+        for meta in metas:
+            received, started, draft, done = (meta.get(k) for k in ("queued_at", "started_at", "draft_at", "done_at"))
+            sent = (meta.get("times") or {}).get("sent")
+            for key, a, b in (("wait", received, started), ("work", started, done), ("draft", started, draft),
+                              ("to_pc", sent, received)):
+                if a and b and float(b) >= float(a) - 5:
+                    spans[key].append(max(0.0, float(b) - float(a)))
+        out: dict = {"count": len(metas), "handed": sum(1 for m in metas if m.get("handed"))}
+        for key, values in spans.items():
+            out[key] = {"median": round(statistics.median(values), 2), "max": round(max(values), 2),
+                        "count": len(values)} if values else None
         return out
 
     def listing(self, limit: int = LIST_LIMIT) -> list[dict]:
@@ -235,7 +410,7 @@ class JobQueue:
             self.log(f"後で受け取る文字起こし {name}: 音声を残せませんでした（消します）: {error!r}")
 
     def _remove_files(self, name: str) -> None:
-        for path in (self.meta_path(name), self.audio_path(name), self.result_path(name)):
+        for path in (self.meta_path(name), self.audio_path(name), self.result_path(name), self.draft_path(name)):
             _unlink(path)
 
     def clean(self, now: float | None = None) -> int:
@@ -262,14 +437,85 @@ class JobQueue:
         return self.working is not None
 
     def pause(self) -> None:
-        """次の仕事を始めない（入れ替え・起動し直しの前）"""
+        """次の仕事を始めない（入れ替え・起動し直しの前）。版 8: 待ち合わせで待っている人には、すぐ pending を返す"""
         with self.lock:
             self.paused = True
+            self.changed.notify_all()
 
     def resume(self) -> None:
         with self.lock:
             self.paused = False
             self.changed.notify_all()
+
+    # MARK: 版 8: 待ち合わせ（wait=1）
+
+    def enter_wait(self, name: str) -> None:
+        with self.lock:
+            self.waiters[name] = self.waiters.get(name, 0) + 1
+
+    def wait_change(self, name: str, timeout: float) -> str:
+        """その仕事が終わるか、閉じるところになるか、timeout 秒たつまで待つ。
+        "done"（でき上がり・失敗）・"gone"（消された）・"closing"（起動し直す・閉じる）・"waiting" のどれか。"""
+        deadline = time.time() + max(0.0, timeout)
+        with self.lock:
+            while True:
+                meta = self.jobs.get(name)
+                if meta is None:
+                    return "gone"
+                if meta.get("status") in ("done", "failed"):
+                    return "done"
+                if self.paused:
+                    return "closing"
+                left = deadline - time.time()
+                if left <= 0:
+                    return "waiting"
+                self.changed.wait(min(left, 1.0))
+
+    def leave_wait(self, name: str, handed: bool) -> None:
+        """待ち合わせが終わった。handed なら答えを書き終えた（渡した）。
+        待っている人がいなくなったとき、そのあいだに終わった仕事がだれにも渡せていなければ、ここで on_done を呼ぶ。"""
+        notify = None
+        with self.lock:
+            left = self.waiters.get(name, 1) - 1
+            if left > 0:
+                self.waiters[name] = left
+            else:
+                self.waiters.pop(name, None)
+            meta = self.jobs.get(name)
+            if handed and meta is not None and not meta.get("handed"):
+                meta["handed"] = True
+                meta["handed_at"] = round(time.time(), 3)
+                _write_json(self.meta_path(name), meta)
+                if name in self.held:
+                    self.held[name]["handed"] = True
+            if left <= 0 and name in self.held:
+                finished = self.held.pop(name)
+                # 消された（iPhone が受け取って消した）仕事にも知らせない
+                if meta is not None and not finished.get("handed") and not meta.get("handed"):
+                    notify = finished
+            self.changed.notify_all()
+        if notify is not None:
+            self._call_done(name, notify)
+
+    def wait_waiters(self, timeout: float) -> bool:
+        """待ち合わせで待っている人が、みな答え終わるまで待つ（閉じる前）。終われば True。"""
+        deadline = time.time() + timeout
+        with self.lock:
+            while self.waiters:
+                left = deadline - time.time()
+                if left <= 0:
+                    return False
+                self.changed.wait(min(left, 0.2))
+            return True
+
+    def _call_done(self, name: str, finished: dict) -> None:
+        callback = self.on_done
+        if callback is None:
+            return
+        try:
+            callback(name, finished)
+        except Exception as failure:  # noqa: BLE001
+            self.log(f"後で受け取る文字起こし {name}: 終わったことを知らせられませんでした: {failure!r}")
 
     def wait_idle(self, timeout: float) -> bool:
         """文字にしている最中のものが終わるまで待つ。終われば True。"""
@@ -288,11 +534,12 @@ class JobQueue:
             self.thread.start()
 
     def next_job(self) -> tuple[str, dict] | None:
-        """待っているもののうち、いちばん早く来たもの（self.lock を持って呼ぶ）"""
+        """待っているもののうち、次に文字にするもの（self.lock を持って呼ぶ）。
+        版 8: 2つ以上待っていれば、いちばん新しく受けたもの（遅れているときは新しい区切りから。古いものはあとで）"""
         waiting = [m for m in self.jobs.values() if m.get("status") == "queued"]
         if self.paused or not waiting:
             return None
-        meta = min(waiting, key=lambda m: int(m.get("seq") or 0))
+        meta = max(waiting, key=lambda m: int(m.get("seq") or 0))
         return meta["id"], meta
 
     def loop(self) -> None:
@@ -324,8 +571,20 @@ class JobQueue:
             audio = self.audio_path(name)
         reply, info, error = None, {}, None
         started = time.time()
+
+        def draft(body: dict) -> bool:
+            """版 8: 下書きを残す口（runner が呼ぶ）。残せなくても、文字にするのは続ける"""
+            try:
+                return self.save_draft(name, seq, body)
+            except Exception as failure:  # noqa: BLE001
+                self.log(f"後で受け取る文字起こし {name}: 下書きを残せませんでした（このまま多数決をします）: {failure!r}")
+                return False
+
         try:
-            reply, info = self.runner(audio, params, name)
+            if self.runner_drafts:
+                reply, info = self.runner(audio, params, name, draft)
+            else:
+                reply, info = self.runner(audio, params, name)
         except Exception as failure:  # noqa: BLE001 — 1つが失敗しても、次へ進む
             error = str(failure) or repr(failure)
             self.log(f"後で受け取る文字起こし {name}: 文字にできませんでした: {failure!r}")
@@ -352,20 +611,68 @@ class JobQueue:
                 current.update(status="failed", error=(error or "文字にできませんでした")[:500])
             if self.keep_audio is None:  # 版 7: 残す先があれば、iPhone が消すまで残す
                 _unlink(audio)
+            _unlink(self.draft_path(name))  # 版 8: でき上がったら下書きは要らない
             _write_json(self.meta_path(name), current)
-            self.changed.notify_all()
             finished = dict(current)
+            # 版 8: 待ち合わせで待っている人がいれば、渡せたかが分かるまで知らせるのを預かる（leave_wait が決める）
+            waiting = self.waiters.get(name, 0) > 0
+            if waiting:
+                self.held[name] = finished
+            self.changed.notify_all()
         # 版 7（ops）: 終わったことを知らせる（見えない通知など）。失敗しても裏の仕事は止めない
-        callback = self.on_done
-        if callback is not None:
-            try:
-                callback(name, finished)
-            except Exception as failure:  # noqa: BLE001
-                self.log(f"後で受け取る文字起こし {name}: 終わったことを知らせられませんでした: {failure!r}")
+        if not waiting:
+            self._call_done(name, finished)
         return True
 
 
 # MARK: - 受け付け（lifelog_pc.py の Handler から呼ぶ。合言葉は確かめてある）
+
+
+def wants_wait(query: dict) -> bool:
+    return (query.get("wait") or [""])[0] in ("1", "true", "yes")
+
+
+def wait_and_answer(handler, queue: JobQueue, name: str, entered: bool = False) -> None:
+    """版 8: 待ち合わせ（POST /jobs?wait=1）。音声は受け取ってある。
+    すぐ 200 と見出しを送り、でき上がるまで WAIT_PING 秒ごとに空白を1文字書く（JSON の前の空白は読み飛ばされる）。
+    でき上がったら GET /jobs/<名前> と同じ形を書いて閉じる。WAIT_LIMIT 秒たつか、起動し直す・閉じるときは
+    {"id", "status": "pending", "job_status", "timing"} を書いて閉じる（仕事は続ける）。"""
+    handler.close_connection = True
+    if not entered:
+        queue.enter_wait(name)
+    handed = False
+    try:
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Cache-Control", "no-store")
+        handler.send_header("Connection", "close")
+        handler.end_headers()
+        handler.wfile.flush()
+        deadline = time.time() + WAIT_LIMIT
+        state = "waiting"
+        while True:
+            state = queue.wait_change(name, min(WAIT_PING, max(0.0, deadline - time.time())))
+            if state != "waiting" or time.time() >= deadline:
+                break
+            if peer_gone(handler.connection):
+                return  # iPhone が待つのをやめた（あとで見えない通知で知らせる）
+            handler.wfile.write(b" ")
+            handler.wfile.flush()
+        got = queue.get(name) if state == "done" else None
+        if got is None:
+            current = queue.get(name) or {"id": name, "status": "gone", "timing": {}}
+            got = {"id": name, "status": "pending", "job_status": current.get("status"),
+                   "timing": current.get("timing") or {}}
+        if peer_gone(handler.connection):
+            return
+        handler.wfile.write(json.dumps(got, ensure_ascii=False).encode("utf-8"))
+        handler.wfile.flush()
+        if got.get("status") in ("done", "failed"):
+            handed = delivered(handler.connection)
+    except OSError:
+        pass  # 途中で切れた。渡せなかったので、でき上がりの見えない通知で知らせる
+    finally:
+        queue.leave_wait(name, handed)
 
 
 def parse_params(query: dict) -> dict:
@@ -398,16 +705,22 @@ def http_post(handler, queue: JobQueue | None, query_text: str, length: int) -> 
         handler.send_json(400 if length <= 0 else 413,
                           {"error": "音声がありません" if length <= 0 else "音声が大きすぎます（200MB まで）"})
         return
+    wait = wants_wait(query)
     state, current = queue.begin(name)
     if state == "exists":
         # 同じ名前はもう預かっている（失敗したものだけ預かり直す）。送られた音声は読み捨てる
         handler.discard_body()
+        # 版 8: 待ち合わせなら、預かっている仕事のでき上がりを待って答える（受け取り途中のものは今までどおり）
+        if wait and (queue.jobs.get(name) or {}).get("status") in ("queued", "working", "done"):
+            wait_and_answer(handler, queue, name)
+            return
         handler.send_json(200, current)
         return
     if state == "full":
         handler.discard_body()
         handler.send_json(503, {"error": f"待っているものが多すぎます（{queue.limit} 個まで）。少し待ってから送ってください"})
         return
+    entered = False
     try:
         left = length
         with queue.part_path(name).open("wb") as f:
@@ -422,12 +735,21 @@ def http_post(handler, queue: JobQueue | None, query_text: str, length: int) -> 
             handler.close_connection = True
             handler.send_json(400, {"error": "音声が途中で切れました"})
             return
-        reply = queue.commit(name, parse_params(query), length)
+        if wait:
+            # 預けてすぐ終わっても「待っている人がいる」と分かるよう、預ける前から待ち合わせに入る
+            queue.enter_wait(name)
+            entered = True
+        reply = queue.commit(name, parse_params(query), length, parse_times(query))
     except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
+        if entered:
+            queue.leave_wait(name, False)
         queue.abort(name)
         queue.log(f"後で受け取る文字起こし {name}: 預かれませんでした: {error!r}")
         handler.close_connection = True
         handler.send_json(500, {"error": f"預かれませんでした: {error}"})
+        return
+    if wait:
+        wait_and_answer(handler, queue, name, entered=True)
         return
     handler.send_json(200, reply)
 
