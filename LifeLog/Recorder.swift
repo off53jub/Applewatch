@@ -1,10 +1,13 @@
 import AVFoundation
 
-/// 5分ほどで区切って AAC で録音し続ける。区切るたびに onChunk に完成したファイルを渡す。
-/// 区切りは、5分たったあとの声の途切れたところで切る（言葉の途中で切らないため。ChunkCutter）。
+/// 区切って AAC で録音し続ける（短めの設定で長くても2分、ふつうで5分ほど）。区切るたびに onChunk に完成したファイルを渡す。
+/// 区切りは、決めた長さを過ぎたあとの声の途切れたところで切る（言葉の途中で切らないため。ChunkCutter）。
 /// マイクの音は AVAudioEngine で受け、16kHz・1ch にしてファイルに書く。ライブ文字起こしがオンなら、同じ音をそちらにも渡す。
+/// 外付けのマイク（USB・受信機など）がつながっていれば、それで録る（2026-11-07。MicInput.swift の MicChoice）。
+/// 2チャンネル（左右）のマイクは、左右を平均して1チャンネルにし、左右それぞれの大きさを別に残す（ChannelStore）。
 @MainActor
 final class Recorder: NSObject {
+    /// ふつうの設定の区切りの長さ（今は ChunkCutter が設定から決める。2026-11-07）
     static let chunkSeconds: TimeInterval = 300
 
     var onChunk: ((URL) -> Void)?
@@ -25,8 +28,12 @@ final class Recorder: NSObject {
 
     func start() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default, options: [.mixWithOthers])
+        // Bluetooth のマイクを使う設定のときだけ、Bluetooth を足す（2026-11-07。MicInput.swift）
+        try session.setCategory(.playAndRecord, mode: .default,
+                                options: MicChoice.categoryOptions(mode: MicChoice.mode, bluetooth: MicChoice.bluetoothOn))
         try session.setActive(true)
+        // 外付けのマイク（USB・受信機など）がつながっていれば、それで録る
+        MicChoice.apply(session)
         let center = NotificationCenter.default
         observers = [
             center.addObserver(forName: AVAudioSession.interruptionNotification, object: session, queue: .main) { [weak self] note in
@@ -35,6 +42,14 @@ final class Recorder: NSObject {
             },
             center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.restartEngine() }
+            },
+            // マイクをつないだ・外したら選び直す（音の形が変わったときは、下の AVAudioEngineConfigurationChange でつなぎ直す）
+            center.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.routeChanged() }
+            },
+            // 設定「マイク」が変わった
+            center.addObserver(forName: MicChoice.changed, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.choiceChanged() }
             },
         ]
         isRecording = true
@@ -49,6 +64,7 @@ final class Recorder: NSObject {
             stop()
             throw error
         }
+        MicRoute.shared.update(recording: true, session: session)
     }
 
     func stop() {
@@ -58,6 +74,27 @@ final class Recorder: NSObject {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers = []
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        MicRoute.shared.update(recording: false)
+    }
+
+    /// マイクをつないだ・外した（外したときは iOS が iPhone のマイクに戻す。選び直しても同じなら何もしない）
+    private func routeChanged() {
+        guard isRecording else { return }
+        let session = AVAudioSession.sharedInstance()
+        MicChoice.apply(session)
+        MicRoute.shared.update(recording: true, session: session)
+    }
+
+    /// 設定「マイク」が変わったので、録音中なら今から選び直す
+    private func choiceChanged() {
+        guard isRecording else { return }
+        let session = AVAudioSession.sharedInstance()
+        let options = MicChoice.categoryOptions(mode: MicChoice.mode, bluetooth: MicChoice.bluetoothOn)
+        if session.categoryOptions != options {
+            try? session.setCategory(.playAndRecord, mode: .default, options: options)
+        }
+        MicChoice.apply(session)
+        MicRoute.shared.update(recording: true, session: session)
     }
 
     private static func newChunkURL() -> URL {
@@ -103,6 +140,7 @@ final class Recorder: NSObject {
         do {
             try AVAudioSession.sharedInstance().setActive(true)
             try startEngine()
+            MicRoute.shared.update(recording: true)
         } catch {
             stopWithReason("録音を続けられませんでした: \(error.localizedDescription)")
         }
@@ -173,6 +211,16 @@ final class ChunkWriter: @unchecked Sendable {
     /// いまの区切りでいちばん大きかった音（0〜1）
     private var peak: Float = 0
     private var converter: AVAudioConverter?
+    /// 2チャンネル以上のマイクか（そのときは、左右を自分で平均してから converter にかける。2026-11-07）
+    private var stereo = false
+    /// 2チャンネルの音が思った形でなかったときに使う、iOS に左右を混ぜてもらう converter
+    private var fallback: AVAudioConverter?
+    /// いまの区切りの左右の大きさ（2チャンネルのマイクのときだけ）
+    private var track: ChannelTrack?
+    /// いまの区切りに書いた長さ（16kHz の数）。左右の大きさの時刻に使う
+    private var written = 0
+    /// 休んでいるあいだの直近の音の、左右の大きさ（preRoll と同じ並び。1チャンネルのマイクなら nil）
+    private var preRollPower: [(left: Float, right: Float)?] = []
     private var listener: (@Sendable (AVAudioPCMBuffer) -> Void)?
     /// 区切る位置を決める
     private var cutter = ChunkCutter()
@@ -199,7 +247,22 @@ final class ChunkWriter: @unchecked Sendable {
     }
 
     func prepare(from input: AVAudioFormat) {
-        lock.withLock { converter = AVAudioConverter(from: input, to: Self.format) }
+        lock.withLock {
+            // 2チャンネル以上のマイク（受信機など）は、左右を平均してから 16kHz・1ch にする（左右の大きさも残すため）。
+            // 前は converter に任せていたので、左のチャンネルしか書いていなかった
+            if input.channelCount >= 2,
+               let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: input.sampleRate, channels: 1, interleaved: false) {
+                converter = AVAudioConverter(from: mono, to: Self.format)
+                let mixer = AVAudioConverter(from: input, to: Self.format)
+                mixer?.downmix = true
+                fallback = mixer
+                stereo = true
+            } else {
+                converter = AVAudioConverter(from: input, to: Self.format)
+                fallback = nil
+                stereo = false
+            }
+        }
     }
 
     func setListener(_ listener: (@Sendable (AVAudioPCMBuffer) -> Void)?) {
@@ -217,38 +280,63 @@ final class ChunkWriter: @unchecked Sendable {
             gate.reset()
             resting = false
             preRoll.removeAll()
+            preRollPower.removeAll()
+            track = nil
+            written = 0
         }
     }
 
     /// いまの区切りを閉じる（ファイルを手放すと書き終わる）。peak は dB。休んでいたら nil。
+    /// 2チャンネルのマイクで録っていたら、左右の大きさも置く（ChannelStore）
     func close() -> (url: URL, peak: Float)? {
-        lock.withLock {
+        let done: (url: URL, peak: Float, track: ChannelTrack?)? = lock.withLock {
             resting = false
             preRoll.removeAll()
+            preRollPower.removeAll()
+            let finishedTrack = track
+            track = nil
+            written = 0
             guard let url else { return nil }
             file = nil
             self.url = nil
-            return (url, 20 * log10(max(peak, 1e-8)))
+            return (url, 20 * log10(max(peak, 1e-8)), finishedTrack)
         }
+        guard let done else { return nil }
+        if let finishedTrack = done.track { ChannelStore.save(finishedTrack, for: done.url.lastPathComponent) }
+        return (done.url, done.peak)
     }
 
     func receive(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
         defer { lock.unlock() }
-        guard let converter, buffer.frameLength > 0 else { return }
-        let ratio = Self.format.sampleRate / buffer.format.sampleRate
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
+        guard buffer.frameLength > 0 else { return }
+        // 2チャンネル以上のマイクは、左右を平均した1チャンネルにしてから変える（左右の大きさを覚えておく）
+        var source = buffer
+        var active = converter
+        var power: (left: Float, right: Float)?
+        if stereo {
+            if let split = StereoSplit.split(buffer) {
+                source = split.mono
+                power = (split.left, split.right)
+            } else {
+                active = fallback
+            }
+        }
+        guard let active else { return }
+        let input = source
+        let ratio = Self.format.sampleRate / input.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(input.frameLength) * ratio) + 64
         guard let out = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: capacity) else { return }
         var fed = false
         var error: NSError?
-        converter.convert(to: out, error: &error) { _, status in
+        active.convert(to: out, error: &error) { _, status in
             if fed {
                 status.pointee = .noDataNow
                 return nil
             }
             fed = true
             status.pointee = .haveData
-            return buffer
+            return input
         }
         guard error == nil, out.frameLength > 0, let samples = out.floatChannelData?[0] else { return }
         let frames = Int(out.frameLength)
@@ -256,20 +344,40 @@ final class ChunkWriter: @unchecked Sendable {
         let step = gate.feed(samples, count: frames, rate: Self.format.sampleRate, resting: resting)
         if resting {
             preRoll.append(out)
+            preRollPower.append(power)
             var total = preRoll.reduce(0) { $0 + Int($1.frameLength) }
             while total > Int(SilenceGate.preRoll * Self.format.sampleRate), preRoll.count > 1 {
                 total -= Int(preRoll.removeFirst().frameLength)
+                if !preRollPower.isEmpty { preRollPower.removeFirst() }
             }
             if step == .wake { wake(frames: total) }
             return
         }
         for i in 0..<frames { peak = max(peak, abs(samples[i])) }
+        record(power, frames: frames)
         try? file?.write(from: out)
         if step == .rest {
             rest()
         } else if file != nil, cutter.feed(samples, count: frames, rate: Self.format.sampleRate) {
             cutHere()
         }
+    }
+
+    /// 書く音の左右の大きさを、いまの区切りの時刻で残す（書く前に呼ぶ。鍵をかけたまま呼ぶ）。1チャンネルの音なら長さだけ数える
+    private func record(_ power: (left: Float, right: Float)?, frames: Int) {
+        if let power {
+            if track == nil { track = ChannelTrack(selfChannel: StereoMic.selfChannel) }
+            track?.add(at: Double(written) / Self.format.sampleRate, leftPower: power.left, rightPower: power.right)
+        }
+        written += frames
+    }
+
+    /// 終わった区切りの左右の大きさを、録音の糸の外で置く（鍵をかけたまま呼ぶ）
+    private func saveTrack(for finished: URL) {
+        guard let done = track else { return }
+        track = nil
+        let name = finished.lastPathComponent
+        DispatchQueue.global(qos: .utility).async { ChannelStore.save(done, for: name) }
     }
 
     /// 休みに入る：いまの区切りを閉じ、次は開かない（鍵をかけたまま呼ぶ）。
@@ -280,6 +388,9 @@ final class ChunkWriter: @unchecked Sendable {
         url = nil
         resting = true
         preRoll.removeAll()
+        preRollPower.removeAll()
+        saveTrack(for: finished)
+        written = 0
         peak = 0
         cutter.reset()
         let callback = onCut
@@ -301,14 +412,18 @@ final class ChunkWriter: @unchecked Sendable {
         resting = false
         peak = 0
         cutter.reset()
-        for piece in preRoll {
+        track = nil
+        written = 0
+        for (n, piece) in preRoll.enumerated() {
             if let samples = piece.floatChannelData?[0] {
                 for i in 0..<Int(piece.frameLength) { peak = max(peak, abs(samples[i])) }
                 _ = cutter.feed(samples, count: Int(piece.frameLength), rate: Self.format.sampleRate)
             }
+            record(n < preRollPower.count ? preRollPower[n] : nil, frames: Int(piece.frameLength))
             try? file?.write(from: piece)
         }
         preRoll.removeAll()
+        preRollPower.removeAll()
     }
 
     /// いまの区切りを閉じ、すぐ次の区切りを開く（鍵をかけたまま呼ぶ）。
@@ -318,6 +433,8 @@ final class ChunkWriter: @unchecked Sendable {
         // ファイルを手放すと書き終わる
         file = nil
         url = nil
+        saveTrack(for: finished)
+        written = 0
         var failure: Error?
         let next = makeURL(.now)
         do {

@@ -311,6 +311,8 @@ class FakeEnsemble:
 
 
 def run(main) -> int:
+    # 版 8: LOCALAPPDATA を一時にしていなくても、本物の HOME（log.txt・データ）に書かない
+    main.isolate_home()
     failed = 0
     saved_env = {k: os.environ.get(k) for k in ("SSLKEYLOGFILE", "LIFELOG_FAKE_TRAIN")}
     saved = (main.log, getattr(main.Handler, "key", None), getattr(main.Handler, "engine", None), main.App.jobs,
@@ -784,7 +786,8 @@ def check_jobqueue_callback(folder: Path) -> int:
     queue.part_path("good-2.m4a").write_bytes(b"x")
     queue.commit("good-2.m4a", {"hints": []}, 1)
     survived = queue.step() and queue.get("good-2.m4a")["status"] == "done"
-    ok = finished == [("good-1.m4a", "done"), ("bad-1.m4a", "failed")] and survived
+    # 版 8 から、待っているものが2つ以上なら新しいほうから文字にするので、並びは見ない
+    ok = sorted(finished) == sorted([("good-1.m4a", "done"), ("bad-1.m4a", "failed")]) and survived
     return say(ok, f"jobqueue の「仕事が終わったとき」の口: {finished}・口が失敗しても裏の仕事は続く {survived}")
 
 

@@ -481,6 +481,8 @@ extension Pipeline {
         if let run = diagnostics.runs.last { state["lastProcessedAt"] = PCJSON.string(run.start.addingTimeInterval(run.seconds)) }
         if let chunk = lastChunkTime() { state["lastChunkAt"] = PCJSON.string(chunk) }
         if let night = PCDiag.nightlyDoneFor { state["nightlyDoneFor"] = night }
+        // 文字になるまでの区間ごとの中央値（直近24時間。秒。版 8。docs/v8-latency.md の 1。Latency.swift）
+        if let latency = Latency.summary() { state["latency"] = latency.json }
         return state
     }
 

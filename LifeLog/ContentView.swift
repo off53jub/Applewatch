@@ -84,6 +84,10 @@ private struct TodayView: View {
                             .foregroundStyle(.orange)
                     }
                     LabeledContent("時計", value: pipeline.watchStatus)
+                    // iPhone で録っているマイク（外付けのマイクをつないだとき。2026-11-07。MicInput.swift）
+                    if pipeline.isRecording {
+                        LabeledContent("iPhone のマイク", value: MicRoute.shared.text)
+                    }
                     if let last = pipeline.watchDelays.entries.last {
                         NavigationLink {
                             WatchDelayView()
@@ -150,6 +154,9 @@ private struct TodayView: View {
                         }
                     }
                 }
+
+                // 家の PC が書いている途中の下書き（仮。記録には入れない。2026-11-07。Drafts.swift）
+                DraftSection()
 
                 if !pipeline.lastLines.isEmpty {
                     Section("最近の発言") {
@@ -370,7 +377,7 @@ private struct LiveView: View {
                         if live.lines.isEmpty {
                             ContentUnavailableView(
                                 "ライブ文字起こし", systemImage: "captions.bubble",
-                                description: Text("オンにしている間だけ、iPhone のマイクの声を話の切れ目ごとに iPhone 内の Haas-ja で文字にして、ここに流します（モデルを入れていなければ Groq）。記録にはいつも通り5分ごとの文字起こしが書かれます。アプリを閉じて10分たつと自動でオフになります。"))
+                                description: Text("オンにしている間だけ、iPhone のマイクの声を話の切れ目ごとに iPhone 内の Haas-ja で文字にして、ここに流します（モデルを入れていなければ Groq）。記録にはいつも通り区切りごとの文字起こしが書かれます。アプリを閉じて10分たつと自動でオフになります。"))
                         }
                     }
                     .onChange(of: live.lines.count) {
@@ -660,14 +667,24 @@ private struct SettingsView: View {
                     Toggle("音がしないあいだは書かない", isOn: Binding(
                         get: { pipeline.skipSilence },
                         set: { pipeline.skipSilence = $0 }))
+                    Picker("区切りの長さ", selection: Binding(
+                        get: { pipeline.chunkLength },
+                        set: { pipeline.chunkLength = $0 })) {
+                        ForEach(ChunkCutter.Length.allCases, id: \.self) { length in
+                            Text(length.label).tag(length)
+                        }
+                    }
                 } header: {
                     Text("Apple Watch")
                 } footer: {
                     Text((pipeline.standbyOn
-                         ? "時計が録音しているあいだだけ無音を流してアプリを起こしておき、時計の録音を5分ごとにすぐ文字起こしします。電池を少し多く使います。"
+                         ? "時計が録音しているあいだだけ無音を流してアプリを起こしておき、時計の録音を区切りごとにすぐ文字起こしします。電池を少し多く使います。"
                          : "時計の録音は、アプリを開いたときや充電中にまとめて文字起こしします。")
-                         + "\n「音がしないあいだは書かない」をオンにすると、時計と iPhone で1分続けて静かなときは録音ファイルに書かず、音がしたらその1秒前から書き始めます（マイクは聞き続けます）。無音を送ったり文字にしたりしないぶん、電池が長持ちします。時計の設定は、時計と iPhone がつながったときに伝わります。")
+                         + "\n「音がしないあいだは書かない」をオンにすると、時計と iPhone で1分続けて静かなときは録音ファイルに書かず、音がしたらその1秒前から書き始めます（マイクは聞き続けます）。無音を送ったり文字にしたりしないぶん、電池が長持ちします。\n「区切りの長さ」は、録音を区切って送る長さです。短め（初め）は45秒を過ぎた話の切れ目で区切り、長くても2分で区切るので、文字になるまでが早くなります。ふつうは今までどおり5分ほどで区切ります（送る回数が少ないぶん、時計の電池が少し長持ちします）。どちらも次の区切りから変わります。時計の設定は、時計と iPhone がつながったときに伝わります。")
                 }
+
+                // 外付けマイク（2026-11-07。MicViews.swift）
+                MicSettingsSection()
 
                 Section {
                     NavigationLink {

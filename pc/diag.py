@@ -229,6 +229,45 @@ def _yes(value) -> str:
     return {True: "はい", False: "いいえ"}.get(value, "—")
 
 
+# 版 8: iPhone が state.latency で送る、区間ごとの時間（直近24時間の中央値。秒）
+LATENCY_PARTS = (("toPhone", "録音の終わり→iPhone"), ("toPC", "iPhone→PC"), ("pcWait", "PC の待ち"),
+                 ("pcWork", "PC の作業"), ("toRecord", "PC→記録"), ("total", "合計"))
+
+
+def _secs(value: float) -> str:
+    value = float(value)
+    return f"{value:.1f} 秒" if value < 120 else f"{value / 60:.1f} 分"
+
+
+def phone_latency(state: dict) -> str | None:
+    """state.latency を1行にする（"録音の終わり→iPhone 40.5 秒・…（12 件）"）。無ければ None"""
+    latency = state.get("latency") if isinstance(state, dict) else None
+    if not isinstance(latency, dict):
+        return None
+    parts = [f"{label} {_secs(latency[key])}" for key, label in LATENCY_PARTS
+             if isinstance(latency.get(key), (int, float)) and not isinstance(latency.get(key), bool)
+             and math.isfinite(float(latency[key])) and latency[key] >= 0]
+    if not parts:
+        return None
+    count = latency.get("count")
+    return "・".join(parts) + (f"（{count} 件）" if isinstance(count, int) and not isinstance(count, bool) else "")
+
+
+def pc_latency(stats: dict | None) -> list[str]:
+    """jobqueue.JobQueue.latency() の答えを、人が読む行にする"""
+    if not stats or not stats.get("count"):
+        return ["まだでき上がった仕事がありません"]
+    labels = (("wait", "PC の待ち（受け終わり→文字にし始め）"), ("work", "PC の作業（文字にし始め→でき上がり）"),
+              ("draft", "下書きまで（文字にし始め→下書き）"), ("to_pc", "iPhone→PC（送り始め→受け終わり）"))
+    lines = []
+    for key, label in labels:
+        value = stats.get(key)
+        if value:
+            lines.append(f"{label}: 中央値 {_secs(value['median'])}・いちばん長い {_secs(value['max'])}（{value['count']} 件）")
+    lines.append(f"待ち合わせで渡した: {stats.get('handed', 0)} / {stats['count']} 件")
+    return lines
+
+
 def state_lines(record: dict) -> list[str]:
     """state の中身を、人が読む行にする"""
     state = record.get("state") if isinstance(record.get("state"), dict) else {}
@@ -241,6 +280,9 @@ def state_lines(record: dict) -> list[str]:
              f"待ち: 取り込み {state.get('queue', '—')}・PC の仕事 {state.get('jobsPending', '—')}・"
              f"最後に文字にした {when('lastProcessedAt')}・最後の区切り {when('lastChunkAt')}・"
              f"夜の処理 {state.get('nightlyDoneFor') or '—'} の分まで"]
+    latency = phone_latency(state)
+    if latency:
+        lines.append(f"文字になるまでの時間（iPhone で測った直近24時間の中央値）: {latency}")
     return lines
 
 

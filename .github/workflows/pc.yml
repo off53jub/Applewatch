@@ -87,6 +87,22 @@ jobs:
       - name: 版 7 の見守り（実機の様子・通知・TestFlight の報告・学び直しと GPU の時間割）を確かめる
         run: python pc/lifelog_pc.py --check-v7-ops
 
+      # 版 8: 時間（timing）・待ち合わせ（wait=1。空白・でき上がりの答え・短くした上限で pending・切れたとき・閉じるとき）・
+      #   渡した仕事に通知を送らない・下書き（haas・reazon を先に。2回読まない）・新しい区切りから・画面の時間の行を、
+      #   一時フォルダと作り物のモデルで確かめる。どの確かめも、本物の HOME（log.txt・データ）には書かない
+      - name: 版 8 の待ち合わせ・下書き・時間を確かめる
+        run: |
+          python pc/lifelog_pc.py --check-v8 > v8.txt 2>&1 || { cat v8.txt; grep '^NG' v8.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v8.txt | sed 's/^/::notice::--check-v8 の OK の数: /'
+
+      # 版 9: 職場の会話の印（work）・聞いて直す（並び・直す・合っている・PC の音声から材料・iPhone の材料と2重にしない）・
+      #   記録を読む MCP サーバー（作り物の記録で、どの道具からも職場の会話と分からない会話が出ない・HOME に書かない・
+      #   標準出力は MCP の答えだけ）を、一時フォルダと作り物の Ollama で確かめる
+      - name: 版 9 の職場の印・聞いて直す・記録を読む MCP サーバーを確かめる
+        run: |
+          python pc/lifelog_pc.py --check-v9 > v9.txt 2>&1 || { cat v9.txt; grep '^NG' v9.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v9.txt | sed 's/^/::notice::--check-v9 の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py
@@ -132,7 +148,7 @@ jobs:
       # 版 6 の部品（jobqueue・dashboard・updater・semantic・v6checks）は pc/ にあるので、--paths pc で探させ、念のため名前でも入れる。
       # 版 7（records）の部品（records・recordsui・v7checks_records）も同じ。
       # 版 7（ops）の部品（ops・diag・apns・ascfeedback・trainer・gpu・v7checks_ops）と、見えない通知の HTTP/2（httpx2 と h2）・
-      # 鍵（cryptography）も名前で入れる。train-requirements.txt は学び直しの部品の一覧（exe の隣に置く）
+      # 鍵（cryptography）も名前で入れる。版 8 の確かめ（v8checks）・版 9 の確かめ（v9checks）と MCP サーバー（lifelog_mcp）も同じ。train-requirements.txt は学び直しの部品の一覧（exe の隣に置く）
       # BUILD.txt は作った回の番号（exe が自分の版を知り、新しい版と比べるのに使う）
       - name: exe にする
         run: |
@@ -145,6 +161,7 @@ jobs:
             --hidden-import records --hidden-import recordsui --hidden-import v7checks_records \
             --hidden-import ops --hidden-import diag --hidden-import apns --hidden-import ascfeedback \
             --hidden-import trainer --hidden-import gpu --hidden-import v7checks_ops \
+            --hidden-import v8checks --hidden-import v9checks --hidden-import lifelog_mcp \
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \
             --hidden-import cryptography.hazmat.primitives.asymmetric.ec \
@@ -169,6 +186,16 @@ jobs:
         run: |
           dist/LifeLogPC/LifeLogPC.exe --check-v7-ops > v7-exe.txt 2>&1 || { cat v7-exe.txt; grep '^NG' v7-exe.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v7-exe.txt | sed 's/^/::notice::exe の --check-v7-ops の OK の数: /'
+      # 版 8 の部品（v8checks）が exe に入っているか（Python のときと同じものを exe で）
+      - name: exe で版 8 の待ち合わせ・下書き・時間を確かめる
+        run: |
+          dist/LifeLogPC/LifeLogPC.exe --check-v8 > v8-exe.txt 2>&1 || { cat v8-exe.txt; grep '^NG' v8-exe.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v8-exe.txt | sed 's/^/::notice::exe の --check-v8 の OK の数: /'
+      # 版 9 の部品（v9checks・lifelog_mcp）が exe に入っているか。MCP サーバーは LifeLogPC.exe --mcp で動かして確かめる
+      - name: exe で版 9 の職場の印・聞いて直す・記録を読む MCP サーバーを確かめる
+        run: |
+          dist/LifeLogPC/LifeLogPC.exe --check-v9 > v9-exe.txt 2>&1 || { cat v9-exe.txt; grep '^NG' v9-exe.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v9-exe.txt | sed 's/^/::notice::exe の --check-v9 の OK の数: /'
 
       - name: exe で試す
         run: |

@@ -8,6 +8,12 @@
   （jobqueue.JobQueue の keep_audio）。30 日か合計 30GB（config.json の "audio_keep_days"・"audio_keep_gb"）を
   超えた古いものから消す。
 記録・音声・直しは、この PC の外には送らない。記録（log）には、会話の文や人の名前を書かない。
+
+版 9 で足したもの:
+- 職場の会話の印: POST /records/<日> の省ける項目 "work"（職場の会話の start の並び）を日ごとに残し、
+  会話ごとに "work"（True＝職場・False＝職場ではない・None＝分からない＝古い iPhone から来た日）を付ける。
+- 「聞いて直す」並び: 自信の低い行（確からしさが低い・モデルの票が食い違う・話し手に「？」）で、PC に音声がある行。
+  「合っている」の答えは edits.db の reviews に残す。直した行・「合っている」行は、PC の音声から材料を作る（sampler）。
 """
 
 from __future__ import annotations
@@ -157,7 +163,37 @@ def parse_line(line, where: str) -> dict:
             "audio": _str(line.get("audio")), "offset": _num(line.get("offset")), "end": _num(line.get("end")),
             "marked": _flag(line.get("marked")), "confidence": _num(line.get("confidence")),
             "checked": _flag(line.get("checked")), "media": _str(line.get("media")), "noisy": _flag(line.get("noisy")),
-            "sound": _str(line.get("sound")), "edited": len(history)}
+            "sound": _str(line.get("sound")), "edited": len(history),
+            # 版 9: 多数決で食い違った行のモデルごとの文・2つの声のモデルで話し手が食い違った行の、もう片方の番号
+            "votes": _votes(line.get("votes")), "speakerDoubt": _str(line.get("speakerDoubt"))}
+
+
+def _votes(value) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {k: v for k, v in value.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+WORK_SLACK = 1   # 職場の会話の印と会話の始まりの、ずれてよいミリ秒（直しの行の探し方と同じ。1ms 未満のずれ）
+
+
+def parse_work(value) -> list[int] | None:
+    """省ける項目 "work"（職場の会話の start の並び）。無ければ None（分からない）"""
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError("work は、職場の会話の start（ISO 8601）の並びです")
+    return sorted({parse_time(item, f"work[{i}]") for i, item in enumerate(value)})
+
+
+def mark_work(conversations: list[dict], work: list[int] | None) -> None:
+    """会話ごとに "work" を付ける: True＝職場・False＝職場ではない・None＝分からない（印の無い日）"""
+    for conversation in conversations:
+        if work is None:
+            conversation["work"] = None
+        else:
+            start = conversation["start"]
+            conversation["work"] = any(abs(start - moment) <= WORK_SLACK for moment in work)
 
 
 def parse_record(body) -> dict:
@@ -211,8 +247,11 @@ def parse_record(body) -> dict:
     audio_names = {k: v for k, v in (names or {}).items()
                    if isinstance(k, str) and isinstance(v, str) and jobqueue.valid_name(v)}
     conversations.sort(key=lambda c: c["start"])
+    # 版 9: 職場の会話の印（無い日は「分からない」）
+    work = parse_work(body.get("work"))
+    mark_work(conversations, work)
     return {"conversations": conversations, "summary": summary, "audio_names": audio_names, "lines": count,
-            "build": _int(body.get("build"))}
+            "build": _int(body.get("build")), "work": work}
 
 
 def people(conversation: dict) -> list[str]:
@@ -240,8 +279,10 @@ def summarize(parsed: dict, stamp: list, received: float) -> dict:
             ident = line.get("speakerID")
             if ident and ident not in entry["ids"]:
                 entry["ids"].append(ident)
+    # 版 9: 職場の会話の数（印の無い日は None＝分からない）
+    work = None if parsed.get("work") is None else sum(1 for c in parsed["conversations"] if c.get("work"))
     return {"stamp": list(stamp), "received": received, "conversations": len(parsed["conversations"]),
-            "lines": parsed["lines"], "names": names}
+            "lines": parsed["lines"], "names": names, "work": work}
 
 
 # MARK: - 直し（<home>/edits.db）
@@ -277,6 +318,9 @@ class EditStore:
                        " status TEXT NOT NULL, reason TEXT, sent INTEGER, acked INTEGER)")
             db.execute("CREATE INDEX IF NOT EXISTS edits_line ON edits (day, time)")
             db.execute("CREATE INDEX IF NOT EXISTS edits_status ON edits (status, id)")
+            # 版 9: 「聞いて直す」で「合っている」と答えた行（iPhone には送らない。並びから外すのと、材料に使う）
+            db.execute("CREATE TABLE IF NOT EXISTS reviews (day TEXT NOT NULL, time INTEGER NOT NULL, answer TEXT NOT NULL,"
+                       " text TEXT, created INTEGER NOT NULL, PRIMARY KEY (day, time))")
 
     @contextlib.contextmanager
     def connect(self):
@@ -399,6 +443,29 @@ class EditStore:
             rows = db.execute("SELECT day, COUNT(*) FROM edits WHERE status='pending' GROUP BY day").fetchall()
         return {day: int(n) for day, n in rows}
 
+    # 版 9: 「聞いて直す」の答え
+
+    def answer(self, day: str, moment: int, answer: str, text: str | None, now: int | None = None) -> None:
+        """「合っている」（answer="ok"）を残す。同じ行は新しい答えで置き換える。"""
+        now = now_ms() if now is None else now
+        with self.lock, self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO reviews (day, time, answer, text, created) VALUES (?, ?, ?, ?, ?)",
+                       (day, int(moment), answer, text, now))
+
+    def answers(self) -> dict[tuple[str, int], str]:
+        """(日, 行の時刻) → 答え"""
+        with self.lock, self.connect() as db:
+            return {(day, int(moment)): answer for day, moment, answer in db.execute("SELECT day, time, answer FROM reviews")}
+
+    def edited_lines(self) -> dict[tuple[str, int], set[str]]:
+        """(日, 行の時刻) → 直した種類（text・speaker。置き換えたものは数えない）"""
+        with self.lock, self.connect() as db:
+            rows = db.execute("SELECT day, time, kind FROM edits WHERE status<>'superseded'").fetchall()
+        out: dict[tuple[str, int], set[str]] = {}
+        for day, moment, kind in rows:
+            out.setdefault((day, int(moment)), set()).add(kind)
+        return out
+
 
 def expected_lines(edits: list[dict]) -> dict[int, list[dict]]:
     """日の直しを、行の時刻ごとにまとめる（古い順）"""
@@ -425,6 +492,43 @@ def expected_state(line: dict, edits: list[dict], received_ms: int | None = None
     for edit in pending:
         state = apply_edit(edit, state)
     return state
+
+
+# MARK: - 版 9: 「聞いて直す」並び
+
+
+def _plain_vote(text: str) -> str:
+    """票の比べ方（全角・半角・大文字小文字・空白と句読点の違いは見ない）"""
+    return re.sub(r"[\s、。，．,.!！?？・「」『』（）()〜~ー-]", "", fold(text))
+
+
+def doubt_reasons(line: dict, unsure: float) -> list[str]:
+    """自信の低い行の理由（無ければ空）。手で直した行・テレビなどの行は選ばない。
+    "low"＝確からしさが低い・"votes"＝モデルの票が食い違う・"speaker"＝2つの声のモデルで話し手が食い違う（「？」付き）"""
+    if line.get("checked") or line.get("media") is not None or not (line.get("text") or "").strip():
+        return []
+    reasons = []
+    if line.get("confidence") is not None and line["confidence"] < unsure:
+        reasons.append("low")
+    votes = {_plain_vote(v) for v in (line.get("votes") or {}).values() if v.strip()}
+    if len(votes) >= 2 or (len(votes) == 1 and _plain_vote(line["text"]) not in votes):
+        reasons.append("votes")
+    doubt = line.get("speakerDoubt")
+    if doubt and doubt != line.get("speakerID"):
+        reasons.append("speaker")
+    return reasons
+
+
+def sample_span(offset: float, end: float | None, text: str) -> tuple[float, float]:
+    """材料にする音声の区間（iPhone の Benchmark.span と sendPersonalSamples と同じ決め方。
+    同じ行を iPhone があとで送ってきても、同じ長さになるように）"""
+    start = max(0.0, float(offset) - 0.3)
+    if end is not None and end > offset:
+        return start, float(end)
+    return start, float(offset) + min(15.0, max(1.5, len(text) * 0.17 + 0.8))
+
+
+REVIEW_UNSURE = 0.45   # iPhone の「確かめたほうがよい行」の初めの線（ConversationLog.Line.uncertainBelow）
 
 
 # MARK: - 音声の置き場所
@@ -474,6 +578,8 @@ class RecordStore:
         self._recover()
         self._load_index()
         self.edits = EditStore(self.home / "edits.db")
+        # 版 9: 材料を作る仕組み（lifelog_pc.py が入れる。(音声のファイル, 始まり, 終わり, 文, 出どころ) → (材料の数, 足したか)）
+        self.sampler: Callable[[Path, float, float, str, dict], tuple[int, bool]] | None = None
 
     # MARK: 置く
 
@@ -728,6 +834,102 @@ class RecordStore:
                 raise ValueError("話し手は、記録に出てくる名前か「自分」から選んでください（PC から新しい名前は作れません）")
             target = {"speaker": name, "speakerID": choices[name]["id"]}
         return self.edits.create(day, moment, kind, state, target)
+
+    # MARK: 版 9: 聞いて直す
+
+    def review_queue(self, limit: int = 30, unsure: float = REVIEW_UNSURE) -> tuple[list[dict], int]:
+        """自信の低い行で、PC に音声がある行（新しい日から。日の中は時刻の順）。(初めの limit 個, 全部の数)。
+        答えた行は外す（文を直した・「合っている」→ 外す、話し手を変えた → 「？」の理由だけ外す）。
+        同じ時刻の行が2つある行は、PC から直せないので出さない。"""
+        available = self.audio_names()
+        answers = self.edits.answers()
+        edited = self.edits.edited_lines()
+        items: list[dict] = []
+        total = 0
+        for summary in self.days():
+            day = summary["day"]
+            parsed = self.day(day)
+            if parsed is None:
+                continue
+            names = parsed["audio_names"]
+            counts: dict[int, int] = {}
+            for c in parsed["conversations"]:
+                for line in c["lines"]:
+                    counts[line["time"]] = counts.get(line["time"], 0) + 1
+            for c in parsed["conversations"]:
+                if c.get("media"):
+                    continue
+                lines = c["lines"]
+                for i, line in enumerate(lines):
+                    reasons = doubt_reasons(line, unsure)
+                    if not reasons or counts.get(line["time"], 0) > 1:
+                        continue
+                    key = (day, line["time"])
+                    kinds = edited.get(key, set())
+                    if key in answers or "text" in kinds:
+                        continue
+                    if "speaker" in kinds:
+                        reasons = [r for r in reasons if r != "speaker"]
+                    job = names.get(line["audio"], line["audio"]) if line.get("audio") else None
+                    if not reasons or not job or job not in available or not safe_audio_name(job) \
+                            or line.get("offset") is None:
+                        continue
+                    total += 1
+                    if len(items) < limit:
+                        items.append({"day": day, "conversation": c, "line": line, "index": i, "job": job,
+                                      "reasons": reasons,
+                                      "before": lines[i - 1] if i > 0 else None,
+                                      "after": lines[i + 1] if i + 1 < len(lines) else None})
+        return items, total
+
+    def review(self, day: str, moment, kind: str, value) -> dict:
+        """「聞いて直す」の答え。kind は text（文を直す）・speaker（話し手を変える）・ok（合っている）。
+        text と ok は、PC にある音声からその行の所を切り出して、学び直しの材料に足す（sampler があるとき）。"""
+        if kind not in ("text", "speaker", "ok"):
+            raise ValueError("kind は text・speaker・ok のどれかです")
+        if kind != "ok":
+            result = self.make_edit(day, moment, kind, value)
+        else:
+            if not valid_day(day) or isinstance(moment, bool) or not isinstance(moment, int):
+                raise ValueError("行が正しくありません")
+            line, _, count = self.find_line(day, moment)
+            if line is None:
+                raise ValueError("その行が記録にありません（画面を開き直してください）")
+            if count > 1:
+                raise ValueError("同じ時刻の行がほかにもあるので、この行は PC から答えられません")
+            edits = [e for e in self.edits.for_day(day) if e["time"] == moment]
+            state = expected_state(line, edits, self.received_ms(day))
+            self.edits.answer(day, moment, "ok", state["text"])
+            result = {"edit": None, "replaced": [], "state": state,
+                      "message": "「合っている」と残しました（iPhone には送りません）"}
+        result["sample"] = None
+        if kind in ("text", "ok"):
+            result["sample"] = self._review_sample(day, moment, result["state"]["text"], kind)
+        return result
+
+    def _review_sample(self, day: str, moment: int, text: str, kind: str) -> dict:
+        """その行の音声を切り出して材料に足す。足せなくても答えはそのまま（理由を返す）"""
+        line, _, _ = self.find_line(day, moment)
+        parsed = self.day(day) or {}
+        if self.sampler is None:
+            return {"added": False, "reason": "材料を作る仕組みが動いていません"}
+        if line is None or not line.get("audio") or line.get("offset") is None:
+            return {"added": False, "reason": "その行の音声の位置が分かりません"}
+        job = (parsed.get("audio_names") or {}).get(line["audio"], line["audio"])
+        path = self.audio_file(job)
+        if path is None:
+            return {"added": False, "reason": "PC に音声がありません"}
+        start, end = sample_span(line["offset"], line.get("end"), text)
+        source = {"origin": "pc-review", "answer": kind, "day": day, "time": iso_ms(moment), "audio": job,
+                  "line": line["audio"], "offset": round(float(line["offset"]), 2)}
+        try:
+            count, added = self.sampler(path, start, end, text, source)
+        except ValueError as error:
+            return {"added": False, "reason": str(error)}
+        except Exception as error:  # noqa: BLE001 — 材料が作れなくても、答えは残す
+            self.log(f"聞いて直す: 材料を作れませんでした: {type(error).__name__}")
+            return {"added": False, "reason": f"材料を作れませんでした（{type(error).__name__}）"}
+        return {"added": added, "count": count, "reason": None if added else "同じ材料がもうあります"}
 
     # MARK: 音声（jobqueue.JobQueue の keep_audio）
 

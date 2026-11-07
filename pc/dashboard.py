@@ -171,6 +171,13 @@ def _clock(when) -> str:
 
 STATUS = {"queued": "待ち", "working": "文字にしています", "done": "でき上がり", "failed": "失敗"}
 
+
+def _pc_latency(stats) -> list[str]:
+    """版 8: 直近の仕事の待ち・作業の時間（diag.pc_latency と同じ行）"""
+    import diag
+
+    return diag.pc_latency(stats)
+
 STYLE = """
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1d2228;--sub:#5d6670;--line:#dfe3e8;--ok:#1f7a3a;--ng:#b3261e;--warn:#9a6700;--btn:#2556c7}
 @media (prefers-color-scheme:dark){:root{--bg:#111418;--card:#1b2026;--ink:#e8ebef;--sub:#9aa4ae;--line:#2c333b;--ok:#5cc97b;--ng:#ff8a80;--warn:#e3b341;--btn:#6d95ff}}
@@ -250,15 +257,26 @@ def render(info: dict) -> str:
         state = STATUS.get(job.get("status"), job.get("status"))
         css = {"done": "ok", "failed": "ng", "working": "warn"}.get(job.get("status"), "")
         error = f"<br><span class='sub'>{_e(job.get('error'))}</span>" if job.get("error") else ""
+        # 版 8: 待ち（受け終わり→文字にし始め）・下書きまで・渡したか
+        started, queued = job.get("started_at"), job.get("queued_at")
+        waited = _seconds(float(started) - float(queued)) if started and queued else "—"
+        draft = job.get("draft_at")
+        drafted = _seconds(float(draft) - float(started)) if draft and started else "—"
+        handed = "<br><span class='sub'>待ち合わせで渡した</span>" if job.get("handed") else ""
         rows.append(f"<tr><td>{_e(job.get('id'))}<br><span class='sub'>{_clock(job.get('queued_at'))}</span></td>"
-                    f"<td class='{css}'>{_e(state)}{error}</td><td class='num'>{_seconds(job.get('audio_seconds'))}</td>"
+                    f"<td class='{css}'>{_e(state)}{error}{handed}</td><td class='num'>{_seconds(job.get('audio_seconds'))}</td>"
+                    f"<td class='num'>{waited}</td><td class='num'>{drafted}</td>"
                     f"<td class='num'>{_seconds(took)}</td><td class='num'>{speed}</td></tr>")
-    table = "".join(rows) or "<tr><td colspan=5>まだありません</td></tr>"
+    table = "".join(rows) or "<tr><td colspan=7>まだありません</td></tr>"
     summary = "・".join(f"{STATUS[k]} {counts.get(k, 0)}" for k in ("queued", "working", "done", "failed"))
-    parts.append(f"<section><h2>後で受け取る文字起こし（{_e(summary)}）</h2><div class='scroll'><table>"
-                 "<tr><th>区切り</th><th>状態</th><th class='num'>音声</th><th class='num'>処理</th>"
-                 f"<th class='num'>速さ</th></tr>{table}</table></div>"
-                 "<p class='sub'>速さ = 処理にかかった秒 ÷ 声のある秒（1 より小さければ録音に追いつけます）</p></section>")
+    latency = "".join(f"<li>{_e(text)}</li>" for text in _pc_latency(info.get("job_latency")))
+    parts.append(f"<section><h2>後で受け取る文字起こし（{_e(summary)}）</h2>"
+                 f"<p class='sub'>直近 50 件のでき上がりの時間（PC で測った分）</p><ul>{latency}</ul><div class='scroll'><table>"
+                 "<tr><th>区切り</th><th>状態</th><th class='num'>音声</th><th class='num'>待ち</th><th class='num'>下書き</th>"
+                 f"<th class='num'>処理</th><th class='num'>速さ</th></tr>{table}</table></div>"
+                 "<p class='sub'>待ち = 受け取ってから文字にし始めるまで。下書き = 文字にし始めてから、速いモデルの下書きができるまで。"
+                 "速さ = 処理にかかった秒 ÷ 声のある秒（1 より小さければ録音に追いつけます）。"
+                 "iPhone で測った区間ごとの時間は「実機の様子」に出ます。</p></section>")
     # 直近の文字起こし
     speed, count = info.get("speed") or (None, 0)
     pairs = info.get("pairs") or {}
@@ -273,7 +291,9 @@ def render(info: dict) -> str:
                  "</div></div><div class='scroll'><table><tr><th>モデルの組</th><th class='num'>近さ</th><th class='num'>区間</th></tr>"
                  f"{pair_rows}</table></div><p class='sub'>何も書かなかった区間: {silent}</p></section>")
     # 版 7（ops）: 実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割
-    parts.extend(ops_sections(info.get("ops") or {}))
+    # 版 9: 学び直しの所に、材料の数・あと何個で学び直せるか・「聞いて直す」への入口
+    ops_parts = ops_sections(info.get("ops") or {}, info.get("personal"))
+    parts.extend(ops_parts or [personal_section(info.get("personal"))])
     # 更新
     update = info.get("update") or {}
     parts.append("<section><h2>更新</h2><div class='kv'>"
@@ -424,7 +444,7 @@ def _ops_push(ops: dict) -> str:
             f"{devices}</table></div>"
             + (f"<details><summary>最近送ったもの</summary><div class='scroll'><table><tr><th>時刻</th><th>種類</th>"
                f"<th>答え</th><th>理由</th></tr>{history}</table></div></details>" if history else "")
-            + "<p class='sub'>送るとき: 文字にし終えた（job・同じ端末へ10分に1回）・録音中なのに30分なにも来ない（wake・1時間に2回、1日12回）・"
+            + "<p class='sub'>送るとき: 文字にし終えた（job・待ち合わせで渡せなかったときだけ・同じ端末へ10分に1回）・録音中なのに30分なにも来ない（wake・1時間に2回、1日12回）・"
               "3時間様子が来ない（diag・1日4回）・毎日 3:30（nightly）</p>"
               "<button onclick=\"opsPost('/dash/ops/apns-test',{},'iPhone にテストの通知を送ります。よろしいですか？','opsMsgPush')\">"
               "テスト通知を送る</button><a href='/dash/ops/keys'>鍵を入れる画面を開く</a>"
@@ -451,7 +471,33 @@ def _ops_feedback(ops: dict) -> str:
             "<a href='/dash/ops/keys'>キーを入れる画面を開く</a><div id='opsMsgAsc' class='sub'></div></section>")
 
 
-def _ops_train(ops: dict) -> str:
+def personal_text(personal: dict | None) -> str:
+    """版 9: 材料の数と、あと何個で学び直せるか（HTML）"""
+    personal = personal or {}
+    count = int(personal.get("count") or 0)
+    need = int(personal.get("need") or 300)
+    left = max(0, need - count)
+    state = f"<span class='ok'>学び直せる数です（{need} 個以上）</span>" if left == 0 else \
+        f"あと <b>{left}</b> 個で学び直せます（{need} 個から）"
+    return f"{count} 個・{state}"
+
+
+def personal_link(personal: dict | None) -> str:
+    if not (personal or {}).get("records"):
+        return "<span class='sub'>記録の機能が動いていないので、「聞いて直す」は使えません</span>"
+    return ("<a href='/dash/records/review'>聞いて直す →</a><br><span class='sub'>自信の低い行を聞いて、その場で直すか"
+            "「合っている」を押すと、その声が材料になります</span>")
+
+
+def personal_section(personal: dict | None) -> str:
+    """版 9: 版 7 の見守りが動いていないときの、学び直しの材料の節"""
+    if personal is None:
+        return ""
+    return (f"<section><h2>学び直しの材料</h2><div class='kv'><div>材料</div><div>{personal_text(personal)}</div>"
+            f"<div>材料を増やす</div><div>{personal_link(personal)}</div></div></section>")
+
+
+def _ops_train(ops: dict, personal: dict | None = None) -> str:
     train = ops.get("train") or {}
     plan = ops.get("gpu") or {}
     last = train.get("last") or {}
@@ -471,6 +517,8 @@ def _ops_train(ops: dict) -> str:
             ("時間帯", f"{_e(train.get('window'))}（次は {_iso_clock(train.get('next'))}）"),
             ("材料", f"{_e(train.get('count'))} 個（前回から +{_e(train.get('since_last'))}。{_e(train.get('min_samples'))} 個以上で、"
                      f"{_e(train.get('min_new'))} 個増えたら学び直します）"),
+            # 版 9: 材料の数・あと何個で学び直せるか・「聞いて直す」への入口
+            *([("材料（今）", personal_text(personal)), ("材料を増やす", personal_link(personal))] if personal else []),
             ("学び直しの部品", _e(train.get("runtime")) + (f"<br><span class='ng'>{_e(train.get('runtime_error'))}</span>"
                                                      if train.get("runtime_error") else "")),
             ("前回", result),
@@ -486,11 +534,11 @@ def _ops_train(ops: dict) -> str:
     return f"<section><h2>学び直しと GPU の時間割</h2><div class='kv'>{body}</div></section>"
 
 
-def ops_sections(ops: dict) -> list[str]:
+def ops_sections(ops: dict, personal: dict | None = None) -> list[str]:
     """見守りの画面の版 7 の節（ops.dash_info() が空なら、何も出さない）"""
     if not ops:
         return []
-    return [f"<style>{OPS_STYLE}</style>", _ops_devices(ops), _ops_push(ops), _ops_feedback(ops), _ops_train(ops),
+    return [f"<style>{OPS_STYLE}</style>", _ops_devices(ops), _ops_push(ops), _ops_feedback(ops), _ops_train(ops, personal),
             f"<script>{OPS_SCRIPT}</script>"]
 
 

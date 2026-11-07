@@ -152,8 +152,8 @@ final class RecordingLedger {
         guard dayEnd > dayStart else { return ([], []) }
         let recorded = chunks.compactMap { c -> (Date, Date)? in
             guard c.source != "import", c.broken != true else { return nil }
-            // 長さが分からない区切りは5分とみなす
-            let end = c.end ?? c.start.addingTimeInterval(ChunkCutter.target)
+            // 長さが分からない区切りは、いまの設定のいちばん長い区切りとみなす（短めなら2分20秒・ふつうなら5分20秒）
+            let end = c.end ?? c.start.addingTimeInterval(ChunkCutter.longest)
             return end > dayStart && c.start < dayEnd ? (c.start, end) : nil
         }
         // その日と、その前の日の様子だけ（理由を決めるのに前の様子も見る）

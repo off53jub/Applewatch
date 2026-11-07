@@ -264,7 +264,7 @@ final class ConversationLog {
     }
 
     /// しばらく何も話していなければ、続いている会話を閉じる。
-    /// 録音中の区切り（最長5分）にまだ続きがあるかもしれないので、その分も待つ。
+    /// 録音中の区切り（短めで最長2分、ふつうで最長5分）にまだ続きがあるかもしれないので、その分も待つ。
     func closeIdle(now: Date, waiting: TimeInterval) async {
         await closeOpenConversations(before: now.addingTimeInterval(-waiting), day: nil)
     }

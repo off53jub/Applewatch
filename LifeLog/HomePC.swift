@@ -8,7 +8,7 @@ import Security
 /// 行ごとに、選んだ文の合い方（確からしさ）と、ほかのモデルの違う文（候補）も返ってくる。
 /// 古い LifeLog PC（Haas-ja だけ）は確からしさを返さないので、そのときは今までどおり端末内と見比べる。
 ///
-/// 送るのは 5 分の録音（AAC、約1.2MB）と、端末内の文字起こしで声があった区間だけ。声の無い区切りは送らない。
+/// 送るのは区切りの録音（短めで長くても2分・ふつうで5分。AAC、5分で約1.2MB）と、端末内の文字起こしで声があった区間だけ。声の無い区切りは送らない。
 /// 宛先は家の Wi-Fi の中の住所（192.168.…）か、Tailscale の住所（100.…）。Tailscale なら外からもモバイル通信で届く。
 /// PC が切れているときは、iPhone 内の Haas-ja かいつもの方法で文字にする。
 @MainActor
@@ -111,6 +111,9 @@ final class HomePC {
         version = hello.version ?? 1
         features = Set(hello.features ?? [])
         UserDefaults.standard.set(features.contains("jobs"), forKey: "homePCJobs")
+        // 待ち合わせ（送った返事で文字を返す）と下書き（版 8 から。2026-11-07。裏で起こされたときにも使えるよう覚えておく）
+        UserDefaults.standard.set(features.contains("jobwait"), forKey: Self.jobWaitKey)
+        UserDefaults.standard.set(features.contains("draft"), forKey: Self.draftKey)
         speakerModel = hello.speaker_model
         return "\(hello.model)（\(hello.provider == "cuda" ? "GPU" : "CPU")）"
     }
@@ -216,14 +219,20 @@ final class HomePC {
 
     // MARK: - あなた向けのモデルの材料（PC の版 4 から。2026-11-06）
 
-    /// 直した文とその音声の区間を PC に渡す（PC の中だけに置く。学び直しは PC で本人が動かす）。PC にたまった数を返す
-    func sendTrainSample(_ url: URL, start: TimeInterval, end: TimeInterval, text: String) async throws -> Int {
+    /// 直した文とその音声の区間を PC に渡す（PC の中だけに置く。学び直しは PC で本人が動かす）。PC にたまった数を返す。
+    /// audio・offset は、その行の音声の名前（Line.audio）と行の位置の秒（Line.offset）。PC の「聞いて直す」画面で
+    /// 直した行と2重に入らないよう、PC が見分けに使う（2026-11-07。版 9。古い PC は読み飛ばす）
+    func sendTrainSample(_ url: URL, start: TimeInterval, end: TimeInterval, text: String,
+                         audio: String? = nil, offset: TimeInterval? = nil) async throws -> Int {
         struct Reply: Decodable { let count: Int }
         var upload = try request("train-sample")
         var components = URLComponents(url: upload.url!, resolvingAgainstBaseURL: false)
-        components?.queryItems = [URLQueryItem(name: "start", value: String(format: "%.2f", start)),
-                                  URLQueryItem(name: "end", value: String(format: "%.2f", end)),
-                                  URLQueryItem(name: "text", value: text)]
+        var items = [URLQueryItem(name: "start", value: String(format: "%.2f", start)),
+                     URLQueryItem(name: "end", value: String(format: "%.2f", end)),
+                     URLQueryItem(name: "text", value: text)]
+        if let audio { items.append(URLQueryItem(name: "audio", value: audio)) }
+        if let offset { items.append(URLQueryItem(name: "offset", value: String(format: "%.3f", offset))) }
+        components?.queryItems = items
         upload.url = components?.url
         upload.httpMethod = "POST"
         upload.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
@@ -369,12 +378,30 @@ final class HomePC {
     /// PC が「裏で送った区切り」を受け付けるか。裏で起こされたときは PC に聞けないので、最後に聞いた答えを覚えておく
     static var acceptsJobs: Bool { UserDefaults.standard.bool(forKey: "homePCJobs") }
 
-    /// 区切りを、アプリが止まっても続く転送で PC に送る（PC はその場で文字にして、結果をためておく）
+    /// PC が待ち合わせ（POST /jobs?wait=1）を受け付けるか（版 8 から）
+    static let jobWaitKey = "homePCJobWait"
+    static var acceptsJobWait: Bool { UserDefaults.standard.bool(forKey: jobWaitKey) }
+    /// PC が下書きを返すか（版 8 から）
+    static let draftKey = "homePCDraft"
+    static var acceptsDrafts: Bool { UserDefaults.standard.bool(forKey: draftKey) }
+    /// 待ち合わせで同時に待たせておく数の上限。これより多く送っている途中なら、待ち合わせにしない
+    /// （つながりを長く持ったままの送りが溜まると、新しい区切りを送り始められなくなるため）
+    nonisolated static let maxWaiting = 3
+
+    /// 区切りを、アプリが止まっても続く転送で PC に送る（PC はその場で文字にして、結果をためておく）。
+    /// 区切りの時刻（録音の始まり・終わり・iPhone に届いた・送り始めた）も渡す（版 8。docs/v8-latency.md の 1）。
+    /// PC が待ち合わせを受け付けるなら wait=1 を付け、文字にし終わった答えを返事で受け取る（PCJobUploader が受け取る）
     func enqueueJob(_ url: URL, hints: [String]) {
         guard isConfigured, Self.acceptsJobs, var req = try? request("jobs") else { return }
         let name = url.lastPathComponent
         var components = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)
         var items = [URLQueryItem(name: "name", value: name)]
+        let sent = Date.now
+        Latency.noteSent(name, at: sent)
+        items += Self.timeItems(Latency.marks(name), sent: sent)
+        if Self.acceptsJobWait, PCJobUploader.stagedCount < Self.maxWaiting {
+            items.append(URLQueryItem(name: "wait", value: "1"))
+        }
         var words: [String] = []
         var length = 0
         for word in hints where !word.isEmpty && !word.contains("\n") {
@@ -388,7 +415,22 @@ final class HomePC {
         req.url = components?.url
         req.httpMethod = "POST"
         req.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
+        // PC は返事を書き終えるまで、15秒ごとに空白を1文字書く。それが届くかぎり切れないよう、待つのは 120 秒まで
+        req.timeoutInterval = PCJobUploader.idleTimeout
         PCJobUploader.shared.upload(url, request: req, cellular: useCellular)
+    }
+
+    /// POST /jobs に付ける区切りの時刻（分かるものだけ。ISO 8601・UTC・ミリ秒つき）
+    nonisolated static func timeItems(_ marks: Latency.Marks?, sent: Date) -> [URLQueryItem] {
+        var items: [URLQueryItem] = []
+        func put(_ key: String, _ date: Date?) {
+            if let date { items.append(URLQueryItem(name: key, value: PCJSON.string(date))) }
+        }
+        put("chunk_start", marks?.chunkStart)
+        put("chunk_end", marks?.chunkEnd)
+        put("arrived", marks?.arrived)
+        put("sent", sent)
+        return items
     }
 
     enum JobState {
@@ -400,19 +442,21 @@ final class HomePC {
         case missing
     }
 
-    /// 裏で送った区切りの様子（数秒で諦める）
+    /// 裏で送った区切りの様子（数秒で諦める）。
+    /// PC に無くても、まだ送っている途中（写しがある・30分以内）なら「受け付け待ち」とみなす
+    /// （送り始めてすぐに取り込みが走ったとき、同じ区切りを PC に二重に頼まないように。2026-11-07）
     func jobState(_ name: String) async -> JobState {
         guard isConfigured, Self.acceptsJobs, let req = try? request("jobs/" + name) else { return .missing }
-        struct Reply: Decodable {
-            let status: String
-            let queued_at: Double?
-            let result: PCReply?
-        }
         let session = makeSession(timeout: 8)
         defer { session.finishTasksAndInvalidate() }
-        guard let (data, response) = try? await session.data(for: req),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let reply = try? JSONDecoder().decode(Reply.self, from: data) else { return .missing }
+        guard let got = try? await session.data(for: req) else { return .missing }
+        let data = got.0
+        let status = (got.1 as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 404, let since = PCJobUploader.stagedSince(name), Date.now.timeIntervalSince(since) < 30 * 60 {
+            return .pending(since)
+        }
+        guard status == 200, let reply = JobReply.decode(data) else { return .missing }
+        if let timing = reply.timing { Latency.notePC(name, timing: timing) }
         switch reply.status {
         case "done":
             guard let result = reply.result else { return .missing }
@@ -423,6 +467,45 @@ final class HomePC {
         default:
             return .missing
         }
+    }
+
+    /// 待ち合わせの返事か、下書きを見に行ったときに受け取って、端末の中に置いてある答え（PCResults）。
+    /// あれば PC に聞かずに使う。読めない答えは消して nil（版 8。2026-11-07）
+    func cachedJob(_ name: String) -> [Line]? {
+        guard let data = PCResults.load(name) else { return nil }
+        guard let reply = JobReply.decode(data), reply.status == "done", let result = reply.result else {
+            PCResults.remove(name)
+            return nil
+        }
+        if let timing = reply.timing { Latency.notePC(name, timing: timing) }
+        let voiced = result.lines.reduce(0) { $0 + max(0, $1.end - $1.start) }
+        return accept(result, voiced: voiced)
+    }
+
+    /// 下書きを見に行ったときの答え
+    enum JobPeek {
+        /// でき上がっていた（答えの JSON。端末の中に置いて取り込みで使う）
+        case done(Data)
+        /// まだで、下書きがある
+        case draft([Line])
+        /// まだで、下書きも無い・PC に無い・つながらない
+        case nothing
+    }
+
+    /// 送ってまだの仕事を、数秒で見に行く（下書き。アプリが前にあるときだけ呼ぶ。版 8 から）
+    func peekJob(_ name: String) async -> JobPeek {
+        guard shouldTry, Self.acceptsJobs, let req = try? request("jobs/" + name) else { return .nothing }
+        let session = makeSession(timeout: 8)
+        defer { session.finishTasksAndInvalidate() }
+        guard let got = try? await session.data(for: req), (got.1 as? HTTPURLResponse)?.statusCode == 200,
+              let reply = JobReply.decode(got.0) else { return .nothing }
+        let data = got.0
+        if let timing = reply.timing { Latency.notePC(name, timing: timing) }
+        if reply.status == "done", reply.result != nil { return .done(data) }
+        guard let draft = reply.draft, !draft.lines.isEmpty else { return .nothing }
+        return .draft(draft.lines.map {
+            Line(offset: $0.start, end: $0.end, text: $0.text, confidence: nil, alternatives: [], votes: [:])
+        })
     }
 
     /// 使い終わった結果を PC から消す（失敗してもよい。PC は7日で消す）
@@ -686,11 +769,88 @@ struct PCReply: Decodable {
     let silent: [String: Int]?
 }
 
+/// PC の仕事の答え（GET /jobs/<名前> と、待ち合わせ POST /jobs?wait=1 の返事。版 8。2026-11-07）
+struct JobReply: Decodable {
+    let status: String
+    let queued_at: Double?
+    let result: PCReply?
+    /// 時刻（docs/v8-latency.md の 1）
+    let timing: PCTiming?
+    /// まだのときの下書き（速いモデルだけで書いたもの。記録には入れない）
+    let draft: PCDraft?
+
+    /// 頭の空白（PC が待たせているあいだに書く）を読み飛ばして読む
+    static func decode(_ data: Data) -> JobReply? {
+        try? JSONDecoder().decode(JobReply.self, from: PCResults.trimmed(data))
+    }
+}
+
+/// 下書き（result と同じ形のうち、行の始まり・終わり・文だけを読む）
+struct PCDraft: Decodable {
+    struct Line: Decodable {
+        let start: Double
+        let end: Double
+        let text: String
+    }
+    let lines: [Line]
+}
+
+/// PC から受け取った、でき上がりの答えの置き場所（Caches/pcresults/<名前>.json。版 8。2026-11-07）。
+/// 待ち合わせの返事と、下書きを見に行ったときにでき上がっていた答えを置き、取り込み（Pipeline.transcribe）が
+/// PC に聞く前にここを見る。使い終わったら消す（2日より古いものも消す）。会話の中身なので端末の中だけに置く
+enum PCResults {
+    static let dir: URL = {
+        let dir = URL.cachesDirectory.appendingPathComponent("pcresults", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    static func url(_ name: String) -> URL { dir.appendingPathComponent(name + ".json") }
+
+    static func save(_ data: Data, name: String) {
+        try? trimmed(data).write(to: url(name), options: .atomic)
+    }
+
+    static func load(_ name: String) -> Data? { try? Data(contentsOf: url(name)) }
+
+    static func has(_ name: String) -> Bool { FileManager.default.fileExists(atPath: url(name).path) }
+
+    static func remove(_ name: String) { try? FileManager.default.removeItem(at: url(name)) }
+
+    /// 古い答えを消す
+    static func prune(olderThan age: TimeInterval = 2 * 86400, now: Date = .now) {
+        let keys: [URLResourceKey] = [.contentModificationDateKey]
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys)) ?? []
+        for file in files {
+            let date = (try? file.resourceValues(forKeys: Set(keys)))?.contentModificationDate ?? .distantPast
+            if now.timeIntervalSince(date) > age { try? FileManager.default.removeItem(at: file) }
+        }
+    }
+
+    /// 頭とお尻の空白・改行を除く
+    static func trimmed(_ data: Data) -> Data {
+        let blank: Set<UInt8> = [0x20, 0x0A, 0x0D, 0x09]
+        guard let first = data.firstIndex(where: { !blank.contains($0) }),
+              let last = data.lastIndex(where: { !blank.contains($0) }) else { return Data() }
+        return data.subdata(in: first..<(last + 1))
+    }
+
+    /// でき上がりの答えか（status が done で、result がある）
+    static func isDone(_ data: Data) -> Bool {
+        guard let reply = JobReply.decode(data) else { return false }
+        return reply.status == "done" && reply.result != nil
+    }
+}
+
 /// 区切りを、アプリが止まっても続く転送（バックグラウンドの URLSession）で PC に送る（2026-11-07）。
 /// 送る区切りは写しを作ってから送る（送っているあいだに元の区切りが処理されて動いても困らないように）。
-final class PCJobUploader: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+/// 待ち合わせ（wait=1）のときは、PC が文字にし終わるまで返事を待ち、返事の中身（でき上がりの答え）を
+/// PCResults に置いて、取り込みを進めてもらう（onResult。版 8。2026-11-07）
+final class PCJobUploader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     static let shared = PCJobUploader()
     static let identifier = "com.off53jub.lifelog.pcjobs"
+    /// 返事が途切れてもこれだけは待つ（PC は待たせているあいだ15秒ごとに空白を書くので、それが届くかぎり切れない）
+    static let idleTimeout: TimeInterval = 120
     private static let stage: URL = {
         let dir = URL.cachesDirectory.appendingPathComponent("pcjobs", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -699,20 +859,41 @@ final class PCJobUploader: NSObject, URLSessionTaskDelegate, @unchecked Sendable
 
     private let lock = NSLock()
     private var finish: (() -> Void)?
+    /// 送り終わったあとに届いている返事の中身（送りごと）
+    private var replies: [Int: Data] = [:]
+    /// でき上がりの答えを受け取ったら呼ぶ（区切りの名前）
+    private var onResult: (@Sendable (String) -> Void)?
 
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.background(withIdentifier: Self.identifier)
         config.sessionSendsLaunchEvents = true
         config.isDiscretionary = false
+        config.timeoutIntervalForRequest = Self.idleTimeout
+        // 待ち合わせで待っている送りがあっても、新しい区切りを送り始められるように
+        config.httpMaximumConnectionsPerHost = 6
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
     /// アプリが起動したときに呼ぶ（前の起動で送っていた分の知らせを受け取れるように）
-    func start() { _ = session }
+    func start() {
+        _ = session
+        PCResults.prune()
+    }
+
+    func setOnResult(_ onResult: (@Sendable (String) -> Void)?) {
+        lock.withLock { self.onResult = onResult }
+    }
 
     /// PC に送っている途中の区切りの数（写しの数。家の PC への様子に使う。2026-11-07）
     static var stagedCount: Int {
         ((try? FileManager.default.contentsOfDirectory(at: stage, includingPropertiesForKeys: nil)) ?? []).count
+    }
+
+    /// その区切りを送っている途中なら、写しを作った時刻（待ち合わせなら、答えを受け取るまで写しが残る）
+    static func stagedSince(_ name: String) -> Date? {
+        let url = stage.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .now
     }
 
     func upload(_ url: URL, request: URLRequest, cellular: Bool) {
@@ -733,12 +914,29 @@ final class PCJobUploader: NSObject, URLSessionTaskDelegate, @unchecked Sendable
         _ = session
     }
 
+    /// 返事の中身が届いた（待ち合わせなら、空白のあとにでき上がりの答え）
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.withLock {
+            var body = replies[dataTask.taskIdentifier] ?? Data()
+            body.append(data)
+            // 答えは多くても数百KB。大きすぎるものは受け取らない
+            replies[dataTask.taskIdentifier] = body.count > 8 * 1024 * 1024 ? Data() : body
+        }
+    }
+
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let received = lock.withLock { replies.removeValue(forKey: task.taskIdentifier) }
         if let name = task.taskDescription {
             try? FileManager.default.removeItem(at: Self.stage.appendingPathComponent(name))
         }
         let status = (task.response as? HTTPURLResponse)?.statusCode ?? 0
         if error != nil || status != 200 { Tally.add("jobs.failed") }
+        // 待ち合わせの返事ででき上がりが届いたら、端末の中に置いて取り込みを進めてもらう
+        guard error == nil, status == 200, let name = task.taskDescription, let body = received, PCResults.isDone(body) else { return }
+        PCResults.save(body, name: name)
+        Tally.add("jobs.waited")
+        let callback = lock.withLock { onResult }
+        callback?(name)
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {

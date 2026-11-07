@@ -3,7 +3,7 @@ import Observation
 
 /// ライブ文字起こし。話の切れ目ごとに数秒の音を iPhone 内の Haas-ja で文字にして流す
 /// （Haas-ja のモデルを入れていなければ Groq の large-v3-turbo に送る）。速さを優先して、言語モデルの補正はかけない。
-/// 画面に出すだけで、記録には書かない（記録はいつもの5分ごとの文字起こしで書く）。
+/// 画面に出すだけで、記録には書かない（記録はいつもの区切りごとの文字起こしで書く）。
 @MainActor
 @Observable
 final class LiveTranscriber {

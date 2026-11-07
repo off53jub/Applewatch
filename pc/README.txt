@@ -107,7 +107,8 @@ Haas-ja と ReazonSpeech にも「ホットワード」として効かせます�
 新しい iPhone のアプリが使います。古いアプリはこれまでどおり動きます。どれも、うまく動かなければ前と同じに動きます。
 ・後で受け取る文字起こし: iPhone は録音の区切りを1つずつ裏で PC に預け、PC が文字にし終えたころに答えを受け取ります。
   PC が声のある所を自分で探し（Silero VAD、使えなければ音の大きさ）、今までと同じ多数決で文字にします。
-  1つずつ、来た順に文字にします。PC を起動し直しても、預かったものは続きから文字にします。
+  1つずつ文字にします（版 8 からは、待っているものが2つ以上あれば、新しく受けたものから）。
+  PC を起動し直しても、預かったものは続きから文字にします。
   預かった音声は、文字にし終えたら（うまくいかなくても）すぐ消します。答えは 7 日たったら消します。
   （版 7 からは、音声は iPhone が答えを受け取って消すまで残し、消したら下の「音声を残す」に移します）
   置き場所は %LOCALAPPDATA%\LifeLogPC\jobs です。録音も文も PC の外には送りません。
@@ -223,6 +224,75 @@ Haas-ja と ReazonSpeech にも「ホットワード」として効かせます�
     python lifelog_pc.py --fake-models --port 47715   モデルを読み込まずに起動して、受け口と見守りの画面を試すとき用
                                        （文字起こしの答えは作り物です。ふだんは使いません）
 
+■ 版 8 で足したもの（文字になって iPhone に入るまでを短くする）
+新しい iPhone のアプリが使います（/hello の features に jobwait・draft・timing があるときだけ）。古いアプリはこれまでどおり動きます。
+・待ち合わせ: iPhone が区切りを預けるとき（POST /jobs?wait=1）、PC は文字にし終えるまで答えを待たせ、でき上がったら
+  その答えをそのまま返します（iPhone が答えを取りに来るのを待たなくてよくなります）。待っているあいだは、つながりが
+  切れないよう 15 秒ごとに空白を 1 文字送ります。25 分たってもできないとき・PC を起動し直す・閉じるときは
+  「まだです」（pending）と返して閉じます（文字にするのは続けます）。
+・「できた」の見えない通知は、待ち合わせで答えを渡せなかった仕事（途中で切れた・待ち合わせでなかった・答えを書いたあと
+  10 秒のうちに iPhone が読み終えて閉じたと分からなかった）にだけ送ります。回数の上限は今までと同じです。
+・下書き: 文字にするとき、先に速いモデル（Haas-ja・ReazonSpeech）だけで文字にして「下書き」として残し、そのあと今までどおり
+  全部のモデルで多数決をします。Haas-ja・ReazonSpeech の文は多数決でもそのまま使うので、同じ音声を 2 回読みません。
+  まだのときに GET /jobs/<名前> を見ると、下書きが返ります（iPhone は画面を見ているときだけ「仮」として出します。
+  下書きは記録には残しません）。下書きを作れなくても、多数決は続けます。でき上がったら下書きは消します。
+・時間: 区切りごとに、受け取った時刻・文字にし始めた時刻・下書きができた時刻・でき上がった時刻を残し、iPhone の時刻
+  （録音の始まりと終わり・iPhone に届いた・送り始めた）と合わせて答えの "timing" に入れます。
+  見守りの画面の「後で受け取る文字起こし」に、直近 50 件の PC の待ち・作業・下書きまでの時間（中央値・いちばん長い）と、
+  区切りごとの待ち・下書きまでの時間、待ち合わせで渡したかが出ます。iPhone で測った区間ごとの時間（時計→iPhone・
+  iPhone→PC・PC の待ち・PC の作業・PC→記録・合計の中央値）は「実機の様子」と summary.md に出ます。
+・確かめるとき:  LifeLogPC.exe --check-v8（一時のフォルダと作り物のモデルで、待ち合わせ・通知・下書き・時間・新しい順を確かめます）
+  起動して試すときは、作り物のモデルで（例）
+    python lifelog_pc.py --fake-models --port 47716 --no-auto-update --no-semantic --no-llm
+  環境変数 LIFELOG_JOBWAIT_PING（空白を送る間の秒）・LIFELOG_JOBWAIT_LIMIT（待つ長さの上限の秒）で短くでき、
+  LIFELOG_FAKE_SECONDS（秒）で作り物の Whisper を遅くできます（下書きが先に出るのを見るため）。
+  試すときは、環境変数 LOCALAPPDATA を一時のフォルダにして、ふだんの置き場所と番号 47615 を使わないでください。
+  --check-vote・--check-v7-ops・--check-v7-records・--check-v8・--check-v9 は、LOCALAPPDATA を替えなくても、自分で一時のフォルダを
+  使います（ふだんの置き場所の記録 log.txt やデータには書きません）。
+
+■ 版 9 で足したもの（職場の会話の印・聞いて直す・この PC の Claude から記録を読む）
+PC の版の番号は 8 のままです。古い iPhone のアプリも、これまでどおり動きます。
+・職場の会話の印: 新しい iPhone のアプリは、記録（POST /records/<日>）に、職場の会話の始まりの時刻の並び
+  （"work"）を足して送ってきます。PC は日ごとに残し、会話を「職場」「職場ではない」「分からない」に分けます。
+  古い iPhone から届いた日（"work" が無い日）は「分からない」です。記録の画面の会話の所に「職場」
+  「職場かどうか分からない」と出ます（PC の画面では、どれも読めます）。
+・聞いて直す: 記録の画面の「聞いて直す」から開きます（見守りの画面の学び直しの所からも入れます）。
+    http://<PC の Tailscale 名>:47615/dash/records/review
+  自信の低い行（確からしさが 0.45 より低い・モデルの票が食い違う・話し手に「？」）で、PC に音声がある行を、
+  新しい日から並べます。▶ で聞いて、違っていれば「文を直す」、そのままで正しければ「合っている」を押します。
+  答えると次の行に進み、自動で流します。話し手は「話し手を変える」で、記録に出てくる名前と「自分」から選びます
+  （新しい名前は作りません）。文と話し手の直しは、ほかの直しと同じく iPhone に渡します。「合っている」は iPhone には送りません。
+  文を直した行と「合っている」行は、PC にある音声から、その行の所（iPhone が材料を作るときと同じ区間）を切り出して、
+  学び直しの材料（personal\data）に足します。iPhone があとで同じ行を材料として送ってきても、2 重には入れません
+  （文が同じで、長さがほぼ同じなら同じ行とみなします。iPhone が /train-sample に audio（行の音声の名前）と
+  offset（行の位置の秒）を付けてくれば、それでも見分けます）。話し手だけを変えた行は、材料にしません。
+  見守りの画面の学び直しの所に、材料の数と、あと何個で学び直せるか（300 個から）が出ます。
+・この PC の Claude Code から記録を読む（MCP サーバー）: 下の「この PC の Claude から記録に聞く」を見てください。
+・確かめるとき:  LifeLogPC.exe --check-v9（一時のフォルダと作り物の記録で、職場の印・聞いて直す・材料を 2 重にしない・
+  MCP サーバーから職場の会話が出ないことを確かめます）
+
+■ この PC の Claude から記録に聞く（MCP サーバー。登録は本人が決めてから）
+この PC の Claude Code に「先週、母と何を話した？」のように聞けるようにする道具です。読むだけで、記録は変えられません。
+音声は返しません。
+・職場の会話は、どの道具からも返しません。職場の印が付いた会話と、印が分からない会話（古い iPhone から来た日・
+  PC に記録が無い日の行）は、返す前に外し、外した数だけを返します。1 日のまとめは、その日に職場の会話も
+  分からない会話も無いときだけ返します。
+・ただし、職場ではない会話の文・見出し・相手の名前は Claude（外のクラウド）に渡ります。登録する前に、本人に確かめてください。
+・出す道具: list_conversations（日付で会話の一覧）・search_text（言葉で探す）・search_meaning（意味で探す。この PC の
+  Ollama の bge-m3 を使い、semantic.db を読むだけ）・conversations_with（人の名前で、その人との会話）・
+  get_conversation（1 つの会話の中身）。
+・%LOCALAPPDATA%\LifeLogPC には何も書きません。LifeLog PC が動いていても、止まっていても使えます
+  （意味で探すだけは、この PC の Ollama が動いているときだけ）。
+・登録のしかた（Claude Code。コマンドプロンプトで1行。exe の場所は自分の置いた所に替えます）:
+    claude mcp add --scope user lifelog -- "C:\Users\<名前>\Documents\LifeLogPC\LifeLogPC.exe" --mcp
+  Python で動かすとき（numpy が要ります）:
+    claude mcp add --scope user lifelog -- py -3.12 "<このリポジトリ>\pc\lifelog_mcp.py"
+  設定ファイルに書くときは、mcpServers に次を足します（~/.claude.json か、プロジェクトの .mcp.json）:
+    "lifelog": {"type": "stdio", "command": "C:\\Users\\<名前>\\Documents\\LifeLogPC\\LifeLogPC.exe", "args": ["--mcp"]}
+  ほかに付けられるもの: --home <フォルダ>（記録の置き場所。既定 %LOCALAPPDATA%\LifeLogPC）・
+  --ollama-url http://127.0.0.1:11434（この PC の中の Ollama だけ）。
+  登録できたかは  claude mcp list  で確かめます。やめるときは  claude mcp remove --scope user lifelog
+
 ■ GPU について（NVIDIA のドライバー）
 Whisper・kotoba-whisper・Qwen3-ASR を GPU で動かすには、NVIDIA のドライバー 528 以上が要ります。
 nvidia-smi で版を見られます。古いと記録（log.txt）に「CUDA driver version is insufficient」と出て、
@@ -283,6 +353,7 @@ NVIDIA のドライバーが古いと GPU を使えません。nvidia-smi で版
 モデル・合言葉・記録: %LOCALAPPDATA%\LifeLogPC（model・reazon・whisper・cuda・speaker・tagging・enhance・vad・qwen のフォルダ）
 預かった区切り・意味で探すための行・取ってきた新しい版: %LOCALAPPDATA%\LifeLogPC（jobs のフォルダ・semantic.db・update のフォルダ）
 iPhone から届いた記録・PC で直した分・残した音声: %LOCALAPPDATA%\LifeLogPC（records のフォルダ・edits.db・audio のフォルダ）
+版 9: 「聞いて直す」で「合っている」と答えた行は edits.db の reviews に、作った材料は personal\data に置きます
 あなた向けのモデルの材料とモデル: %LOCALAPPDATA%\LifeLogPC\personal（data に声と文、model に作ったモデル）
 版 7: 実機の様子 diag（summary.md も）・TestFlight の報告 feedback・通知の鍵と様子 apns・App Store Connect のキー asc・
       学び直しの部品 train（どれも %LOCALAPPDATA%\LifeLogPC の下）

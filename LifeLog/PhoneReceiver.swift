@@ -138,6 +138,8 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         lastSettings["skipSilence"] = skipSilence
         lastSettings["held"] = held
         lastSettings["acks"] = true
+        // 区切りの長さ（短め・ふつう。時計は次の区切りから使う。2026-11-07）
+        lastSettings[ChunkCutter.lengthKey] = ChunkCutter.length.rawValue
         if let meeting { lastSettings["meeting"] = meeting }
         guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
         try? WCSession.default.updateApplicationContext(lastSettings)

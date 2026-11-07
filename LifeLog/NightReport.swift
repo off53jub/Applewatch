@@ -147,6 +147,14 @@ enum Tally {
         if !silent.isEmpty {
             rows.append(("何も書かなかった行", silent.map { String($0.dropFirst(7)) + " \(n($0))" }.joined(separator: "・"), nil))
         }
+        if n("budget.cloud") + n("budget.correct") > 0 {
+            // 区切りが短いあいだ、1時間に使う回数の上限で見送った区切り（2026-11-07。ChunkBudget）
+            rows.append(("1時間の上限で見送った（短めの区切り）", "クラウドの票 \(n("budget.cloud"))・誤変換の直し \(n("budget.correct"))", nil))
+        }
+        if n("night.asked") + n("budget.night") > 0 {
+            // 夜の聞き直しで言語モデルに頼んだ回数（区切りをまとめて頼む）と、1晩の上限で次の夜に回した回数（2026-11-07。NightBudget）
+            rows.append(("夜の聞き直しの言語モデル", "頼んだ \(n("night.asked")) 回・上限で次の夜へ \(n("budget.night")) 回", nil))
+        }
         if n("learn.updated") > 0 {
             rows.append(("直した記録から学んだ", "値を合わせ直した \(n("learn.updated")) 回", nil))
         }

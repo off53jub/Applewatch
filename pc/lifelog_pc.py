@@ -65,6 +65,21 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 - 自動の学び直しと GPU の時間割（/train-status の "auto"。features に "autotrain"）
     LifeLogPC.exe --check-v7-ops   版 7 の見守りを、一時フォルダと作り物の相手で確かめる
     python lifelog_pc.py --fake-models --port 47715  モデルを読み込まずに起動して、受け口と画面を試す
+
+版 8 で足したもの（中身は jobqueue.py。決まりは docs/v8-latency.md。features に "jobwait"・"draft"・"timing"）:
+- POST /jobs の chunk_start・chunk_end・arrived・sent（iPhone の時刻）を残し、GET /jobs/名前 に "timing" を付ける
+- POST /jobs?wait=1  でき上がりまで答えを待たせ（15 秒ごとに空白）、GET と同じ形で返す。25 分・閉じるときは pending
+- 待ち合わせで渡した仕事には「できた」の見えない通知を送らない
+- 下書き: 先に haas・reazon だけで文字にして残す（GET はまだのとき "draft"）。その文は多数決でもそのまま使う
+- 待っているものが2つ以上なら、新しく受けたものから文字にする
+    LifeLogPC.exe --check-v8   版 8 を、一時フォルダと作り物のモデルで確かめる
+確かめ（--check-vote・--check-v7-ops・--check-v7-records・--check-v8・--check-v9）は、本物の HOME に書かない（isolate_home）。
+
+版 9 で足したもの（VERSION は 8 のまま。中身は records.py・recordsui.py・lifelog_mcp.py）:
+- 職場の会話の印（POST /records/<日> の省ける項目 "work"）。印の無い日は「分からない」
+- 記録の画面の「聞いて直す」（/dash/records/review）。直した行・「合っている」行は、PC の音声から材料を作って足す
+- この PC の Claude Code から記録を読む MCP サーバー（LifeLogPC.exe --mcp。職場の会話と分からない会話は返さない）
+    LifeLogPC.exe --check-v9   版 9 を、一時フォルダと作り物の記録で確かめる
 """
 
 from __future__ import annotations
@@ -101,7 +116,7 @@ import updater
 import records
 import recordsui
 
-VERSION = 7
+VERSION = 8
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
 INSTALL_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 BUILD = updater.read_build(INSTALL_DIR)
@@ -137,6 +152,43 @@ PERSONAL_MODEL = PERSONAL_DIR / "model"
 # 後で受け取る文字起こしの音声と答え・意味で探すための行と数の並び（版 6）。どちらも PC の外には出さない
 JOBS_DIR = HOME / "jobs"
 SEMANTIC_DB = HOME / "semantic.db"
+
+
+# 版 8: HOME の下の置き場所（確かめるときに、まとめて一時のフォルダに替える）
+HOME_PATHS = (("MODEL_DIR", "model"), ("REAZON_DIR", "reazon"), ("WHISPER_DIR", "whisper"), ("CUDA_DIR", "cuda"),
+              ("CONFIG", "config.json"), ("LOG", "log.txt"), ("PERSONAL_DIR", "personal"),
+              ("PERSONAL_DATA", "personal/data"), ("PERSONAL_MODEL", "personal/model"), ("JOBS_DIR", "jobs"),
+              ("SEMANTIC_DB", "semantic.db"), ("QWEN_DIR", "qwen"), ("SPEAKER_DIR", "speaker"),
+              ("TAGGING_DIR", "tagging"), ("ENHANCE_DIR", "enhance"), ("VAD_DIR", "vad"))
+_isolated: Path | None = None
+_START_HOME = HOME  # 起動したときの HOME（確かめで、替えたことを確かめる）
+
+
+def use_home(folder: Path) -> None:
+    """HOME と、その下の置き場所を全部 folder に替える（確かめ・試しのとき用）"""
+    global HOME
+    HOME = Path(folder)
+    module = sys.modules[__name__]
+    for name, sub in HOME_PATHS:
+        setattr(module, name, HOME / sub)
+
+
+def isolate_home() -> Path:
+    """確かめるときは、本物の HOME（%LOCALAPPDATA%\\LifeLogPC）の記録（log.txt）やデータに書かないよう、
+    環境変数 LOCALAPPDATA と HOME の置き場所を、終わると消える一時のフォルダに替える。2回目からは何もしない。"""
+    global _isolated
+    if _isolated is not None:
+        return _isolated
+    import atexit
+    import shutil
+    import tempfile
+
+    root = Path(tempfile.mkdtemp(prefix="lifelog-check-"))
+    os.environ["LOCALAPPDATA"] = str(root)
+    use_home(root / "LifeLogPC")
+    _isolated = root
+    atexit.register(shutil.rmtree, root, True)
+    return root
 
 
 def log(message: str) -> None:
@@ -1034,6 +1086,10 @@ def pair_stats_line(stats: dict) -> str:
     return f"  モデルの組の近さ: {pairs}／何も書かなかった: {silent}（声のある区間 {stats.get('heard_lines', 0)}）"
 
 
+# 版 8: 下書きに使う速いモデル（後で受け取る文字起こしで、先にこれだけで文字にして「仮」として見せる）
+DRAFT_ENGINES = ("haas", "reazon")
+
+
 class Ensemble:
     """読み込めたモデルを全部動かし、区間ごとに多数決する。"""
 
@@ -1050,36 +1106,73 @@ class Ensemble:
     def transcribe(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str] | None = None,
                    prompt: str | None = None, votes: bool = False,
                    weights: dict[str, float] | None = None, extra_from: int | None = None,
-                   enhance: bool = False, stats: dict | None = None) -> list[dict]:
+                   enhance: bool = False, stats: dict | None = None, on_draft=None) -> list[dict]:
         """extra_from を渡すと、その番号から後ろの区間（PC が見つけた、iPhone が聞き逃した声）の行に "extra": true を付け、
         全部の行を時間の順に並べ直す。enhance なら、雑音を除いた音を Haas-ja・ReazonSpeech でもう一度聞いた票も加える。
-        stats に dict を渡すと、モデルの組ごとの近さ（pair_stats）を入れて返す。"""
+        stats に dict を渡すと、モデルの組ごとの近さ（pair_stats）を入れて返す。
+        版 8: on_draft(行, モデルの名前) を渡すと、速いモデル（DRAFT_ENGINES）が書き終えたところで、それだけの多数決を
+        下書きとして渡す。そのモデルの文は、あとの多数決でもそのまま使う（同じ音声を2回読まない）。
+        下書きを作れなくても、多数決は続ける。"""
+        source = audio
+        if CLEAN_AUDIO:
+            audio = clean_audio(audio, segments)
+        # 版 8: いつもの票を先に始める（雑音を除くのを待たずに、速いモデルが書き始められる。答えは前と同じ）
+        jobs = {e.name: self.pool.submit(self._run, e, audio, segments, hints or [], prompt) for e in self.engines}
         denoised = None
         if enhance and any(isinstance(e, Engine) for e in self.engines):
             try:
-                denoised = extra_model("enhance", ENHANCE_THREADS).denoise_segments(audio, segments)
+                denoised = extra_model("enhance", ENHANCE_THREADS).denoise_segments(source, segments)
                 if CLEAN_AUDIO:
                     denoised = clean_audio(denoised, segments)
             except Exception as error:  # noqa: BLE001 — 雑音を除けなくても、いつもの票だけで決める
                 log(f"雑音を除けませんでした（いつもの票だけで決めます）: {error!r}")
                 denoised = None
-        if CLEAN_AUDIO:
-            audio = clean_audio(audio, segments)
-        jobs = {e.name: self.pool.submit(self._run, e, audio, segments, hints or [], prompt) for e in self.engines}
         if denoised is not None:
             for e in self.engines:
                 if isinstance(e, Engine):
                     jobs[e.name + "_e"] = self.pool.submit(self._run, e, denoised, segments, hints or [], prompt)
         results: dict[str, list[tuple[str, list | None]]] = {}
-        for name, job in jobs.items():
+
+        def collect(name: str) -> None:
+            if name in results:
+                return
             try:
-                results[name] = job.result()
+                results[name] = jobs[name].result()
             except Exception as error:  # noqa: BLE001 — 1つが失敗しても、残りで決める
                 log(f"{name} で文字にできませんでした: {error!r}")
+                results[name] = None  # type: ignore[assignment]
+
+        if on_draft is not None:
+            fast = [name for name in DRAFT_ENGINES if name in jobs]
+            if fast and len(fast) < len(jobs):
+                for name in fast:
+                    collect(name)
+                got = {name: results[name] for name in fast if results.get(name) is not None}
+                try:
+                    if got:
+                        on_draft(self._lines(got, segments, weights, votes, extra_from, []), list(got))
+                except Exception as error:  # noqa: BLE001 — 下書きを作れなくても、多数決は続ける
+                    log(f"下書きを作れませんでした（このまま多数決をします）: {error!r}")
+        for name in jobs:
+            collect(name)
+        results = {name: results[name] for name in jobs if results.get(name) is not None}  # 前と同じ並び
         if not results:
             raise RuntimeError("どのモデルでも文字にできませんでした")
-        lines = []
         rows: list[tuple[dict[str, str], dict]] = []
+        lines = self._lines(results, segments, weights, votes, extra_from, rows)
+        if stats is not None:
+            try:
+                stats.update(pair_stats(rows))
+            except Exception as error:  # noqa: BLE001 — 見立てが作れなくても、文字にした行は返す
+                log(f"モデルの組の近さを測れませんでした: {error!r}")
+        return lines
+
+    @staticmethod
+    def _lines(results: dict[str, list[tuple[str, list | None]]], segments: list[tuple[float, float]],
+               weights: dict[str, float] | None, votes: bool, extra_from: int | None,
+               rows: list[tuple[dict[str, str], dict]]) -> list[dict]:
+        """モデルごとの区間の文から、区間ごとに多数決した行（rows に区間ごとの票と近さを足す）"""
+        lines = []
         for i, (start, end) in enumerate(segments):
             hypotheses = {name: got[i][0] if i < len(got) else "" for name, got in results.items()}
             known: dict = {}
@@ -1105,11 +1198,6 @@ class Ensemble:
             lines.append(line)
         if extra_from is not None:
             lines.sort(key=lambda line: (line["start"], line["end"]))
-        if stats is not None:
-            try:
-                stats.update(pair_stats(rows))
-            except Exception as error:  # noqa: BLE001 — 見立てが作れなくても、文字にした行は返す
-                log(f"モデルの組の近さを測れませんでした: {error!r}")
         return lines
 
     @staticmethod
@@ -1682,9 +1770,52 @@ def read_samples(folder: Path) -> list[dict]:
     return rows
 
 
-def save_sample(folder: Path, audio: np.ndarray, start: float, end: float, text: str) -> tuple[int, bool]:
+SAME_SECONDS = 0.6   # 版 9: PC の「聞いて直す」と iPhone から届いた材料を同じ行とみなす、長さの違い（秒）
+
+
+def _from_pc(row: dict) -> bool:
+    return isinstance(row.get("source"), dict) and row["source"].get("origin") == "pc-review"
+
+
+def same_line_sample(rows: list[dict], text: str, seconds: float, source: dict | None) -> bool:
+    """版 9: 同じ行の材料が、もう片方（PC の「聞いて直す」と iPhone）から入っているか。
+    - PC の「聞いて直す」どうし: 同じ日・同じ行の時刻
+    - iPhone から届いたものと「聞いて直す」: 文が同じで、長さの違いが SAME_SECONDS 秒まで
+      （iPhone は区切りの名前を送ってこないので。iPhone が "audio"・"offset" を送ってきたときは、それも合えば同じ）"""
+    mine = isinstance(source, dict) and source.get("origin") == "pc-review"
+    for row in rows:
+        other = row.get("source") if isinstance(row.get("source"), dict) else {}
+        if mine and _from_pc(row):
+            if other.get("day") == source.get("day") and other.get("time") == source.get("time"):
+                return True
+            continue
+        if mine == _from_pc(row):
+            continue  # iPhone どうしは、今までどおりハッシュで見分ける
+        if row.get("text") != text:
+            continue
+        hint = source if not mine else other
+        pc = other if not mine else source
+        if hint and hint.get("audio") and hint.get("offset") is not None:
+            try:
+                near = abs(float(hint["offset"]) - float(pc.get("offset"))) <= 0.5
+            except (TypeError, ValueError):
+                near = False
+            if near and hint["audio"] in (pc.get("audio"), pc.get("line")):
+                return True
+        try:
+            if abs(float(row.get("seconds") or 0) - seconds) <= SAME_SECONDS:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def save_sample(folder: Path, audio: np.ndarray, start: float, end: float, text: str,
+                source: dict | None = None) -> tuple[int, bool]:
     """audio の start〜end 秒を 16kHz モノラルの wav にし、文と一緒に folder に足す。(材料の数, 足したか) を返す。
-    同じ声と文（ハッシュが同じ）は足さない。SAMPLE_LIMIT に達したら足さない。"""
+    同じ声と文（ハッシュが同じ）は足さない。SAMPLE_LIMIT に達したら足さない。
+    版 9: source は出どころ（「聞いて直す」なら {"origin": "pc-review", "day", "time", "audio", "line", "offset"}。
+    iPhone からなら None か {"audio", "offset"}）。同じ行の材料が両方から2重に入らないようにする（same_line_sample）。"""
     text = unicodedata.normalize("NFC", text or "").strip()
     if not text:
         raise ValueError("文がありません")
@@ -1702,7 +1833,8 @@ def save_sample(folder: Path, audio: np.ndarray, start: float, end: float, text:
     digest = hashlib.sha256(text.encode("utf-8") + b"\0" + pcm).hexdigest()
     with _samples_lock:
         rows = read_samples(folder)
-        if any(row.get("hash") == digest for row in rows) or len(rows) >= SAMPLE_LIMIT:
+        if any(row.get("hash") == digest for row in rows) or len(rows) >= SAMPLE_LIMIT \
+                or same_line_sample(rows, text, seconds, source):
             return len(rows), False
         folder.mkdir(parents=True, exist_ok=True)
         name = f"{digest[:24]}.wav"
@@ -1715,9 +1847,19 @@ def save_sample(folder: Path, audio: np.ndarray, start: float, end: float, text:
         part.replace(folder / name)
         row = {"audio": name, "text": text, "seconds": round(seconds, 2), "hash": digest,
                "added": now_iso()}
+        if source:
+            row["source"] = source
         with (folder / "samples.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
         return len(rows) + 1, True
+
+
+MIN_SAMPLES = 300   # 版 9: train_personal.py の MIN_SAMPLES と同じ（学び直しに要る材料の数）
+
+
+def review_sample(path: Path, start: float, end: float, text: str, source: dict) -> tuple[int, bool]:
+    """版 9: 「聞いて直す」で答えた行の音声（PC にある区切りの音声）から、材料を作って足す"""
+    return save_sample(PERSONAL_DATA, load_audio(Path(path).read_bytes()), start, end, text, source)
 
 
 def train_status() -> dict:
@@ -1799,6 +1941,11 @@ def features(engines: list | None = None) -> list[str]:
     # 版 6: POST /jobs（後で受け取る文字起こし）と、意味で探す（Ollama と bge-m3 が使えるときだけ）
     if App.jobs is not None:
         found.append("jobs")
+        # 版 8: 待ち合わせ（POST /jobs?wait=1）・時間（timing）・下書き（速いモデルがあり、ほかにも票があるとき）
+        found += ["jobwait", "timing"]
+        names = [getattr(e, "name", "") for e in engines or getattr(getattr(Handler, "engine", None), "engines", None) or []]
+        if any(n in DRAFT_ENGINES for n in names) and any(n not in DRAFT_ENGINES for n in names):
+            found.append("draft")
     if App.semantic is not None and App.semantic.available():
         found.append("semantic")
     # 版 7（records）: POST /records/<日>（記録を受ける）・GET /edits と POST /edits/ack（PC で直した分を返す）
@@ -1841,6 +1988,8 @@ def pause_work() -> None:
     App.closing = True
     if App.jobs is not None:
         App.jobs.pause()
+        # 版 8: 待ち合わせで待っている iPhone に pending を返し終わるまで、少しだけ待つ
+        App.jobs.wait_waiters(3.0)
 
 
 def resume_work() -> None:
@@ -1851,10 +2000,17 @@ def resume_work() -> None:
 
 def transcribe_reply(engine: Ensemble, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
                      prompt: str | None, weights: dict[str, float], enhance: bool, union: bool, who: str, kind: str,
-                     started: float) -> tuple[dict, dict]:
+                     started: float, on_draft=None) -> tuple[dict, dict]:
     """/transcribe と後で受け取る文字起こしの共通の中身。(/transcribe の答え, 数の見立て) を返す。
-    who は記録の行の頭（「100.x.x.x から 」など）。文の中身は記録に書かない。"""
+    who は記録の行の頭（「100.x.x.x から 」など）。文の中身は記録に書かない。
+    版 8: on_draft(下書き) を渡すと、速いモデルだけの下書き（答えと同じ形に "draft": true）を先に渡す。"""
     duration = len(audio) / RATE
+    def give_draft(lines: list[dict], names: list[str]) -> None:
+        took = time.time() - started
+        on_draft({"lines": lines, "seconds": round(took, 2), "engines": names, "draft": True})
+        log(f"{who}下書き {len(lines)} 行（{'・'.join(names)}）、{took:.1f} 秒")
+
+    draft_hook = give_draft if on_draft is not None else None
     extra: list[tuple[float, float]] = []
     stats: dict = {}
     # vad=union: iPhone が聞き逃した声も PC で探して、一緒に文字にする
@@ -1866,10 +2022,10 @@ def transcribe_reply(engine: Ensemble, audio: np.ndarray, segments: list[tuple[f
             extra = []
     if extra:
         lines = engine.transcribe(audio, segments + extra, hints=hints, prompt=prompt, weights=weights,
-                                  extra_from=len(segments), enhance=enhance, stats=stats)
+                                  extra_from=len(segments), enhance=enhance, stats=stats, on_draft=draft_hook)
     else:
         lines = engine.transcribe(audio, segments, hints=hints, prompt=prompt, weights=weights,
-                                  enhance=enhance, stats=stats)
+                                  enhance=enhance, stats=stats, on_draft=draft_hook)
     took = time.time() - started
     voiced = sum(b - a for a, b in segments)
     log(f"{who}{duration:.0f} 秒（声 {voiced:.0f} 秒）→ {len(lines)} 行、{took:.1f} 秒")
@@ -1894,8 +2050,9 @@ def find_voice(audio: np.ndarray, threads: int = 1) -> list[tuple[float, float]]
     return find_extra(audio, [], threads)
 
 
-def run_job(path: Path, params: dict, name: str) -> tuple[dict, dict]:
-    """後で受け取る文字起こしの1つ分。区間は PC が探す。答えは /transcribe と同じ形。"""
+def run_job(path: Path, params: dict, name: str, draft=None) -> tuple[dict, dict]:
+    """後で受け取る文字起こしの1つ分。区間は PC が探す。答えは /transcribe と同じ形。
+    版 8: draft（jobqueue の下書きの口）があれば、速いモデルだけの下書きを先に残す。"""
     started = time.time()
     audio = load_audio(path.read_bytes())
     segments = find_voice(audio)
@@ -1905,7 +2062,7 @@ def run_job(path: Path, params: dict, name: str) -> tuple[dict, dict]:
         enhance = bool(params.get("noisy"))
     return transcribe_reply(Handler.engine, audio, segments, list(params.get("hints") or []), None,
                             parse_weights(params.get("weights")), bool(enhance), False,
-                            f"後で受け取る文字起こし {name}: ", "job", started)
+                            f"後で受け取る文字起こし {name}: ", "job", started, on_draft=draft)
 
 
 def dash_info() -> dict:
@@ -1950,11 +2107,28 @@ def dash_info() -> dict:
                        "semantic_model": semantic.EMBED_MODEL, "semantic_state": state,
                        "semantic_count": index.status()["count"] if index is not None and index.enabled else 0},
             "job_counts": App.jobs.counts() if App.jobs else {}, "jobs": App.jobs.recent(20) if App.jobs else [],
+            # 版 8: 直近のでき上がった仕事の、PC の待ち・作業の時間
+            "job_latency": App.jobs.latency() if App.jobs else None,
             "speed": App.recent.speed("transcribe", 20), "pairs": App.recent.pairs(),
             "update": App.updater.status() if App.updater else {"auto": App.auto_update, "state": "—"},
             "problems": dashboard.problems(lines, 15),
+            # 版 9: 学び直しの材料の数（見守りの画面の「学び直し」と「聞いて直す」への入口）
+            "personal": personal_info(),
             # 版 7（ops）: 実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割（動いていなければ空）
             "ops": ops.dash_info()}
+
+
+def personal_info() -> dict:
+    """版 9: 材料の数と、学び直しに要る数（自動の学び直しの設定があれば、その数）"""
+    need = MIN_SAMPLES
+    auto = ops.train_auto()
+    if isinstance(auto, dict) and isinstance(auto.get("min_samples"), int):
+        need = auto["min_samples"]
+    try:
+        count = len(read_samples(PERSONAL_DATA))
+    except Exception:  # noqa: BLE001
+        count = 0
+    return {"count": count, "need": need, "records": App.records is not None}
 
 
 def start_v6(threads: int) -> None:
@@ -1992,6 +2166,7 @@ def start_v6(threads: int) -> None:
 def start_records() -> None:
     try:
         App.records = records.RecordStore(HOME, log, load_config)
+        App.records.sampler = review_sample   # 版 9: 「聞いて直す」で材料を作る
         App.records.start()
     except Exception as error:  # noqa: BLE001 — 始められなくても、ほかの受け付けは続ける
         App.records = None
@@ -2231,7 +2406,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         # 版 7（records）: 記録の画面・保存した音声（合言葉は見守りの画面と同じ）と、GET /edits（Bearer）
         if recordsui.handles(path):
-            recordsui.http(self, url, "GET", App.records, App.semantic, log)
+            recordsui.http(self, url, "GET", App.records, App.semantic, log, personal_info)
             return
         if path == "/edits":
             records.http_get_edits(self, App.records, url.query, log)
@@ -2348,9 +2523,18 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "start と end（秒）が要ります"})
             return
         text = (query.get("text") or [""])[0]
+        # 版 9: 省ける "audio"（Line.audio）・"offset"（行の位置の秒）。PC の「聞いて直す」と同じ行かを見分けるのに使う
+        source = None
+        hint = (query.get("audio") or [""])[0]
+        try:
+            offset = float((query.get("offset") or [""])[0])
+        except ValueError:
+            offset = None
+        if hint and offset is not None and np.isfinite(offset):
+            source = {"audio": hint[:200], "offset": round(offset, 2)}
         try:
             audio = load_audio(data)
-            count, added = save_sample(PERSONAL_DATA, audio, start, end, text)
+            count, added = save_sample(PERSONAL_DATA, audio, start, end, text, source)
         except ValueError as error:
             self.send_json(400, {"error": str(error)})
             return
@@ -2629,6 +2813,7 @@ def test(path: str, engine: Ensemble, segments: str | None, hints: list[str], en
 
 def check_vote() -> None:
     """多数決の決まりを確かめる（モデル無しで動く。CI で使う）。"""
+    isolate_home()  # 版 8: 本物の HOME の log.txt やデータに書かない
     cases = [
         # 2つが同じなら、それを選ぶ
         ({"haas": "今日は会議です", "reazon": "今日は会議です", "whisper": "教は買いぎです"}, "今日は会議です", 0.5),
@@ -3185,6 +3370,11 @@ def check_enhance(audio: np.ndarray, ranges: list[tuple[float, float]], threads:
 
 
 def main() -> None:
+    # 版 9: MCP サーバー（stdio）。答えの通り道（標準出力）に何も混ぜないよう、ほかの何よりも先に分ける
+    if "--mcp" in sys.argv[1:]:
+        import lifelog_mcp
+
+        sys.exit(lifelog_mcp.main([a for a in sys.argv[1:] if a != "--mcp"]))
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
     parser = argparse.ArgumentParser(description="LifeLog PC（家の PC で3つの音声モデルを動かして多数決で文字にする）")
@@ -3239,6 +3429,15 @@ def main() -> None:
     parser.add_argument("--check-v7-ops", action="store_true",
                         help="版 7 の見守り（実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割）を、"
                              "一時フォルダと作り物の相手で確かめる（ネットも GPU も使わない）")
+    # 版 8
+    parser.add_argument("--check-v8", action="store_true",
+                        help="版 8（時間・待ち合わせ・通知・下書き・新しい区切りから）を、一時フォルダと作り物のモデルで確かめる")
+    # 版 9
+    parser.add_argument("--check-v9", action="store_true",
+                        help="版 9（職場の会話の印・聞いて直す・記録を読む MCP サーバー）を、一時フォルダと作り物の記録で確かめる")
+    parser.add_argument("--mcp", action="store_true",
+                        help="この PC の Claude Code から記録を読む MCP サーバー（stdio）として動く。読むだけで、"
+                             "職場の会話は返さない（ほかに --home・--ollama-url を付けられる。くわしくは README.txt）")
     parser.add_argument("--fake-models", action="store_true",
                         help="モデルを読み込まず、作り物のモデルで起動する（受け口・見守りの画面・GPU の時間割を試すとき用。"
                              "文字起こしの答えは作り物）")
@@ -3247,6 +3446,9 @@ def main() -> None:
     if args.startup or args.no_startup:
         set_startup(args.startup)
         return
+    if args.check_vote or args.check_v7_ops or args.check_v7_records or args.check_v8 or args.check_v9:
+        # 版 8: 確かめるときは、本物の HOME（log.txt・データ）に書かない
+        isolate_home()
     if args.check_vote:
         check_vote()
         return
@@ -3254,6 +3456,14 @@ def main() -> None:
         import v7checks_ops
 
         sys.exit(1 if v7checks_ops.run(sys.modules[__name__]) else 0)
+    if args.check_v8:  # 版 8: 時間・待ち合わせ・通知・下書き・新しい順
+        import v8checks
+
+        sys.exit(1 if v8checks.run(sys.modules[__name__]) else 0)
+    if args.check_v9:  # 版 9: 職場の会話の印・聞いて直す・記録を読む MCP サーバー
+        import v9checks
+
+        sys.exit(1 if v9checks.run(sys.modules[__name__]) else 0)
     if args.check_extras:
         check_extras(args.check_extras, max(1, args.threads // 2))
         return

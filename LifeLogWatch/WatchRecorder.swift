@@ -3,11 +3,11 @@ import Observation
 import UserNotifications
 import WatchKit
 
-/// 時計で録音し続け、5分ほどで区切ったファイルを iPhone に送る。
+/// 時計で録音し続け、区切ったファイル（短めの設定で長くても2分、ふつうで5分ほど）を iPhone に送る。
 /// 画面が消えているあいだは録音を新しく始め直せないので、マイクは止めずに
 /// AVAudioEngine で流し続け、書き込むファイルだけを切り替える。ほぼ無音の区切りは捨てる。
 /// 1分続けて静かなら書くのを休み、音がしたらその1秒前から書き始める（無音を送らない）。
-/// 区切りは、5分たったあとの声の途切れたところで切る（言葉の途中で切らないため。ChunkCutter）。
+/// 区切りは、決めた長さを過ぎたあとの声の途切れたところで切る（言葉の途中で切らないため。ChunkCutter）。
 /// 音は文字起こしに使う 16kHz・1ch にしてから書く（圧縮と送る量が減り、電池が長持ちする）。
 @MainActor
 @Observable
@@ -52,9 +52,10 @@ final class WatchRecorder: NSObject {
     private static let wasRecordingKey = "wasRecording"
     private static let watchdogID = "watchdog"
     private static let unsentID = "unsent"
-    /// 送れていない区切りがこれだけ溜まったら知らせる（低電力モードでは、まとめて送るぶん多めに待つ）
-    private static let unsentAlert = 4
-    private static let unsentAlertLowPower = 6
+    /// 送れていない区切りがこれだけ溜まったら知らせる（低電力モードでは、まとめて送るぶん多めに待つ）。
+    /// 5分の区切りでの数。短めの区切りでは、同じくらいの時間になるよう数を増やす（2026-11-07。ChunkCutter.scaled）
+    private static var unsentAlert: Int { ChunkCutter.scaled(4) }
+    private static var unsentAlertLowPower: Int { ChunkCutter.scaled(6) }
     @ObservationIgnored private var unsentAlerted = false
 
     override init() {
@@ -179,13 +180,14 @@ final class WatchRecorder: NSObject {
 
     /// 次の区切りの少しあとに鳴る通知を予約し、区切るたびに先へ延ばす。
     /// 時計がアプリを終わらせたり止めたりして延ばせなくなると、この通知が鳴って気づける。
+    /// 静かで休んでいるあいだは5分ごと（restTick）にしか延ばさないので、区切りが短くても5分より先に鳴らす（2026-11-07）
     private func armWatchdog() {
         let content = UNMutableNotificationContent()
         content.title = "LifeLog の録音が止まっているかもしれません"
         content.body = "LifeLog を開くと録音を再開します。"
         content.sound = .default
         let trigger = UNTimeIntervalNotificationTrigger(
-            timeInterval: ChunkCutter.target + ChunkCutter.maxExtra + 120, repeats: false)
+            timeInterval: max(ChunkCutter.longest, ChunkWriter.restTick) + 120, repeats: false)
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: Self.watchdogID, content: content, trigger: trigger))
     }
@@ -332,7 +334,7 @@ final class WatchRecorder: NSObject {
 }
 
 /// マイクの音を 16kHz・1ch にして、今の区切りのファイルに書く。マイクの音は別のスレッドから届くので鍵をかける。
-/// 5分たったあとの静かなところで、自分で次の区切りに切り替える。
+/// 決めた長さを過ぎたあとの静かなところで、自分で次の区切りに切り替える。
 /// 1分続けて静かなら区切りを閉じて休み、音がしたらその1秒前から次の区切りを書き始める（SilenceGate）。
 final class ChunkWriter: @unchecked Sendable {
     static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
