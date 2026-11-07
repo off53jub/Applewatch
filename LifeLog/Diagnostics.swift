@@ -212,6 +212,22 @@ extension Pipeline {
                     "\(lowPowerArrivals.count) 個・ふつう \(WatchDelayLog.text(lowPowerArrivals[lowPowerArrivals.count / 2]))")
             }
         }
+        // 届かないとき（直近24時間に1つも届かないと上の行は出ない）にも分かるように、最後に届いた時刻と、時計に残っている数（2026-11-07）
+        if let last = watchDelays.entries.last {
+            let late = Date.now.timeIntervalSince(last.received)
+            add("時計", "最後に届いた時計の区切り", Self.when(last.received), isWatchRecording ? late < 3600 : nil)
+        } else if isWatchRecording {
+            add("時計", "最後に届いた時計の区切り", "まだ届いていません", false)
+        }
+        let detail = UserDefaults.standard.dictionary(forKey: PCDiag.watchDetailKey) ?? [:]
+        if let pending = detail["watchPending"] as? Int {
+            let kept = detail["watchKept"] as? Int ?? 0
+            let moving = detail["watchOutstanding"] as? Int
+            var text = "まだ送っていない \(pending) 個" + (moving.map { "（うち送っている途中 \($0) 個）" } ?? "") + "・返事待ち \(kept) 個"
+            if let cut = detail["watchLastCut"] as? Double { text += "・最後に区切った " + Self.when(Date(timeIntervalSince1970: cut)) }
+            if detail["watchHeld"] as? Bool == true { text += "・休む場所にいると思っている" }
+            add("時計", "時計に残っている区切り", text, pending + kept <= ChunkCutter.scaled(4))
+        }
 
         // 文字になるまで（区間ごとの中央値。2026-11-07。Latency.swift）
         for row in Latency.rows() { add("文字になるまで", row.label, row.value, row.ok) }

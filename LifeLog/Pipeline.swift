@@ -341,7 +341,11 @@ final class Pipeline {
             // 時計が PC に送るときのヒントも、ときどき新しくする（10分に1回まで）
             refreshWatchPCHints()
         }
-        receiver.onWatchState = { [weak self] state in self?.noteWatchState(state) }
+        receiver.onWatchState = { [weak self] state in
+            self?.noteWatchState(state)
+            // 時計の区切りが届かないときの立て直し（2026-11-07。WatchRescue.swift）
+            self?.checkWatchDelivery(state)
+        }
         receiver.onNewPerson = { [weak self] time in self?.markNewPerson(at: time) }
         receiver.onMeeting = { [weak self] on in self?.setMeeting(on) }
         receiver.onAsk = { [weak self] _ in self?.recentWords() ?? "" }

@@ -23,7 +23,11 @@ extension Pipeline {
     /// init から1回だけ呼ぶ
     func setUpWatchDirect() {
         homePC.onWatchSettingsChange = { [weak self] in self?.scheduleWatchPCSync() }
-        receiver.onActivated = { [weak self] in self?.syncWatchPC() }
+        receiver.onActivated = { [weak self] in
+            self?.syncWatchPC()
+            // 時計に残っている区切りを送り直してもらう（起動のたびに1回。WatchRescue.swift）
+            self?.askWatchResendOnLaunch()
+        }
     }
 
     /// 設定が変わったら、2秒待ってから時計に送る

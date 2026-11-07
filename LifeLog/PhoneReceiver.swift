@@ -129,6 +129,29 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         let charging: Bool?
         /// iPhone の返事を待っている控えの数
         let kept: Int?
+        /// 時計の中の、まだ送り終わっていない区切りの数（送っている途中を含む。古い時計のアプリでは nil。2026-11-07）
+        var unsent: Int? = nil
+        /// そのうち、WatchConnectivity が送っている途中の数
+        var outstanding: Int? = nil
+        /// 時計が最後に区切った時刻（無音で捨てたものも含む）
+        var lastCut: Date? = nil
+        /// 時計が「録音を休む場所にいる」と思っているか
+        var held: Bool? = nil
+        /// 時計で、止めるボタンを押さずに録音していた（録音しているつもり）か
+        var wanted: Bool? = nil
+
+        /// 時計の中に残っている区切り（まだ送っていない＋返事待ち）。どちらも分からなければ nil
+        var leftOnWatch: Int? {
+            guard unsent != nil || kept != nil else { return nil }
+            return (unsent ?? 0) + (kept ?? 0)
+        }
+    }
+
+    /// 時計に「残っている区切りを全部送り直して」と頼む（iPhone のアプリが起動したとき・区切りが届かないとき。2026-11-07）。
+    /// 時計はまだ送っていないものと、返事待ちの控えを送り直す。もう受け取った区切りは、返事だけして捨てる（二重にならない）
+    func askWatchToResend() {
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated, WCSession.default.isPaired else { return }
+        WCSession.default.transferUserInfo(["resendKept": true])
     }
 
     /// 前に送った設定（会議モードだけ変えるときなどに、ほかを残す）
@@ -229,14 +252,21 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         let at = (context["at"] as? Double).map { Date(timeIntervalSince1970: $0) }
         let resting = (context["resting"] as? Double).map { Date(timeIntervalSince1970: $0) }
         let lowPower = context["lowPower"] as? Bool
-        let state = WatchState(at: at ?? .now, recording: recording, resting: recording && resting != nil, lowPower: lowPower,
+        var state = WatchState(at: at ?? .now, recording: recording, resting: recording && resting != nil, lowPower: lowPower,
                                battery: context["battery"] as? Double, charging: context["charging"] as? Bool,
                                kept: context["kept"] as? Int)
+        // 時計の中に残っている区切りの様子（2026-11-07。古い時計のアプリは送らない）
+        state.unsent = context["unsent"] as? Int
+        state.outstanding = context["outstanding"] as? Int
+        state.lastCut = (context["lastCut"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        state.held = context["held"] as? Bool
+        state.wanted = context["wanted"] as? Bool
+        let snapshot = state
         Task { @MainActor in
             if let lowPower { self.onWatchLowPower?(lowPower) }
             self.onWatchResting?(recording ? resting : nil)
             self.onWatchRecording?(recording, at)
-            self.onWatchState?(state)
+            self.onWatchState?(snapshot)
             self.onWatchContext?()
         }
     }

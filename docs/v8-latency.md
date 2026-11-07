@@ -77,3 +77,8 @@ PC の版は 8（上げるのはつなぐ人）。`/hello` の features に、�
   `cut`（時計で区切った時刻）・`sentAt`（時計が送り始めた時刻）・`lowPower`（送ったとき低電力モードか）・`pc`（PC にも送った）。時刻は 1970 年からの秒。
 - iPhone の `/diag` の `state.latency` に、省ける項目 `watchWait`（`cut`→`sentAt`）と `handoff`（`sentAt`→iPhone のアプリが受け取った）を足した（秒）。
   PC は分かれば実機の様子の行に出す。
+- 時計に残っている区切り（届かないときに見分ける。どれも省ける）: 時計は applicationContext と起こしの sendMessage に
+  `unsent`（まだ送り終わっていない数）・`outstanding`（そのうち送っている途中）・`lastCut`（最後に区切った時刻）・`held`・`wanted` を足す（`kept` は前から）。
+  iPhone の `/diag` の state に `watchPending`・`watchOutstanding`・`watchKept`・`watchLastCut`（ISO 8601）・`watchHeld`・`watchWanted` を足し、
+  `watchUnsent` は分かれば「まだ送っていない＋返事待ち」にする（古い時計のアプリでは今までどおり返事待ちの数）。
+- iPhone から時計への `transferUserInfo` の `{"resendKept": true}`: 時計は、まだ送っていないものと返事待ちの控え（送ってから5分より古いもの）を全部送り直す。

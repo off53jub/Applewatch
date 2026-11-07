@@ -175,6 +175,34 @@ final class WatchDeliveryTests: XCTestCase {
         XCTAssertNil(WatchDelayLog.splitText(entries))
     }
 
+    // MARK: - 届かないときの立て直し（WatchRescue.swift）
+
+    func testAskResendOnlyWhenLeftAndQuiet() {
+        let now = t
+        // 時計に残っていて、30分届いていなくて、前に頼んでから1時間たった
+        XCTAssertTrue(Pipeline.shouldAskResend(left: 3, lastArrival: now.addingTimeInterval(-31 * 60),
+                                               lastAsked: .distantPast, now: now))
+        XCTAssertTrue(Pipeline.shouldAskResend(left: 1, lastArrival: nil, lastAsked: .distantPast, now: now))
+        // 残っていない・分からない（古い時計のアプリ）・最近届いた・最近頼んだ
+        XCTAssertFalse(Pipeline.shouldAskResend(left: 0, lastArrival: nil, lastAsked: .distantPast, now: now))
+        XCTAssertFalse(Pipeline.shouldAskResend(left: nil, lastArrival: nil, lastAsked: .distantPast, now: now))
+        XCTAssertFalse(Pipeline.shouldAskResend(left: 3, lastArrival: now.addingTimeInterval(-10 * 60),
+                                                lastAsked: .distantPast, now: now))
+        XCTAssertFalse(Pipeline.shouldAskResend(left: 3, lastArrival: nil, lastAsked: now.addingTimeInterval(-30 * 60), now: now))
+    }
+
+    func testLeftOnWatchCountsUnsentAndKept() {
+        var state = PhoneReceiver.WatchState(at: t, recording: true, resting: false, lowPower: false,
+                                             battery: 0.5, charging: false, kept: 2)
+        // 古い時計のアプリ（返事待ちの数だけ）
+        XCTAssertEqual(state.leftOnWatch, 2)
+        state.unsent = 5
+        XCTAssertEqual(state.leftOnWatch, 7)
+        let unknown = PhoneReceiver.WatchState(at: t, recording: true, resting: false, lowPower: nil,
+                                               battery: nil, charging: nil, kept: nil)
+        XCTAssertNil(unknown.leftOnWatch)
+    }
+
     func testWatchDelaySplitText() {
         let base = t
         let entries = (0..<3).map { i in

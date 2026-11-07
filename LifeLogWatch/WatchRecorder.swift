@@ -91,8 +91,82 @@ final class WatchRecorder: NSObject {
         if UserDefaults.standard.bool(forKey: Self.wasRecordingKey) {
             Task { @MainActor in
                 await self.start()
-                if self.isRecording { self.message = "途中で止まっていた録音を再開しました" }
+                if self.isRecording {
+                    self.message = "途中で止まっていた録音を再開しました"
+                } else {
+                    // 再開できなかった（時計が裏でアプリを起こしたときは、録音を始めさせてもらえないことがある）。
+                    // iPhone に「録音していない」と知らせ、時計にも知らせる（2026-11-07）
+                    self.sender.isRecording = false
+                    self.notifyNotRecording("LifeLog を開くと録音を再開します。")
+                }
             }
+        }
+    }
+
+    /// 録音しているつもりなのに録音できていないことを、通知で知らせる（2026-11-07）
+    private func notifyNotRecording(_ body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "時計の LifeLog が録音していません"
+        content.body = body
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "not-recording", content: content, trigger: nil))
+    }
+
+    // MARK: - マイクの音が本当に届いているか（2026-11-07）
+
+    /// 録音中なのに、マイクの音がこれだけ届かなければ、マイクを流し直す。流し直しても届かなければ止めて知らせる。
+    /// 音が届かないと区切りも「録音は続いている」の知らせも作られず、iPhone は時計が録音中だと思ったままになる
+    private static let micSilence: TimeInterval = 20
+    @ObservationIgnored private var micCheck: Task<Void, Never>?
+    /// 電話などでマイクが止められている（そのあいだは確かめない）
+    @ObservationIgnored private var interruptedSince: Date?
+
+    private func watchMicrophone() {
+        micCheck?.cancel()
+        micCheck = Task { @MainActor [weak self] in
+            var restarted = false
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.micSilence))
+                guard let self, self.isRecording, !Task.isCancelled else { return }
+                if let since = self.interruptedSince, Date.now.timeIntervalSince(since) < 120 { continue }
+                // 音は届いているのに書く先が無ければ開く（割り込みのあとなど）
+                self.reopenIfNeeded()
+                let silent = Date.now.timeIntervalSince(self.writer.lastBufferAt)
+                guard silent >= Self.micSilence else {
+                    restarted = false
+                    continue
+                }
+                if !restarted {
+                    restarted = true
+                    self.forceRestartEngine()
+                    continue
+                }
+                self.micCheck = nil
+                self.stopWithAlert("マイクの音が \(Int(silent)) 秒届いていません。LifeLog を開いて録音し直してください。")
+                return
+            }
+        }
+    }
+
+    /// 録音中なのに書く先（区切りのファイル）が開いていなければ開く（休んでいるときは開かない）
+    private func reopenIfNeeded() {
+        guard isRecording, !writer.isWriting else { return }
+        do {
+            try openChunk()
+        } catch {
+            stopWithAlert("録音を続けられませんでした: \(error.localizedDescription)")
+        }
+    }
+
+    /// マイクが動いているように見えても、音が来ないときに流し直す
+    private func forceRestartEngine() {
+        guard isRecording else { return }
+        do {
+            stopEngine()
+            try startEngine()
+        } catch {
+            stopWithAlert("マイクを流し直せませんでした。LifeLog を開いて録音し直してください。")
         }
     }
 
@@ -123,6 +197,7 @@ final class WatchRecorder: NSObject {
             UserDefaults.standard.set(true, forKey: Self.wasRecordingKey)
             message = ""
             sender.resendPending()
+            watchMicrophone()
             refreshStatus()
         } catch {
             stopEngine()
@@ -138,6 +213,9 @@ final class WatchRecorder: NSObject {
 
     func stop() {
         isRecording = false
+        micCheck?.cancel()
+        micCheck = nil
+        interruptedSince = nil
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.watchdogID])
         stopEngine()
         // 低電力モードで溜めていた区切りも、止めたら送る
@@ -209,6 +287,8 @@ final class WatchRecorder: NSObject {
 
     /// 書き終わった区切りを送る（ほぼ無音なら捨てる）。
     private func deliver(_ url: URL, peakDB: Float) {
+        // 区切った時刻を残す（無音で捨てる区切りも。iPhone が「録音が本当に続いているか」を見分ける。2026-11-07）
+        sender.noteCut()
         if peakDB < -50 {
             try? FileManager.default.removeItem(at: url)
         } else {
@@ -286,7 +366,14 @@ final class WatchRecorder: NSObject {
 
     /// 割り込みなどで止まったマイクを流し直す。
     private func restartEngine() {
-        guard isRecording, !engine.isRunning else { return }
+        interruptedSince = nil
+        guard isRecording else { return }
+        // 割り込みの始まりで区切りを閉じたが、マイクは止まっていなかったとき、前はここで何もせず、
+        // 区切りを開かないまま「録音中」が続いていた（音は届くのに書く先が無い。2026-11-07）。書く先を開き直す
+        if engine.isRunning {
+            reopenIfNeeded()
+            return
+        }
         do {
             stopEngine()
             try startEngine()
@@ -315,6 +402,7 @@ final class WatchRecorder: NSObject {
             guard self.isRecording else { return }
             switch type {
             case .began:
+                self.interruptedSince = .now
                 self.finishChunk()
                 // 「終わった」の知らせが来ないこともあるので、1分たっても止まったままなら自分で再開する
                 try? await Task.sleep(for: .seconds(60))
@@ -383,8 +471,17 @@ final class ChunkWriter: @unchecked Sendable {
     }
 
     func prepare(from input: AVAudioFormat) {
-        lock.withLock { converter = AVAudioConverter(from: input, to: Self.format) }
+        lock.withLock {
+            converter = AVAudioConverter(from: input, to: Self.format)
+            lastBuffer = .now
+        }
     }
+
+    /// 最後にマイクの音が届いた時刻（休んでいるあいだも届く。届かなければマイクが止まっている。2026-11-07）
+    private var lastBuffer = Date.distantPast
+    var lastBufferAt: Date { lock.withLock { lastBuffer } }
+    /// 区切りのファイルに書いているか、静かで休んでいるか（どちらでもなければ、音が来ても捨てている）
+    var isWriting: Bool { lock.withLock { file != nil || resting } }
 
     func open(_ url: URL) throws {
         // ファイルができる前に「書いている途中」と知らせておく
@@ -407,6 +504,7 @@ final class ChunkWriter: @unchecked Sendable {
     func write(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
         defer { lock.unlock() }
+        if buffer.frameLength > 0 { lastBuffer = .now }
         guard file != nil || resting, let converter, buffer.frameLength > 0 else { return }
         let ratio = Self.format.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64

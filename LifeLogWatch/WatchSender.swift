@@ -11,7 +11,8 @@ import WatchKit
 /// 区切りには「時計で区切った時刻・送り始めた時刻」を添える（iPhone が時計で待った時間と受け渡しの時間を分けて測る）。
 /// 家の Wi-Fi にいるときは、家の PC にも直接送る（WatchPC。iPhone への送りは今までどおり）。
 /// 送り終わった区切りは「送った」フォルダに控えとして残し、iPhone が「受け取った」と返事したら消す（2026-11-06）。
-/// 30分たっても返事が無ければ送り直す（3回まで）。控えは3日・300MB まで。
+/// 30分たっても返事が無ければ送り直す（30分ごとに3回、そのあとは6時間ごと）。控えは7日・300MB まで（2026-11-07）。
+/// iPhone から頼まれたとき・iPhone のアプリが入れ直されたときは、残っている区切りを全部送り直す（2026-11-07）。
 /// 返事をしない古い iPhone のアプリには、今までどおり送り終わったら消す。
 final class WatchSender: NSObject, WCSessionDelegate {
     static let pendingDir: URL = {
@@ -29,8 +30,11 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// 返事が無ければ、これだけたってから送り直す
     static let resendAfter: TimeInterval = 30 * 60
     static let maxResends = 3
-    /// 控えを残す長さと大きさ
-    static let keepSentFor: TimeInterval = 72 * 3600
+    /// 3回送り直しても返事が無ければ、そのあとは6時間ごとに送り直す（控えが残っているかぎり。2026-11-07）。
+    /// 前は3回で諦めていて、iPhone のアプリが受け取れない時間が長いと、控えが残っていても二度と送らなかった
+    static let slowResendAfter: TimeInterval = 6 * 3600
+    /// 控えを残す長さと大きさ（2026-11-07 に3日から7日へ。iPhone のアプリの入れ替えなどで受け取れない日があっても失わないように）
+    static let keepSentFor: TimeInterval = 7 * 86400
     static let keepSentBytes = 300 * 1024 * 1024
     /// 送り終わった時刻と、送り直した回数（ファイル名ごと）
     private static let sentAtKey = "sentAt"
@@ -136,10 +140,37 @@ final class WatchSender: NSObject, WCSessionDelegate {
             return true
         }
         guard due else { return }
-        let message: [String: Any] = ["wake": true, "recording": isRecording, "at": now.timeIntervalSince1970,
-                                      "lowPower": ProcessInfo.processInfo.isLowPowerModeEnabled,
-                                      "kept": sentFiles().count]
+        var message: [String: Any] = ["wake": true, "recording": isRecording, "at": now.timeIntervalSince1970,
+                                      "lowPower": ProcessInfo.processInfo.isLowPowerModeEnabled]
+        for (key, value) in deliveryState() { message[key] = value }
         WCSession.default.sendMessage(message, replyHandler: nil, errorHandler: { _ in })
+    }
+
+    /// 時計の中に残っている区切りの様子（iPhone に知らせる。2026-11-07）。
+    /// - kept: 送り終わって、iPhone の「受け取った」の返事を待っている数（前からある）
+    /// - unsent: まだ送り終わっていない数（送っている途中を含む。書いている途中のものは除く）
+    /// - outstanding: そのうち、WatchConnectivity が送っている途中の数
+    /// - lastCut: 最後に区切った時刻（無音で捨てた区切りも含む。録音が本当に続いているかを iPhone が見分ける）
+    /// - held: 時計が「録音を休む場所にいる」と思っているか（iPhone の思っていることと違えば、iPhone が設定を送り直す）
+    /// - wanted: 止めるボタンを押さずに録音していた（録音しているつもり）か
+    private func deliveryState() -> [String: Any] {
+        var out: [String: Any] = ["kept": sentFiles().count, "unsent": unsentCount(), "held": SilenceGate.held,
+                                  "wanted": UserDefaults.standard.bool(forKey: Self.wantedKey)]
+        if WCSession.default.activationState == .activated {
+            out["outstanding"] = WCSession.default.outstandingFileTransfers.count
+        }
+        let lastCut = UserDefaults.standard.double(forKey: Self.lastCutKey)
+        if lastCut > 0 { out["lastCut"] = lastCut }
+        return out
+    }
+
+    /// WatchRecorder が「録音中だった」を残す名前（WatchRecorder.wasRecordingKey と同じ）
+    private static let wantedKey = "wasRecording"
+    private static let lastCutKey = "lastCut"
+
+    /// 区切った（無音で捨てたものも含む）。最後に区切った時刻を残す
+    func noteCut(at date: Date = .now) {
+        UserDefaults.standard.set(date.timeIntervalSince1970, forKey: Self.lastCutKey)
     }
 
     private func publish() {
@@ -152,7 +183,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
             context["battery"] = battery.level
             context["charging"] = battery.charging
         }
-        context["kept"] = sentFiles().count
+        for (key, value) in deliveryState() { context[key] = value }
         try? WCSession.default.updateApplicationContext(context)
     }
 
@@ -279,7 +310,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         }
     }
 
-    /// 送ってから30分たっても返事の無い区切りを、送り直す（3回まで）
+    /// 送ってから30分たっても返事の無い区切りを、送り直す（30分ごとに3回まで。そのあとは6時間ごと。2026-11-07）。
+    /// 前は送り直した時刻を残していなかったので、30分たつと3回を数分のうちに使い切り、そのあとは送らなかった
     func resendUnacknowledged() {
         guard Self.phoneAcks, WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
         let outstanding = Set(WCSession.default.outstandingFileTransfers.map { $0.file.fileURL.lastPathComponent })
@@ -288,19 +320,55 @@ final class WatchSender: NSObject, WCSessionDelegate {
              resent: UserDefaults.standard.dictionary(forKey: Self.resentKey) as? [String: Int] ?? [:])
         }
         var counts = stored.resent
+        var sentAt = stored.sentAt
+        let now = Date.now
         for url in sentFiles() {
             let name = url.lastPathComponent
-            guard !outstanding.contains(name), (counts[name] ?? 0) < Self.maxResends else { continue }
-            let sent = stored.sentAt[name].map { Date(timeIntervalSince1970: $0) } ?? .distantPast
-            guard Date.now.timeIntervalSince(sent) >= Self.resendAfter else { continue }
-            counts[name, default: 0] += 1
+            guard !outstanding.contains(name) else { continue }
+            let count = counts[name] ?? 0
+            let sent = sentAt[name].map { Date(timeIntervalSince1970: $0) } ?? .distantPast
+            guard now.timeIntervalSince(sent) >= (count < Self.maxResends ? Self.resendAfter : Self.slowResendAfter) else { continue }
+            counts[name] = count + 1
+            sentAt[name] = now.timeIntervalSince1970
             WCSession.default.transferFile(url, metadata: WatchDelivery.metadata(
-                zone: .current, cut: Self.cutTime(url), sent: .now, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                viaPC: WatchPC.wasSent(name), resend: counts[name] ?? 1))
+                zone: .current, cut: Self.cutTime(url), sent: now, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                viaPC: WatchPC.wasSent(name), resend: count + 1))
         }
-        if counts != stored.resent {
-            lock.withLock { UserDefaults.standard.set(counts, forKey: Self.resentKey) }
+        guard counts != stored.resent else { return }
+        lock.withLock {
+            // 控えの時刻は、ほかの糸（返事の受け取り）も書くので、読み直して足す
+            var savedAt = UserDefaults.standard.dictionary(forKey: Self.sentAtKey) as? [String: Double] ?? [:]
+            var savedCounts = UserDefaults.standard.dictionary(forKey: Self.resentKey) as? [String: Int] ?? [:]
+            for (name, count) in counts where count != stored.resent[name] {
+                // 返事が来て消えた区切りは、書き戻さない
+                guard FileManager.default.fileExists(atPath: Self.sentDir.appendingPathComponent(name).path) else { continue }
+                savedCounts[name] = count
+                savedAt[name] = sentAt[name]
+            }
+            UserDefaults.standard.set(savedAt, forKey: Self.sentAtKey)
+            UserDefaults.standard.set(savedCounts, forKey: Self.resentKey)
         }
+    }
+
+    /// 返事待ちの控えを、回数にかかわらずすぐ送り直す（iPhone から頼まれた・iPhone のアプリが入れ直された。2026-11-07）。
+    /// 送ってから minAge より新しいものは、返事がまだ届いていないだけかもしれないので送らない。
+    /// iPhone は、もう受け取った区切りなら返事だけして捨てるので、送り直しても二重にはならない
+    func resendKept(minAge: TimeInterval = 300) {
+        guard Self.phoneAcks else { return }
+        let names = sentFiles().map(\.lastPathComponent)
+        guard !names.isEmpty else { return }
+        let now = Date.now.timeIntervalSince1970
+        lock.withLock {
+            var sentAt = UserDefaults.standard.dictionary(forKey: Self.sentAtKey) as? [String: Double] ?? [:]
+            var resent = UserDefaults.standard.dictionary(forKey: Self.resentKey) as? [String: Int] ?? [:]
+            for name in names where now - (sentAt[name] ?? 0) >= minAge {
+                resent[name] = 0
+                sentAt[name] = 0
+            }
+            UserDefaults.standard.set(sentAt, forKey: Self.sentAtKey)
+            UserDefaults.standard.set(resent, forKey: Self.resentKey)
+        }
+        resendUnacknowledged()
     }
 
     /// 古い控え（3日より前）と、300MB を超えた分（古いものから）を消す
@@ -441,6 +509,12 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if let alert = userInfo["alert"] as? String { onAlert?(alert) }
         // 家の PC の家の中の住所と合言葉（合言葉は時計の Keychain に置く。2026-11-07。WatchPC）
         WatchPC.applyCredentials(userInfo)
+        // iPhone から「時計に残っている区切りを全部送り直して」（iPhone のアプリが起動したとき・区切りが届かないとき。2026-11-07）
+        if userInfo[Self.resendRequestKey] as? Bool == true {
+            resendPending()
+            resendKept()
+            publish()
+        }
         if let answer = userInfo["answer"] as? String { onAnswer?(answer, userInfo["question"] as? String ?? "") }
         onChange?()
     }
@@ -480,5 +554,17 @@ final class WatchSender: NSObject, WCSessionDelegate {
         }
         onChange?()
     }
-    func sessionCompanionAppInstalledDidChange(_ session: WCSession) { onChange?() }
+    func sessionCompanionAppInstalledDidChange(_ session: WCSession) {
+        // iPhone のアプリが入れ直された（TestFlight で入れ替えたなど）。前のアプリが受け取れなかった区切りがあるかもしれないので、
+        // まだ送っていないものと返事待ちの控えを、全部送り直す（2026-11-07）
+        if session.activationState == .activated, session.isCompanionAppInstalled {
+            resendPending()
+            resendKept(minAge: 0)
+            publish()
+        }
+        onChange?()
+    }
+
+    /// iPhone からの「残っている区切りを送り直して」の名前（PhoneReceiver.askWatchToResend と同じ）
+    static let resendRequestKey = "resendKept"
 }

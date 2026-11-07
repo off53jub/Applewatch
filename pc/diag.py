@@ -214,6 +214,14 @@ def concerns(record: dict, now: float) -> list[str]:
         chunk = parse_time(state.get("lastChunkAt"))
         if chunk is not None and snapshot - chunk > CHUNK_LATE:
             out.append(f"録音中なのに、録音の区切りが {ago(snapshot - chunk)} できていません（最後は {clock(chunk)}）")
+    # 2026-11-07: 時計が区切りを作っていない・時計に区切りが残っている（新しい時計のアプリだけが知らせる）
+    if state.get("watchRecording") is True and state.get("watchHeld") is not True and state.get("watchResting") is not True:
+        cut = parse_time(state.get("watchLastCut"))
+        if cut is not None and snapshot - cut > CHUNK_LATE:
+            out.append(f"時計が録音中なのに、時計が区切りを {ago(snapshot - cut)} 作っていません（最後は {clock(cut)}）")
+    pending = state.get("watchPending")
+    if isinstance(pending, int) and not isinstance(pending, bool) and pending >= 4:
+        out.append(f"時計の中に、まだ iPhone に送っていない区切りが {pending} 個あります")
     return out
 
 
@@ -279,6 +287,11 @@ def state_lines(record: dict) -> list[str]:
     lines = [f"録音: iPhone {_yes(state.get('phoneRecording'))}・時計 {_yes(state.get('watchRecording'))}"
              f"（時計の便り {when('watchHeartbeatAt')}・時計に残っている {state.get('watchUnsent', '—')}・"
              f"時計の build {state.get('watchBuild', '—')}）",
+             # 2026-11-07: 時計に残っている区切りの内訳（新しい時計のアプリだけ）
+             *([f"時計の中: まだ送っていない {state.get('watchPending')}・送っている途中 {state.get('watchOutstanding', '—')}・"
+                f"返事待ち {state.get('watchKept', '—')}・最後に区切った {when('watchLastCut')}・"
+                f"休む場所 {_yes(state.get('watchHeld'))}・録音しているつもり {_yes(state.get('watchWanted'))}"]
+               if 'watchPending' in state else []),
              f"待ち: 取り込み {state.get('queue', '—')}・PC の仕事 {state.get('jobsPending', '—')}・"
              f"最後に文字にした {when('lastProcessedAt')}・最後の区切り {when('lastChunkAt')}・"
              f"夜の処理 {state.get('nightlyDoneFor') or '—'} の分まで"]
