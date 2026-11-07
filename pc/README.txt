@@ -254,7 +254,7 @@ Haas-ja と ReazonSpeech にも「ホットワード」として効かせます�
   環境変数 LIFELOG_JOBWAIT_PING（空白を送る間の秒）・LIFELOG_JOBWAIT_LIMIT（待つ長さの上限の秒）で短くでき、
   LIFELOG_FAKE_SECONDS（秒）で作り物の Whisper を遅くできます（下書きが先に出るのを見るため）。
   試すときは、環境変数 LOCALAPPDATA を一時のフォルダにして、ふだんの置き場所と番号 47615 を使わないでください。
-  --check-vote・--check-v7-ops・--check-v7-records・--check-v8・--check-v9 は、LOCALAPPDATA を替えなくても、自分で一時のフォルダを
+  --check-vote・--check-v7-ops・--check-v7-records・--check-v8・--check-v9・--check-v10 は、LOCALAPPDATA を替えなくても、自分で一時のフォルダを
   使います（ふだんの置き場所の記録 log.txt やデータには書きません）。
 
 ■ 版 9 で足したもの（職場の会話の印・聞いて直す・この PC の Claude から記録を読む）
@@ -277,6 +277,22 @@ PC の版の番号は 8 のままです。古い iPhone のアプリも、これ
 ・この PC の Claude Code から記録を読む（MCP サーバー）: 下の「この PC の Claude から記録に聞く」を見てください。
 ・確かめるとき:  LifeLogPC.exe --check-v9（一時のフォルダと作り物の記録で、職場の印・聞いて直す・材料を 2 重にしない・
   --exclude-work のときに MCP サーバーから職場の会話が出ないこと・既定では全部返すことを確かめます）
+
+■ 版 10 で足したもの（時計の外の道。決まりは docs/v10-watch-route.md）
+PC の版の番号は 10 です。古い iPhone のアプリも、これまでどおり動きます。
+・時計の区切りは iPhone を通ると何時間も遅れることがあるので、家の Wi-Fi の外にいる時計も、区切りを PC に直接
+  預けられるようにしました。Tailscale Funnel（https://<PC の Tailscale 名> → この PC の中の 127.0.0.1:47617）を通って届きます。
+・この受け口は「預けるだけ」です。GET /w/ping と POST /w/jobs だけを受け、見守りの画面・記録・ほかの受け口は全部 404 です。
+  この PC の中（127.0.0.1）だけで待つので、家の中の番号や Tailscale の番号から直接は届きません（Funnel を通ってだけ）。
+・合言葉は、ふだんの合言葉とは別の「時計の合言葉」です（%LOCALAPPDATA%\LifeLogPC\watch-token.txt。初めて起動したときに作ります）。
+  画面にも記録にも出しません。iPhone が GET /watch-route（ふだんの合言葉）で受け取って、時計に渡します。
+  作り直すときは、LifeLog PC を止めて watch-token.txt を消してから起動し直し、iPhone で家の PC の設定を開き直します。
+・時計の合言葉が 10 分に 10 回違うと、10 分のあいだ、この受け口はだれにも 429 を返します（記録に 1 回書きます）。
+・番号は --watch-port で変えられます（0 で使いません）。番号がほかのソフトに使われていれば、時計の外の道は無しで続けます。
+・Tailscale Funnel の設定は LifeLog PC は変えません（様子を読むだけ）。持ち主が 1 回だけ、手で次のように打ちます:
+    tailscale funnel --bg 47617
+  見守りの画面の「時計の外の道」に、受け口・Funnel がオンか・今日預かった区切りの数・断っているかが出ます。
+・確かめるとき:  LifeLogPC.exe --check-v10（一時のフォルダと作り物のモデル・作り物の Tailscale の答えで確かめます）
 
 ■ この PC の Claude から記録に聞く（MCP サーバー。2026-11-07 本人の了承で登録）
 この PC の Claude Code に「先週、母と何を話した？」のように聞けるようにする道具です。読むだけで、記録は変えられません。

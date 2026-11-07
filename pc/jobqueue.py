@@ -18,6 +18,11 @@ iPhone は録音の区切りを1つずつ裏で送っておき、PC が文字に
   呼ばない。途中で切れた・閉じるのが WAIT_CONFIRM 秒のうちに来なかったときは、渡せなかったとして通知する。
 - 下書き: runner が4つ目の引数 draft を受けるなら、draft(答えと同じ形) で下書きを残せる。GET はまだのとき下書きを返す。
 - 新しい区切りから: 待っているものが2つ以上あれば、いちばん新しく受けたものから文字にする。
+
+版 10（決まりは docs/v10-watch-route.md）:
+- 時計の外の道（watchroute.py の POST /w/jobs）から預かった仕事には "origin": "watch" を付ける。
+  http_post(..., origin="watch") は、待ち合わせ（wait）をしない・8MB まで・名前は「年月日-時分秒…-w.m4a」だけ。
+- GET /jobs?origin=watch は、時計から預かった仕事だけを返す。GET /jobs・GET /jobs/<名前> は "origin" が付くだけで、ほかは同じ。
 """
 
 from __future__ import annotations
@@ -65,6 +70,9 @@ WAIT_LIMIT = _env_seconds("LIFELOG_JOBWAIT_LIMIT", 25 * 60.0)
 WAIT_CONFIRM = _env_seconds("LIFELOG_JOBWAIT_CONFIRM", 10.0)
 # 版 8: iPhone が query に付ける時刻（timing にそのまま返す）
 CLIENT_TIMES = ("chunk_start", "chunk_end", "arrived", "sent")
+# 版 10: 時計の外の道から預かるもの。5 分の区切り（約 1.2MB）には十分な大きさの上限と、時計の区切りの名前の形
+WATCH_BODY_LIMIT = 8 * 1024 * 1024
+WATCH_NAME = re.compile(r"\d{8}-\d{6}[A-Za-z0-9._-]*-w\.m4a")
 
 
 def valid_name(name) -> bool:
@@ -287,9 +295,11 @@ class JobQueue:
     def part_path(self, name: str) -> Path:
         return self.audio_path(name).with_name(self.audio_path(name).name + ".part")
 
-    def commit(self, name: str, params: dict, size: int, times: dict | None = None) -> dict:
+    def commit(self, name: str, params: dict, size: int, times: dict | None = None,
+               origin: str | None = None) -> dict:
         """受け取った音声を待ちの最後に加える。失敗していた同じ名前のものは置き換える。
-        版 8: times は iPhone の時刻（parse_times の答え）。queued_at が received（受け終わり）になる。"""
+        版 8: times は iPhone の時刻（parse_times の答え）。queued_at が received（受け終わり）になる。
+        版 10: origin は、どこから預かったか（時計の外の道なら "watch"。iPhone からなら付けない）。"""
         with self.lock:
             self.receiving.discard(name)
             os.replace(self.part_path(name), self.audio_path(name))
@@ -300,6 +310,8 @@ class JobQueue:
                     "seq": self.seq, "params": params, "size": int(size)}
             if times:
                 meta["times"] = dict(times)
+            if origin:
+                meta["origin"] = origin
             self.jobs[name] = meta
             _write_json(self.meta_path(name), meta)
             self.changed.notify_all()
@@ -314,12 +326,15 @@ class JobQueue:
 
     @staticmethod
     def public(meta: dict, short: bool = False) -> dict:
+        # POST /jobs の短い答えは今までどおり（時計から預かった仕事に iPhone が送っても、同じ形で答える）
         if short:
             return {"id": meta["id"], "status": meta["status"]}
         out = {"id": meta["id"], "status": meta["status"], "queued_at": meta.get("queued_at"),
                "done_at": meta.get("done_at")}
         if meta.get("status") == "failed":
             out["error"] = meta.get("error") or "文字にできませんでした"
+        if meta.get("origin"):  # 版 10: 時計の外の道から預かった仕事
+            out["origin"] = meta["origin"]
         return out
 
     def get(self, name: str) -> dict | None:
@@ -384,10 +399,11 @@ class JobQueue:
                         "count": len(values)} if values else None
         return out
 
-    def listing(self, limit: int = LIST_LIMIT) -> list[dict]:
-        """新しい順に、最大 limit 個"""
+    def listing(self, limit: int = LIST_LIMIT, origin: str | None = None) -> list[dict]:
+        """新しい順に、最大 limit 個。版 10: origin を渡したら、その origin の仕事だけ"""
         with self.lock:
-            metas = sorted(self.jobs.values(), key=lambda m: int(m.get("seq") or 0), reverse=True)[:limit]
+            metas = [m for m in self.jobs.values() if origin is None or m.get("origin") == origin]
+            metas = sorted(metas, key=lambda m: int(m.get("seq") or 0), reverse=True)[:limit]
             return [self.public(m) for m in metas]
 
     def recent(self, limit: int = 20) -> list[dict]:
@@ -708,25 +724,36 @@ def parse_params(query: dict) -> dict:
             "weights": weights[:2000] if weights else None}
 
 
-def http_post(handler, queue: JobQueue | None, query_text: str, length: int) -> None:
+def http_post(handler, queue: JobQueue | None, query_text: str, length: int, origin: str | None = None) -> str | None:
+    """POST /jobs（と、版 10 の時計の外の道の POST /w/jobs）。答えは送ってから、どうなったかを返す:
+    "stored"（預かった）・"exists"（同じ名前をもう預かっている）・None（断った・失敗した）。
+    origin="watch" のとき: 待ち合わせ（wait）はしない・WATCH_BODY_LIMIT まで・名前は WATCH_NAME の形だけ。"""
     from urllib.parse import parse_qs
 
+    watch = origin == "watch"
+    limit = WATCH_BODY_LIMIT if watch else BODY_LIMIT
     if queue is None:
         handler.discard_body()
         handler.send_json(503, {"error": "後で受け取る文字起こしは今は使えません"})
-        return
+        return None
     query = parse_qs(query_text)
     name = (query.get("name") or [""])[0]
     if not valid_name(name):
         handler.discard_body()
         handler.send_json(400, {"error": "name は英数字と . _ - だけで 80 文字までです"})
-        return
-    if length <= 0 or length > BODY_LIMIT:
+        return None
+    if watch and WATCH_NAME.fullmatch(name) is None:
+        handler.discard_body()
+        handler.send_json(400, {"error": "name は 年月日-時分秒…-w.m4a の形だけです"})
+        return None
+    if length <= 0 or length > limit:
         handler.discard_body()
         handler.send_json(400 if length <= 0 else 413,
-                          {"error": "音声がありません" if length <= 0 else "音声が大きすぎます（200MB まで）"})
-        return
-    wait = wants_wait(query)
+                          {"error": "音声がありません" if length <= 0
+                           else f"音声が大きすぎます（{'8MB' if watch else '200MB'} まで）"})
+        return None
+    # 版 10: 時計の外の道では待ち合わせをしない（時計は答えを待たない。文字は iPhone が取りに来る）
+    wait = wants_wait(query) and not watch
     state, current = queue.begin(name)
     if state == "exists":
         # 同じ名前はもう預かっている（失敗したものだけ預かり直す）。送られた音声は読み捨てる
@@ -734,13 +761,13 @@ def http_post(handler, queue: JobQueue | None, query_text: str, length: int) -> 
         # 版 8: 待ち合わせなら、預かっている仕事のでき上がりを待って答える（受け取り途中のものは今までどおり）
         if wait and (queue.jobs.get(name) or {}).get("status") in ("queued", "working", "done"):
             wait_and_answer(handler, queue, name)
-            return
+            return "exists"
         handler.send_json(200, current)
-        return
+        return "exists"
     if state == "full":
         handler.discard_body()
         handler.send_json(503, {"error": f"待っているものが多すぎます（{queue.limit} 個まで）。少し待ってから送ってください"})
-        return
+        return None
     entered = False
     try:
         left = length
@@ -755,12 +782,12 @@ def http_post(handler, queue: JobQueue | None, query_text: str, length: int) -> 
             queue.abort(name)
             handler.close_connection = True
             handler.send_json(400, {"error": "音声が途中で切れました"})
-            return
+            return None
         if wait:
             # 預けてすぐ終わっても「待っている人がいる」と分かるよう、預ける前から待ち合わせに入る
             queue.enter_wait(name)
             entered = True
-        reply = queue.commit(name, parse_params(query), length, parse_times(query))
+        reply = queue.commit(name, parse_params(query), length, parse_times(query), origin=origin)
     except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
         if entered:
             queue.leave_wait(name, False)
@@ -768,11 +795,12 @@ def http_post(handler, queue: JobQueue | None, query_text: str, length: int) -> 
         queue.log(f"後で受け取る文字起こし {name}: 預かれませんでした: {error!r}")
         handler.close_connection = True
         handler.send_json(500, {"error": f"預かれませんでした: {error}"})
-        return
+        return None
     if wait:
         wait_and_answer(handler, queue, name, entered=True)
-        return
+        return "stored"
     handler.send_json(200, reply)
+    return "stored"
 
 
 def _name_from(path: str) -> str:
@@ -781,12 +809,16 @@ def _name_from(path: str) -> str:
     return unquote(path[len("/jobs/"):])
 
 
-def http_get(handler, queue: JobQueue | None, path: str) -> None:
+def http_get(handler, queue: JobQueue | None, path: str, query_text: str = "") -> None:
+    from urllib.parse import parse_qs
+
     if queue is None:
         handler.send_json(503, {"error": "後で受け取る文字起こしは今は使えません"})
         return
     if path == "/jobs":
-        handler.send_json(200, {"jobs": queue.listing()})
+        # 版 10: GET /jobs?origin=watch は、時計の外の道から預かった仕事だけ（新しい順）
+        origin = (parse_qs(query_text).get("origin") or [None])[0]
+        handler.send_json(200, {"jobs": queue.listing(origin=origin or None)})
         return
     name = _name_from(path)
     got = queue.get(name) if valid_name(name) else None

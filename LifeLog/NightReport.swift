@@ -120,6 +120,12 @@ enum Tally {
         if n("watch.wake") > 0 {
             rows.append(("時計が iPhone のアプリを起こした", "\(n("watch.wake")) 回", nil))
         }
+        if n("pcFirst.applied") + n("pcFirst.waitAudio") > 0 {
+            // 時計の区切りを、音声が届く前に家の PC の答えから記録に入れた（版 10。PCFirst.swift）
+            rows.append(("PC から先に記録に入れた", "\(n("pcFirst.applied")) 区切り・あとから届いた音声 \(n("pcFirst.audioLater"))"
+                + "・あとから話者を付けた行 \(n("pcFirst.speakers"))・音声を待った \(n("pcFirst.waitAudio"))"
+                + (n("pcFirst.speakersSkipped") > 0 ? "・話者を付けられなかった \(n("pcFirst.speakersSkipped"))" : ""), nil))
+        }
         if n("othermic.lines") > 0 {
             rows.append(("もう1台のマイクの票", "\(n("othermic.lines")) 行（iPhone と時計の両方で録った時間）", nil))
         }

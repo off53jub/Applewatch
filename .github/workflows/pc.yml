@@ -111,6 +111,14 @@ jobs:
           python pc/lifelog_pc.py --check-v9 > v9.txt 2>&1 || { cat v9.txt; grep '^NG' v9.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v9.txt | sed 's/^/::notice::--check-v9 の OK の数: /'
 
+      # 版 10: 時計の外の道（127.0.0.1 だけで待つ別の受け口・時計の合言葉・/w/ping・ほかは 404・名前の形・8MB まで・
+      #   待ち合わせをしない・origin watch・GET /jobs?origin=watch・iPhone から同じ名前が来ても2つにしない・10 回違えば 429・
+      #   GET /watch-route・Funnel の様子の読み方（作り物の JSON）・できたの通知）を、一時フォルダと作り物のモデルで確かめる
+      - name: 版 10 の時計の外の道を確かめる
+        run: |
+          python pc/lifelog_pc.py --check-v10 > v10.txt 2>&1 || { cat v10.txt; grep '^NG' v10.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v10.txt | sed 's/^/::notice::--check-v10 の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py
@@ -156,7 +164,7 @@ jobs:
       # 版 6 の部品（jobqueue・dashboard・updater・semantic・v6checks）は pc/ にあるので、--paths pc で探させ、念のため名前でも入れる。
       # 版 7（records）の部品（records・recordsui・v7checks_records）も同じ。
       # 版 7（ops）の部品（ops・diag・apns・ascfeedback・trainer・gpu・v7checks_ops）と、見えない通知の HTTP/2（httpx2 と h2）・
-      # 鍵（cryptography）も名前で入れる。版 8 の確かめ（v8checks）・版 9 の確かめ（v9checks）と MCP サーバー（lifelog_mcp）も同じ。train-requirements.txt は学び直しの部品の一覧（exe の隣に置く）
+      # 鍵（cryptography）も名前で入れる。版 8 の確かめ（v8checks）・版 9 の確かめ（v9checks）と MCP サーバー（lifelog_mcp）・版 10 の時計の外の道（watchroute・v10checks）も同じ。train-requirements.txt は学び直しの部品の一覧（exe の隣に置く）
       # BUILD.txt は作った回の番号（exe が自分の版を知り、新しい版と比べるのに使う）
       - name: exe にする
         run: |
@@ -170,6 +178,7 @@ jobs:
             --hidden-import ops --hidden-import diag --hidden-import apns --hidden-import ascfeedback \
             --hidden-import trainer --hidden-import gpu --hidden-import v7checks_ops \
             --hidden-import v8checks --hidden-import v9checks --hidden-import lifelog_mcp \
+            --hidden-import watchroute --hidden-import v10checks \
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \
             --hidden-import cryptography.hazmat.primitives.asymmetric.ec \
@@ -204,6 +213,11 @@ jobs:
         run: |
           dist/LifeLogPC/LifeLogPC.exe --check-v9 > v9-exe.txt 2>&1 || { cat v9-exe.txt; grep '^NG' v9-exe.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v9-exe.txt | sed 's/^/::notice::exe の --check-v9 の OK の数: /'
+      # 版 10 の部品（watchroute・v10checks）が exe に入っているか
+      - name: exe で版 10 の時計の外の道を確かめる
+        run: |
+          dist/LifeLogPC/LifeLogPC.exe --check-v10 > v10-exe.txt 2>&1 || { cat v10-exe.txt; grep '^NG' v10-exe.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v10-exe.txt | sed 's/^/::notice::exe の --check-v10 の OK の数: /'
 
       - name: exe で試す
         run: |

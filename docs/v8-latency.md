@@ -82,3 +82,5 @@ PC の版は 8（上げるのはつなぐ人）。`/hello` の features に、�
   iPhone の `/diag` の state に `watchPending`・`watchOutstanding`・`watchKept`・`watchLastCut`（ISO 8601）・`watchHeld`・`watchWanted` を足し、
   `watchUnsent` は分かれば「まだ送っていない＋返事待ち」にする（古い時計のアプリでは今までどおり返事待ちの数）。
 - iPhone から時計への `transferUserInfo` の `{"resendKept": true}`: 時計は、まだ送っていないものと返事待ちの控え（送ってから5分より古いもの）を全部送り直す。
+
+- 家の外からも送る（外の道・Tailscale の Funnel・`POST <url>/w/jobs`）と、残っている区切りを追いかけて送る決まりは `docs/v10-watch-route-ios.md`（2026-11-07）。

@@ -27,6 +27,8 @@ enum Latency {
         var watchCut: Date? = nil
         /// 時計が送り始めた時刻（同じ）
         var watchSent: Date? = nil
+        /// 音声が iPhone に届く前に、家の PC の答えだけで記録に入れた（版 10。PCFirst.swift）
+        var pcFirst: Bool? = nil
     }
 
     /// 1つの区切りの、区間ごとの秒数（分からない区間は nil）
@@ -48,6 +50,8 @@ enum Latency {
         var watchWait: Double? = nil
         /// 時計→iPhone の内訳2: 受け渡し（時計が送り始めた → iPhone のアプリが受け取った）
         var handoff: Double? = nil
+        /// PC から先に記録に入れた区切り（時計→iPhone の区間が無い。ふつうの中央値には入れず、別に数える。版 10）
+        var pcFirst: Bool? = nil
     }
 
     /// 直近の中央値
@@ -62,6 +66,9 @@ enum Latency {
         /// 時計で待った・受け渡し（時計→iPhone の内訳。2026-11-07）
         var watchWait: Double? = nil
         var handoff: Double? = nil
+        /// PC から先に記録に入れた区切りの数と、その合計（録音の終わり → 記録に入れた）の中央値（版 10）
+        var pcFirstCount: Int = 0
+        var pcFirstTotal: Double? = nil
 
         /// 家の PC に送る形（秒。分からない区間は省く）
         var json: [String: Any] {
@@ -77,6 +84,8 @@ enum Latency {
             put("total", total)
             put("watchWait", watchWait)
             put("handoff", handoff)
+            if pcFirstCount > 0 { out["pcFirstCount"] = pcFirstCount }
+            put("pcFirstTotal", pcFirstTotal)
             return out
         }
     }
@@ -136,6 +145,18 @@ enum Latency {
         }
     }
 
+    /// 音声が届く前に、PC の答えだけで記録に入れる区切りにする（版 10。記録に入れる前に呼ぶ）
+    static func notePCFirst(_ name: String, start: Date, end: Date) {
+        update { store in
+            var marks = store.marks[name] ?? Marks(watch: true)
+            marks.watch = true
+            marks.chunkStart = marks.chunkStart ?? start
+            marks.chunkEnd = marks.chunkEnd ?? end
+            marks.pcFirst = true
+            store.marks[name] = marks
+        }
+    }
+
     /// 区切りの行を記録に入れた。区間ごとの秒数を残し、時刻は忘れる（2回目からは何もしない）
     static func noteApplied(_ name: String, at date: Date = .now) {
         update { store in
@@ -184,14 +205,15 @@ enum Latency {
 
     static func sample(_ m: Marks, applied: Date) -> Sample {
         Sample(at: applied,
-               toPhone: m.watch ? span(m.chunkEnd, m.arrived) : nil,
+               toPhone: m.watch && m.pcFirst != true ? span(m.chunkEnd, m.arrived) : nil,
                toPC: span(m.arrived, m.received),
                pcWait: span(m.received, m.started),
                pcWork: span(m.started, m.finished),
                toRecord: span(m.finished, applied),
                total: span(m.chunkEnd, applied),
                watchWait: m.watch ? span(m.watchCut, m.watchSent) : nil,
-               handoff: m.watch ? span(m.watchSent, m.arrived) : nil)
+               handoff: m.watch ? span(m.watchSent, m.arrived) : nil,
+               pcFirst: m.pcFirst == true ? true : nil)
     }
 
     static func median(_ values: [Double]) -> Double? {
@@ -202,8 +224,11 @@ enum Latency {
     }
 
     static func summarize(_ samples: [Sample], now: Date, within: TimeInterval = 86400) -> Summary? {
-        let recent = samples.filter { now.timeIntervalSince($0.at) <= within && $0.at <= now.addingTimeInterval(60) }
-        guard !recent.isEmpty else { return nil }
+        let all = samples.filter { now.timeIntervalSince($0.at) <= within && $0.at <= now.addingTimeInterval(60) }
+        // PC から先に入れた区切りは、ふつうの中央値に混ぜない（時計→iPhone の区間が無く、合計の意味が違うため。版 10）
+        let recent = all.filter { $0.pcFirst != true }
+        let first = all.filter { $0.pcFirst == true }
+        guard !all.isEmpty else { return nil }
         return Summary(count: recent.count,
                        toPhone: median(recent.compactMap(\.toPhone)),
                        toPC: median(recent.compactMap(\.toPC)),
@@ -212,7 +237,9 @@ enum Latency {
                        toRecord: median(recent.compactMap(\.toRecord)),
                        total: median(recent.compactMap(\.total)),
                        watchWait: median(recent.compactMap(\.watchWait)),
-                       handoff: median(recent.compactMap(\.handoff)))
+                       handoff: median(recent.compactMap(\.handoff)),
+                       pcFirstCount: first.count,
+                       pcFirstTotal: median(first.compactMap(\.total)))
     }
 
     /// 自己点検の行（見出し・中身・良いか）
@@ -222,6 +249,10 @@ enum Latency {
         }
         func text(_ v: Double) -> String { v < 10 ? String(format: "%.1f 秒", v) : "\(Int(v.rounded())) 秒" }
         var rows: [(label: String, value: String, ok: Bool?)] = []
+        // PC から先に入れた区切りだけのときは、ふつうの行は「まだ」にする（版 10）
+        guard s.count > 0 else {
+            return [("直近24時間", "まだ測っていません（区切りが記録に入ると測ります）", nil)] + pcFirstRows(s, text: text)
+        }
         rows.append(("直近24時間の合計（ふつう）",
                      (s.total.map(text) ?? "分からない") + "（\(s.count) 個の区切り。録音の終わり→記録に入るまで）",
                      s.total.map { $0 < 600 }))
@@ -237,7 +268,15 @@ enum Latency {
                          watchKnown.joined(separator: "・") + "（時計で待った＝区切ってから時計が送り始めるまで。受け渡し＝送り始めてから iPhone のアプリが受け取るまで）",
                          nil))
         }
-        return rows
+        return rows + pcFirstRows(s, text: text)
+    }
+
+    /// PC から先に記録に入れた区切りの行（版 10。無ければ出さない）
+    private static func pcFirstRows(_ s: Summary, text: (Double) -> String) -> [(label: String, value: String, ok: Bool?)] {
+        guard s.pcFirstCount > 0 else { return [] }
+        return [("PC から先に入れた（直近24時間）",
+                 "\(s.pcFirstCount) 個・ふつう " + (s.pcFirstTotal.map(text) ?? "分からない")
+                    + "（録音の終わり→記録に入るまで。音声は iPhone にあとから届きます）", nil)]
     }
 
     // MARK: - 保存

@@ -245,9 +245,16 @@ extension Pipeline {
         }
         // 時計の区切りの長さ（電池が少ないので自動で5分にしているか。2026-11-07。WatchPresence.swift）
         add("時計", "区切りの長さ", watchChunkLengthText)
+        // 時計から家の PC への外の道（Tailscale の Funnel。2026-11-07。WatchDirect.swift）
+        if let route = watchRouteDiag() {
+            add("時計", "時計から PC への外の道",
+                route.value + (route.checkedAt.map { "・PC に聞いた " + Self.when($0) } ?? ""), route.ok)
+        }
 
         // 文字になるまで（区間ごとの中央値。2026-11-07。Latency.swift）
         for row in Latency.rows() { add("文字になるまで", row.label, row.value, row.ok) }
+        // 時計の区切りを、音声が届く前に家の PC の答えから記録に入れた数（版 10。PCFirst.swift）
+        add("文字になるまで", "PC から先に記録に入れた（今日）", pcFirstTodayText)
 
         // 人（数だけ）
         let others = people.filter { !$0.isSelf }

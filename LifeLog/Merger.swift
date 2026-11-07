@@ -47,6 +47,11 @@ final class Merger {
     var outbox: [ConversationLog.Line] { state.outbox }
     var hasHeld: Bool { !state.held.isEmpty }
 
+    /// その音声の行が、まだ書き出していないまま残っているか（版 10。PC から先に入れた区切りに、あとから話者を付けるとき）
+    func holds(_ audio: String) -> Bool {
+        state.held.contains { $0.line.audio == audio } || state.outbox.contains { $0.audio == audio }
+    }
+
     /// 1つの区切りの行を足す。アプリが途中で終わって同じ区切りをもう一度文字起こししたときは足さない。
     func add(_ heard: [Heard]) {
         guard let name = heard.first?.line.audio else { return }

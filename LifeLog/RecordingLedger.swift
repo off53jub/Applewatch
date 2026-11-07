@@ -22,6 +22,8 @@ final class RecordingLedger {
         /// 書いた行の数
         var lines: Int? = nil
         var broken: Bool? = nil
+        /// 音声が届く前に、家の PC の答えだけで記録に入れた（版 10。2026-11-07。PCFirst.swift）
+        var pcFirst: Bool? = nil
     }
 
     /// 時計とこの端末の様子（変わったときと、15分ごとに残す）
@@ -127,6 +129,46 @@ final class RecordingLedger {
 
     /// もう文字にした区切りか（送り直されてきた区切りを二重に処理しないため）
     func isTranscribed(_ name: String) -> Bool { chunks.contains { $0.name == name && $0.transcribed != nil } }
+
+    // MARK: - PC から先に記録に入れた区切り（版 10。2026-11-07。PCFirst.swift）
+
+    /// 時計の区切りを、音声が届く前に家の PC の答えだけで記録に入れた。抜けの地図では録れていた時間になる
+    func transcribedFromPC(_ name: String, start: Date, end: Date, lines: Int) {
+        if let i = chunks.lastIndex(where: { $0.name == name }) {
+            chunks[i].transcribed = .now
+            chunks[i].lines = lines
+            chunks[i].end = end
+            chunks[i].pcFirst = true
+        } else {
+            var chunk = Chunk(name: name, start: start, end: end, source: "watch")
+            chunk.transcribed = .now
+            chunk.lines = lines
+            chunk.pcFirst = true
+            chunks.append(chunk)
+        }
+        save()
+    }
+
+    /// PC から先に記録に入れた区切りか
+    func isPCFirst(_ name: String) -> Bool { chunks.contains { $0.name == name && $0.pcFirst == true } }
+
+    /// もう文字にした区切りの名前（PC から先に入れる区切りを選ぶのに使う）
+    var transcribedNames: Set<String> { Set(chunks.filter { $0.transcribed != nil }.map(\.name)) }
+
+    /// その日に PC から先に記録に入れた区切りの数（記録に入れた時刻で数える）
+    func pcFirstCount(on dayStart: Date) -> Int {
+        let dayEnd = dayStart.addingTimeInterval(24 * 3600)
+        return chunks.filter { c in
+            guard c.pcFirst == true, let at = c.transcribed else { return false }
+            return at >= dayStart && at < dayEnd
+        }.count
+    }
+
+    /// PC から先に入れた区切りの終わり。PC の答えの chunk_end が始まりのあと30分以内ならそれを、無ければ始まりの5分後
+    nonisolated static func pcFirstEnd(start: Date, timingEnd: Date?) -> Date {
+        if let timingEnd, timingEnd > start, timingEnd.timeIntervalSince(start) <= 30 * 60 { return timingEnd }
+        return start.addingTimeInterval(300)
+    }
 
     /// 様子を残す。前と同じなら、15分に1回だけ（電池は1%より大きく変わったとき）
     func note(_ state: State) {

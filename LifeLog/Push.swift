@@ -90,6 +90,12 @@ enum PushWake {
         return Kind(rawValue: raw)
     }
 
+    /// 文字起こしができた知らせの、仕事の名前（{"lifelog":{"kind":"job","job":"<名前>"}}。無ければ nil）
+    nonisolated static func job(from userInfo: [AnyHashable: Any]) -> String? {
+        guard let info = userInfo["lifelog"] as? [String: Any], let name = info["job"] as? String, !name.isEmpty else { return nil }
+        return name
+    }
+
     /// 見えない通知が届いた（AppDelegate）。種類ごとに動いて、25秒以内に iOS に終わったと言う
     static func receive(_ userInfo: [AnyHashable: Any], completion: @escaping (UIBackgroundFetchResult) -> Void) {
         guard let wake = Self.kind(from: userInfo) else {
@@ -98,6 +104,8 @@ enum PushWake {
         }
         Tally.add("push." + wake.rawValue)
         UserDefaults.standard.set(Date.now, forKey: lastKey)
+        // 文字起こしができた知らせなら、次の取り込みで1分を待たずに PC から先に入れる区切りを見る（版 10。PCFirst.swift）
+        if wake == .job { PCFirst.jobPushed(Self.job(from: userInfo)) }
         guard let target = Self.pipeline else {
             completion(.noData)
             return
