@@ -42,6 +42,8 @@ LIST_LIMIT = 500             # GET /jobs で返す数の上限
 BODY_LIMIT = 200_000_000     # 音声の大きさの上限（200MB）
 KEEP_SECONDS = 7 * 86400     # でき上がった答えを残しておく長さ
 CLEAN_EVERY = 3600.0         # 古い答えを消すのを確かめる間（秒）
+# 版 8: 新しい順にしても、これより長く待った区切りは先に文字にする（秒）
+STARVE_AFTER = 15 * 60
 
 
 def _env_seconds(name: str, default: float) -> float:
@@ -539,6 +541,10 @@ class JobQueue:
         waiting = [m for m in self.jobs.values() if m.get("status") == "queued"]
         if self.paused or not waiting:
             return None
+        # 新しい区切りが次々来ても、古いものがずっと後回しにならないよう、15分より長く待ったものは先にする
+        oldest = min(waiting, key=lambda m: int(m.get("seq") or 0))
+        if time.time() - float(oldest.get("queued_at") or time.time()) > STARVE_AFTER:
+            return oldest["id"], oldest
         meta = max(waiting, key=lambda m: int(m.get("seq") or 0))
         return meta["id"], meta
 
