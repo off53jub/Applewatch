@@ -135,6 +135,10 @@ private struct RecordPage: View {
                     if recorder.lowPower {
                         Text("低電力モード: 15分ほどごとにまとめて送ります")
                     }
+                    // 電池が少ないので、区切りを自動で5分にしている（2026-11-07）
+                    if recorder.batterySaving {
+                        Text("電池が少ないので、5分ごとに区切っています")
+                    }
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -363,6 +367,10 @@ private struct StatusPage: View {
                 }
                 if recorder.lowPower {
                     Text("低電力モード: 15分ほどごとにまとめて送ります").font(.caption2).foregroundStyle(.secondary)
+                }
+                if recorder.batterySaving {
+                    Text("電池が少ないので、5分ごとに区切っています（電池が戻れば短めに戻します）")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
             }
         }

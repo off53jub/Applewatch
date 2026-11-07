@@ -96,6 +96,13 @@ final class Pipeline {
             receiver.sendSettings(skipSilence: skipSilence, held: recordingHeld)
         }
     }
+    /// 電池が少ないときは5分に（時計の電池が 30% より下・低電力モードのあいだ、短めの設定でも時計は5分で区切る。初めはオン。2026-11-07）
+    var chunkBatterySaver = ChunkCutter.batterySaverOn {
+        didSet {
+            ChunkCutter.batterySaverOn = chunkBatterySaver
+            receiver.sendSettings(skipSilence: skipSilence, held: recordingHeld)
+        }
+    }
     /// 時計の区切りがこれ以上遅れたら、待たずに iPhone の分だけで書く
     private static let watchWait: TimeInterval = 12 * 60
     @ObservationIgnored private var retry: Task<Void, Never>?
@@ -1400,6 +1407,7 @@ final class Pipeline {
 
     /// アプリを閉じて10分たったら、ライブを自動で切る（切り忘れで電池と無料枠を使わないように）
     func appMovedToBackground() {
+        RunClock.movedToBackground()  // 裏にいた時間を数える（2026-11-07。RunClock.swift）
         // 下書き（仮）を見に行くのは、アプリが前にあるときだけ（2026-11-07。Drafts.swift）
         stopDraftPolling()
         guard liveOn, liveAutoOff == nil else { return }
@@ -1412,6 +1420,7 @@ final class Pipeline {
     }
 
     func appBecameActive() {
+        RunClock.becameActive()
         updateHold()
         if email != nil { Task { await sync.run() } }
         if UIDevice.current.userInterfaceIdiom != .pad { Task { await scheduleMeetingBriefs() } }
@@ -1444,9 +1453,12 @@ final class Pipeline {
         }
         guard email != nil, queueTask == nil else { return }
         let started = Date.now
-        defer { diagnostics.ran(from: started) }
-        // 裏にいても、iOS が許すあいだ（30秒ほど）は続けさせてもらう
-        let background = UIApplication.shared.beginBackgroundTask(withName: "transcribe")
+        // 裏にいても、iOS が許すあいだ（30秒ほど）は続けさせてもらう。時間が切れたら、そう知らせて終える
+        // （前は時間切れの知らせを受けず、終えないまま時間が切れると iOS にアプリを終わらされることがあった。2026-11-07）
+        let background = BackgroundTime("transcribe")
+        // 家の PC を待った・裏にいた時間は、自分で動いた時間と分けて数える（2026-11-07。RunClock.swift）
+        let clock = RunClock.begin(now: started)
+        defer { diagnostics.ran(from: started, parts: RunClock.end(clock), expired: background.expired) }
         let task = Task {
             // 処理しているあいだに届いた区切りも、続けて処理する
             while await drainQueue(), !Task.isCancelled,
@@ -1473,7 +1485,7 @@ final class Pipeline {
                 Task { await refreshSemanticIndex(limit: 1500) }
             }
         }
-        if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
+        background.end()
         Self.scheduleBackgroundWork()
         // 夜に充電していれば、1日分を聞き直す
         startNightlyIfTime()
@@ -2631,6 +2643,9 @@ final class Pipeline {
                 jobLines = lines
             case .pending(let since) where Date.now.timeIntervalSince(since) < 20 * 60:
                 if UIApplication.shared.applicationState == .active {
+                    // 待った時間は、自己点検の「処理」の時間と分けて数える（2026-11-07。RunClock.swift）
+                    let waitStart = Date.now
+                    defer { RunClock.addWait(Date.now.timeIntervalSince(waitStart)) }
                     for _ in 0..<24 where jobLines == nil {
                         try? await Task.sleep(for: .seconds(5))
                         // 待ち合わせの返事が先に届いていれば、それを使う

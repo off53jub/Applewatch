@@ -211,6 +211,9 @@ struct ConversationsView: View {
     @State private var fixing: Fix?
     @State private var addingWord: WordTarget?
     @State private var editing: WordTarget?
+    /// 会話ごとの、その時間に撮った写真（始まりの時刻ごと。iPhone の中で探すだけで保存しない。2026-11-07。DayPhotos.swift）
+    @State private var photos: [Date: [DayPhoto]] = [:]
+    @Environment(\.displayScale) private var displayScale
 
     struct WordTarget: Identifiable {
         let id = UUID()
@@ -249,6 +252,10 @@ struct ConversationsView: View {
                             Text(conversation.points.map { "・" + $0 }.joined(separator: "\n"))
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
+                        }
+                        // その会話の時間（と前後5分）に撮った写真（許可があるときだけ。押すと大きく見る。2026-11-07。DayPhotos.swift）
+                        if let shots = photos[conversation.start], !shots.isEmpty {
+                            ConversationPhotoStrip(photos: shots)
                         }
                         // 前の会話とつなぐ（2026-11-06。閉じた会話で、その日の前に閉じた会話があるとき）
                         if conversation.closed, conversations.contains(where: { $0.closed && $0.start < conversation.start }) {
@@ -307,6 +314,10 @@ struct ConversationsView: View {
         }
         .onAppear { conversations = load() }
         .refreshable { conversations = load() }
+        // 会話が変わったら、写真を探し直す（許可が無い・設定がオフなら何もしない）
+        .task(id: conversations.map(\.start)) {
+            photos = await DayPhotos.load(conversations.map { (start: $0.start, end: $0.end) }, scale: displayScale)
+        }
         .onDisappear { player.stop() }
         .sheet(item: $addingWord) { AddWordView(line: $0.line) }
         .sheet(item: $editing) { target in

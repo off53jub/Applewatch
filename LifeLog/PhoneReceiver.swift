@@ -104,8 +104,9 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
 
     /// 「聞く」の答えを時計に送る（時計が離れていても、つながったときに届く）
     func sendAnswer(_ text: String, question: String) {
+        // isWatchAppInstalled が入れ直しのあとに false のままのことがあるので、時計からの最近の便りも見る（2026-11-07。WatchPresence.swift）
         guard WCSession.isSupported(), WCSession.default.activationState == .activated,
-              WCSession.default.isWatchAppInstalled else { return }
+              WatchPresence.installed(WCSession.default) else { return }
         WCSession.default.transferUserInfo(["answer": text, "question": question])
     }
 
@@ -138,8 +139,8 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         lastSettings["skipSilence"] = skipSilence
         lastSettings["held"] = held
         lastSettings["acks"] = true
-        // 区切りの長さ（短め・ふつう。時計は次の区切りから使う。2026-11-07）
-        lastSettings[ChunkCutter.lengthKey] = ChunkCutter.length.rawValue
+        // 区切りの長さ（短め・ふつう）と「電池が少ないときは5分に」（時計は次の区切りから使う。2026-11-07）
+        ChunkCutter.addSettings(to: &lastSettings)
         if let meeting { lastSettings["meeting"] = meeting }
         guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
         try? WCSession.default.updateApplicationContext(lastSettings)
@@ -148,7 +149,7 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     /// 時計に知らせを送る（時計が震えて画面に出す）
     func alertWatch(_ text: String) {
         guard WCSession.isSupported(), WCSession.default.activationState == .activated,
-              WCSession.default.isWatchAppInstalled else { return }
+              WatchPresence.installed(WCSession.default) else { return }
         WCSession.default.transferUserInfo(["alert": text])
     }
 

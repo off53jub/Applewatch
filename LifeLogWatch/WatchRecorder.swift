@@ -20,6 +20,8 @@ final class WatchRecorder: NSObject {
     private(set) var link = ""
     /// 時計が低電力モードか（送るのを15分ごとにまとめる）
     private(set) var lowPower = false
+    /// 電池が少ないので、短めの設定を自動で5分の区切りにしているか（設定「電池が少ないときは5分に」。2026-11-07）
+    private(set) var batterySaving = ChunkCutter.batterySaving && ChunkCutter.length == .short
     /// 「さっき何て言った？」の答え（iPhone の記録の直近の行）
     private(set) var recentAnswer: String?
     private(set) var asking = false
@@ -227,6 +229,7 @@ final class WatchRecorder: NSObject {
         unsent = sender.unsentCount()
         link = sender.linkText()
         lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        updateBatterySaver()
         meetingOn = UserDefaults.standard.bool(forKey: "meetingOn")
         // 録音を始めた・止めた・送っていない数が変わったら、文字盤も出し直す（変わったときだけ書く。2026-11-07）
         updateWidgets()
@@ -253,6 +256,21 @@ final class WatchRecorder: NSObject {
             unsentAlerted = false
             center.removeDeliveredNotifications(withIdentifiers: [Self.unsentID])
         }
+    }
+
+    /// 電池が少ない（30% より下・低電力モード）あいだは、短めの設定でも自動で5分の区切りにする。
+    /// 電池が 35% まで戻る・充電を始めたら、短めに戻す。次の区切りから効く（ChunkCutter.current）。2026-11-07
+    private func updateBatterySaver() {
+        let device = WKInterfaceDevice.current()
+        let level: Double? = device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil
+        let charging = device.batteryState == .charging || device.batteryState == .full
+        let saving = ChunkCutter.shouldSave(on: ChunkCutter.batterySaverOn, battery: level, charging: charging,
+                                            lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                                            wasSaving: ChunkCutter.batterySaving)
+        if saving != ChunkCutter.batterySaving { ChunkCutter.batterySaving = saving }
+        // 画面に出すのは、短めの設定を5分にしているときだけ（ふつうの設定なら、もともと5分）
+        let shown = saving && ChunkCutter.length == .short
+        if batterySaving != shown { batterySaving = shown }
     }
 
     /// 大事なところに印を付ける（前後1分の行に★が付く）。
