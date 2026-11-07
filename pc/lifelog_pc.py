@@ -85,6 +85,7 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 from __future__ import annotations
 
 import argparse
+import contextlib
 import difflib
 import hashlib
 import io
@@ -108,6 +109,7 @@ import numpy as np
 
 # 版 6 の機能（lifelog_pc.py と同じフォルダの部品）
 import dashboard
+import gpu  # GPU_LOCK（GPU の文字起こしのモデルは1度に1つだけ動かす。2026-11-07 の落ち方の直し）
 import jobqueue
 import ops  # 版 7（ops）: 実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割（中身は ops.py）
 import semantic
@@ -580,8 +582,10 @@ class WhisperEngine:
         self.model = None
         if use_gpu:
             try:
-                self.model = WhisperModel(model, device="cuda", compute_type="float16",
-                                          download_root=str(WHISPER_DIR))
+                # GPU に読み込むのも、ほかの GPU のモデルが動いていない間に（GPU の時間割で戻すときは、ほかが動いていることがある）
+                with gpu.GPU_LOCK:
+                    self.model = WhisperModel(model, device="cuda", compute_type="float16",
+                                              download_root=str(WHISPER_DIR))
                 self.provider = "cuda"
             except Exception as error:  # noqa: BLE001
                 if self.name in ("kotoba", "mine"):
@@ -596,6 +600,8 @@ class WhisperEngine:
             self.provider = "cpu"
         self.label = {"kotoba": "kotoba-whisper", "mine": "あなた向け Whisper"}.get(self.name, f"Whisper {model}")
         self.lock = threading.Lock()
+        # GPU のモデルは、ほかの GPU のモデルと同時には動かさない（CPU のときは待たない）
+        self.gpu_lock = gpu.GPU_LOCK if self.provider == "cuda" else None
         log(f"Whisper を読み込みました（{self.label}、{time.time() - started:.1f} 秒、{self.provider}）")
 
     def run(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
@@ -617,31 +623,38 @@ class WhisperEngine:
                 if b - a < int(0.3 * RATE):
                     out.append(("", None))
                     continue
-                pieces, _ = self.model.transcribe(
-                    audio[a:b], language="ja", beam_size=5, initial_prompt=initial or None,
-                    condition_on_previous_text=False, without_timestamps=True, vad_filter=False,
-                    temperature=0.0, word_timestamps=WORD_TIMES)
                 kept = []
                 timed: list[tuple[float, float, str]] = []
                 timed_ok = WORD_TIMES
-                for piece in pieces:
-                    # 言葉の時刻を付けると、faster-whisper は最後の言葉の後ろをもう一度聞き直すことがある。
-                    # 区間は 30 秒の窓1つに収まるので、最初の窓（seek 0）だけを使えば、時刻を付けないときと同じ文になる
-                    if WORD_TIMES and getattr(piece, "seek", 0) > 0:
-                        break
-                    text = piece.text.strip()
-                    # 声が無いのに作った文（無音らしさが高く、自信が低い）と決まり文句は捨てる
-                    if piece.no_speech_prob > 0.6 and piece.avg_logprob < -1.0:
-                        continue
-                    if WHISPER_JUNK.match(text):
-                        continue
-                    kept.append(text)
-                    if not piece.words:
-                        timed_ok = False
-                        continue
-                    for word in piece.words:
-                        s = min(a / RATE + float(word.start), b / RATE)
-                        timed.append((s, max(s, min(a / RATE + float(word.end), b / RATE)), word.word))
+                # GPU のモデルは区間ごとに GPU_LOCK を持つ（文を作るのは pieces を読む間なので、読み終えるまで持つ）。
+                # 区間ごとに放すので、ほかの GPU のモデル・ほかの仕事とは区間ごとに代わる代わる動く
+                with getattr(self, "gpu_lock", None) or contextlib.nullcontext():
+                    if self.model is None:
+                        # GPU の時間割で下ろされた（下ろす前にこのモデルを選んでいた仕事）。この票は無しで多数決する
+                        raise RuntimeError(f"{self.label} は GPU から下ろしたので使えません")
+                    pieces, _ = self.model.transcribe(
+                        audio[a:b], language="ja", beam_size=5, initial_prompt=initial or None,
+                        condition_on_previous_text=False, without_timestamps=True, vad_filter=False,
+                        temperature=0.0, word_timestamps=WORD_TIMES)
+                    for piece in pieces:
+                        # 言葉の時刻を付けると、faster-whisper は最後の言葉の後ろをもう一度聞き直すことがある。
+                        # 区間は 30 秒の窓1つに収まるので、最初の窓（seek 0）だけを使えば、時刻を付けないときと同じ文になる
+                        if WORD_TIMES and getattr(piece, "seek", 0) > 0:
+                            break
+                        text = piece.text.strip()
+                        # 声が無いのに作った文（無音らしさが高く、自信が低い）と決まり文句は捨てる
+                        if piece.no_speech_prob > 0.6 and piece.avg_logprob < -1.0:
+                            continue
+                        if WHISPER_JUNK.match(text):
+                            continue
+                        kept.append(text)
+                        if not piece.words:
+                            timed_ok = False
+                            continue
+                        for word in piece.words:
+                            s = min(a / RATE + float(word.start), b / RATE)
+                            timed.append((s, max(s, min(a / RATE + float(word.end), b / RATE)), word.word))
+                    del pieces  # 読みかけの generator も、GPU_LOCK を持っている間に捨てる
                 text = "".join(kept)
                 out.append((text, group_words(timed, text) if timed_ok and text else None))
         return out
@@ -717,6 +730,7 @@ class QwenEngine:
         self.provider = "cuda"
         self.label = f"Qwen3-ASR {repo.rsplit('/', 1)[-1].removeprefix('Qwen3-ASR-')}"
         self.lock = threading.Lock()
+        self.gpu_lock = gpu.GPU_LOCK  # Whisper の GPU のモデルと同時には動かさない
         log(f"Qwen3-ASR を読み込みました（{self.label}、{time.time() - started:.1f} 秒）")
 
     def run(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
@@ -731,7 +745,7 @@ class QwenEngine:
         out = [""] * len(segments)
         if not clips:
             return out
-        with self.lock:
+        with self.lock, self.gpu_lock:
             results = self.model.transcribe(audio=clips, context="、".join(hints[:40]), language=QWEN_LANGUAGE)
         for i, result in zip(index, results):
             out[i] = str(getattr(result, "text", "") or "").strip()
@@ -1106,20 +1120,39 @@ class Ensemble:
     def transcribe(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str] | None = None,
                    prompt: str | None = None, votes: bool = False,
                    weights: dict[str, float] | None = None, extra_from: int | None = None,
-                   enhance: bool = False, stats: dict | None = None, on_draft=None) -> list[dict]:
+                   enhance: bool = False, stats: dict | None = None, on_draft=None, cpu_only: bool = False) -> list[dict]:
         """extra_from を渡すと、その番号から後ろの区間（PC が見つけた、iPhone が聞き逃した声）の行に "extra": true を付け、
         全部の行を時間の順に並べ直す。enhance なら、雑音を除いた音を Haas-ja・ReazonSpeech でもう一度聞いた票も加える。
         stats に dict を渡すと、モデルの組ごとの近さ（pair_stats）を入れて返す。
         版 8: on_draft(行, モデルの名前) を渡すと、速いモデル（DRAFT_ENGINES）が書き終えたところで、それだけの多数決を
         下書きとして渡す。そのモデルの文は、あとの多数決でもそのまま使う（同じ音声を2回読まない）。
-        下書きを作れなくても、多数決は続ける。"""
+        下書きを作れなくても、多数決は続ける。
+        cpu_only なら（同じ仕事で2回落ちた・GPU で落ち続けた）、GPU のモデルは使わない。"""
+        engines = list(self.engines)
+        if cpu_only or gpu.safe_mode():
+            engines = [e for e in engines if getattr(e, "provider", "") != "cuda"]
+            if not engines:
+                raise RuntimeError("GPU のモデルを使わずに文字にするモデルがありません")
+        uses_gpu = any(getattr(e, "provider", "") == "cuda" for e in engines)
+        guard = gpu.GUARD if uses_gpu else None
+        if guard is not None:
+            guard.enter()  # 文字にしている最中に落ちたら、次に起動したときに分かるように
+        try:
+            return self._transcribe(engines, audio, segments, hints, prompt, votes, weights, extra_from, enhance,
+                                    stats, on_draft)
+        finally:
+            if guard is not None:
+                guard.leave()
+
+    def _transcribe(self, engines: list, audio: np.ndarray, segments: list[tuple[float, float]], hints, prompt,
+                    votes: bool, weights, extra_from, enhance: bool, stats, on_draft) -> list[dict]:
         source = audio
         if CLEAN_AUDIO:
             audio = clean_audio(audio, segments)
         # 版 8: いつもの票を先に始める（雑音を除くのを待たずに、速いモデルが書き始められる。答えは前と同じ）
-        jobs = {e.name: self.pool.submit(self._run, e, audio, segments, hints or [], prompt) for e in self.engines}
+        jobs = {e.name: self.pool.submit(self._run, e, audio, segments, hints or [], prompt) for e in engines}
         denoised = None
-        if enhance and any(isinstance(e, Engine) for e in self.engines):
+        if enhance and any(isinstance(e, Engine) for e in engines):
             try:
                 denoised = extra_model("enhance", ENHANCE_THREADS).denoise_segments(source, segments)
                 if CLEAN_AUDIO:
@@ -1128,7 +1161,7 @@ class Ensemble:
                 log(f"雑音を除けませんでした（いつもの票だけで決めます）: {error!r}")
                 denoised = None
         if denoised is not None:
-            for e in self.engines:
+            for e in engines:
                 if isinstance(e, Engine):
                     jobs[e.name + "_e"] = self.pool.submit(self._run, e, denoised, segments, hints or [], prompt)
         results: dict[str, list[tuple[str, list | None]]] = {}
@@ -2000,7 +2033,7 @@ def resume_work() -> None:
 
 def transcribe_reply(engine: Ensemble, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
                      prompt: str | None, weights: dict[str, float], enhance: bool, union: bool, who: str, kind: str,
-                     started: float, on_draft=None) -> tuple[dict, dict]:
+                     started: float, on_draft=None, cpu_only: bool = False) -> tuple[dict, dict]:
     """/transcribe と後で受け取る文字起こしの共通の中身。(/transcribe の答え, 数の見立て) を返す。
     who は記録の行の頭（「100.x.x.x から 」など）。文の中身は記録に書かない。
     版 8: on_draft(下書き) を渡すと、速いモデルだけの下書き（答えと同じ形に "draft": true）を先に渡す。"""
@@ -2022,10 +2055,12 @@ def transcribe_reply(engine: Ensemble, audio: np.ndarray, segments: list[tuple[f
             extra = []
     if extra:
         lines = engine.transcribe(audio, segments + extra, hints=hints, prompt=prompt, weights=weights,
-                                  extra_from=len(segments), enhance=enhance, stats=stats, on_draft=draft_hook)
+                                  extra_from=len(segments), enhance=enhance, stats=stats, on_draft=draft_hook,
+                                  **({"cpu_only": True} if cpu_only else {}))
     else:
         lines = engine.transcribe(audio, segments, hints=hints, prompt=prompt, weights=weights,
-                                  enhance=enhance, stats=stats, on_draft=draft_hook)
+                                  enhance=enhance, stats=stats, on_draft=draft_hook,
+                                  **({"cpu_only": True} if cpu_only else {}))
     took = time.time() - started
     voiced = sum(b - a for a, b in segments)
     log(f"{who}{duration:.0f} 秒（声 {voiced:.0f} 秒）→ {len(lines)} 行、{took:.1f} 秒")
@@ -2034,9 +2069,12 @@ def transcribe_reply(engine: Ensemble, audio: np.ndarray, segments: list[tuple[f
         log(f"  iPhone が聞き逃した声: {len(extra)} 区間（{sum(b - a for a, b in extra):.0f} 秒）→ {found} 行")
     unsure = sum(1 for line in lines if line.get("confidence", 1) < 0.5)
     timed = sum(1 for line in lines if line.get("words"))
-    log(f"  多数決: {len(engine.engines)} モデル" + ("（雑音を除いた票も）" if enhance else "")
+    skip_gpu = cpu_only or gpu.safe_mode()
+    used = [e.name for e in engine.engines if not (skip_gpu and getattr(e, "provider", "") == "cuda")]
+    log(f"  多数決: {len(used)} モデル" + ("（雑音を除いた票も）" if enhance else "")
+        + ("（GPU のモデルは使わず）" if skip_gpu else "")
         + f"、食い違いの大きい行 {unsure}、言葉の時刻のある行 {timed}")
-    reply: dict = {"lines": lines, "seconds": round(took, 2), "engines": [e.name for e in engine.engines]}
+    reply: dict = {"lines": lines, "seconds": round(took, 2), "engines": used}
     if stats:
         # モデルの組ごとの近さと、何も書かなかった区間の数（数だけ。文の中身は記録に書かない）
         log(pair_stats_line(stats))
@@ -2060,9 +2098,12 @@ def run_job(path: Path, params: dict, name: str, draft=None) -> tuple[dict, dict
     if enhance is None:
         # enhance を指定しなかったら、iPhone と同じく、騒がしい区切りだけ雑音を除いた票も加える
         enhance = bool(params.get("noisy"))
+    # 同じ仕事を文字にしている最中に2回止まった（jobqueue が cpu_only を付ける）。GPU のモデルを使わない
+    cpu_only = bool(params.get("cpu_only"))
     return transcribe_reply(Handler.engine, audio, segments, list(params.get("hints") or []), None,
                             parse_weights(params.get("weights")), bool(enhance), False,
-                            f"後で受け取る文字起こし {name}: ", "job", started, on_draft=draft)
+                            f"後で受け取る文字起こし {name}: " + ("（CPU のモデルだけ）" if cpu_only else ""), "job", started,
+                            on_draft=draft, cpu_only=cpu_only)
 
 
 def dash_info() -> dict:
@@ -2734,6 +2775,12 @@ def serve(engine_factory, port: int, threads: int = 4) -> None:
         raise RuntimeError(f"番号 {port} はほかのソフトが使っています。--port で別の番号を指定してください（{error}）") from error
     Handler.engine = engine_factory()
     Handler.key = key
+    # 2026-11-07 の落ち方への守り: 前の起動が GPU のモデルで文字にしている最中に止まっていたか（続けば GPU を使わない）。
+    # 後で受け取る文字起こしを始める（start_v6）より前に
+    try:
+        gpu.start_guard(HOME, log)
+    except Exception as error:  # noqa: BLE001 — 守りが作れなくても受け付けは始める
+        log(f"GPU の守りを始められませんでした: {error!r}")
     # 雑音を除くモデル（約0.5MB）は裏で用意する。用意できなくても受け付けは始める
     threading.Thread(target=prepare_enhance, daemon=True).start()
     # 版 7（records）: 記録の置き場所（後で受け取る文字起こしが音声を移す先なので、先に始める）
@@ -3452,6 +3499,9 @@ def main() -> None:
     # 版 8
     parser.add_argument("--check-v8", action="store_true",
                         help="版 8（時間・待ち合わせ・通知・下書き・新しい区切りから）を、一時フォルダと作り物のモデルで確かめる")
+    parser.add_argument("--check-crash", action="store_true",
+                        help="2026-11-07 の落ち方の直し（GPU のモデルは1度に1つ・落ちたあとの守り）を、一時フォルダと作り物のモデルで"
+                             "確かめる（GPU は使わない）")
     # 版 9
     parser.add_argument("--check-v9", action="store_true",
                         help="版 9（職場の会話の印・聞いて直す・記録を読む MCP サーバー）を、一時フォルダと作り物の記録で確かめる")
@@ -3466,9 +3516,14 @@ def main() -> None:
     if args.startup or args.no_startup:
         set_startup(args.startup)
         return
-    if args.check_vote or args.check_v7_ops or args.check_v7_records or args.check_v8 or args.check_v9:
+    if args.check_vote or args.check_v7_ops or args.check_v7_records or args.check_v8 or args.check_v9 \
+            or args.check_crash:
         # 版 8: 確かめるときは、本物の HOME（log.txt・データ）に書かない
         isolate_home()
+    if args.check_crash:  # 2026-11-07 の落ち方の直し
+        import v8checks
+
+        sys.exit(1 if v8checks.run_crash(sys.modules[__name__]) else 0)
     if args.check_vote:
         check_vote()
         return
