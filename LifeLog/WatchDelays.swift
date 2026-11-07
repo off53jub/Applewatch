@@ -20,9 +20,16 @@ final class WatchDelayLog {
         var lowPower: Bool? = nil
         /// 届くのが遅れて捨てた30秒枠の数
         var dropped: Int? = nil
+        /// 時計で区切った時刻と、時計が送り始めた時刻（時計が添えた控え。古い時計のアプリでは nil。2026-11-07）
+        var cut: Date? = nil
+        var sent: Date? = nil
 
         /// 録り終わってから届くまで（秒）
         var arrival: TimeInterval { max(0, received.timeIntervalSince(ended)) }
+        /// 届くまでの内訳1: 時計で待った（区切ってから時計が送り始めるまで。秒）
+        var watchWait: TimeInterval? { Latency.span(cut, sent) }
+        /// 届くまでの内訳2: 受け渡し（時計が送り始めてから iPhone のアプリが受け取るまで。秒）
+        var handoff: TimeInterval? { Latency.span(sent, received) }
         /// 届いてから文字になるまで（秒）
         var waiting: TimeInterval? { processed.map { max(0, $0.timeIntervalSince(received)) } }
     }
@@ -46,9 +53,9 @@ final class WatchDelayLog {
         return entries.filter { $0.received >= since }
     }
 
-    func received(_ name: String, ended: Date, at time: Date, lowPower: Bool?) {
+    func received(_ name: String, ended: Date, at time: Date, lowPower: Bool?, cut: Date? = nil, sent: Date? = nil) {
         guard !entries.contains(where: { $0.id == name }) else { return }
-        entries.append(Entry(id: name, ended: ended, received: time, lowPower: lowPower))
+        entries.append(Entry(id: name, ended: ended, received: time, lowPower: lowPower, cut: cut, sent: sent))
         entries = Array(entries.suffix(Self.limit))
         save()
     }
@@ -77,6 +84,21 @@ final class WatchDelayLog {
     static func text(_ seconds: TimeInterval) -> String {
         seconds < 60 ? "\(Int(seconds)) 秒" : String(format: "%.1f 分", seconds / 60)
     }
+
+    /// 届くまでの内訳（時計で待った・受け渡しの、ふつうといちばん遅い）を1行にする。控えのある区切りが無ければ nil（2026-11-07）
+    static func splitText(_ entries: [Entry]) -> String? {
+        let waits = entries.compactMap(\.watchWait).sorted()
+        let handoffs = entries.compactMap(\.handoff).sorted()
+        guard !waits.isEmpty || !handoffs.isEmpty else { return nil }
+        var parts: [String] = []
+        if !waits.isEmpty {
+            parts.append("時計で待った ふつう \(text(waits[waits.count / 2]))・いちばん長い \(text(waits.last ?? 0))")
+        }
+        if !handoffs.isEmpty {
+            parts.append("受け渡し ふつう \(text(handoffs[handoffs.count / 2]))・いちばん長い \(text(handoffs.last ?? 0))")
+        }
+        return parts.joined(separator: "／") + "（\(max(waits.count, handoffs.count)) 個）"
+    }
 }
 
 /// 時計の遅れの一覧。
@@ -103,6 +125,9 @@ struct WatchDelayView: View {
                     LabeledContent("届くまで（ふつう）", value: WatchDelayLog.text(median(arrivals)))
                     LabeledContent("届くまで（いちばん遅い）", value: WatchDelayLog.text(arrivals.max() ?? 0))
                 }
+                if let split = WatchDelayLog.splitText(recent) {
+                    LabeledContent("届くまでの内訳", value: split)
+                }
                 if !waits.isEmpty {
                     LabeledContent("文字になるまで（ふつう）", value: WatchDelayLog.text(median(waits)))
                     LabeledContent("文字になるまで（いちばん遅い）", value: WatchDelayLog.text(waits.max() ?? 0))
@@ -111,7 +136,7 @@ struct WatchDelayView: View {
             } header: {
                 Text("直近24時間")
             } footer: {
-                Text("「届くまで」は、区切りを録り終わってから iPhone のアプリが受け取るまでです。「文字になるまで」は、受け取ってから文字起こしが終わるまでです。12分以上遅れて、iPhone の音で先に書いた時間は「遅れて使えなかった時間」に入ります。")
+                Text("「届くまで」は、区切りを録り終わってから iPhone のアプリが受け取るまでです。内訳の「時計で待った」は、時計が区切ってから送り始めるまで（低電力モードでまとめて送るときに長くなります）、「受け渡し」は、時計が送り始めてから iPhone のアプリが受け取るまで（iPhone のアプリが止まっていると長くなります）です。「文字になるまで」は、受け取ってから文字起こしが終わるまでです。12分以上遅れて、iPhone の音で先に書いた時間は「遅れて使えなかった時間」に入ります。")
             }
             Section("いまの設定") {
                 LabeledContent("待機モード", value: pipeline.standbyOn ? "オン" : "オフ")
@@ -132,6 +157,9 @@ struct WatchDelayView: View {
 
     private func detail(_ entry: WatchDelayLog.Entry) -> String {
         var text = "届く " + WatchDelayLog.text(entry.arrival)
+        if let wait = entry.watchWait, let handoff = entry.handoff {
+            text += "（待つ " + WatchDelayLog.text(wait) + "・渡す " + WatchDelayLog.text(handoff) + "）"
+        }
         if let wait = entry.waiting { text += "・文字 " + WatchDelayLog.text(wait) }
         if entry.lowPower == true { text += "・低電力" }
         return text

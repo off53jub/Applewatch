@@ -44,6 +44,9 @@ KEEP_SECONDS = 7 * 86400     # でき上がった答えを残しておく長さ
 CLEAN_EVERY = 3600.0         # 古い答えを消すのを確かめる間（秒）
 # 版 8: 新しい順にしても、これより長く待った区切りは先に文字にする（秒）
 STARVE_AFTER = 15 * 60
+# 2026-11-07 の落ち方への守り: 同じ仕事を文字にしている最中に、これだけ止まったら GPU のモデルを使わない・飛ばす
+CRASH_CPU_ONLY = 2
+CRASH_SKIP = 3
 
 
 def _env_seconds(name: str, default: float) -> float:
@@ -231,11 +234,21 @@ class JobQueue:
                 continue
             known.add(path.stem)
             if meta.get("status") == "working":
-                meta["status"] = "queued"
+                # 文字にしている最中に止まった（落ちた・電源が切れた）回数。入れ替えのときは、仕事が終わるのを待ってから止まる
+                stops = int(meta.get("interrupted") or 0) + 1
+                meta["interrupted"] = stops
                 meta.pop("started_at", None)
                 meta.pop("draft_at", None)  # 版 8: 下書きも作り直す
                 _unlink(self.draft_path(name))
-                self.log(f"後で受け取る文字起こし {name}: 途中で止まっていたので、もう一度文字にします")
+                if stops >= CRASH_SKIP:
+                    meta.update(status="failed", done_at=time.time(),
+                                error=f"文字にしている最中に LifeLog PC が {stops} 回止まったので、この区切りは飛ばしました")
+                    self.log(f"後で受け取る文字起こし {name}: 文字にしている最中に {stops} 回止まったので、飛ばします"
+                             "（GPU を使わずに試しても止まりました）")
+                else:
+                    meta["status"] = "queued"
+                    self.log(f"後で受け取る文字起こし {name}: 途中で止まっていたので、もう一度文字にします"
+                             + ("（2 回目なので、GPU のモデルを使わず CPU のモデルだけで）" if stops >= CRASH_CPU_ONLY else ""))
             if meta.get("status") == "queued" and not self.audio_path(name).exists():
                 meta.update(status="failed", error="音声がありません（受け取り途中で止まりました）", done_at=time.time())
             if meta.get("status") not in ("queued", "done", "failed"):
@@ -574,6 +587,8 @@ class JobQueue:
             self.working = name
             _write_json(self.meta_path(name), meta)
             params = dict(meta.get("params") or {})
+            if int(meta.get("interrupted") or 0) >= CRASH_CPU_ONLY:
+                params["cpu_only"] = True  # この仕事で2回止まった。GPU のモデルを使わない（runner が見る。保存はしない）
             audio = self.audio_path(name)
         reply, info, error = None, {}, None
         started = time.time()

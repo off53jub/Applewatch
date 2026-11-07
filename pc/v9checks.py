@@ -446,6 +446,23 @@ TOOL_CALLS = [
 
 
 def check_mcp(main) -> int:
+    """--exclude-work のとき職場の会話が漏れないことと、既定（2026-11-07 本人の決定で全部返す）で職場の会話も返ること"""
+    lifelog_mcp.INCLUDE_WORK = False
+    try:
+        failed = check_mcp_excluding(main)
+    finally:
+        lifelog_mcp.INCLUDE_WORK = True
+    with tempfile.TemporaryDirectory() as folder:
+        home = Path(folder) / "LifeLogPC"
+        make_home(home, mcp_days())
+        answer = lifelog_mcp.Tools(home, FakeEmbedder()).call("search_text", {"query": "ヒミツ案件"})
+        text = json.dumps(answer, ensure_ascii=False)
+        failed += say("ヒミツ案件" in text and answer.get("excluded_work", 0) == 0,
+                      "既定では職場の会話も返す（本人の決定。--exclude-work で外せる）")
+    return failed
+
+
+def check_mcp_excluding(main) -> int:
     failed = 0
     with tempfile.TemporaryDirectory() as folder:
         home = Path(folder) / "LifeLogPC"
@@ -545,7 +562,7 @@ def check_mcp_stdio(main, home: Path) -> int:
             command = [sys.executable, "--mcp"]
         else:
             command = [sys.executable, str(Path(main.__file__).resolve()), "--mcp"]
-        command += ["--home", str(home), "--ollama-url", f"http://127.0.0.1:{fake.server_address[1]}"]
+        command += ["--exclude-work", "--home", str(home), "--ollama-url", f"http://127.0.0.1:{fake.server_address[1]}"]
         messages = [{"jsonrpc": "2.0", "id": 1, "method": "initialize",
                      "params": {"protocolVersion": "2025-06-18", "capabilities": {},
                                 "clientInfo": {"name": "check", "version": "1"}}},

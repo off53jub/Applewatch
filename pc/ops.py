@@ -15,6 +15,7 @@ lifelog_pc.py から呼ぶのは次だけ（どれも start() の前に呼ばれ
 from __future__ import annotations
 
 import collections
+import contextlib
 import json
 import os
 import threading
@@ -97,16 +98,18 @@ class FakeEngine:
         self.provider = provider
         self.lock = threading.Lock()
         self.model = object()
+        # 本物と同じく、GPU の作り物は gpu.GPU_LOCK で1度に1つだけ動く
+        self.gpu_lock = gpu.GPU_LOCK if provider == "cuda" else None
 
     def run(self, audio, segments, hints, prompt):
-        # 版 8: 試すときだけ、環境変数 LIFELOG_FAKE_SECONDS で GPU の作り物（whisper・kotoba）を遅くできる
-        # （待ち合わせの空白・下書きが先に出ることを、起動して確かめるため）
-        if self.provider == "cuda":
-            try:
-                time.sleep(max(0.0, min(600.0, float(os.environ.get("LIFELOG_FAKE_SECONDS") or 0))))
-            except ValueError:
-                pass
-        with self.lock:
+        with self.lock, (self.gpu_lock or contextlib.nullcontext()):
+            # 版 8: 試すときだけ、環境変数 LIFELOG_FAKE_SECONDS で GPU の作り物（whisper・kotoba）を遅くできる
+            # （待ち合わせの空白・下書きが先に出ることを、起動して確かめるため。GPU の作り物どうしは順に動く）
+            if self.provider == "cuda":
+                try:
+                    time.sleep(max(0.0, min(600.0, float(os.environ.get("LIFELOG_FAKE_SECONDS") or 0))))
+                except ValueError:
+                    pass
             return ["作り物の文です" if self.model is not None else "" for _ in segments]
 
 

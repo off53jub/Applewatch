@@ -96,6 +96,13 @@ final class Pipeline {
             receiver.sendSettings(skipSilence: skipSilence, held: recordingHeld)
         }
     }
+    /// 電池が少ないときは5分に（時計の電池が 30% より下・低電力モードのあいだ、短めの設定でも時計は5分で区切る。初めはオン。2026-11-07）
+    var chunkBatterySaver = ChunkCutter.batterySaverOn {
+        didSet {
+            ChunkCutter.batterySaverOn = chunkBatterySaver
+            receiver.sendSettings(skipSilence: skipSilence, held: recordingHeld)
+        }
+    }
     /// 時計の区切りがこれ以上遅れたら、待たずに iPhone の分だけで書く
     private static let watchWait: TimeInterval = 12 * 60
     @ObservationIgnored private var retry: Task<Void, Never>?
@@ -319,7 +326,7 @@ final class Pipeline {
             self?.processQueue()
         }
         receiver.onStateChange = { [weak self] in self?.watchStatus = $0 }
-        receiver.onArrival = { [weak self] url, time in
+        receiver.onArrival = { [weak self] url, time, stamp in
             guard let self, let start = Storage.startDate(of: url) else { return }
             // もう文字にした区切りが送り直されてきたら、二重に書かないよう捨てる
             if ledger.isTranscribed(url.lastPathComponent) {
@@ -327,18 +334,30 @@ final class Pipeline {
                 return
             }
             let ended = start.addingTimeInterval(Self.duration(of: url))
-            watchDelays.received(url.lastPathComponent, ended: ended, at: time, lowPower: watchLowPower)
+            // 低電力モードだったかは、時計が送ったときの値を先に使う（2026-11-07）
+            watchDelays.received(url.lastPathComponent, ended: ended, at: time, lowPower: stamp.lowPower ?? watchLowPower,
+                                 cut: stamp.cut, sent: stamp.sent)
             ledger.received(url, at: time)
-            // 文字になるまでの時間を測る（時計の区切りの終わりは「名前の時刻＋音声の長さ」。2026-11-07。Latency.swift）
-            Latency.noteChunk(url.lastPathComponent, start: start, end: ended, arrived: time, watch: true)
-            // 届いたらすぐ、アプリが止まっても続く転送で家の PC に送っておく（2026-11-07）
-            homePC.enqueueJob(url, hints: keywords(for: vocabularyContext(at: start)))
+            // 文字になるまでの時間を測る（時計の区切りの終わりは「名前の時刻＋音声の長さ」。2026-11-07。Latency.swift）。
+            // 時計が添えた「区切った時刻・送り始めた時刻」で、時計で待った時間と受け渡しの時間も分ける
+            Latency.noteChunk(url.lastPathComponent, start: start, end: ended, arrived: time, watch: true,
+                              watchCut: stamp.cut, watchSent: stamp.sent)
+            // 届いたらすぐ、アプリが止まっても続く転送で家の PC に送っておく（2026-11-07）。
+            // 時計が家の PC にも直接送っていて、もうでき上がっていれば、その答えをすぐ使う（WatchDirect.swift）
+            sendWatchChunkToPC(url, hints: keywords(for: vocabularyContext(at: start)), viaPC: stamp.viaPC)
+            // 時計が PC に送るときのヒントも、ときどき新しくする（10分に1回まで）
+            refreshWatchPCHints()
         }
-        receiver.onWatchState = { [weak self] state in self?.noteWatchState(state) }
+        receiver.onWatchState = { [weak self] state in
+            self?.noteWatchState(state)
+            // 時計の区切りが届かないときの立て直し（2026-11-07。WatchRescue.swift）
+            self?.checkWatchDelivery(state)
+        }
         receiver.onNewPerson = { [weak self] time in self?.markNewPerson(at: time) }
         receiver.onMeeting = { [weak self] on in self?.setMeeting(on) }
         receiver.onAsk = { [weak self] _ in self?.recentWords() ?? "" }
         setUpWatchApp()  // 時計のアプリ: 済み・聞く・時計に送る中身（2026-11-07。WatchInfo.swift）
+        setUpWatchDirect()  // 時計から家の PC に直接送る設定（2026-11-07。WatchDirect.swift）
         // 時計に起こされたら、待機モードを確かめて、届いた区切りを文字にする（2026-11-06）
         receiver.onWake = { [weak self] in
             guard let self else { return }
@@ -1400,6 +1419,7 @@ final class Pipeline {
 
     /// アプリを閉じて10分たったら、ライブを自動で切る（切り忘れで電池と無料枠を使わないように）
     func appMovedToBackground() {
+        RunClock.movedToBackground()  // 裏にいた時間を数える（2026-11-07。RunClock.swift）
         // 下書き（仮）を見に行くのは、アプリが前にあるときだけ（2026-11-07。Drafts.swift）
         stopDraftPolling()
         guard liveOn, liveAutoOff == nil else { return }
@@ -1412,6 +1432,7 @@ final class Pipeline {
     }
 
     func appBecameActive() {
+        RunClock.becameActive()
         updateHold()
         if email != nil { Task { await sync.run() } }
         if UIDevice.current.userInterfaceIdiom != .pad { Task { await scheduleMeetingBriefs() } }
@@ -1444,9 +1465,12 @@ final class Pipeline {
         }
         guard email != nil, queueTask == nil else { return }
         let started = Date.now
-        defer { diagnostics.ran(from: started) }
-        // 裏にいても、iOS が許すあいだ（30秒ほど）は続けさせてもらう
-        let background = UIApplication.shared.beginBackgroundTask(withName: "transcribe")
+        // 裏にいても、iOS が許すあいだ（30秒ほど）は続けさせてもらう。時間が切れたら、そう知らせて終える
+        // （前は時間切れの知らせを受けず、終えないまま時間が切れると iOS にアプリを終わらされることがあった。2026-11-07）
+        let background = BackgroundTime("transcribe")
+        // 家の PC を待った・裏にいた時間は、自分で動いた時間と分けて数える（2026-11-07。RunClock.swift）
+        let clock = RunClock.begin(now: started)
+        defer { diagnostics.ran(from: started, parts: RunClock.end(clock), expired: background.expired) }
         let task = Task {
             // 処理しているあいだに届いた区切りも、続けて処理する
             while await drainQueue(), !Task.isCancelled,
@@ -1473,7 +1497,7 @@ final class Pipeline {
                 Task { await refreshSemanticIndex(limit: 1500) }
             }
         }
-        if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
+        background.end()
         Self.scheduleBackgroundWork()
         // 夜に充電していれば、1日分を聞き直す
         startNightlyIfTime()
@@ -2631,6 +2655,9 @@ final class Pipeline {
                 jobLines = lines
             case .pending(let since) where Date.now.timeIntervalSince(since) < 20 * 60:
                 if UIApplication.shared.applicationState == .active {
+                    // 待った時間は、自己点検の「処理」の時間と分けて数える（2026-11-07。RunClock.swift）
+                    let waitStart = Date.now
+                    defer { RunClock.addWait(Date.now.timeIntervalSince(waitStart)) }
                     for _ in 0..<24 where jobLines == nil {
                         try? await Task.sleep(for: .seconds(5))
                         // 待ち合わせの返事が先に届いていれば、それを使う

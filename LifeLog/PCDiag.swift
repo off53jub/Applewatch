@@ -95,6 +95,8 @@ enum PCDiag {
     private static let deviceKey = "pcDiagDeviceID"
     private static let watchSeenKey = "pcWatchSeenAt"
     private static let watchKeptKey = "pcWatchKept"
+    /// 時計に残っている区切りの内訳（2026-11-07）
+    static let watchDetailKey = "pcWatchDelivery"
     private static let nightlyKey = "pcNightlyDoneFor"
 
     /// 送る間隔（1時間に1回ほど）
@@ -140,6 +142,36 @@ enum PCDiag {
     static var watchUnsent: Int? {
         get { UserDefaults.standard.object(forKey: watchKeptKey) as? Int }
         set { UserDefaults.standard.set(newValue, forKey: watchKeptKey) }
+    }
+
+    /// 最後に区切りができた・届いた時刻（state の lastChunkAt・lastWatchChunkAt・lastPhoneChunkAt）。
+    /// 帳簿の区切りは、届いた時刻（時計）か終わり（iPhone）か始まり。待ちのファイルは、書いた時刻。取り込んだ音声は入れない。
+    /// watch が true なら時計の区切り（名前の終わりが -w）だけ、false なら iPhone の区切りだけ、nil なら両方。
+    ///
+    /// 2026-11-07 の実機の点検で「録音中なのに、区切りが 13.8 時間できていません（最後は 11/06 21:35）」と出たときに確かめたこと:
+    /// その日の記録には、時計の区切り（-w）の行が1つも無く（前の日の最後は 21:13 に始まった区切り。届くまで 18 分ほど）、
+    /// iPhone の文字起こし待ちも 0 だった（その日の行は -w の付かない区切りで、同期で届いた iPad の分とみられる。推測）。
+    /// つまりこの値はたぶん正しく、時計の区切りが iPhone に届いていなかった。時計の kept（様子の watchUnsent）は
+    /// 「送り終えて返事を待っている数」で、時計がまだ送っていない区切りは入っていないので、0 でも届いているとは限らない。
+    /// 届かないわけは、時計→iPhone の受け渡しの側で調べる。
+    static func lastChunk(_ chunks: [RecordingLedger.Chunk], pending: [(name: String, modified: Date?)],
+                          watch: Bool? = nil) -> Date? {
+        var latest: Date?
+        func note(_ date: Date?) {
+            guard let date else { return }
+            if latest.map({ date > $0 }) ?? true { latest = date }
+        }
+        for chunk in chunks where chunk.source != "import" {
+            if let watch, (chunk.source == "watch") != watch { continue }
+            note(chunk.received ?? chunk.end ?? chunk.start)
+        }
+        for file in pending {
+            let url = URL(fileURLWithPath: file.name)
+            guard !Storage.isImported(url) else { continue }
+            if let watch, Storage.isFromWatch(url) != watch { continue }
+            note(file.modified)
+        }
+        return latest
     }
 
     /// 夜の処理を、どの日の夜の分まで済ませたか（yyyy-MM-dd）
@@ -343,12 +375,15 @@ final class PCLinkState {
 @MainActor
 final class BackgroundTime {
     private var id: UIBackgroundTaskIdentifier = .invalid
+    /// 時間切れになった（iOS がこのあとアプリを止める。2026-11-07）
+    private(set) var expired = false
 
     init(_ name: String) {
         // 時間切れの知らせは、いつもメインスレッドに来る
         id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                self.expired = true
                 self.end()
             }
         }
@@ -476,34 +511,51 @@ extension Pipeline {
         state["held"] = recordingHeld
         if let at = PCDiag.watchSeenAt { state["watchHeartbeatAt"] = PCJSON.string(at) }
         if let kept = PCDiag.watchUnsent { state["watchUnsent"] = kept }
+        // 時計に残っている区切りの内訳（2026-11-07。時計の最後に区切った時刻は ISO 8601）
+        for (key, value) in UserDefaults.standard.dictionary(forKey: PCDiag.watchDetailKey) ?? [:] {
+            if key == "watchLastCut", let seconds = value as? Double {
+                state[key] = PCJSON.string(Date(timeIntervalSince1970: seconds))
+            } else {
+                state[key] = value
+            }
+        }
         // 時計が静かで書くのを休んでいる（区切りが来ないのは正常）
         if isWatchRecording, let last = ledger.lastState { state["watchResting"] = last.resting }
         if let run = diagnostics.runs.last { state["lastProcessedAt"] = PCJSON.string(run.start.addingTimeInterval(run.seconds)) }
         if let chunk = lastChunkTime() { state["lastChunkAt"] = PCJSON.string(chunk) }
+        // 時計の区切りと iPhone の区切りを分けても送る（2026-11-07）。時計が録音中なのに時計の区切りだけ届かない、が見分けられる
+        if let chunk = lastChunkTime(watch: true) { state["lastWatchChunkAt"] = PCJSON.string(chunk) }
+        if let chunk = lastChunkTime(watch: false) { state["lastPhoneChunkAt"] = PCJSON.string(chunk) }
         if let night = PCDiag.nightlyDoneFor { state["nightlyDoneFor"] = night }
         // 文字になるまでの区間ごとの中央値（直近24時間。秒。版 8。docs/v8-latency.md の 1。Latency.swift）
         if let latency = Latency.summary() { state["latency"] = latency.json }
         return state
     }
 
-    /// 最後に区切りができた・届いた時刻（時計から届いた・iPhone で録り終えた・書いている途中のファイル）
-    private func lastChunkTime() -> Date? {
-        var latest: Date?
-        func note(_ date: Date?) {
-            guard let date else { return }
-            if latest.map({ date > $0 }) ?? true { latest = date }
+    /// 最後に区切りができた・届いた時刻（時計から届いた・iPhone で録り終えた・書いている途中のファイル）。
+    /// watch が true なら時計の区切りだけ、false なら iPhone の区切りだけ、nil なら両方
+    private func lastChunkTime(watch: Bool? = nil) -> Date? {
+        let pending = Storage.pendingChunks().map { url in
+            (name: url.lastPathComponent,
+             modified: (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate)
         }
-        for chunk in ledger.chunks where chunk.source != "import" { note(chunk.received ?? chunk.end ?? chunk.start) }
-        for url in Storage.pendingChunks() where !Storage.isImported(url) {
-            note((try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate)
-        }
-        return latest
+        return PCDiag.lastChunk(ledger.chunks, pending: pending, watch: watch)
     }
 
     /// 時計から知らせが来るたびに呼ぶ（noteWatchState）。最後に来た時刻と、時計の控えの数を覚える
     func notePCWatchState(_ state: PhoneReceiver.WatchState) {
         if PCDiag.watchSeenAt.map({ state.at > $0 }) ?? true { PCDiag.watchSeenAt = state.at }
-        if let kept = state.kept { PCDiag.watchUnsent = kept }
+        // 「時計に残っている」は、まだ送っていない数＋返事待ちの数（新しい時計のアプリ）。古い時計のアプリでは返事待ちの数だけ（2026-11-07）
+        if let left = state.leftOnWatch { PCDiag.watchUnsent = left }
+        // 内訳（まだ送っていない・送っている途中・返事待ち・最後に区切った時刻・休む場所・録音しているつもりか）
+        var detail: [String: Any] = [:]
+        if let unsent = state.unsent { detail["watchPending"] = unsent }
+        if let outstanding = state.outstanding { detail["watchOutstanding"] = outstanding }
+        if let kept = state.kept { detail["watchKept"] = kept }
+        if let cut = state.lastCut { detail["watchLastCut"] = cut.timeIntervalSince1970 }
+        if let held = state.held { detail["watchHeld"] = held }
+        if let wanted = state.wanted { detail["watchWanted"] = wanted }
+        UserDefaults.standard.set(detail, forKey: PCDiag.watchDetailKey)
     }
 
     /// 夜の聞き直しが終わったときに呼ぶ（runNightly）。全部済んだら、どの日の夜の分かを覚える

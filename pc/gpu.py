@@ -29,6 +29,10 @@ OLLAMA_URL = "http://127.0.0.1:11434"
 # 戻す前に GPU の空きを確かめる（MB のおおよそ。空きが足りないときは載せようとせず、あとでやり直す。
 # 足りないまま載せると、Whisper は CPU に落ちて遅くなるため）
 NEED_MB = {"whisper": 3300, "kotoba": 1800, "mine": 1800}
+# 2026-11-07 11:22 に ctranslate2.dll の中で落ちた（0xc0000005）ことへの直し: GPU の文字起こしのモデル
+# （whisper・kotoba・mine・qwen）は、この PC の中で1度に1つだけ動かす（読み込む・下ろすときも）。
+# 持つ順は、いつも「モデルの lock → GPU_LOCK」（逆にしない。どこでも GPU_LOCK を持ったままモデルの lock を待たない）。
+GPU_LOCK = threading.RLock()
 
 
 def parse_clock(text, default: str) -> tuple[int, int]:
@@ -87,11 +91,98 @@ def gpu_memory(cache: dict = {}) -> dict | None:  # noqa: B006 — 30 秒だけ�
     return value
 
 
+class CrashGuard:
+    """GPU のモデルで文字にしている最中に LifeLog PC が止まった（落ちた）ことを、次に起動したときに知る守り。
+    文字にしている間だけ <home>/gpu-busy.json を置き、終わったら消す。起動したときに残っていれば、前は GPU を使っている
+    最中に止まった。それが CRASH_WINDOW の間に CRASH_LIMIT 回あれば、この起動のあいだは GPU のモデルを使わない
+    （CPU のモデルだけで受ける）。<home>/gpu-crashes.json を消すか、時間がたってから起動し直すと、また GPU を使う。"""
+
+    LIMIT = 2
+    WINDOW = 6 * 3600.0
+
+    def __init__(self, home: Path, log: Callable[[str], None], clock: Callable[[], float] = time.time) -> None:
+        self.busy_path = Path(home) / "gpu-busy.json"
+        self.history_path = Path(home) / "gpu-crashes.json"
+        self.log = log
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.count = 0
+        self.safe = False
+        self.crashes: list[float] = []
+
+    def startup(self) -> bool:
+        """起動したときに1回呼ぶ。GPU を使わないことにしたら True"""
+        now = self.clock()
+        try:
+            history = json.loads(self.history_path.read_text(encoding="utf-8"))
+            history = [float(t) for t in history if isinstance(t, (int, float))] if isinstance(history, list) else []
+        except (OSError, ValueError):
+            history = []
+        if self.busy_path.exists():
+            try:
+                at = float(json.loads(self.busy_path.read_text(encoding="utf-8")).get("at") or now)
+            except (OSError, ValueError, AttributeError, TypeError):
+                at = now
+            history.append(at)
+            self.log("前の LifeLog PC は、GPU のモデルで文字にしている最中に止まりました（落ちた疑い）")
+            try:
+                self.busy_path.unlink()
+            except OSError:
+                pass
+        self.crashes = [t for t in history if now - t < self.WINDOW]
+        try:
+            self.history_path.write_text(json.dumps(self.crashes), encoding="utf-8")
+        except OSError:
+            pass
+        self.safe = len(self.crashes) >= self.LIMIT
+        if self.safe:
+            self.log(f"GPU のモデルで文字にしている最中に {len(self.crashes)} 回止まったので、この起動のあいだは GPU のモデルを"
+                     f"使わず、CPU のモデルだけで文字にします（{self.history_path} を消して起動し直すと、また GPU を使います）")
+        return self.safe
+
+    def enter(self) -> None:
+        with self.lock:
+            self.count += 1
+            if self.count == 1:
+                try:
+                    self.busy_path.write_text(json.dumps({"pid": os.getpid(), "at": self.clock()}), encoding="utf-8")
+                except OSError:
+                    pass
+
+    def leave(self) -> None:
+        with self.lock:
+            self.count = max(0, self.count - 1)
+            if self.count == 0:
+                try:
+                    self.busy_path.unlink()
+                except OSError:
+                    pass
+
+
+GUARD: CrashGuard | None = None    # lifelog_pc.serve() が起動したときに作る（確かめのときは無い）
+
+
+def start_guard(home: Path, log: Callable[[str], None]) -> CrashGuard:
+    global GUARD
+    GUARD = CrashGuard(home, log)
+    GUARD.startup()
+    return GUARD
+
+
+def safe_mode() -> bool:
+    """GPU のモデルで落ち続けたので、この起動のあいだは GPU のモデルを使わないか"""
+    return GUARD is not None and GUARD.safe
+
+
 def free_engine(engine) -> None:
-    """文字起こしのモデルを GPU から下ろす（動いている最中なら、終わるのを待ってから）"""
+    """文字起こしのモデルを GPU から下ろす（動いている最中なら、終わるのを待ってから）。
+    GPU のモデル（gpu_lock を持つもの）は、ほかの GPU のモデルが動いていない間に下ろし、捨てるところまで済ませる。"""
     lock = getattr(engine, "lock", None)
+    shared = getattr(engine, "gpu_lock", None)
     if lock is not None:
         lock.acquire()
+    if shared is not None:
+        shared.acquire()
     try:
         model = getattr(engine, "model", None)
         inner = getattr(model, "model", None)
@@ -103,10 +194,13 @@ def free_engine(engine) -> None:
         if hasattr(engine, "model"):
             engine.model = None
         engine.unloaded = True
+        del model, inner
+        gc.collect()
     finally:
+        if shared is not None:
+            shared.release()
         if lock is not None:
             lock.release()
-    gc.collect()
 
 
 class GpuPlan:
@@ -161,7 +255,10 @@ class GpuPlan:
                  "restoring": "GPU の文字起こしのモデルを戻しています（戻るまでは CPU のモデルで受けます）"}
         with self.lock:
             mode = "restoring" if self.restoring else self.mode
-            return {"mode": mode, "text": names.get(mode, mode), "down": list(self.down), "holds": sorted(self.holds),
+            text = names.get(mode, mode)
+            if safe_mode():
+                text = "GPU のモデルで落ち続けたので、この起動のあいだは CPU のモデルだけで文字にしています（" + text + "）"
+            return {"mode": mode, "text": text, "safe": safe_mode(), "down": list(self.down), "holds": sorted(self.holds),
                     "since": self.changed, "last_work": self.last_work, "failed": dict(self.failed),
                     "night": None if self.night is None else {
                         "start": "%02d:%02d" % self.night["start"], "end": "%02d:%02d" % self.night["end"],
