@@ -73,7 +73,9 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 - 下書き: 先に haas・reazon だけで文字にして残す（GET はまだのとき "draft"）。その文は多数決でもそのまま使う
 - 待っているものが2つ以上なら、新しく受けたものから文字にする
     LifeLogPC.exe --check-v8   版 8 を、一時フォルダと作り物のモデルで確かめる
-確かめ（--check-vote・--check-v7-ops・--check-v7-records・--check-v8・--check-v9）は、本物の HOME に書かない（isolate_home）。
+    LifeLogPC.exe --check-gpu  GPU に余裕を作る直し（2026-11-07。--check-v8 にも入っている）だけを確かめる
+確かめ（--check-vote・--check-v7-ops・--check-v7-records・--check-v8・--check-v9・--check-gpu）は、本物の HOME に書かない
+（isolate_home）。
 
 版 9 で足したもの（VERSION は 8 のまま。中身は records.py・recordsui.py・lifelog_mcp.py）:
 - 職場の会話の印（POST /records/<日> の省ける項目 "work"）。印の無い日は「分からない」
@@ -548,12 +550,31 @@ WHISPER_JUNK = re.compile(
 KOTOBA_REPO = "kotoba-tech/kotoba-whisper-v2.0-faster"
 
 
+def cuda_compute_types() -> set[str] | None:
+    """この PC の GPU で CTranslate2 が速く動かせる形（float16・int8_float16 など）。分からなければ None"""
+    try:
+        import ctranslate2
+
+        return set(ctranslate2.get_supported_compute_types("cuda"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def gpu_free_line(memory: dict | None) -> str:
+    return f"空き {memory['free']} MB／全体 {memory['total']} MB" if memory else ""
+
+
 class WhisperEngine:
-    """faster-whisper で Whisper を動かす。登録した言葉をヒントとして渡せる（ほかの2つにはできない）。"""
+    """faster-whisper で Whisper を動かす。登録した言葉をヒントとして渡せる（ほかの2つにはできない）。
+    2026-11-07: GPU に載せる形（compute_type）は gpu.compute_for で決める（合計 10GB 未満の GPU では int8_float16。
+    config.json の "whisper_compute" で変えられる）。載せる前と後の GPU の空きを記録に書き、空きが足りなければ GPU に載せない
+    （whisper は CPU で、kotoba・mine は使わずに、空きができたら GPU の時間割が載せ直す）。"""
 
     name = "whisper"
 
-    def __init__(self, model: str, device: str, threads: int) -> None:
+    def __init__(self, model: str, device: str, threads: int, gpu_only: bool = False) -> None:
+        """gpu_only（GPU の時間割が戻すとき）なら、GPU に載せられないときに CPU で読み込まずに RuntimeError
+        （CPU に落ちたものは時間割が使わずに捨てるので、読み込むだけむだになる）"""
         from faster_whisper import WhisperModel
 
         use_gpu = device == "cuda" or (device == "auto" and has_nvidia_gpu())
@@ -570,6 +591,26 @@ class WhisperEngine:
                     raise RuntimeError(f"GPU の部品を用意できないので使いません: {error!r}") from error
                 log(f"GPU の部品を用意できませんでした。CPU で動かします: {error!r}")
                 use_gpu = False
+        config = load_config()
+        compute = "int8"   # CPU は今までどおり int8
+        before = None
+        if use_gpu:
+            before = gpu.gpu_memory(fresh=True)
+            compute, why = gpu.compute_for(config, before["total"] if before else None, cuda_compute_types())
+            log(f"{self.name} を GPU に載せる形: {compute}（{why}）")
+            if before is not None:
+                log(f"GPU のメモリー（{self.name} を載せる前）: {gpu_free_line(before)}")
+                need = gpu.need_mb(self.name, compute)
+                spare = gpu.free_min_mb(config)
+                if before["free"] - need < spare:
+                    short = (f"GPU の空きが {before['free']} MB で、{self.name} を {compute} で動かすのに要る約 {need} MB と、"
+                             f"残しておく {spare} MB に足りません")
+                    if self.name in ("kotoba", "mine"):
+                        # 追加の票は CPU では録音に追いつかない（2026-11-06。5分の区切りに816秒）ので、CPU にはしない
+                        gpu.skipped(self.name)
+                        raise RuntimeError(short + "（GPU には載せません。空きができたら GPU の時間割が載せ直します）")
+                    log(short + "。CPU で動かします")
+                    use_gpu = False
         if self.name == "kotoba":
             model = KOTOBA_REPO
         elif self.name == "mine":
@@ -582,9 +623,10 @@ class WhisperEngine:
         self.model = None
         if use_gpu:
             try:
-                # GPU に読み込むのも、ほかの GPU のモデルが動いていない間に（GPU の時間割で戻すときは、ほかが動いていることがある）
-                with gpu.GPU_LOCK:
-                    self.model = WhisperModel(model, device="cuda", compute_type="float16",
+                # GPU に読み込むのも、ほかの GPU のモデルが動いていない間に（GPU の時間割で戻すときは、ほかが動いていることがある）。
+                # 読み込んでいる間も「GPU に載っている」とみなす（この PC の Ollama は CPU だけで動かす）
+                with gpu.GPU_LOCK, gpu.loading(self.name):
+                    self.model = WhisperModel(model, device="cuda", compute_type=compute,
                                               download_root=str(WHISPER_DIR))
                 self.provider = "cuda"
             except Exception as error:  # noqa: BLE001
@@ -594,15 +636,51 @@ class WhisperEngine:
                 log(f"GPU で読み込めませんでした。CPU で動かします: {error!r}")
                 if model == "large-v3":
                     model = "large-v3-turbo"
+        if self.model is not None and before is not None:
+            after = gpu.gpu_memory(fresh=True)
+            if after is not None:
+                log(f"GPU のメモリー（{self.name} を載せた後）: {gpu_free_line(after)}"
+                    f"（{self.name} で約 {before['free'] - after['free']} MB）")
+                spare = gpu.free_min_mb(config)
+                if after["free"] < spare and self.name in ("kotoba", "mine"):
+                    # 思ったより使った。追加の票は下ろして、ほかのモデルが動く分を残す（落ちない側）
+                    self._drop_gpu()
+                    gpu.skipped(self.name)
+                    raise RuntimeError(f"載せたあとの GPU の空きが {after['free']} MB で、残しておく {spare} MB より少ないので、"
+                                       f"{self.name} は GPU から下ろしました（空きができたら GPU の時間割が載せ直します）")
+                if after["free"] < spare:
+                    log(f"載せたあとの GPU の空きが {after['free']} MB で、残しておく {spare} MB より少なくなりました"
+                        "（kotoba などの追加の票は GPU に載せません）")
         if self.model is None:
+            if gpu_only:
+                raise RuntimeError(f"{self.name} を GPU に載せられないので、CPU には読み込みません（あとでやり直します）")
+            compute = "int8"
             self.model = WhisperModel(model, device="cpu", compute_type="int8", cpu_threads=threads,
                                       download_root=str(WHISPER_DIR))
             self.provider = "cpu"
+        self.compute = compute
         self.label = {"kotoba": "kotoba-whisper", "mine": "あなた向け Whisper"}.get(self.name, f"Whisper {model}")
         self.lock = threading.Lock()
         # GPU のモデルは、ほかの GPU のモデルと同時には動かさない（CPU のときは待たない）
         self.gpu_lock = gpu.GPU_LOCK if self.provider == "cuda" else None
-        log(f"Whisper を読み込みました（{self.label}、{time.time() - started:.1f} 秒、{self.provider}）")
+        if self.provider == "cuda":
+            gpu.register(self)  # GPU に載っているあいだ、この PC の Ollama は CPU だけで動かす
+        log(f"Whisper を読み込みました（{self.label}、{time.time() - started:.1f} 秒、{self.provider}・{compute}）")
+
+    def _drop_gpu(self) -> None:
+        """読み込んだばかりの GPU のモデルを捨てる（ほかの GPU のモデルが動いていない間に）"""
+        with gpu.GPU_LOCK:
+            inner = getattr(self.model, "model", None)
+            try:
+                if inner is not None and hasattr(inner, "unload_model"):
+                    inner.unload_model()
+            except Exception:  # noqa: BLE001 — 下ろせなくても、捨てれば GPU は空く
+                pass
+            self.model = None
+            del inner
+            import gc
+
+            gc.collect()
 
     def run(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
             prompt: str | None) -> list[str]:
@@ -724,13 +802,15 @@ class QwenEngine:
         dtype = torch.bfloat16 if major >= 8 else torch.float16
         log(f"Qwen3-ASR を読み込んでいます…（{repo}、{dtype}）")
         started = time.time()
-        self.model = qwen_asr.Qwen3ASRModel.from_pretrained(
-            str(local), dtype=dtype, device_map="cuda:0",
-            max_inference_batch_size=QWEN_BATCH, max_new_tokens=QWEN_MAX_TOKENS)
+        with gpu.loading(self.name):  # 読み込んでいる間も、この PC の Ollama は CPU だけで動かす
+            self.model = qwen_asr.Qwen3ASRModel.from_pretrained(
+                str(local), dtype=dtype, device_map="cuda:0",
+                max_inference_batch_size=QWEN_BATCH, max_new_tokens=QWEN_MAX_TOKENS)
         self.provider = "cuda"
         self.label = f"Qwen3-ASR {repo.rsplit('/', 1)[-1].removeprefix('Qwen3-ASR-')}"
         self.lock = threading.Lock()
         self.gpu_lock = gpu.GPU_LOCK  # Whisper の GPU のモデルと同時には動かさない
+        gpu.register(self)
         log(f"Qwen3-ASR を読み込みました（{self.label}、{time.time() - started:.1f} 秒）")
 
     def run(self, audio: np.ndarray, segments: list[tuple[float, float]], hints: list[str],
@@ -1245,7 +1325,20 @@ class Ensemble:
 def load_engines(names: list[str], threads: int, provider: str, whisper: str, device: str,
                  qwen: str | None = None) -> Ensemble:
     """頼まれたモデルを読み込む。読み込めなかったモデルは飛ばす（Haas-ja だけでも動く）。
-    qwen に Qwen3-ASR のモデルの名前を渡したときだけ、"qwen" も読み込む（使えなければ一言だけ記録して飛ばす）。"""
+    qwen に Qwen3-ASR のモデルの名前を渡したときだけ、"qwen" も読み込む（使えなければ一言だけ記録して飛ばす）。
+    2026-11-07: GPU のモデルを読み込むときは、先に LifeLog が使う Ollama のモデルを GPU から下ろし（gpu.make_room）、
+    読み込み終わるまで、この PC の Ollama は CPU だけで動かす。"""
+    wants_gpu = (whisper != "off" and device != "cpu" and any(n in ("whisper", "kotoba", "mine") for n in names)) \
+        or (qwen is not None and "qwen" in names)
+    if wants_gpu and (device == "cuda" or has_nvidia_gpu()):
+        gpu.make_room()
+        with gpu.loading("start"):
+            return _load_engines(names, threads, provider, whisper, device, qwen)
+    return _load_engines(names, threads, provider, whisper, device, qwen)
+
+
+def _load_engines(names: list[str], threads: int, provider: str, whisper: str, device: str,
+                  qwen: str | None) -> Ensemble:
     engines = []
     for name in names:
         if name == "qwen":
@@ -2111,7 +2204,8 @@ def dash_info() -> dict:
     import shutil
 
     engine = getattr(Handler, "engine", None)
-    engines = [{"name": e.name, "label": getattr(e, "label", e.name), "provider": getattr(e, "provider", "cpu")}
+    engines = [{"name": e.name, "label": getattr(e, "label", e.name), "provider": getattr(e, "provider", "cpu"),
+                "compute": getattr(e, "compute", None)}
                for e in (engine.engines if engine else [])]
     lines = dashboard.log_tail(LOG)
     try:
@@ -2187,7 +2281,9 @@ def start_v6(threads: int) -> None:
         log(f"後で受け取る文字起こしを始められませんでした: {error!r}")
     if App.use_semantic:
         try:
-            App.semantic = semantic.SemanticIndex(SEMANTIC_DB, semantic.OllamaEmbedder(LLM.url), log)
+            # bge-m3 も、GPU の文字起こしのモデルが載っているあいだは CPU だけで（options に num_gpu 0）
+            App.semantic = semantic.SemanticIndex(SEMANTIC_DB, semantic.OllamaEmbedder(LLM.url, options=ollama_options),
+                                                  log)
             threading.Thread(target=App.semantic.available, kwargs={"force": True}, daemon=True).start()
         except Exception as error:  # noqa: BLE001
             App.semantic = None
@@ -2275,10 +2371,12 @@ def parse_llm_request(data: bytes) -> dict:
     return {"prompt": prompt, "json": as_json, "max_tokens": int(min(LLM_MAX_TOKENS, max(1, tokens)))}
 
 
-def ollama_chat_body(model: str, prompt: str, as_json: bool, max_tokens: int, think: bool = True) -> dict:
-    """Ollama の /api/chat に送る中身。考える過程（thinking）は書かせない。json なら "format": "json"。"""
+def ollama_chat_body(model: str, prompt: str, as_json: bool, max_tokens: int, think: bool = True,
+                     options: dict | None = None) -> dict:
+    """Ollama の /api/chat に送る中身。考える過程（thinking）は書かせない。json なら "format": "json"。
+    options（GPU の文字起こしのモデルが載っているあいだは {"num_gpu": 0}）は、そのまま options に足す。"""
     body: dict = {"model": model, "messages": [{"role": "user", "content": prompt}], "stream": False,
-                  "options": {"num_predict": max_tokens}}
+                  "options": {"num_predict": max_tokens, **(options or {})}}
     if think:
         body["think"] = False
     if as_json:
@@ -2300,9 +2398,11 @@ def model_listed(names: list[str], wanted: str) -> bool:
 
 
 class LocalLLM:
-    """この PC の中の Ollama に取り次ぐ。宛先はこの PC の中だけ（それ以外は受け付けない）。"""
+    """この PC の中の Ollama に取り次ぐ。宛先はこの PC の中だけ（それ以外は受け付けない）。
+    options を渡すと、頼むたびにその答え（{"num_gpu": 0} など）を Ollama の options に足す。"""
 
-    def __init__(self, url: str = OLLAMA_URL, model: str = LLM_MODEL, enabled: bool = True) -> None:
+    def __init__(self, url: str = OLLAMA_URL, model: str = LLM_MODEL, enabled: bool = True,
+                 options=None) -> None:
         if not is_local_url(url):
             raise ValueError(f"Ollama の宛先はこの PC の中（http://127.0.0.1:…）にしてください: {url}")
         import urllib.request
@@ -2310,6 +2410,7 @@ class LocalLLM:
         self.url = url.rstrip("/")
         self.model = model
         self.enabled = enabled
+        self.options = options
         # プロキシの設定があっても使わない（この PC の中にだけつなぐ）
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self.ok = False
@@ -2365,15 +2466,16 @@ class LocalLLM:
             raise RuntimeError(f"Ollama が動いていないか、{self.model} が入っていません")
         import urllib.error
 
+        extra = self.extra_options()
         try:
             answer = self.call("/api/chat", ollama_chat_body(self.model, prompt, as_json, max_tokens,
-                                                             self.supports_think), timeout=LLM_TIMEOUT)
+                                                             self.supports_think, extra), timeout=LLM_TIMEOUT)
         except urllib.error.HTTPError as error:
             # 古い Ollama・考える過程を持たないモデルが "think" を断ったときは、付けずにもう一度
             if error.code != 400 or not self.supports_think:
                 raise
             self.supports_think = False
-            answer = self.call("/api/chat", ollama_chat_body(self.model, prompt, as_json, max_tokens, False),
+            answer = self.call("/api/chat", ollama_chat_body(self.model, prompt, as_json, max_tokens, False, extra),
                                timeout=LLM_TIMEOUT)
         except OSError:
             self.ok = False
@@ -2383,8 +2485,68 @@ class LocalLLM:
             raise RuntimeError(str(answer["error"]))
         return strip_think(str((answer.get("message") or {}).get("content") or answer.get("response") or ""))
 
+    def extra_options(self) -> dict:
+        if self.options is None:
+            return {}
+        try:
+            return dict(self.options() or {})
+        except Exception:  # noqa: BLE001 — 決められなくても、頼むのはやめない
+            return {}
+
 
 LLM = LocalLLM(enabled=False)
+
+
+# MARK: - GPU の文字起こしのモデルが載っているあいだは、この PC の Ollama を CPU だけで動かす（2026-11-07）
+# Ollama の options の num_gpu は、GPU に置く層の数（既定 -1 は Ollama が決める）。0 なら GPU を使わない。
+# 読み込み済みのモデルの num_gpu と違う値で頼むと、Ollama はそのモデルを読み込み直す（GPU にいれば CPU に移る）。
+# -1（付けない）で頼むと読み込み直さないので、夜に GPU へ戻すために、CPU に載っていたものは下ろしておく（ollama_after_night）。
+
+_ollama_cpu: bool | None = None   # 前に頼んだときに num_gpu 0 を付けたか（変わったときだけ記録に書く）
+
+
+def ollama_options() -> dict:
+    """この PC の Ollama（/llm の言語モデル・意味で探すの bge-m3・学び直しのあとに載せ直すもの）に足す options"""
+    global _ollama_cpu
+    config = load_config()
+    extra = gpu.ollama_options(config)
+    cpu = extra.get("num_gpu") == 0
+    if cpu != _ollama_cpu:
+        _ollama_cpu = cpu
+        if cpu:
+            log("この PC の Ollama は、CPU だけで動かします（options に num_gpu 0。"
+                + ("config.json の ollama_gpu" if gpu.ollama_gpu_mode(config) == "never"
+                   else "GPU に文字起こしのモデルが載っているあいだ") + "）")
+        else:
+            log("この PC の Ollama は、GPU を使ってよい状態です（num_gpu を付けません）")
+    return extra
+
+
+def lifelog_ollama_models() -> list[str]:
+    """LifeLog が使う Ollama のモデル（/llm の言語モデルと、意味で探すの bge-m3）"""
+    return ([LLM.model] if LLM.enabled else []) + ([semantic.EMBED_MODEL] if App.use_semantic else [])
+
+
+def ollama_make_room() -> None:
+    """GPU に文字起こしのモデルを載せる前に（gpu.BEFORE_LOAD）、LifeLog が使う Ollama のモデルが GPU にいれば下ろす。
+    "ollama_gpu": "always" のときは何もしない。ほかのソフトが使うモデルには触らない。"""
+    if gpu.ollama_gpu_mode(load_config()) == "always" or not lifelog_ollama_models():
+        return
+    gone = gpu.Ollama(LLM.url, log).unload_where(lifelog_ollama_models(), on_gpu=True)
+    if gone:
+        log(f"GPU に文字起こしのモデルを載せるので、Ollama の {'・'.join(gone)} を GPU から下ろしました"
+            "（GPU の文字起こしのモデルが載っているあいだは、CPU だけで動かします）")
+
+
+def ollama_after_night() -> None:
+    """夜の割り当てで GPU の文字起こしのモデルを下ろしたあと（gpu.AFTER_NIGHT）、昼に CPU だけで載せた LifeLog の
+    Ollama のモデルを下ろす（次に頼んだときに GPU で読み込まれるように）。"auto" のときだけ。"""
+    if gpu.ollama_gpu_mode(load_config()) != "auto" or not lifelog_ollama_models():
+        return
+    gone = gpu.Ollama(LLM.url, log).unload_where(lifelog_ollama_models(), on_gpu=False, wait=0)
+    if gone:
+        log(f"夜の割り当てで GPU が空いたので、CPU だけで載っていた Ollama の {'・'.join(gone)} を下ろしました"
+            "（次に使うときは GPU で読み込みます）")
 
 
 # MARK: - 受け付け
@@ -2773,6 +2935,9 @@ def serve(engine_factory, port: int, threads: int = 4) -> None:
         server = Server(("0.0.0.0", port), Handler)
     except OSError as error:
         raise RuntimeError(f"番号 {port} はほかのソフトが使っています。--port で別の番号を指定してください（{error}）") from error
+    # 2026-11-07: GPU に文字起こしのモデルが載っているかを <home>/gpu-state.json に書く（MCP サーバーが読み、
+    # そのあいだは bge-m3 を CPU だけで動かす。main() が置き場所を決める）。モデルを読み込む前から
+    gpu.note_change()
     Handler.engine = engine_factory()
     Handler.key = key
     # 2026-11-07 の落ち方への守り: 前の起動が GPU のモデルで文字にしている最中に止まっていたか（続けば GPU を使わない）。
@@ -3502,6 +3667,10 @@ def main() -> None:
     parser.add_argument("--check-crash", action="store_true",
                         help="2026-11-07 の落ち方の直し（GPU のモデルは1度に1つ・落ちたあとの守り）を、一時フォルダと作り物のモデルで"
                              "確かめる（GPU は使わない）")
+    parser.add_argument("--check-gpu", action="store_true",
+                        help="GPU に余裕を作る直し（Whisper を載せる形・GPU の文字起こしのモデルがあるあいだ Ollama に num_gpu 0・"
+                             "空きが少ないときは載せない）を、一時フォルダと作り物のモデル・作り物の Ollama で確かめる"
+                             "（本物の GPU と Ollama は使わない。--check-v8 にも入っています）")
     # 版 9
     parser.add_argument("--check-v9", action="store_true",
                         help="版 9（職場の会話の印・聞いて直す・記録を読む MCP サーバー）を、一時フォルダと作り物の記録で確かめる")
@@ -3517,13 +3686,17 @@ def main() -> None:
         set_startup(args.startup)
         return
     if args.check_vote or args.check_v7_ops or args.check_v7_records or args.check_v8 or args.check_v9 \
-            or args.check_crash:
+            or args.check_crash or args.check_gpu:
         # 版 8: 確かめるときは、本物の HOME（log.txt・データ）に書かない
         isolate_home()
     if args.check_crash:  # 2026-11-07 の落ち方の直し
         import v8checks
 
         sys.exit(1 if v8checks.run_crash(sys.modules[__name__]) else 0)
+    if args.check_gpu:  # 2026-11-07: GPU に余裕を作る直し
+        import v8checks
+
+        sys.exit(1 if v8checks.run_gpu(sys.modules[__name__]) else 0)
     if args.check_vote:
         check_vote()
         return
@@ -3584,6 +3757,13 @@ def main() -> None:
 
     # 版 7（ops）: GPU の時間割で、下ろしたモデルを同じ設定で作り直すため
     ops.configure(names=names, whisper=args.whisper, device=args.device, threads=args.threads, fake=args.fake_models)
+    # 2026-11-07: LLM が決まってから、Ollama の LifeLog のモデルを GPU から下ろす・夜に戻す口をつなぐ。
+    # /llm と bge-m3 は、GPU の文字起こしのモデルが載っているあいだ CPU だけで動かす（"ollama_gpu" で変えられる）。
+    # 作り物のモデル（--fake-models）のときは、GPU を使わないので、本物の Ollama のモデルは下ろさない
+    LLM.options = ollama_options
+    if not args.fake_models:
+        gpu.BEFORE_LOAD = ollama_make_room
+        gpu.AFTER_NIGHT = ollama_after_night
 
     def factory() -> Ensemble:
         if args.fake_models:  # 版 7（ops）: 試すとき用の作り物のモデル
@@ -3601,6 +3781,10 @@ def main() -> None:
     if args.test:
         test(args.test, factory(), args.segments, [w for w in re.split("[、,]", args.hints) if w], args.enhance)
         return
+    if not args.fake_models:
+        # 受け付けを始めるときだけ、GPU に文字起こしのモデルが載っているかを <home>/gpu-state.json に書く（MCP サーバーが読む。
+        # --test・--download・--fake-models は書かない。動いている LifeLog PC の様子を上書きしないため）
+        gpu.STATE_PATH = HOME / gpu.STATE_FILE
     try:
         serve(factory, args.port, args.threads)
     except Exception as error:  # noqa: BLE001

@@ -32,6 +32,7 @@ import threading
 import time
 from pathlib import Path
 
+import gpu
 import records
 import semantic
 
@@ -579,7 +580,9 @@ def make_tools(home: Path, ollama_url: str | None = None) -> Tools:
     if config.get("semantic") is not False:
         url = ollama_url or str(config.get("ollama_url") or OLLAMA_URL)
         try:
-            embedder = semantic.OllamaEmbedder(url)
+            # LifeLog PC が GPU に文字起こしのモデルを載せているあいだ（<home>/gpu-state.json を読むだけ）は、
+            # bge-m3 も CPU だけで動かす（options に num_gpu 0。2026-11-07）
+            embedder = semantic.OllamaEmbedder(url, options=lambda: gpu.state_options(home, config))
         except ValueError as error:
             note(f"意味で探すは使いません: {error}")
     return Tools(home, embedder)

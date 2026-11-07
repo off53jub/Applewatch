@@ -317,6 +317,21 @@ GPU で落ちたときの守り（2026-11-07 に ctranslate2.dll の中で 0xc00
   使わず CPU のモデルだけで文字にします（記録と見守りの画面に出ます）。gpu-crashes.json を消して起動し直すと、また GPU を使います。
 ・確かめるとき:  LifeLogPC.exe --check-crash（一時のフォルダと作り物のモデルで。GPU は使いません。--check-v8 にも入っています）
 
+GPU のメモリーに余裕を作る（2026-11-07。8GB の GPU に large-v3 と kotoba を float16 で載せると、空きが約 600MB だったため）:
+・合計 10GB 未満の GPU では、Whisper（large-v3・kotoba・あなた向け）の重みを 8 ビットにして載せます（int8_float16。
+  重みが約半分になり、large-v3 で約 1.5GB 減ります）。config.json の "whisper_compute" で変えられます:
+  "auto"（既定）・"float16"（前と同じ）・"int8_float16"・"int8"（このモデルでは int8_float16 と同じになります）。
+・GPU に文字起こしのモデルが載っているあいだ（読み込み中も）は、この PC の Ollama（/llm の言語モデルと、意味で探すの bge-m3。
+  MCP サーバーの意味で探すも）を CPU だけで動かします（options に num_gpu 0 を付けて頼みます。答えは遅くなります）。
+  GPU に載せる前に、LifeLog が使う Ollama のモデルが GPU にいれば下ろします（ほかのソフトのモデルには触りません）。
+  夜の割り当てで下ろしているあいだは、今までどおり GPU を使います。config.json の "ollama_gpu" で変えられます:
+  "auto"（既定）・"always"（いつも GPU を使ってよい。前と同じ）・"never"（いつも CPU だけ）。
+・GPU に載せる前と後の空きを、記録（log.txt）に「GPU のメモリー（whisper を載せる前）: 空き … MB」のように書きます。
+  動かすのに要る分と、残しておく分（既定 1024MB。config.json の "gpu_free_min_mb"）が無いときは、Whisper は CPU
+  （large-v3-turbo）で動かし、kotoba・あなた向けは使わずに、空きができたら GPU の時間割が載せ直します。
+・確かめるとき:  LifeLogPC.exe --check-gpu（一時のフォルダと作り物のモデル・作り物の Ollama で。GPU も Ollama も使いません。
+  --check-v8 にも入っています）
+
 ■ Qwen3-ASR も使う（NVIDIA の GPU が要ります。使わなくても困りません）
 Qwen3-ASR（Alibaba の Qwen、Apache License 2.0、2026 年 1 月公開）の 0.6B を、多数決の5票目「qwen」として加えます。
 torch などの大きな部品が要るので、LifeLogPC.exe には入っていません。Python で動かします。

@@ -165,15 +165,17 @@ def text_hash(text: str) -> str:
 
 
 class OllamaEmbedder:
-    """この PC の中の Ollama で、文を数の並びにする。"""
+    """この PC の中の Ollama で、文を数の並びにする。
+    options を渡すと、頼むたびにその答え（GPU の文字起こしのモデルが載っているあいだは {"num_gpu": 0}）を options に付ける。"""
 
-    def __init__(self, url: str, model: str = EMBED_MODEL) -> None:
+    def __init__(self, url: str, model: str = EMBED_MODEL, options: Callable[[], dict] | None = None) -> None:
         if not is_local_url(url):
             raise ValueError(f"Ollama の宛先はこの PC の中（http://127.0.0.1:…）にしてください: {url}")
         import urllib.request
 
         self.url = url.rstrip("/")
         self.model = model
+        self.options = options
         # プロキシの設定があっても使わない（この PC の中にだけつなぐ）
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -195,12 +197,23 @@ class OllamaEmbedder:
         if answer.get("error"):
             raise RuntimeError(str(answer["error"]))
 
+    def extra_options(self) -> dict:
+        if self.options is None:
+            return {}
+        try:
+            return dict(self.options() or {})
+        except Exception:  # noqa: BLE001 — 決められなくても、頼むのはやめない
+            return {}
+
     def embed(self, texts: list[str]) -> np.ndarray:
         out = []
         for i in range(0, len(texts), BATCH):
             part = texts[i:i + BATCH]
-            answer = self.call("/api/embed", {"model": self.model, "input": part, "truncate": True},
-                               timeout=EMBED_TIMEOUT)
+            body = {"model": self.model, "input": part, "truncate": True}
+            extra = self.extra_options()
+            if extra:
+                body["options"] = extra
+            answer = self.call("/api/embed", body, timeout=EMBED_TIMEOUT)
             if answer.get("error"):
                 raise RuntimeError(str(answer["error"]))
             vectors = answer.get("embeddings")
