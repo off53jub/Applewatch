@@ -129,8 +129,15 @@ enum Tally {
         if n("bench.lines") > 0 {
             rows.append(("精度の物差しで測った行", "\(n("bench.lines")) 行", nil))
         }
-        if n("personal.sent") > 0 {
-            rows.append(("あなた向けのモデルの材料", "PC に渡した \(n("personal.sent")) 行", nil))
+        if n("personal.sent") + n("personal.refused") > 0 {
+            // PC が受け付けなかった材料（声が短すぎる など）は、飛ばして先へ進む（2026-11-07）
+            rows.append(("あなた向けのモデルの材料", "PC に渡した \(n("personal.sent")) 行"
+                + (n("personal.refused") > 0 ? "・PC が受け付けなかった \(n("personal.refused")) 行" : ""), nil))
+        }
+        let reviewed = n("review.fixed") + n("review.ok") + n("review.skipped")
+        if reviewed > 0 {
+            // 毎朝の「聞いて直す」で答えた数（2026-11-07。ReviewNudge.swift）
+            rows.append(("聞いて直す", "直した \(n("review.fixed"))・合っている \(n("review.ok"))・飛ばした \(n("review.skipped"))", nil))
         }
         // どのモデルどうしが合わないか（PC の版 5 から。近い順ではなく、合わない順に）
         let pairs = s.keys.filter { $0.hasPrefix("pair.") && $0.hasSuffix(".n") }.compactMap { key -> (String, Double)? in
