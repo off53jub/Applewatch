@@ -247,8 +247,51 @@ Haas-ja と ReazonSpeech にも「ホットワード」として効かせます�
   環境変数 LIFELOG_JOBWAIT_PING（空白を送る間の秒）・LIFELOG_JOBWAIT_LIMIT（待つ長さの上限の秒）で短くでき、
   LIFELOG_FAKE_SECONDS（秒）で作り物の Whisper を遅くできます（下書きが先に出るのを見るため）。
   試すときは、環境変数 LOCALAPPDATA を一時のフォルダにして、ふだんの置き場所と番号 47615 を使わないでください。
-  --check-vote・--check-v7-ops・--check-v7-records・--check-v8 は、LOCALAPPDATA を替えなくても、自分で一時のフォルダを
+  --check-vote・--check-v7-ops・--check-v7-records・--check-v8・--check-v9 は、LOCALAPPDATA を替えなくても、自分で一時のフォルダを
   使います（ふだんの置き場所の記録 log.txt やデータには書きません）。
+
+■ 版 9 で足したもの（職場の会話の印・聞いて直す・この PC の Claude から記録を読む）
+PC の版の番号は 8 のままです。古い iPhone のアプリも、これまでどおり動きます。
+・職場の会話の印: 新しい iPhone のアプリは、記録（POST /records/<日>）に、職場の会話の始まりの時刻の並び
+  （"work"）を足して送ってきます。PC は日ごとに残し、会話を「職場」「職場ではない」「分からない」に分けます。
+  古い iPhone から届いた日（"work" が無い日）は「分からない」です。記録の画面の会話の所に「職場」
+  「職場かどうか分からない」と出ます（PC の画面では、どれも読めます）。
+・聞いて直す: 記録の画面の「聞いて直す」から開きます（見守りの画面の学び直しの所からも入れます）。
+    http://<PC の Tailscale 名>:47615/dash/records/review
+  自信の低い行（確からしさが 0.45 より低い・モデルの票が食い違う・話し手に「？」）で、PC に音声がある行を、
+  新しい日から並べます。▶ で聞いて、違っていれば「文を直す」、そのままで正しければ「合っている」を押します。
+  答えると次の行に進み、自動で流します。話し手は「話し手を変える」で、記録に出てくる名前と「自分」から選びます
+  （新しい名前は作りません）。文と話し手の直しは、ほかの直しと同じく iPhone に渡します。「合っている」は iPhone には送りません。
+  文を直した行と「合っている」行は、PC にある音声から、その行の所（iPhone が材料を作るときと同じ区間）を切り出して、
+  学び直しの材料（personal\data）に足します。iPhone があとで同じ行を材料として送ってきても、2 重には入れません
+  （文が同じで、長さがほぼ同じなら同じ行とみなします。iPhone が /train-sample に audio（行の音声の名前）と
+  offset（行の位置の秒）を付けてくれば、それでも見分けます）。話し手だけを変えた行は、材料にしません。
+  見守りの画面の学び直しの所に、材料の数と、あと何個で学び直せるか（300 個から）が出ます。
+・この PC の Claude Code から記録を読む（MCP サーバー）: 下の「この PC の Claude から記録に聞く」を見てください。
+・確かめるとき:  LifeLogPC.exe --check-v9（一時のフォルダと作り物の記録で、職場の印・聞いて直す・材料を 2 重にしない・
+  MCP サーバーから職場の会話が出ないことを確かめます）
+
+■ この PC の Claude から記録に聞く（MCP サーバー。登録は本人が決めてから）
+この PC の Claude Code に「先週、母と何を話した？」のように聞けるようにする道具です。読むだけで、記録は変えられません。
+音声は返しません。
+・職場の会話は、どの道具からも返しません。職場の印が付いた会話と、印が分からない会話（古い iPhone から来た日・
+  PC に記録が無い日の行）は、返す前に外し、外した数だけを返します。1 日のまとめは、その日に職場の会話も
+  分からない会話も無いときだけ返します。
+・ただし、職場ではない会話の文・見出し・相手の名前は Claude（外のクラウド）に渡ります。登録する前に、本人に確かめてください。
+・出す道具: list_conversations（日付で会話の一覧）・search_text（言葉で探す）・search_meaning（意味で探す。この PC の
+  Ollama の bge-m3 を使い、semantic.db を読むだけ）・conversations_with（人の名前で、その人との会話）・
+  get_conversation（1 つの会話の中身）。
+・%LOCALAPPDATA%\LifeLogPC には何も書きません。LifeLog PC が動いていても、止まっていても使えます
+  （意味で探すだけは、この PC の Ollama が動いているときだけ）。
+・登録のしかた（Claude Code。コマンドプロンプトで1行。exe の場所は自分の置いた所に替えます）:
+    claude mcp add --scope user lifelog -- "C:\Users\<名前>\Documents\LifeLogPC\LifeLogPC.exe" --mcp
+  Python で動かすとき（numpy が要ります）:
+    claude mcp add --scope user lifelog -- py -3.12 "<このリポジトリ>\pc\lifelog_mcp.py"
+  設定ファイルに書くときは、mcpServers に次を足します（~/.claude.json か、プロジェクトの .mcp.json）:
+    "lifelog": {"type": "stdio", "command": "C:\\Users\\<名前>\\Documents\\LifeLogPC\\LifeLogPC.exe", "args": ["--mcp"]}
+  ほかに付けられるもの: --home <フォルダ>（記録の置き場所。既定 %LOCALAPPDATA%\LifeLogPC）・
+  --ollama-url http://127.0.0.1:11434（この PC の中の Ollama だけ）。
+  登録できたかは  claude mcp list  で確かめます。やめるときは  claude mcp remove --scope user lifelog
 
 ■ GPU について（NVIDIA のドライバー）
 Whisper・kotoba-whisper・Qwen3-ASR を GPU で動かすには、NVIDIA のドライバー 528 以上が要ります。
@@ -310,6 +353,7 @@ NVIDIA のドライバーが古いと GPU を使えません。nvidia-smi で版
 モデル・合言葉・記録: %LOCALAPPDATA%\LifeLogPC（model・reazon・whisper・cuda・speaker・tagging・enhance・vad・qwen のフォルダ）
 預かった区切り・意味で探すための行・取ってきた新しい版: %LOCALAPPDATA%\LifeLogPC（jobs のフォルダ・semantic.db・update のフォルダ）
 iPhone から届いた記録・PC で直した分・残した音声: %LOCALAPPDATA%\LifeLogPC（records のフォルダ・edits.db・audio のフォルダ）
+版 9: 「聞いて直す」で「合っている」と答えた行は edits.db の reviews に、作った材料は personal\data に置きます
 あなた向けのモデルの材料とモデル: %LOCALAPPDATA%\LifeLogPC\personal（data に声と文、model に作ったモデル）
 版 7: 実機の様子 diag（summary.md も）・TestFlight の報告 feedback・通知の鍵と様子 apns・App Store Connect のキー asc・
       学び直しの部品 train（どれも %LOCALAPPDATA%\LifeLogPC の下）

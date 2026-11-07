@@ -291,7 +291,9 @@ def render(info: dict) -> str:
                  "</div></div><div class='scroll'><table><tr><th>モデルの組</th><th class='num'>近さ</th><th class='num'>区間</th></tr>"
                  f"{pair_rows}</table></div><p class='sub'>何も書かなかった区間: {silent}</p></section>")
     # 版 7（ops）: 実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割
-    parts.extend(ops_sections(info.get("ops") or {}))
+    # 版 9: 学び直しの所に、材料の数・あと何個で学び直せるか・「聞いて直す」への入口
+    ops_parts = ops_sections(info.get("ops") or {}, info.get("personal"))
+    parts.extend(ops_parts or [personal_section(info.get("personal"))])
     # 更新
     update = info.get("update") or {}
     parts.append("<section><h2>更新</h2><div class='kv'>"
@@ -469,7 +471,33 @@ def _ops_feedback(ops: dict) -> str:
             "<a href='/dash/ops/keys'>キーを入れる画面を開く</a><div id='opsMsgAsc' class='sub'></div></section>")
 
 
-def _ops_train(ops: dict) -> str:
+def personal_text(personal: dict | None) -> str:
+    """版 9: 材料の数と、あと何個で学び直せるか（HTML）"""
+    personal = personal or {}
+    count = int(personal.get("count") or 0)
+    need = int(personal.get("need") or 300)
+    left = max(0, need - count)
+    state = f"<span class='ok'>学び直せる数です（{need} 個以上）</span>" if left == 0 else \
+        f"あと <b>{left}</b> 個で学び直せます（{need} 個から）"
+    return f"{count} 個・{state}"
+
+
+def personal_link(personal: dict | None) -> str:
+    if not (personal or {}).get("records"):
+        return "<span class='sub'>記録の機能が動いていないので、「聞いて直す」は使えません</span>"
+    return ("<a href='/dash/records/review'>聞いて直す →</a><br><span class='sub'>自信の低い行を聞いて、その場で直すか"
+            "「合っている」を押すと、その声が材料になります</span>")
+
+
+def personal_section(personal: dict | None) -> str:
+    """版 9: 版 7 の見守りが動いていないときの、学び直しの材料の節"""
+    if personal is None:
+        return ""
+    return (f"<section><h2>学び直しの材料</h2><div class='kv'><div>材料</div><div>{personal_text(personal)}</div>"
+            f"<div>材料を増やす</div><div>{personal_link(personal)}</div></div></section>")
+
+
+def _ops_train(ops: dict, personal: dict | None = None) -> str:
     train = ops.get("train") or {}
     plan = ops.get("gpu") or {}
     last = train.get("last") or {}
@@ -489,6 +517,8 @@ def _ops_train(ops: dict) -> str:
             ("時間帯", f"{_e(train.get('window'))}（次は {_iso_clock(train.get('next'))}）"),
             ("材料", f"{_e(train.get('count'))} 個（前回から +{_e(train.get('since_last'))}。{_e(train.get('min_samples'))} 個以上で、"
                      f"{_e(train.get('min_new'))} 個増えたら学び直します）"),
+            # 版 9: 材料の数・あと何個で学び直せるか・「聞いて直す」への入口
+            *([("材料（今）", personal_text(personal)), ("材料を増やす", personal_link(personal))] if personal else []),
             ("学び直しの部品", _e(train.get("runtime")) + (f"<br><span class='ng'>{_e(train.get('runtime_error'))}</span>"
                                                      if train.get("runtime_error") else "")),
             ("前回", result),
@@ -504,11 +534,11 @@ def _ops_train(ops: dict) -> str:
     return f"<section><h2>学び直しと GPU の時間割</h2><div class='kv'>{body}</div></section>"
 
 
-def ops_sections(ops: dict) -> list[str]:
+def ops_sections(ops: dict, personal: dict | None = None) -> list[str]:
     """見守りの画面の版 7 の節（ops.dash_info() が空なら、何も出さない）"""
     if not ops:
         return []
-    return [f"<style>{OPS_STYLE}</style>", _ops_devices(ops), _ops_push(ops), _ops_feedback(ops), _ops_train(ops),
+    return [f"<style>{OPS_STYLE}</style>", _ops_devices(ops), _ops_push(ops), _ops_feedback(ops), _ops_train(ops, personal),
             f"<script>{OPS_SCRIPT}</script>"]
 
 
