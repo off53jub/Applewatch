@@ -144,6 +144,8 @@ final class HomePC {
         // 待ち合わせ（送った返事で文字を返す）と下書き（版 8 から。2026-11-07。裏で起こされたときにも使えるよう覚えておく）
         UserDefaults.standard.set(features.contains("jobwait"), forKey: Self.jobWaitKey)
         UserDefaults.standard.set(features.contains("draft"), forKey: Self.draftKey)
+        // 時計から直接届いた区切りを、PC から先に記録に入れられるか（版 10。PCFirst.swift）
+        UserDefaults.standard.set(features.contains(PCFirst.feature), forKey: PCFirst.featureKey)
         speakerModel = hello.speaker_model
         return "\(hello.model)（\(hello.provider == "cuda" ? "GPU" : "CPU")）"
     }

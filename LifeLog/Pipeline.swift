@@ -330,10 +330,22 @@ final class Pipeline {
         receiver.onStateChange = { [weak self] in self?.watchStatus = $0 }
         receiver.onArrival = { [weak self] url, time, stamp in
             guard let self, let start = Storage.startDate(of: url) else { return }
-            // もう文字にした区切りが送り直されてきたら、二重に書かないよう捨てる
-            if ledger.isTranscribed(url.lastPathComponent) {
+            let name = url.lastPathComponent
+            switch PCFirst.arrival(transcribed: ledger.isTranscribed(name), pcFirst: ledger.isPCFirst(name)) {
+            case .drop:
+                // もう文字にした区切りが送り直されてきたら、二重に書かないよう捨てる
                 try? FileManager.default.removeItem(at: url)
                 return
+            case .keepAudio:
+                // PC から先に記録に入れた区切りの音声が、あとから届いた（版 10。PCFirst.swift）。
+                // 文字にし直さず（行を二重にしない）、聞き直し・話者の確認に使えるよう音声だけ残す。届くまでの遅れは今までどおり数える
+                watchDelays.received(name, ended: start.addingTimeInterval(Self.duration(of: url)), at: time,
+                                     lowPower: stamp.lowPower ?? watchLowPower, cut: stamp.cut, sent: stamp.sent)
+                watchDelays.processed(name)
+                pcFirstAudioArrived(url, at: time)
+                return
+            case .normal:
+                break
             }
             let ended = start.addingTimeInterval(Self.duration(of: url))
             // 低電力モードだったかは、時計が送ったときの値を先に使う（2026-11-07）
@@ -1520,6 +1532,8 @@ final class Pipeline {
         await conversations.repairBrokenLines()
         await conversations.removeFillerLines()
         await conversations.removeBlankLines()
+        // 時計から家の PC に直接届いて、もう文字になっている区切りは、音声を待たずに記録に入れる（1分に1回まで。版 10。PCFirst.swift）
+        await pullPCFirst()
         // 取り込んだ昔の音声は、いま録っている分のあとに回す
         let pending = Storage.pendingChunks()
         let ordered = pending.filter { !Storage.isImported($0) } + pending.filter(Storage.isImported)
@@ -1534,6 +1548,11 @@ final class Pipeline {
             }
             // 書いている途中で録音が終わった区切りは開けない。何度やっても同じなので脇によけて先へ進む
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            // PC から先に記録に入れた区切りの音声なら、文字にし直さずに残すだけ（版 10。PCFirst.swift）
+            if ledger.isPCFirst(url.lastPathComponent) {
+                pcFirstAudioArrived(url, at: .now)
+                continue
+            }
             guard (try? AVAudioFile(forReading: url)) != nil else {
                 ledger.broken(url)
                 Storage.setAside(url)
@@ -1570,6 +1589,8 @@ final class Pipeline {
         let settled = settledUntil()
         watchDelays.dropped(merger.release(before: settled))
         guard await writeMerged() else { return false }
+        // PC から先に入れた区切りの音声があとから届いていれば、話者の無い行に話者を付ける（版 10。PCFirst.swift）
+        await labelPCFirstSpeakers()
         // いま書いた行に、決まり文句や連打があれば消す
         await autoClean()
         // 印の前後1分の行に★を付ける
@@ -3073,6 +3094,202 @@ final class Pipeline {
             lastEngine += "・\(removed.count) 行を外した"
         }
         return lines
+    }
+
+    // MARK: - PC から先に記録に入れる（版 10。2026-11-07。PCFirst.swift・docs/v10-pc-first.md）
+
+    /// 時計の区切りを、音声が iPhone に届く前に、家の PC の答えだけで記録に入れる（Merger に入れ、帳簿に残す）。
+    /// 音声の要らない手順は transcribe と同じにする: 話題・予定・連絡先の言葉、登録した書き方、言語モデルの直し
+    /// （2つ目のモデルとの見比べも）、数字そろえ、多数決の確からしさと票、行の終わり。
+    /// 音声の要る手順（端末内の聞き取り・声の区間・騒がしさ・こすれ・話者の聞き分け・周りの声を外す・背景の音・
+    /// クラウドや有料の票）はしない。話者は音声が届いてから付ける（labelPCFirstSpeakers）。書いた行の数を返す
+    func applyPCFirst(name: String, start: Date, end: Date, lines pc: [HomePC.Line]) async -> Int {
+        let duration = max(1, end.timeIntervalSince(start))
+        let context = vocabularyContext(at: start)
+        let ensemble = homePC.engineCount > 1
+        var entries: [(offset: TimeInterval?, text: String)] = pc.map { ($0.offset, $0.text) }
+        guard !entries.isEmpty else {
+            ledger.transcribedFromPC(name, start: start, end: end, lines: 0)
+            return 0
+        }
+        // 聞き取りと直しのヒント（transcribe と同じ選び方。端末内の聞き取りの代わりに PC の文を使う）
+        let texts = entries.map { $0.text }
+        let previous = lastTranscript[true].flatMap { start.timeIntervalSince($0.end) < 90 ? $0.text : nil }
+        let placeWords = keywords(for: context)
+        let topics = vocabulary.activeTopics(hearing: texts.joined() + (previous ?? ""), at: start)
+        let event = calendar.events(from: start, to: end).first
+        let eventWords = event.map { [$0.title] + $0.attendees + ($0.location.map { [$0] } ?? []) }?.filter { !$0.isEmpty } ?? []
+        let meetingWords = MeetingMode.session(at: start).map { MeetingMode.words(title: $0.title) + $0.attendees } ?? []
+        let todayWords = dayWords(at: start)
+        let placeTalkWords = places.quickName(at: start).map { wordStats.hints(forPlace: $0) } ?? []
+        let contactWords = await contacts.mentioned(in: texts + [previous ?? ""])
+        let personWords = recentPeople[true].flatMap { start.timeIntervalSince($0.end) < 600 ? $0.names : nil }
+            .map { wordStats.hints(for: $0) } ?? []
+        var seenWords = Set<String>()
+        let hintWords = (meetingWords + contactWords + topics.flatMap(\.words) + personWords + eventWords + todayWords
+                         + placeTalkWords + placeWords)
+            .filter { seenWords.insert($0).inserted }
+        // 多数決の合い方を確からしさにし、食い違った行はほかのモデルの文を候補として見比べてもらう
+        let sameCount = pc.count == entries.count
+        let agreement: [Double?] = ensemble && sameCount
+            ? pc.map(\.confidence) : [Double?](repeating: nil, count: entries.count)
+        let others: [String]? = ensemble && sameCount
+            ? pc.map { ($0.confidence ?? 1) < 0.5 ? $0.alternatives.joined(separator: " ／ ") : "" } : nil
+        let heardTopics = vocabulary.activeTopics(hearing: texts.joined(), at: start)
+        let heardNames = await contacts.mentioned(in: texts)
+        let correctionWords = (heardNames + heardTopics.flatMap(\.words)).filter { seenWords.insert($0).inserted } + hintWords
+        var originals = [String?](repeating: nil, count: entries.count)
+        var rewrittenBy = [[String]](repeating: [], count: entries.count)
+        // 登録した「間違えやすい書き方」は、そのまま正しい書き方に置き換える
+        for fix in vocabulary.fixes(for: context) {
+            for i in entries.indices where entries[i].text.contains(fix.wrong) {
+                if originals[i] == nil { originals[i] = entries[i].text }
+                entries[i].text = entries[i].text.replacingOccurrences(of: fix.wrong, with: fix.right)
+                if !rewrittenBy[i].contains("登録した書き方") { rewrittenBy[i].append("登録した書き方") }
+            }
+        }
+        var engine = (ensemble ? "家の PC（\(homePC.engineCount) つのモデルの多数決）" : "Haas-ja（家の PC）")
+        // 同音の誤変換などを言語モデルで直す（transcribe と同じ。直せなければそのまま）
+        if correctionOn, let key = llmKey, ChunkBudget.take(.correct),
+           var fixed = try? await Summarizer.$sensitive.withValue(context == .work, operation: {
+               try await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
+                                            previous: previous, alternatives: others, apiKey: key)
+           }), fixed.count == entries.count {
+            let changedAny = entries.indices.contains { fixed[$0] != entries[$0].text && !fixed[$0].isEmpty }
+            let proposed = entries.indices.filter { fixed[$0] != entries[$0].text && !fixed[$0].isEmpty }.count
+            if changedAny, !MultiModel.secondOpinionOK { Tally.add("second.skipped") }
+            if changedAny, MultiModel.secondOpinionOK,
+               !Summarizer.$sensitive.withValue(context == .work, operation: { Summarizer.usesLocal(apiKey: key) }),
+               let second = try? await Summarizer.$forceLocal.withValue(true, operation: {
+                   try await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
+                                                previous: previous, alternatives: others, apiKey: key)
+               }), second.count == fixed.count {
+                fixed = Self.agreedFixes(original: entries.map(\.text), first: fixed, second: second,
+                                         alternatives: others ?? [])
+                let kept = entries.indices.filter { fixed[$0] != entries[$0].text && !fixed[$0].isEmpty }.count
+                Tally.add("second.ran")
+                Tally.add("fix.proposed", proposed)
+                Tally.add("fix.kept", kept)
+                Tally.add("fix.dropped", proposed - kept)
+            }
+            for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
+                if originals[i] == nil { originals[i] = entries[i].text }
+                entries[i].text = fixed[i]
+                rewrittenBy[i].append("言語モデルの直し")
+            }
+            engine += "＋補正"
+        }
+        lastEngine = engine + "・音声より先に記録へ（時計）"
+        lastTranscript[true] = (end, String(entries.map { $0.text }.joined().suffix(200)))
+        let offsets = Self.fillOffsets(entries, duration: duration)
+        // 行の終わり（PC の多数決の行は PC が返した終わり、ほかは次の行の始まり）
+        let knownEnds: [TimeInterval?] = entries.indices.map { i in
+            guard ensemble, sameCount else { return nil }
+            return pc[i].end > offsets[i] ? pc[i].end : nil
+        }
+        let ends = entries.indices.map { i in i + 1 < offsets.count ? offsets[i + 1] : max(duration, offsets[i]) }
+        let heard = entries.indices.map { i -> Merger.Heard in
+            // 金額・株数・日付などの漢数字は算用数字にそろえる
+            let text = NumberStyle.normalize(entries[i].text)
+            var line = ConversationLog.Line(time: start.addingTimeInterval(offsets[i]), speaker: nil,
+                                            text: text, audio: name,
+                                            offset: offsets[i],
+                                            original: originals[i] ?? (text != entries[i].text ? entries[i].text : nil),
+                                            speakerID: nil,
+                                            confidence: agreement[i].map { ($0 * 100).rounded() / 100 })
+            var by = rewrittenBy[i]
+            if text != entries[i].text { by.append("数字そろえ") }
+            if let first = line.original, !by.isEmpty {
+                line.history = [.init(at: .now, by: by.joined(separator: "・"), from: first)]
+            }
+            if let known = knownEnds[i] { line.end = (known * 100).rounded() / 100 }
+            if ensemble, sameCount, (pc[i].confidence ?? 1) < HomePC.cloudVoteBelow,
+               pc[i].votes.values.filter({ !$0.isEmpty }).count >= 2 {
+                line.votes = pc[i].votes
+            }
+            return Merger.Heard(line: line, end: start.addingTimeInterval(ends[i]), fromWatch: true,
+                                weight: Double(entries[i].text.count) * (agreement[i] ?? 0.6))
+        }
+        // Merger に入れるのと帳簿に残すのは続けて（あいだで止まっても、二重に入れない）
+        merger.add(heard)
+        ledger.transcribedFromPC(name, start: start, end: end, lines: heard.count)
+        // 時計の区切りがここまで届いたのと同じに扱う（iPhone の行を待たせすぎない）
+        lastWatchEnd = max(lastWatchEnd, end)
+        // 家の PC で書けた区切りは、夜の聞き直しで文字起こしし直さない（transcribe と同じ）
+        NightlyRecheck.markHaasDone(name)
+        if ensemble { NightlyRecheck.markEnsembleDone(name) }
+        return heard.count
+    }
+
+    /// PC から先に記録に入れた区切りの音声が、あとから届いた。文字にし直さず（行を二重にしない）、
+    /// 聞き直し・「聞いて直す」・話者の確認に使えるよう、文字にし終えた音声と同じ置き場所に移す
+    func pcFirstAudioArrived(_ url: URL, at time: Date) {
+        let name = url.lastPathComponent
+        // 同じ区切りが送り直されてきて、音声をもう残してあれば、二重に置かない
+        if let kept = Storage.keptAudio(named: name), kept.path != url.path {
+            try? FileManager.default.removeItem(at: url)
+            pendingCount = Storage.pendingChunks().count
+            return
+        }
+        ledger.received(url, at: time)
+        Storage.keep(url)
+        Tally.add(PCFirst.audioLaterKey)
+        // 話者は、行を書き出したあとで付ける（labelPCFirstSpeakers）
+        if speakerLabelsOn { PCFirst.addSpeakersPending(name) }
+        // PC から受け取って置いておいた答えと「仮」は、もう要らない
+        finishedChunk(name)
+        pendingCount = Storage.pendingChunks().count
+    }
+
+    /// PC から先に記録に入れた区切りの音声が届いたら、話者の無い行に話者を付ける（1回に6つまで）。
+    /// 付け方は「話者を直す」と同じ relabel（記録とドキュメントの行をその場で直す）。聞き分けは transcribe と同じ
+    /// speakerNames を使う。名前のある人を合わせたり名前を変えたりはしない。手で直した行・話者のある行・放送の行には触らない。
+    /// 「記録に出さない」にした人の声だった行は、話者なしのまま残す（自動では消さない）
+    func labelPCFirstSpeakers() async {
+        let pending = PCFirst.speakersPending()
+        guard !pending.isEmpty else { return }
+        var done = 0
+        for name in pending {
+            if Task.isCancelled || done >= 6 { return }
+            // まだ書き出していない行が残っていれば、次の機会に
+            if merger.holds(name) { continue }
+            PCFirst.removeSpeakersPending(name)
+            guard speakerLabelsOn, let url = Storage.keptAudio(named: name), let start = Storage.startDate(of: url) else {
+                Tally.add(PCFirst.speakersSkippedKey)
+                continue
+            }
+            done += 1
+            let duration = Self.duration(of: url)
+            let days = Set([start, start.addingTimeInterval(max(duration, 1))].map { dayFormatter.string(from: $0) })
+            let targets = days.sorted()
+                .flatMap { day in conversations.conversations(on: day).flatMap(\.lines) }
+                .filter { $0.audio == name && $0.speakerID == nil && $0.speaker == nil && $0.media == nil && $0.checked != true }
+                .sorted { $0.time < $1.time }
+            guard !targets.isEmpty else {
+                Tally.add(PCFirst.speakersSkippedKey)
+                continue
+            }
+            let offsets = targets.map { max(0, $0.offset ?? $0.time.timeIntervalSince(start)) }
+            let ends: [TimeInterval?] = targets.map { $0.end }
+            let names = await speakerNames(for: offsets, in: url, context: places.context(at: start),
+                                           selfLevel: officeFilter.selfLevel(watch: true),
+                                           expected: expectedSpeakers(at: start, fromWatch: true), ends: ends)
+            let hiddenIDs = Set(people.filter { $0.hidden == true }.map(\.id))
+            var byPerson: [String: Set<Date>] = [:]
+            for i in names.indices where i < targets.count {
+                guard let segment = names[i], !hiddenIDs.contains(segment.personID) else { continue }
+                byPerson[segment.personID, default: []].insert(targets[i].time)
+            }
+            var labeled = 0
+            for (id, times) in byPerson {
+                await relabel(to: id) { line in
+                    line.audio == name && line.speakerID == nil && line.speaker == nil && line.media == nil
+                        && line.checked != true && times.contains(line.time)
+                }
+                labeled += times.count
+            }
+            Tally.add(PCFirst.speakersKey, labeled)
+        }
     }
 
     /// その時刻に使う言葉の組。登録した場所にいればその場所で、分からなければ時刻（平日8〜19時は職場）で決める。
