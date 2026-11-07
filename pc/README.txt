@@ -142,6 +142,53 @@ Haas-ja と ReazonSpeech にも「ホットワード」として効かせます�
   使わないときは  LifeLogPC.exe --no-semantic（config.json の "semantic": false でも同じ）。
   試すときは  LifeLogPC.exe --check-semantic（一時のフォルダで、本物の bge-m3 に日本語の文を置いて探します）
 
+■ 版 7 で足したもの（実機の様子・TestFlight の報告・見えない通知・学び直しの自動化と GPU の時間割）
+新しい iPhone のアプリが使います。古いアプリはこれまでどおり動きます。どれも、うまく動かなければ前と同じに動きます。
+・実機の様子: iPhone の LifeLog が、1時間に1回ほど・アプリを開いたとき・見えない通知で起きたときに、PC に様子を送ってきます
+  （自己点検の行・落ちた記録・MetricKit の診断・録音や待ちの様子・通知の登録。会話の中身や人の名前は入りません）。
+  PC は端末ごとに %LOCALAPPDATA%\LifeLogPC\diag\<端末の ID> に置きます（latest.json・日ごとの .jsonl は 60 日分・metrickit）。
+  %LOCALAPPDATA%\LifeLogPC\diag\summary.md に、今の様子と気になる所を書き直します（この PC で動く Claude が読むためのものです）。
+  気になる所: 3時間様子が来ない／24時間以内に落ちた・固まった／自己点検で ok でない行／時計が録音中なのに、時計からの便りが
+  30分より前／録音中なのに、録音の区切りが60分より前。見守りの画面の「実機の様子」にも出ます。
+・TestFlight の報告: App Store Connect の API キーを入れると、1日に4回（起動して5分後と、そのあと6時間ごと）、TestFlight の
+  スクショつきの報告と落ちた報告を読んで、%LOCALAPPDATA%\LifeLogPC\feedback に置きます（スクショ・落ちた記録も）。
+  見守りの画面の「TestFlight の報告」に出ます（「詳しく」でコメント・スクショ・落ちた記録）。「今すぐ読む」でもすぐ読みます。
+  キーが無いときは何もしません。テスターのメールアドレスは置きません。
+  キーの入れ方: App Store Connect の「ユーザとアクセス」→「統合」→「App Store Connect API」で、役割が Developer 以上のキーを作り、
+  .p8 のファイルを保存します。見守りの画面の「キーを入れる画面を開く」で .p8 を選び、issuer ID（同じ画面の上にあります）を
+  入れて「App Store Connect のキーを入れる」を押します。キーは %LOCALAPPDATA%\LifeLogPC\asc に置きます
+  （手で置くときは AuthKey_<キーの ID>.p8 と、config.json に {"key_id": "…", "issuer_id": "…"}）。
+  キーも報告も、GitHub など PC の外には置きません（リポジトリは公開なので）。
+・見えない通知（家の PC から iPhone を起こす）: 文字にし終えたとき・録音中なのに30分なにも来ないとき・3時間様子が来ないとき・
+  毎日 3:30 に、iPhone に見えない通知（APNs）を送って、取り込み・送り出し・夜の処理を進めてもらいます。
+  回数の上限: 文字にし終えた知らせは同じ端末へ10分に1回、起こすのは1時間に2回・1日12回、様子を頼むのは1日4回、夜の処理は1日1回。
+  APNs が「このトークンはもう使えない」（410）と答えたら、そのトークンには送りません（iPhone から新しいトークンが届けば、また送ります）。
+  鍵の入れ方: Apple Developer の「Certificates, Identifiers & Profiles」→「Keys」で、Apple Push Notifications service（APNs）に
+  チェックを入れて鍵を作り、.p8 を保存します。見守りの画面の「鍵を入れる画面を開く」で .p8 を選んで「通知の鍵を入れる」を押します。
+  鍵は %LOCALAPPDATA%\LifeLogPC\apns\AuthKey_<鍵の ID>.p8 に置きます（手で置いてもかまいません）。チームの ID は iPhone が
+  知らせてきます（鍵を入れる画面で入れることもできます）。鍵かチームの ID が無いときは、何もしません。
+  見守りの画面の「テスト通知を送る」で、iPhone に目に見えるテストの通知が届くか確かめられます。
+  通知を使わないときは config.json に "push": false を足します。
+・自動の学び直し: 材料が 300 個以上たまり、前に学び直してから 50 個以上増えていたら、週に1回（初めは日曜の 2:00〜6:00）、
+  仕事が無いときに、このフォルダの train_personal.py を自分で動かします。良くなったときだけあなた向けのモデルを入れ替え、
+  起動し直さなくても、すぐに使い始めます。
+  学び直しの部品（Python 3.12 と torch など、合わせて 5GB ほど）は、初めて要るとき（材料がそろった夜）に
+  %LOCALAPPDATA%\LifeLogPC\train に用意します。取ってきたものは、train-requirements.txt などに決めておいたハッシュ（SHA-256）と
+  合うものだけを使います。学び直しのあいだは、GPU の文字起こしのモデル（Whisper・kotoba-whisper・あなた向け Whisper）と、
+  この PC の Ollama のモデルを下ろし、Haas-ja と ReazonSpeech だけで受けます。終わったら戻します。
+  6 時間を超えたら止めて、次の週にやり直します。GPU のメモリが足りないと言われたら、次は小さく（--batch 2）学びます。
+  学び直しの出力は %LOCALAPPDATA%\LifeLogPC\personal\train-log.txt に、様子は見守りの画面の「学び直しと GPU の時間割」と
+  /train-status の "auto" に出ます。時間帯を変える・やめるときは config.json に（例）
+    "autotrain": {"days": ["sun"], "start": "02:00", "end": "06:00"}　　やめるときは "autotrain": false
+・GPU の時間割: 夜（1:00〜6:00）に30分仕事が無ければ、GPU の文字起こしのモデルを下ろして、Ollama と学び直しに GPU を空けます。
+  仕事が来たら戻します（戻るまでの1分ほどは Haas-ja と ReazonSpeech だけで受けます）。GPU の空きが足りないときは5分おいて
+  やり直します。変える・やめるときは config.json に（例）
+    "gpu_night": {"start": "01:00", "end": "06:00", "idle_minutes": 30}　　やめるときは "gpu_night": false
+・試す:
+    LifeLogPC.exe --check-v7-ops       一時フォルダと作り物の相手で、ネットも GPU も使わずに確かめます
+    python lifelog_pc.py --fake-models --port 47715   モデルを読み込まずに起動して、受け口と見守りの画面を試すとき用
+                                       （文字起こしの答えは作り物です。ふだんは使いません）
+
 ■ GPU について（NVIDIA のドライバー）
 Whisper・kotoba-whisper・Qwen3-ASR を GPU で動かすには、NVIDIA のドライバー 528 以上が要ります。
 nvidia-smi で版を見られます。古いと記録（log.txt）に「CUDA driver version is insufficient」と出て、
@@ -196,11 +243,14 @@ NVIDIA のドライバーが古いと GPU を使えません。nvidia-smi で版
    - GPU のメモリが足りないと出たら  python train_personal.py --batch 2
 4. LifeLog PC を起動し直すと、「あなた向け Whisper」が加わります（起動の画面の「使うモデル」に出ます）。
 使わないときは  LifeLogPC.exe --engines haas,reazon,whisper,kotoba
+版 7 からは、上の「自動の学び直し」で、毎週 LifeLog PC が自分で学び直します（部品も自分で用意します）。手で動かすこともできます。
 
 ■ 置き場所
 モデル・合言葉・記録: %LOCALAPPDATA%\LifeLogPC（model・reazon・whisper・cuda・speaker・tagging・enhance・vad・qwen のフォルダ）
 預かった区切り・意味で探すための行・取ってきた新しい版: %LOCALAPPDATA%\LifeLogPC（jobs のフォルダ・semantic.db・update のフォルダ）
 あなた向けのモデルの材料とモデル: %LOCALAPPDATA%\LifeLogPC\personal（data に声と文、model に作ったモデル）
+版 7: 実機の様子 diag（summary.md も）・TestFlight の報告 feedback・通知の鍵と様子 apns・App Store Connect のキー asc・
+      学び直しの部品 train（どれも %LOCALAPPDATA%\LifeLogPC の下）
 合言葉を変えたいときは、そこにある config.json を消して起動し直します（iPhone 側も入れ直してください）。
 
 ■ モデル

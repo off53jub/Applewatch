@@ -75,6 +75,12 @@ jobs:
       - name: 多数決の決まり・聞き逃した声の探し方・言葉の時刻・材料の保存・/llm・版 6 の機能を確かめる
         run: python pc/lifelog_pc.py --check-vote
 
+      # 版 7（ops）: 実機の様子（POST /diag・summary.md）・見えない通知（作り物の APNs に HTTP/2 で。JWT・回数の上限・410）・
+      #   TestFlight の報告（作り物の App Store Connect）・GPU の時間割・Ollama を下ろす・自動の学び直し（作り物の .cmd）・
+      #   学び直しの部品の用意（ハッシュ・tar・pip の --require-hashes）を、一時フォルダで確かめる（ネットも GPU も使わない）
+      - name: 版 7 の見守り（実機の様子・通知・TestFlight の報告・学び直しと GPU の時間割）を確かめる
+        run: python pc/lifelog_pc.py --check-v7-ops
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py
@@ -118,6 +124,8 @@ jobs:
           while IFS= read -r line; do echo "::notice::$line"; done < <(grep -E '^(OK|NG|話し手|周りの音|雑音|Silero|この PC)' extras.txt)
 
       # 版 6 の部品（jobqueue・dashboard・updater・semantic・v6checks）は pc/ にあるので、--paths pc で探させ、念のため名前でも入れる。
+      # 版 7（ops）の部品（ops・diag・apns・ascfeedback・trainer・gpu・v7checks_ops）と、見えない通知の HTTP/2（httpx2 と h2）・
+      # 鍵（cryptography）も名前で入れる。train-requirements.txt は学び直しの部品の一覧（exe の隣に置く）
       # BUILD.txt は作った回の番号（exe が自分の版を知り、新しい版と比べるのに使う）
       - name: exe にする
         run: |
@@ -127,8 +135,14 @@ jobs:
             --hidden-import tarfile --hidden-import bz2 --hidden-import sqlite3 \
             --hidden-import jobqueue --hidden-import dashboard --hidden-import updater \
             --hidden-import semantic --hidden-import v6checks \
+            --hidden-import ops --hidden-import diag --hidden-import apns --hidden-import ascfeedback \
+            --hidden-import trainer --hidden-import gpu --hidden-import v7checks_ops \
+            --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
+            --hidden-import hpack --hidden-import hyperframe \
+            --hidden-import cryptography.hazmat.primitives.asymmetric.ec \
+            --hidden-import cryptography.hazmat.primitives.serialization \
             --exclude-module torch --exclude-module transformers --exclude-module qwen_asr pc/lifelog_pc.py
-          cp pc/README.txt pc/train_personal.py dist/LifeLogPC/
+          cp pc/README.txt pc/train_personal.py pc/train-requirements.txt dist/LifeLogPC/
           echo "${{ github.run_number }}" > dist/LifeLogPC/BUILD.txt
 
       # exe に版 6 の部品が入っているか（多数決の決まりから意味で探すまで、Python のときと同じものを exe で）
@@ -136,6 +150,12 @@ jobs:
         run: |
           dist/LifeLogPC/LifeLogPC.exe --check-vote > vote-exe.txt 2>&1 || { cat vote-exe.txt; grep '^NG' vote-exe.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' vote-exe.txt | sed 's/^/::notice::exe の --check-vote の OK の数: /'
+
+      # exe に版 7 の部品（HTTP/2 の h2・鍵の cryptography も）が入っているか。作り物の学び直しは .cmd なので exe でも動く
+      - name: exe で版 7 の見守りを確かめる
+        run: |
+          dist/LifeLogPC/LifeLogPC.exe --check-v7-ops > v7-exe.txt 2>&1 || { cat v7-exe.txt; grep '^NG' v7-exe.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v7-exe.txt | sed 's/^/::notice::exe の --check-v7-ops の OK の数: /'
 
       - name: exe で試す
         run: |
