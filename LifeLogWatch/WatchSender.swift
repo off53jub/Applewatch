@@ -5,7 +5,8 @@ import WatchKit
 
 /// 録音した区切りを iPhone に送る。
 /// iPhone が近くに無いときは WatchConnectivity が溜めておき、つながったときに送る。
-/// 時計が低電力モードのときは、無線を起こす回数を減らすため、3つ（15分ほど）溜まってからまとめて送る。
+/// 時計が低電力モードのときは、無線を起こす回数を減らすため、15分ほど溜まってからまとめて送る
+/// （5分の区切りなら3つ、短めの区切りなら12個。2026-11-07）。
 /// 送り終わった区切りは「送った」フォルダに控えとして残し、iPhone が「受け取った」と返事したら消す（2026-11-06）。
 /// 30分たっても返事が無ければ送り直す（3回まで）。控えは3日・300MB まで。
 /// 返事をしない古い iPhone のアプリには、今までどおり送り終わったら消す。
@@ -45,8 +46,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         pendingDir.appendingPathComponent(nameFormatter.string(from: date) + ".m4a")
     }
 
-    /// 低電力モードで、これだけ溜まったらまとめて送る
-    private static let batch = 3
+    /// 低電力モードで、これだけ溜まったらまとめて送る（5分の区切りで3つ＝15分ほど。短めの区切りでも同じくらいの時間）
+    private static var batch: Int { ChunkCutter.scaled(3) }
 
     /// 送れた・つながりが変わったときに呼ぶ（画面の数を出し直す）
     var onChange: (@Sendable () -> Void)?
@@ -415,6 +416,10 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if let acks = context["acks"] as? Bool { UserDefaults.standard.set(acks, forKey: "phoneAcks") }
         // 会議モードのあいだは、録音の音質を上げる（次の区切りから）
         if let meeting = context["meeting"] as? Bool { UserDefaults.standard.set(meeting, forKey: "meetingOn") }
+        // 区切りの長さ（短め・ふつう。次の区切りから。2026-11-07）
+        if let raw = context[ChunkCutter.lengthKey] as? String, let length = ChunkCutter.Length(rawValue: raw) {
+            ChunkCutter.length = length
+        }
     }
 
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {

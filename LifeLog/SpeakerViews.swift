@@ -889,7 +889,7 @@ struct SpeakerFixView: View {
                 Text(line.text).lineLimit(3)
                 Picker("直す範囲", selection: $scope) {
                     Text("この行だけ").tag(Pipeline.SpeakerFix.line)
-                    Text("同じ5分の同じ声").tag(Pipeline.SpeakerFix.sameVoice)
+                    Text("同じ区切りの同じ声").tag(Pipeline.SpeakerFix.sameVoice)
                     if line.speakerID != nil {
                         Text("この声すべて").tag(Pipeline.SpeakerFix.everywhere)
                     }
@@ -929,7 +929,7 @@ struct SpeakerFixView: View {
     private var scopeHint: String {
         switch scope {
         case .line: "この行だけ直します。"
-        case .sameVoice: "同じ録音の区切り（5分）で、同じ声とされた行をまとめて直します。"
+        case .sameVoice: "同じ録音の区切り（2〜5分）で、同じ声とされた行をまとめて直します。"
         case .everywhere: "これまでに「\(line.speaker ?? "")」とされた行をすべて直し、2人を1人にまとめます。"
         }
     }

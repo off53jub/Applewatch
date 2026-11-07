@@ -53,6 +53,14 @@ struct WatchInfo: Codable, Equatable {
         var text: String
     }
 
+    /// 家の PC の下書き（仮。まだ多数決の前の文。記録には入っていない。2026-11-07。Drafts.swift）
+    struct Draft: Codable, Equatable {
+        /// 区切りの録音の始まり
+        var start: Double
+        /// 終わりの3行まで
+        var lines: [String] = []
+    }
+
     /// 作った時刻
     var made: Double
     var tasks: [TaskItem] = []
@@ -66,6 +74,8 @@ struct WatchInfo: Codable, Equatable {
     /// 文字盤に出す。2026-11-07。WidgetBridge.taskCounts）
     var dueCount: Int? = nil
     var overdueCount: Int? = nil
+    /// 家の PC の下書き（仮）。無ければ省く（古い時計のアプリは読み飛ばす。2026-11-07）
+    var draft: Draft? = nil
 
     /// 時計に送る applicationContext の名前
     static let contextKey = "watchInfo"
@@ -136,7 +146,10 @@ struct WatchInfo: Codable, Equatable {
         var info = info
         guard var data = encode(info) else { return nil }
         while data.count > limit {
-            if let morning = info.morning, morning.text.count > 400 {
+            if info.draft != nil {
+                // 仮はすぐ入れ替わるので、いちばん先に外す
+                info.draft = nil
+            } else if let morning = info.morning, morning.text.count > 400 {
                 info.morning?.text = clip(morning.text, 400)
             } else if let brief = info.next?.brief, brief.count > 120 {
                 info.next?.brief = clip(brief, 120)
@@ -262,6 +275,7 @@ extension Pipeline {
         info.overdueCount = counts.overdue
         info.next = nextEventForWatch(now: now)
         info.last = lastTalkForWatch()
+        info.draft = draftForWatch()
         let today = watchDayKey.string(from: now)
         if let brief = MorningBriefStore.shared.current, brief.day >= today {
             info.morning = WatchInfo.Brief(day: brief.day, text: brief.text)

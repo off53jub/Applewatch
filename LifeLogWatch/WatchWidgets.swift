@@ -14,10 +14,11 @@ extension WatchRecorder {
 }
 
 enum WatchWidgets {
-    /// 送っていない数を文字盤に出す数。1つは送っている途中のことが多い（低電力モードでは3つ溜めてから送る）ので、
-    /// それより多く溜まったときだけ出す（いつもの送り受けで、文字盤を何度も読み直させないため）
-    static func shownUnsent(_ unsent: Int, lowPower: Bool) -> Int {
-        unsent >= (lowPower ? 4 : 2) ? unsent : 0
+    /// 送っていない数を文字盤に出す数。1つは送っている途中のことが多い（低電力モードでは15分ほど溜めてから送る）ので、
+    /// それより多く溜まったときだけ出す（いつもの送り受けで、文字盤を何度も読み直させないため）。
+    /// 区切りが短いと数が増えるので、5分の区切りで2つ（低電力 4つ）と同じくらいの時間の分が溜まったときだけ出す（2026-11-07）
+    static func shownUnsent(_ unsent: Int, lowPower: Bool, length: ChunkCutter.Length = ChunkCutter.length) -> Int {
+        unsent >= ChunkCutter.scaled(lowPower ? 4 : 2, length: length) ? unsent : 0
     }
 
     /// 文字盤に出す中身。info は iPhone から届いた中身（まだ届いていなければ nil）、due は今日までの頼まれごとの数

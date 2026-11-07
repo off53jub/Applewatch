@@ -1,10 +1,11 @@
 import AVFoundation
 
-/// 5分ほどで区切って AAC で録音し続ける。区切るたびに onChunk に完成したファイルを渡す。
-/// 区切りは、5分たったあとの声の途切れたところで切る（言葉の途中で切らないため。ChunkCutter）。
+/// 区切って AAC で録音し続ける（短めの設定で長くても2分、ふつうで5分ほど）。区切るたびに onChunk に完成したファイルを渡す。
+/// 区切りは、決めた長さを過ぎたあとの声の途切れたところで切る（言葉の途中で切らないため。ChunkCutter）。
 /// マイクの音は AVAudioEngine で受け、16kHz・1ch にしてファイルに書く。ライブ文字起こしがオンなら、同じ音をそちらにも渡す。
 @MainActor
 final class Recorder: NSObject {
+    /// ふつうの設定の区切りの長さ（今は ChunkCutter が設定から決める。2026-11-07）
     static let chunkSeconds: TimeInterval = 300
 
     var onChunk: ((URL) -> Void)?

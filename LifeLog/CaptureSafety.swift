@@ -359,7 +359,8 @@ extension Pipeline {
 
     // MARK: 音の見張り
 
-    /// 区切りの音を調べた結果で、時計に知らせる（2つ続けてこもっている・割れているとき。30分に1回まで）
+    /// 区切りの音を調べた結果で、時計に知らせる（10分ほど続けてこもっている・割れているとき。30分に1回まで）。
+    /// 5分の区切りなら2つ続けて。短めの区切りでは、同じくらいの時間になるよう続く数を増やす（2026-11-07）
     func handleSoundCheck(_ check: AudioCheck.Result, fromWatch: Bool) {
         guard fromWatch else { return }
         let findings: [(key: String, hit: Bool, text: String)] = [
@@ -368,7 +369,7 @@ extension Pipeline {
         ]
         for finding in findings {
             soundStreak[finding.key] = finding.hit ? (soundStreak[finding.key] ?? 0) + 1 : 0
-            guard (soundStreak[finding.key] ?? 0) >= 2 else { continue }
+            guard (soundStreak[finding.key] ?? 0) >= ChunkCutter.scaled(2) else { continue }
             let last = lastSoundAlert[finding.key] ?? .distantPast
             guard Date.now.timeIntervalSince(last) > 30 * 60 else { continue }
             lastSoundAlert[finding.key] = .now
