@@ -268,19 +268,51 @@ final class HomePC {
         let session = makeSession(timeout: 60)
         defer { session.finishTasksAndInvalidate() }
         let (data, response) = try await session.upload(for: upload, fromFile: url)
+        // PC が中身を見て受け付けなかった（声が短すぎる・長すぎる・文が無い など）。何度送っても同じなので、
+        // 呼ぶ側はこの材料を飛ばして先へ進む（前は、ここで夜の残りの材料を送るのをやめていた。2026-11-07）
+        if (response as? HTTPURLResponse)?.statusCode == 400 { throw SampleRefused() }
         try Self.check(response, data: data)
         return try JSONDecoder().decode(Reply.self, from: data).count
     }
 
-    /// PC にたまった材料の数と、学び直したモデルがあるか
-    func trainStatus() async throws -> (count: Int, model: Bool) {
-        struct Reply: Decodable { let count: Int; let model: Bool }
+    /// PC が材料を受け付けなかった（HTTP 400）
+    struct SampleRefused: Error {}
+
+    /// PC にたまった材料の数・学び直したモデルがあるか・学び直しに要る数（PC の自動の学び直しの設定。無ければ 300。2026-11-07）
+    func trainStatus() async throws -> (count: Int, model: Bool, need: Int) {
         let session = makeSession(timeout: 8)
         defer { session.finishTasksAndInvalidate() }
         let (data, response) = try await session.data(for: try request("train-status"))
         try Self.check(response, data: data)
+        return try Self.trainStatusReply(data)
+    }
+
+    /// /train-status の答えを読む。学び直しに要る数は "auto" の "min_samples"（PC の版 7 の自動の学び直し）。
+    /// 無いとき・形が違うときは 300（train_personal.py の MIN_SAMPLES）
+    nonisolated static func trainStatusReply(_ data: Data) throws -> (count: Int, model: Bool, need: Int) {
+        struct Auto: Decodable {
+            let minSamples: Int?
+            enum CodingKeys: String, CodingKey { case minSamples = "min_samples" }
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                minSamples = try? c.decodeIfPresent(Int.self, forKey: .minSamples)
+            }
+        }
+        struct Reply: Decodable {
+            let count: Int
+            let model: Bool
+            let auto: Auto?
+            enum CodingKeys: String, CodingKey { case count, model, auto }
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                count = try c.decode(Int.self, forKey: .count)
+                model = try c.decode(Bool.self, forKey: .model)
+                auto = try? c.decodeIfPresent(Auto.self, forKey: .auto)
+            }
+        }
         let reply = try JSONDecoder().decode(Reply.self, from: data)
-        return (reply.count, reply.model)
+        let need = reply.auto?.minSamples ?? PersonalMaterial.need
+        return (reply.count, reply.model, need > 0 ? need : PersonalMaterial.need)
     }
 
     private func post(_ path: String, url: URL, segments: [(start: TimeInterval, end: TimeInterval)]) async throws -> Data {

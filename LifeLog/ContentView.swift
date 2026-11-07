@@ -69,6 +69,9 @@ private struct TodayView: View {
 
                 confirmBox()
 
+                // 今日の聞いて直す（10行・3分ほど。まだ答えていない行があるときだけ。2026-11-07。ReviewNudge.swift）
+                ReviewNudgeEntry()
+
                 // 朝の読み上げ（2026-11-07。MorningBrief.swift）
                 MorningBriefSection()
 
@@ -469,6 +472,12 @@ private struct RecordsView: View {
                             AnswerKeyView()
                         } label: {
                             Label("答え合わせ（週5分）・聞き取りの数字", systemImage: "checkmark.seal")
+                        }
+                        // 毎朝の聞いて直す（終わったあとも、ここから開ける。2026-11-07。ReviewNudge.swift）
+                        NavigationLink {
+                            ReviewNudgeView()
+                        } label: {
+                            Label("今日の聞いて直す・学び直しの材料", systemImage: "ear")
                         }
                     }
                     Section("日ごと") {

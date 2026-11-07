@@ -280,10 +280,19 @@ extension Pipeline {
         }
         for row in bench { add("精度の物差し", row.label, row.value, row.ok) }
         if homePC.isConfigured {
-            let count = UserDefaults.standard.integer(forKey: "personalCount")
-            let model = UserDefaults.standard.bool(forKey: "personalModel")
-            add("精度の物差し", "あなた向けのモデル", model ? "PC で使っている（材料 \(count) 行）"
-                : "まだ（PC にたまった材料 \(count) 行。300 行と NVIDIA の GPU で学べる）")
+            let model = UserDefaults.standard.bool(forKey: PersonalMaterial.modelKey)
+            add("精度の物差し", "あなた向けのモデル", model ? "PC で使っている"
+                : "まだ（材料 \(PersonalMaterial.need) 個と NVIDIA の GPU で学べる）")
+            // 材料の数と、学び直しまであと何個か（家の PC に聞けたときだけ。2026-11-07。ReviewNudge.swift）
+            if let material = PersonalMaterial.latest() {
+                add("精度の物差し", "学び直しの材料", PersonalMaterial.text(material) + "（\(Self.when(material.at)) に家の PC で数えた）",
+                    material.left == 0 ? true : nil)
+            }
+            // 「聞いて直す」で答えて、まだ家の PC に送っていない材料（夜に送る）
+            let waiting = reviewNudgeUnsent()
+            if waiting > 0 {
+                add("精度の物差し", "聞いて直すの材料（まだ送っていない）", "\(waiting) 個（夜に充電しているとき送る）")
+            }
         }
 
         // 仕組みごとの効き目（直近7日。数だけ。2026-11-06）
@@ -363,7 +372,17 @@ struct DiagnosticsView: View {
             }
         }
         .navigationTitle("自己点検")
-        .task { items = await pipeline.diagnosticItems() }
-        .refreshable { items = await pipeline.diagnosticItems() }
+        .task {
+            items = await pipeline.diagnosticItems()
+            // 学び直しの材料の数を家の PC に聞き直して、出し直す（家の PC を使っていて、少し聞いていないときだけ。2026-11-07）
+            if pipeline.homePC.isConfigured, PersonalMaterial.isStale() {
+                await pipeline.refreshPersonalCount()
+                items = await pipeline.diagnosticItems()
+            }
+        }
+        .refreshable {
+            if pipeline.homePC.isConfigured { await pipeline.refreshPersonalCount() }
+            items = await pipeline.diagnosticItems()
+        }
     }
 }

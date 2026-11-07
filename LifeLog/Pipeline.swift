@@ -191,6 +191,8 @@ final class Pipeline {
     let asks = AskBook()
     /// 正解帳（週に1回の答え合わせ）
     let answerKey = AnswerKey()
+    /// 毎朝の「聞いて直す」（自信の低い行を10行ほど聞いて、直す・合っている・飛ばす。2026-11-07。ReviewNudge.swift）
+    let reviewNudge = ReviewNudgeBox()
     /// 時計の区切りが届くまでの遅れ
     let watchDelays = WatchDelayLog()
     /// 区切りごとの騒がしさ（しきい値を実際の録音で合わせるため）
@@ -1436,6 +1438,8 @@ final class Pipeline {
         updateHold()
         if email != nil { Task { await sync.run() } }
         if UIDevice.current.userInterfaceIdiom != .pad { Task { await scheduleMeetingBriefs() } }
+        // 今日の「聞いて直す」（まだ選んでいなければ選ぶ。2026-11-07。ReviewNudge.swift）。朝の読み上げに数を入れるので、その前に
+        prepareReviewNudge()
         morningBriefOnActive()  // 朝の読み上げ（まだなら作る）と時計に送る中身（2026-11-07。MorningBrief.swift）
         pcLinkOnActive()  // 家の PC に様子を送り、記録と直しをやり取りする（2026-11-07。PCDiag.swift）
         startDraftPolling()  // 送ってまだの区切りの下書き（仮）を15秒ごとに見に行く（版 8。2026-11-07。Drafts.swift）

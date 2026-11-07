@@ -372,34 +372,54 @@ extension Pipeline {
         }
     }
 
-    /// あなた向けのモデルの材料（手で直した行と、答え合わせで答えた行）を、家の PC に渡す（PC の版 4 から）。
-    /// 1晩に40個まで。渡したものは覚えておき、2度は渡さない。音声はその行の所だけ切り出して PC にだけ渡す。
+    /// あなた向けのモデルの材料（手で直した行と、答え合わせで答えた行と、「聞いて直す」で「合っている」と答えた行）を、
+    /// 家の PC に渡す（PC の版 4 から）。1晩に40個まで。渡したものは覚えておき、2度は渡さない。音声はその行の所だけ切り出して PC にだけ渡す。
     func sendPersonalSamples(limit: Int = 40) async {
         guard homePC.shouldTry, (homePC.version ?? 0) >= 4 else { return }
-        let key = "personalSent"
+        let key = PersonalMaterial.sentKey
         var sent = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
         var done = 0
-        for t in answerKey.answeredTruths + manualTruths() where done < limit {
+        var refused = 0
+        // 「聞いて直す」で「合っている」と答えた行も、答え合わせの答えと同じく材料にする（2026-11-07。ReviewNudge.swift）。
+        // 「聞いて直す」で直した行は、手で直した行として manualTruths に入る
+        for t in answerKey.answeredTruths + manualTruths() + reviewNudgeTruths() where done < limit {
             let span = Benchmark.span(offset: t.offset, chars: t.right.count)
             let end = t.end ?? span.end
-            let id = t.audio + "|" + String(format: "%.1f", span.start) + "|" + t.right
-            guard !sent.contains(id), let url = await archive.playableURL(for: t.audio) else { continue }
-            let clip = await clipped(url, start: span.start, end: end)
-            defer { if let temp = clip.temp { try? FileManager.default.removeItem(at: temp) } }
+            let id = PersonalMaterial.sampleID(audio: t.audio, offset: t.offset, right: t.right)
+            guard !sent.contains(id) else { continue }
+            // PC が受け付けない長さ（0.3秒より短い・30秒より長い）は送らない
+            guard end - span.start >= 0.3, end - span.start <= 30 else { continue }
+            // 「聞いて直す」で答えた行は、答えたときに切り出して残した音を使う（iPhone の中の音声が26時間で消えていても送れる）
+            let source: (url: URL, shift: TimeInterval, temp: URL?)
+            if let kept = reviewNudgeClip(audio: t.audio, offset: t.offset), kept.from <= span.start + 0.05, kept.to >= end - 0.05 {
+                source = (kept.url, kept.from, nil)
+            } else {
+                guard let url = await archive.playableURL(for: t.audio) else { continue }
+                source = await clipped(url, start: span.start, end: end)
+            }
+            defer { if let temp = source.temp { try? FileManager.default.removeItem(at: temp) } }
             // 行の音声の名前と位置も付ける（PC の画面で直した行と2重にしないため。2026-11-07）
-            guard (try? await homePC.sendTrainSample(clip.url, start: span.start - clip.shift, end: end - clip.shift,
-                                                     text: t.right, audio: t.audio, offset: t.offset)) != nil else { break }
-            sent.insert(id)
-            done += 1
+            do {
+                _ = try await homePC.sendTrainSample(source.url, start: span.start - source.shift, end: end - source.shift,
+                                                     text: t.right, audio: t.audio, offset: t.offset)
+                sent.insert(id)
+                done += 1
+            } catch is HomePC.SampleRefused {
+                // PC がこの材料を受け付けなかった（声が短すぎる など）。毎晩ここで止まらないよう、渡したものとして先へ進む
+                sent.insert(id)
+                refused += 1
+            } catch {
+                // つながらない・PC の調子が悪いときは、続きを次の夜に
+                break
+            }
         }
-        if done > 0 {
+        if done + refused > 0 {
             UserDefaults.standard.set(Array(Array(sent).suffix(6000)), forKey: key)
             Tally.add("personal.sent", done)
+            Tally.add("personal.refused", refused)
         }
-        if let status = try? await homePC.trainStatus() {
-            UserDefaults.standard.set(status.count, forKey: "personalCount")
-            UserDefaults.standard.set(status.model, forKey: "personalModel")
-        }
+        // PC にたまった数と、学び直しに要る数を覚える（「聞いて直す」の画面と自己点検に出す。2026-11-07）
+        await refreshPersonalCount()
     }
 }
 
