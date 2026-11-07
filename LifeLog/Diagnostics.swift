@@ -248,6 +248,8 @@ extension Pipeline {
 
         // 文字になるまで（区間ごとの中央値。2026-11-07。Latency.swift）
         for row in Latency.rows() { add("文字になるまで", row.label, row.value, row.ok) }
+        // 時計の区切りを、音声が届く前に家の PC の答えから記録に入れた数（版 10。PCFirst.swift）
+        add("文字になるまで", "PC から先に記録に入れた（今日）", pcFirstTodayText)
 
         // 人（数だけ）
         let others = people.filter { !$0.isSelf }
