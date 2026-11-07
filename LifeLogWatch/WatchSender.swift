@@ -10,6 +10,7 @@ import WatchKit
 /// （静かな日に何時間も送らないことがあったため。2026-11-07。WatchDelivery）。
 /// 区切りには「時計で区切った時刻・送り始めた時刻」を添える（iPhone が時計で待った時間と受け渡しの時間を分けて測る）。
 /// 家の Wi-Fi にいるときは、家の PC にも直接送る（WatchPC。iPhone への送りは今までどおり）。
+/// PC の外の道（Tailscale の Funnel）があれば、家の外からも送る。送れなかった古い区切りも追いかけて送る（2026-11-07）。
 /// 送り終わった区切りは「送った」フォルダに控えとして残し、iPhone が「受け取った」と返事したら消す（2026-11-06）。
 /// 30分たっても返事が無ければ送り直す（30分ごとに3回、そのあとは6時間ごと）。控えは7日・300MB まで（2026-11-07）。
 /// iPhone から頼まれたとき・iPhone のアプリが入れ直されたときは、残っている区切りを全部送り直す（2026-11-07）。
@@ -74,12 +75,24 @@ final class WatchSender: NSObject, WCSessionDelegate {
     func activate() {
         WKInterfaceDevice.current().isBatteryMonitoringEnabled = true
         readBattery()
+        // 家の PC に追いかけて送るとき、時計に残っている区切りと電池の様子を見る（2026-11-07。WatchPC.catchUp）
+        pc.candidates = { [weak self] in self?.unsentFiles() ?? [] }
+        pc.power = { [weak self] in
+            let battery = self?.currentBattery()
+            return (lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled, battery: battery?.level,
+                    charging: battery?.charging ?? false)
+        }
         guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
         WCSession.default.activate()
     }
 
     private var batteryInfo: (level: Double, charging: Bool)?
+
+    /// 最後に読んだ電池の様子（どの糸からでもよい）
+    private func currentBattery() -> (level: Double, charging: Bool)? {
+        lock.withLock { batteryInfo }
+    }
 
     /// 時計の電池を読み直す（画面の糸から呼ぶ）
     @MainActor
@@ -161,6 +174,10 @@ final class WatchSender: NSObject, WCSessionDelegate {
         }
         let lastCut = UserDefaults.standard.double(forKey: Self.lastCutKey)
         if lastCut > 0 { out["lastCut"] = lastCut }
+        // 家の PC の外の道（Funnel。2026-11-07）: 使えるか・直近24時間に外の道で送れた数・合言葉が違うと言われたか
+        out["pcPublic"] = WatchPC.hasPublicRoute
+        out["pcPublicSent"] = WatchPC.publicSentCount()
+        if WatchPC.publicRefused { out["pcPublicRefused"] = true }
         return out
     }
 
@@ -420,6 +437,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
             flushIfDue()
         } else {
             send(url)
+            // 時計に残っていて、まだ家の PC に送っていない古い区切りも追いかけて送る（いま送っている区切りが終わってから。2026-11-07）
+            pc.catchUp()
         }
     }
 

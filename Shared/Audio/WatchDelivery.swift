@@ -8,6 +8,7 @@ import Foundation
 /// - 時計が低電力モードのときは溜めてまとめて送る。ただし、いちばん古い区切りが15分待ったら、数が溜まっていなくても送る
 ///   （静かな日は区切りが少なく、数だけで決めると何時間も送らないことがあったため）。
 /// - 家の Wi-Fi にいるときは、時計から家の PC にも直接送る（宛先は家の中の住所だけ。iPhone への送りは今までどおり）。
+/// - PC の外の道（Tailscale の Funnel・https://〜.ts.net）があれば、家の外からも時計用の合言葉で直接送る（2026-11-07。docs/v10-watch-route-ios.md）。
 enum WatchDelivery {
     // MARK: - 区切りに付ける控え（時計 → iPhone）
 
@@ -159,6 +160,105 @@ enum WatchDelivery {
         if let battery, battery < directMinBattery, !charging { return false }
         if let lastFailure, now.timeIntervalSince(lastFailure) < directRetryAfter { return false }
         return true
+    }
+
+    // MARK: - 家の外からの道（Tailscale の Funnel。2026-11-07）
+
+    /// transferUserInfo（合言葉を含む）: PC の外の道の宛先（https://〜.ts.net）と、時計用の合言葉。空なら消す
+    static let publicURLKey = "pcPublicURL"
+    static let publicSecretKey = "pcPublicKey"
+    /// 外の道に送れる大きさの上限（PC が受け取る上限）
+    static let publicMaxBytes = 8 * 1024 * 1024
+    /// 外の道で「混んでいる・しばらく受け付けない」（429）と言われたら、これだけ待つ
+    static let publicBusyWait: TimeInterval = 15 * 60
+
+    /// PC の外の道の宛先（例 https://desktop-xxxx.tail1234.ts.net）。
+    /// https で、名前が「.ts.net」で終わり、道（/…）・問い（?…）・番号（443 以外）が付いていないものだけ。ほかは nil
+    static func publicBaseURL(_ text: String) -> URL? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, let c = URLComponents(string: t), c.scheme?.lowercased() == "https",
+              let host = c.host?.lowercased(), host.hasSuffix(".ts.net"), host.count > ".ts.net".count,
+              c.user == nil, c.password == nil, c.query == nil, c.fragment == nil,
+              c.path.isEmpty || c.path == "/", c.port == nil || c.port == 443 else { return nil }
+        let allowed: (Character) -> Bool = { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.allSatisfy({ !$0.isEmpty && $0.allSatisfy(allowed) }) else { return nil }
+        return URL(string: "https://\(host)")
+    }
+
+    /// 時計から PC に直接送る道
+    enum DirectRoute: Equatable, Sendable {
+        /// 外の道（Funnel。どこからでも届く。時計用の合言葉で送る）
+        case publicRoute(URL)
+        /// 家の中の住所（家の Wi-Fi にいるときだけ届く。PC の合言葉で送る）
+        case home(URL)
+
+        var isPublic: Bool {
+            if case .publicRoute = self { return true }
+            return false
+        }
+
+        /// 区切りを送る先（外の道は /w/jobs、家の中は /jobs）
+        var uploadURL: URL {
+            switch self {
+            case .publicRoute(let base): base.appendingPathComponent("w").appendingPathComponent("jobs")
+            case .home(let base): base.appendingPathComponent("jobs")
+            }
+        }
+    }
+
+    /// どの道で送るか。外の道が使えればそちら（家の中でも外でも届くので、いつもそちら）。
+    /// 外の道が無い・合言葉が違うと言われた・しばらく待つあいだは、家の中の住所。どちらも無ければ nil
+    static func directRoute(direct: Bool, publicURL: String?, hasPublicKey: Bool, publicUsable: Bool,
+                            homeAddress: String?, hasHomeKey: Bool) -> DirectRoute? {
+        guard direct else { return nil }
+        if publicUsable, hasPublicKey, let base = publicBaseURL(publicURL ?? "") { return .publicRoute(base) }
+        if hasHomeKey, let base = homeBaseURL(homeAddress ?? "") { return .home(base) }
+        return nil
+    }
+
+    /// 送った結果
+    enum DirectOutcome: Equatable, Sendable {
+        /// 届いた（PC がしまった・もう知っていた）
+        case sent
+        /// 届かなかった（家の外・PC が止まっている など）。しばらく試さない
+        case failed
+        /// 外の道で合言葉が違うと言われた。新しい合言葉が届くまで外の道は使わない
+        case refused
+        /// 外の道で「しばらく受け付けない」と言われた。15分待つ
+        case busy
+        /// その区切りは受け付けられない（名前・大きさ）。その区切りはもう送らない
+        case rejected
+    }
+
+    /// 返事から、次にどうするか（家の中の住所は今までどおり、200 以外は「届かなかった」）
+    static func directOutcome(status: Int, networkError: Bool, isPublic: Bool) -> DirectOutcome {
+        if networkError || status == 0 { return .failed }
+        if status == 200 { return .sent }
+        guard isPublic else { return .failed }
+        switch status {
+        case 401: return .refused
+        case 429: return .busy
+        case 400..<500: return .rejected
+        default: return .failed
+        }
+    }
+
+    // MARK: - 残っている古い区切りを追いかけて送る（2026-11-07）
+
+    /// 1回に追いかける数と、追いかける古さ
+    static let catchUpLimit = 3
+    static let catchUpMaxAge: TimeInterval = 86400
+
+    /// 時計に残っている区切りから、PC に追いかけて送るもの（まだ PC に送っていない・24時間より新しい・古い順に3つまで）
+    static func catchUpPick(_ files: [(name: String, start: Date?)], skip: Set<String>, now: Date) -> [String] {
+        let fresh = files.compactMap { file -> (name: String, start: Date)? in
+            guard !skip.contains(file.name), let start = file.start else { return nil }
+            let age = now.timeIntervalSince(start)
+            guard age >= 0, age < catchUpMaxAge else { return nil }
+            return (file.name, start)
+        }
+        return fresh.sorted { ($0.start, $0.name) < ($1.start, $1.name) }.prefix(catchUpLimit).map { $0.name }
     }
 
     /// POST /jobs に付ける query（iPhone の送りと同じ形。待ち合わせ wait=1 は付けない＝答えは iPhone が受け取る）

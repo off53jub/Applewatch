@@ -48,7 +48,8 @@ final class HomePC {
         return "家の中の住所（192.168.… や 10.… の番号）を入れてください。〜.ts.net や 100.… は時計からは使えません。"
     }
     var address = UserDefaults.standard.string(forKey: "homePCAddress") ?? "" {
-        didSet { UserDefaults.standard.set(address, forKey: "homePCAddress"); forgetFailure() }
+        // 宛先が変わったら、時計に送る設定と PC の外の道（WatchDirect.swift）も見直す
+        didSet { UserDefaults.standard.set(address, forKey: "homePCAddress"); forgetFailure(); onWatchSettingsChange?() }
     }
     /// PC の多数決で食い違った行は、クラウドの Whisper（Groq など）にも聞いて、もう1票にする
     var cloudVote = UserDefaults.standard.object(forKey: "homePCCloudVote") as? Bool ?? true {
