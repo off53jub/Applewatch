@@ -27,8 +27,8 @@ final class WatchDelayLog {
         var waiting: TimeInterval? { processed.map { max(0, $0.timeIntervalSince(received)) } }
     }
 
-    /// 覚えておく数（5分ごとなら2日ほど）
-    private static let limit = 600
+    /// 覚えておく数（5分ごとなら8日ほど、短めの区切りでも2日ほど。2026-11-07 に 600 から増やした）
+    private static let limit = 2400
     private static let url = URL.applicationSupportDirectory.appendingPathComponent("watch-delays.json")
 
     private(set) var entries: [Entry] = []
@@ -111,7 +111,7 @@ struct WatchDelayView: View {
             } header: {
                 Text("直近24時間")
             } footer: {
-                Text("「届くまで」は、5分の区切りを録り終わってから iPhone のアプリが受け取るまでです。「文字になるまで」は、受け取ってから文字起こしが終わるまでです。12分以上遅れて、iPhone の音で先に書いた時間は「遅れて使えなかった時間」に入ります。")
+                Text("「届くまで」は、区切りを録り終わってから iPhone のアプリが受け取るまでです。「文字になるまで」は、受け取ってから文字起こしが終わるまでです。12分以上遅れて、iPhone の音で先に書いた時間は「遅れて使えなかった時間」に入ります。")
             }
             Section("いまの設定") {
                 LabeledContent("待機モード", value: pipeline.standbyOn ? "オン" : "オフ")

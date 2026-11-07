@@ -44,7 +44,7 @@ struct HaasView: View {
                         Text(testResult).font(.callout).textSelection(.enabled)
                     }
                 } footer: {
-                    Text("いちばん新しい区切り（最長5分）を文字にして、かかった時間を出します。")
+                    Text("いちばん新しい区切り（最長2〜5分）を文字にして、かかった時間を出します。")
                 }
 
                 Section {

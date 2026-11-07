@@ -130,7 +130,7 @@ private struct RecordPage: View {
                     Text(recorder.link)
                     if recorder.unsent > 0 {
                         Text("iPhone に送っていない録音 \(recorder.unsent) 個")
-                            .foregroundStyle(recorder.unsent >= 4 ? .orange : .secondary)
+                            .foregroundStyle(recorder.unsent >= ChunkCutter.scaled(4) ? .orange : .secondary)
                     }
                     if recorder.lowPower {
                         Text("低電力モード: 15分ほどごとにまとめて送ります")
@@ -230,6 +230,17 @@ private struct LastTalkPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
                 PageTitle(text: "さっきの会話", symbol: "text.bubble")
+                // 家の PC が書いている途中の下書き（仮。30分より前のものは出さない。2026-11-07）
+                if let draft = board.info?.draft, let lines = draft.lines, !lines.isEmpty,
+                   Date().timeIntervalSince1970 - draft.start < 30 * 60 {
+                    Text("仮（\(clock(draft.start))〜・書いている途中）")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                        Text(line).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Divider()
+                }
                 if board.info == nil {
                     NothingYet()
                 } else if let talk = board.info?.last {
@@ -336,7 +347,7 @@ private struct StatusPage: View {
                 Text(recorder.link).font(.caption2)
                 Text("時計から送っていない録音 \(recorder.unsent) 個")
                     .font(.caption2)
-                    .foregroundStyle(recorder.unsent >= 4 ? .orange : .primary)
+                    .foregroundStyle(recorder.unsent >= ChunkCutter.scaled(4) ? .orange : .primary)
                 if let status = board.info?.status {
                     if let pending = status.pending {
                         Text("iPhone の文字起こし待ち \(pending) 件").font(.caption2)

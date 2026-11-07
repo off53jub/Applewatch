@@ -89,6 +89,13 @@ final class Pipeline {
             receiver.sendSettings(skipSilence: skipSilence, held: recordingHeld)
         }
     }
+    /// 区切りの長さ（短め=2分まで／ふつう=5分まで。初めは短め。iPhone と時計の次の区切りから効く。2026-11-07）
+    var chunkLength = ChunkCutter.length {
+        didSet {
+            ChunkCutter.length = chunkLength
+            receiver.sendSettings(skipSilence: skipSilence, held: recordingHeld)
+        }
+    }
     /// 時計の区切りがこれ以上遅れたら、待たずに iPhone の分だけで書く
     private static let watchWait: TimeInterval = 12 * 60
     @ObservationIgnored private var retry: Task<Void, Never>?
@@ -200,6 +207,8 @@ final class Pipeline {
     /// ほかの端末から記録が届くたびに増える（画面を出し直すため）
     private(set) var recordsVersion = 0
     let receiver = PhoneReceiver()
+    /// 家の PC の下書き（「仮」。記録には保存しない・同期にも入れない。2026-11-07。Drafts.swift）
+    let drafts = JobDrafts()
     /// 処理中の列。二重に走らせないよう、走っていればそれを待つ。
     private var queueTask: Task<Void, Never>?
 
@@ -273,6 +282,9 @@ final class Pipeline {
             guard let self else { return }
             // iPhone で録った区切りも、すぐ家の PC に送っておく（2026-11-07）
             if let start = Storage.startDate(of: url) {
+                // 文字になるまでの時間を測る（iPhone で録った区切りは、録り終えた時刻が届いた時刻。2026-11-07。Latency.swift）
+                let end = start.addingTimeInterval(Self.duration(of: url))
+                Latency.noteChunk(url.lastPathComponent, start: start, end: end, arrived: end, watch: false)
                 homePC.enqueueJob(url, hints: keywords(for: vocabularyContext(at: start)))
             }
             processQueue()
@@ -314,9 +326,11 @@ final class Pipeline {
                 try? FileManager.default.removeItem(at: url)
                 return
             }
-            watchDelays.received(url.lastPathComponent, ended: start.addingTimeInterval(Self.duration(of: url)),
-                                 at: time, lowPower: watchLowPower)
+            let ended = start.addingTimeInterval(Self.duration(of: url))
+            watchDelays.received(url.lastPathComponent, ended: ended, at: time, lowPower: watchLowPower)
             ledger.received(url, at: time)
+            // 文字になるまでの時間を測る（時計の区切りの終わりは「名前の時刻＋音声の長さ」。2026-11-07。Latency.swift）
+            Latency.noteChunk(url.lastPathComponent, start: start, end: ended, arrived: time, watch: true)
             // 届いたらすぐ、アプリが止まっても続く転送で家の PC に送っておく（2026-11-07）
             homePC.enqueueJob(url, hints: keywords(for: vocabularyContext(at: start)))
         }
@@ -373,6 +387,10 @@ final class Pipeline {
         // アプリが落ちた・固まった記録を受け取る（MetricKit）
         CrashWatch.shared.start()
         receiver.activate()
+        // 家の PC の待ち合わせの返事ででき上がりが届いたら、取り込みを進める（版 8。2026-11-07）
+        PCJobUploader.shared.setOnResult { [weak self] _ in
+            Task { @MainActor in self?.processQueue() }
+        }
     }
 
     /// 聞き分けのモデルを用意し、覚えている声を読み込む。
@@ -1382,6 +1400,8 @@ final class Pipeline {
 
     /// アプリを閉じて10分たったら、ライブを自動で切る（切り忘れで電池と無料枠を使わないように）
     func appMovedToBackground() {
+        // 下書き（仮）を見に行くのは、アプリが前にあるときだけ（2026-11-07。Drafts.swift）
+        stopDraftPolling()
         guard liveOn, liveAutoOff == nil else { return }
         liveAutoOff = Task {
             try? await Task.sleep(for: .seconds(600))
@@ -1397,6 +1417,7 @@ final class Pipeline {
         if UIDevice.current.userInterfaceIdiom != .pad { Task { await scheduleMeetingBriefs() } }
         morningBriefOnActive()  // 朝の読み上げ（まだなら作る）と時計に送る中身（2026-11-07。MorningBrief.swift）
         pcLinkOnActive()  // 家の PC に様子を送り、記録と直しをやり取りする（2026-11-07。PCDiag.swift）
+        startDraftPolling()  // 送ってまだの区切りの下書き（仮）を15秒ごとに見に行く（版 8。2026-11-07。Drafts.swift）
         liveAutoOff?.cancel()
         liveAutoOff = nil
         // ボタンで始めた録音の Live Activity は、古ければ出し直す（8時間で iOS に終わらせられるため）。
@@ -1500,6 +1521,8 @@ final class Pipeline {
                 }
                 // 文字起こしした音声は、アプリで聞き直せるよう1日だけ残す
                 Storage.keep(url)
+                // PC から受け取って置いておいた答えと、その区切りの「仮」は、もう要らない（2026-11-07）
+                finishedChunk(url.lastPathComponent)
             } catch is PCJobDeferred {
                 // 家の PC がまだ文字にしている。次の機会（時計の合図・開いたとき）に続ける
                 return false
@@ -1507,6 +1530,7 @@ final class Pipeline {
                 // 開けても中身が途中で切れている区切り
                 ledger.broken(url)
                 Storage.setAside(url)
+                finishedChunk(url.lastPathComponent)
             } catch {
                 message = "処理に失敗しました（あとで再試行します）: \(error.localizedDescription)"
                 return false
@@ -2499,6 +2523,11 @@ final class Pipeline {
                 return false
             }
             merger.sent(batch.count)
+            // 記録に入れた時刻（区切りごとに初めの1回。文字になるまでの時間を測る。2026-11-07。Latency.swift）
+            for name in Set(batch.compactMap(\.audio)) {
+                Latency.noteApplied(name)
+                drafts.remove(name)
+            }
             recentlyWritten += batch.map { (day, $0) }
             lastLines = Array((lastLines + lines).suffix(20))
         }
@@ -2514,8 +2543,9 @@ final class Pipeline {
         // 裏で家の PC に送っておいた区切りなら、その結果を使う（2026-11-07）。PC がまだ文字にしている最中なら、
         // アプリを開いていれば2分まで待ち、裏にいるときは次の機会に回す（同じ区切りを PC に二重に頼まない）。
         // 20分たっても終わらない区切りは待たずに、今までどおりその場で頼む
-        var jobLines: [HomePC.Line]?
-        if homePC.shouldTry, HomePC.acceptsJobs {
+        // 待ち合わせの返事などで、答えをもう受け取って端末の中に置いてあれば、PC に聞かずに使う（版 8。2026-11-07）
+        var jobLines: [HomePC.Line]? = homePC.cachedJob(url.lastPathComponent)
+        if jobLines == nil, homePC.shouldTry, HomePC.acceptsJobs {
             switch await homePC.jobState(url.lastPathComponent) {
             case .done(let lines):
                 jobLines = lines
@@ -2523,7 +2553,12 @@ final class Pipeline {
                 if UIApplication.shared.applicationState == .active {
                     for _ in 0..<24 where jobLines == nil {
                         try? await Task.sleep(for: .seconds(5))
-                        if case .done(let lines) = await homePC.jobState(url.lastPathComponent) { jobLines = lines }
+                        // 待ち合わせの返事が先に届いていれば、それを使う
+                        if let cached = homePC.cachedJob(url.lastPathComponent) {
+                            jobLines = cached
+                        } else if case .done(let lines) = await homePC.jobState(url.lastPathComponent) {
+                            jobLines = lines
+                        }
                     }
                 }
                 guard jobLines != nil else { throw PCJobDeferred() }
@@ -2609,12 +2644,14 @@ final class Pipeline {
         func fetchCloud(_ key: String) async -> CloudTranscriber.Transcript? {
             if cloudFetched { return cloudResult }
             cloudFetched = true
+            // 区切りが短いあいだは、1時間に使う回数に上限を置く（2026-11-07。ChunkBudget）
+            guard ChunkBudget.take(.cloud) else { return nil }
             cloudResult = try? await CloudTranscriber.transcribe(url, provider: settings.provider, apiKey: key,
                                                                  keywords: keywords, previous: previous)
             if cloudResult != nil { settings.addUsage(seconds: duration) }
             return cloudResult
         }
-        if !usedHaas, homePC.shouldTry {
+        if !usedHaas, homePC.shouldTry || jobLines != nil {
             // 家の PC（無料）。Haas-ja・ReazonSpeech・Whisper の多数決（古い PC は Haas-ja だけ）。
             // PC が切れているときや届かないときは、この区切りはほかの方法で
             var fromJob: [HomePC.Line]? = jobLines
@@ -2781,7 +2818,7 @@ final class Pipeline {
                 if !rewrittenBy[i].contains("登録した書き方") { rewrittenBy[i].append("登録した書き方") }
             }
         }
-        if correctionOn, !asleep, !silent, let key = llmKey,
+        if correctionOn, !asleep, !silent, let key = llmKey, ChunkBudget.take(.correct),
            var fixed = try? await Summarizer.$sensitive.withValue(context == .work, operation: {
                try await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
                                             previous: previous, alternatives: others, apiKey: key)

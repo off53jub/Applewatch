@@ -409,12 +409,18 @@ extension Pipeline {
         let unsure = lines.indices.filter { (lines[$0].confidence ?? 1) < HomePC.cloudVoteBelow && !lines[$0].votes.isEmpty }
         guard !unsure.isEmpty, !Storage.isImported(url), let start = Storage.startDate(of: url) else { return lines }
         let fromWatch = Storage.isFromWatch(url)
-        guard let other = AudioClip.otherMic(for: url, start: start, fromWatch: fromWatch, in: Storage.keptAudio()),
-              let otherStart = Storage.startDate(of: other) else { return lines }
-        // もう片方の音声の中の時刻 = この音声の中の時刻 - shift
-        let shift = otherStart.timeIntervalSince(start)
-        let length = AudioClip.duration(of: other)
-        let targets = unsure.filter { lines[$0].offset - shift >= 0 && lines[$0].end - shift <= length + 0.5 }
+        // 区切りが短いと、同じ時間の区切りが向こうにいくつもあるので、食い違った行をいちばん多く含むものを使う（2026-11-07）
+        var best: (other: URL, shift: TimeInterval, targets: [Int])?
+        for other in AudioClip.otherMicCandidates(for: url, start: start, fromWatch: fromWatch, in: Storage.keptAudio()).prefix(4) {
+            guard let otherStart = Storage.startDate(of: other) else { continue }
+            // もう片方の音声の中の時刻 = この音声の中の時刻 - shift
+            let shift = otherStart.timeIntervalSince(start)
+            let length = AudioClip.duration(of: other)
+            let inside = unsure.filter { lines[$0].offset - shift >= 0 && lines[$0].end - shift <= length + 0.5 }
+            if inside.count > (best?.targets.count ?? 0) { best = (other, shift, inside) }
+        }
+        guard let chosen = best else { return lines }
+        let other = chosen.other, shift = chosen.shift, targets = chosen.targets
         guard let lo = targets.map({ lines[$0].offset - shift }).min(),
               let hi = targets.map({ lines[$0].end - shift }).max() else { return lines }
         let clip = await clipped(other, start: lo, end: hi)
@@ -449,10 +455,15 @@ enum AudioClip {
 
     /// 同じ時間に、もう片方の端末で録った区切り（始まりが5分半以内のもの。取り込んだ音声は除く）
     static func otherMic(for url: URL, start: Date, fromWatch: Bool, in kept: [URL]) -> URL? {
+        otherMicCandidates(for: url, start: start, fromWatch: fromWatch, in: kept).first
+    }
+
+    /// 同じ時間に、もう片方の端末で録った区切りを、始まりが近い順に（2026-11-07）
+    static func otherMicCandidates(for url: URL, start: Date, fromWatch: Bool, in kept: [URL]) -> [URL] {
         kept.filter { o in
             Storage.isFromWatch(o) != fromWatch && !Storage.isImported(o) && o.lastPathComponent != url.lastPathComponent
                 && (Storage.startDate(of: o).map { abs($0.timeIntervalSince(start)) < 330 } ?? false)
-        }.min { a, b in
+        }.sorted { a, b in
             abs((Storage.startDate(of: a) ?? .distantPast).timeIntervalSince(start))
                 < abs((Storage.startDate(of: b) ?? .distantPast).timeIntervalSince(start))
         }

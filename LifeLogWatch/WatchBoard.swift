@@ -56,6 +56,13 @@ struct WatchInfo: Codable {
     /// 文字盤に出す。2026-11-07）
     var dueCount: Int?
     var overdueCount: Int?
+
+    /// 家の PC の下書き（仮。まだ多数決の前の文。2026-11-07）
+    struct Draft: Codable {
+        var start: Double
+        var lines: [String]?
+    }
+    var draft: Draft?
 }
 
 /// 時計の画面の中身（頼まれごと・次の予定・さっきの会話・聞く・朝の読み上げ）を持つ。
