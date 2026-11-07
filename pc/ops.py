@@ -287,9 +287,18 @@ def seen(handler) -> None:
         pass
 
 
+def note_watch() -> None:
+    """版 10: 時計の外の道から仕事を預かった（127.0.0.1 から届くので seen は呼ばない。iPhone の最後に来た時刻も変えない）。
+    夜の割り当てで GPU のモデルを下ろしていれば戻す"""
+    if O.started:
+        O.gpu.note_work()
+
+
 def job_done(name: str, meta: dict) -> None:
     """後で受け取る文字起こしが1つ終わった（jobqueue から呼ばれる）。でき上がったら、その端末に job の通知。
-    版 8: 待ち合わせ（wait=1）の答えで iPhone に渡した仕事（"handed"）には送らない（渡せなかったときの保険）"""
+    版 8: 待ち合わせ（wait=1）の答えで iPhone に渡した仕事（"handed"）には送らない（渡せなかったときの保険）
+    版 10: 時計の外の道から預かった仕事（"origin": "watch"）は、送ってきた iPhone の宛先が無いので、通知を登録した端末の全部に
+    送る（中身に仕事の名前。iPhone が同じ名前を wait=1 で送って受け取っていれば handed なので送らない）"""
     if not O.started or meta.get("status") != "done" or meta.get("handed") or not O.pusher.ready():
         return
     if config().get("push") is False:

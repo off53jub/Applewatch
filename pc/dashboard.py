@@ -279,6 +279,9 @@ def render(info: dict) -> str:
                  "<p class='sub'>待ち = 受け取ってから文字にし始めるまで。下書き = 文字にし始めてから、速いモデルの下書きができるまで。"
                  "速さ = 処理にかかった秒 ÷ 声のある秒（1 より小さければ録音に追いつけます）。"
                  "iPhone で測った区間ごとの時間は「実機の様子」に出ます。</p></section>")
+    # 版 10: 時計の外の道（時計の合言葉は出さない）
+    if info.get("watch") is not None:
+        parts.append(watch_section(info.get("watch") or {}))
     # 直近の文字起こし
     speed, count = info.get("speed") or (None, 0)
     pairs = info.get("pairs") or {}
@@ -471,6 +474,31 @@ def _ops_feedback(ops: dict) -> str:
             f"{rows}</table></div><p class='sub'>1日に4回読みます。置き場所: {_e(feedback.get('folder'))}（PC の外には出しません）</p>"
             "<button onclick=\"opsPost('/dash/ops/asc-fetch',{},null,'opsMsgAsc')\">今すぐ読む</button>"
             "<a href='/dash/ops/keys'>キーを入れる画面を開く</a><div id='opsMsgAsc' class='sub'></div></section>")
+
+
+def watch_section(watch: dict) -> str:
+    """版 10: 時計の外の道（受け口・Funnel・今日預かった数・断っているか）。時計の合言葉は info に入っていない"""
+    on = bool(watch.get("listening"))
+    listener = (f"<span class='ok'>動いています（この PC の中の 127.0.0.1:{_e(watch.get('port'))}）</span>" if on
+                else "<span class='warn'>動いていません（--watch-port 0 か、番号がほかのソフトに使われています）</span>")
+    if not on:
+        funnel = "—"
+    elif watch.get("funnel"):
+        funnel = f"<span class='ok'>オン</span>（{_e(watch.get('url'))} → この受け口）"
+    else:
+        funnel = ("<span class='warn'>オフ</span><span class='sub'>（Tailscale Funnel がこの受け口に向いていません。"
+                  "持ち主が手で1回だけ設定します）</span>")
+    if watch.get("locked"):
+        lock = (f"<span class='ng'>合言葉の違う接続が続いたので、{_clock(watch.get('locked_until'))} まで"
+                "だれからも受け付けません</span>")
+    else:
+        lock = f"ふつう（この 10 分の合言葉の違い {_e(watch.get('failures', 0))} 回）"
+    rows = [("受け口", listener), ("Funnel", funnel), ("今日預かった区切り", f"{_e(watch.get('today', 0))} 個"),
+            ("断っているか", lock)]
+    return ("<section><h2>時計の外の道</h2><div class='kv'>"
+            + "".join(f"<div>{_e(k)}</div><div>{v}</div>" for k, v in rows)
+            + "</div><p class='sub'>家の Wi-Fi の外にいる時計が、区切りを Tailscale Funnel を通して直接この PC に預ける道です。"
+              "預けるだけで、見守りの画面や記録はこの道からは見えません。</p></section>")
 
 
 def personal_text(personal: dict | None) -> str:
