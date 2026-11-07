@@ -87,6 +87,10 @@ struct HomePCView: View {
             // 家の Wi-Fi にいるとき、時計から PC に直接送る（2026-11-07。WatchDirect.swift・LifeLogWatch/WatchPC.swift）
             Section {
                 Toggle("時計から家の PC に直接送る", isOn: $pc.watchDirect)
+                // いまの道（PC の外の道があるか。2026-11-07。WatchDirect.swift）
+                if let route = pc.watchRouteText {
+                    Text(route).font(.caption).foregroundStyle(.secondary)
+                }
                 TextField("家の中の住所（例: 192.168.1.20）", text: $pc.homeAddress)
                     .keyboardType(.numbersAndPunctuation)
                     .textInputAutocapitalization(.never)
@@ -97,7 +101,7 @@ struct HomePCView: View {
             } header: {
                 Text("時計から直接")
             } footer: {
-                Text("家の Wi-Fi にいるとき、時計で録った区切りを iPhone を待たずに家の PC にも送り、早く文字にしてもらいます（iPhone にも今までどおり送ります。PC は同じ区切りを二重には文字にしません）。時計には Tailscale が無いので、上の宛先とは別に、PC の家の中の住所を入れます（PC で LifeLogPC.exe を起動したときの画面の「時計から直接送るとき…」の行に出る 192.168.… の番号）。合言葉は時計の中の鍵の保管場所（キーチェーン）に置きます。時計の電池は、送る量が増える分だけ少し早く減ります。時計が低電力モードのときと、電池が20%より少ないときは送りません。")
+                Text("時計で録った区切りを iPhone を待たずに家の PC にも送り、早く文字にしてもらいます（iPhone にも今までどおり送ります。PC は同じ区切りを二重には文字にしません）。PC で Tailscale の Funnel（外の道）をオンにしていれば、家の外でも送れます（宛先と時計用の合言葉は、iPhone が PC に聞いて時計に渡します）。外の道が無いときは家の Wi-Fi にいるときだけ送ります。時計には Tailscale が無いので、上の宛先とは別に、PC の家の中の住所を入れます（PC で LifeLogPC.exe を起動したときの画面の「時計から直接送るとき…」の行に出る 192.168.… の番号）。合言葉は時計の中の鍵の保管場所（キーチェーン）に置きます。時計の電池は、送る量が増える分だけ少し早く減ります。時計が低電力モードのときと、電池が20%より少ないときは送りません。")
             }
 
             Section {
