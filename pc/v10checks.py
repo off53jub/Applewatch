@@ -1,0 +1,407 @@
+"""LifeLog PC 版 10（時計の外の道）を確かめる（--check-v10 から呼ぶ。本物のモデル・本物の Tailscale・ふだんの置き場所は使わない）。
+
+- Tailscale Funnel の様子の読み方（serve status --json の形。作り物の JSON で）
+- 時計の外の道: 時計の合言葉（HOME/watch-token.txt）・GET /w/ping・ほかは全部 404・名前の形・8MB まで・待ち合わせをしない・
+  "origin": "watch"・GET /jobs?origin=watch・あとから iPhone が同じ名前を送っても（wait=1 でも）2つにならない・
+  10 分に 10 回違えば 429・番号が使われていても止まらない・記録に時計の合言葉を書かない
+- ふだんの受け口の GET /watch-route（合言葉・形・Funnel の様子を覚えておく）と /hello の features、見守りの画面
+- 時計から預かった仕事も、でき上がりで「できた」の見えない通知（仕事の名前つき）を送る
+番号はどれも空いているもの（127.0.0.1 の 0 番）を使う。確かめるときは、本物の HOME に書かない（isolate_home）。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import socket
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+import dashboard
+import jobqueue
+import ops
+import watchroute
+from v6checks import KEY, Client, say
+from v8checks import raw_post, wait_until
+
+HOST = "desktop-test.tail0000.ts.net"
+
+
+def run(main) -> int:
+    main.isolate_home()
+    failed = 0
+    failed += check_isolated(main)
+    failed += check_funnel_parse()
+    failed += check_routes(main)
+    failed += check_push()
+    print(("NG の数: " + str(failed)) if failed else "版 10: 全部 OK", flush=True)
+    return failed
+
+
+def check_isolated(main) -> int:
+    home = Path(main.HOME)
+    ok = main._isolated is not None and home.is_relative_to(main._isolated) and home != Path(main._START_HOME) \
+        and os.environ.get("LOCALAPPDATA") == str(main._isolated)
+    return say(ok, f"確かめるときは、HOME を一時のフォルダに替える（{home.name}）")
+
+
+# MARK: - Funnel の様子の読み方
+
+
+def serve_config(host: str, proxy: str, allow: bool = True, port: str = "443") -> dict:
+    """`tailscale serve status --json` の形（2026-11-07 にこの PC で Funnel をオンにしたときの答えと同じ形）"""
+    key = f"{host}:{port}"
+    return {"TCP": {port: {"HTTPS": True}}, "Web": {key: {"Handlers": {"/": {"Proxy": proxy}}}},
+            "AllowFunnel": {key: allow}}
+
+
+def check_funnel_parse() -> int:
+    failed = 0
+    port = 47617
+    real = {"TCP": {"443": {"HTTPS": True}},
+            "Web": {"desktop-7ki97gp.tail997110.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:47617"}}}},
+            "AllowFunnel": {"desktop-7ki97gp.tail997110.ts.net:443": True}}
+    cases = [
+        ("この PC の本当の形", real, "desktop-7ki97gp.tail997110.ts.net"),
+        ("localhost:番号", serve_config(HOST, "localhost:47617"), HOST),
+        ("番号だけ", serve_config(HOST, "47617"), HOST),
+        ("http://localhost:番号/", serve_config(HOST, "http://localhost:47617/"), HOST),
+        ("名前の末尾の点は取る", serve_config(HOST + ".", "http://127.0.0.1:47617"), HOST),
+        ("Funnel がオフ（tailnet の中だけ）", serve_config(HOST, "http://127.0.0.1:47617", allow=False), None),
+        ("AllowFunnel が無い", {"TCP": {"443": {"HTTPS": True}},
+                               "Web": {f"{HOST}:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:47617"}}}}}, None),
+        ("ほかの番号に向いている", serve_config(HOST, "http://127.0.0.1:47615"), None),
+        ("https に向いている", serve_config(HOST, "https://127.0.0.1:47617"), None),
+        ("この PC の外に向いている", serve_config(HOST, "http://192.168.1.20:47617"), None),
+        ("443 でない（8443）", serve_config(HOST, "http://127.0.0.1:47617", port="8443"), None),
+        ("前で動かしている funnel（Foreground）", {"Foreground": {"abc": serve_config(HOST, "http://127.0.0.1:47617")}},
+         HOST),
+        ("空の設定", {}, None),
+        ("壊れた答え", ["x"], None),
+    ]
+    wrong = [(label, watchroute.funnel_host(config, port), want) for label, config, want in cases
+             if watchroute.funnel_host(config, port) != want]
+    failed += say(not wrong, f"Funnel の様子の読み方（{len(cases)} 通り）" + (f": 違う {wrong}" if wrong else ""))
+    return failed
+
+
+# MARK: - 時計の外の道と、ふだんの受け口
+
+
+def raw(port: int, method: str, path: str, token: str | None = None, body: bytes = b"",
+        length: int | None = None, timeout: float = 30.0) -> tuple[int, bytes, float]:
+    """見出しの Content-Length を好きに書いて送る（大きすぎる音声を、中身を送らずに試す）"""
+    sock = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+    started = time.time()
+    auth = f"Authorization: Bearer {token}\r\n" if token is not None else ""
+    head = (f"{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{auth}"
+            f"Content-Length: {len(body) if length is None else length}\r\n\r\n").encode("ascii")
+    data = b""
+    try:
+        sock.sendall(head + body)
+        # 送るのはここまで（中身が見出しの長さより短くても、PC が読み捨てるのを待たせない）
+        sock.shutdown(socket.SHUT_WR)
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+    except OSError:
+        pass
+    finally:
+        sock.close()
+    header, _, rest = data.partition(b"\r\n\r\n")
+    status = int(header.split(b" ")[1]) if header.startswith(b"HTTP/") else 0
+    return status, rest, time.time() - started
+
+
+def check_routes(main) -> int:
+    failed = 0
+    logged: list[str] = []
+    gates: dict[str, threading.Event] = {}
+    notified: list[tuple[str, str | None, bool]] = []
+    status_box: dict = {"config": {}, "calls": 0}
+
+    def runner(path, params, name, draft):
+        gate = gates.get(name)
+        if gate is not None:
+            gate.wait(20)
+        return {"lines": [{"start": 0.0, "end": 1.0, "text": "でき上がり"}], "seconds": 0.1}, {"audio_seconds": 1.0}
+
+    def status():
+        status_box["calls"] += 1
+        return status_box["config"]
+
+    saved = (main.App.jobs, getattr(main.Handler, "engine", None), getattr(main.Handler, "key", None), main.log,
+             watchroute.W.status, watchroute.W.clock, watchroute.W.funnel_cache)
+    server = None
+    try:
+        main.log = logged.append
+        main.Handler.key = KEY
+        main.Handler.engine = main.Ensemble(ops.fake_engines())
+        main.App.jobs = queue = jobqueue.JobQueue(Path(main.HOME) / "jobs-v10", runner, logged.append)
+        queue.on_done = lambda name, meta: notified.append((name, meta.get("origin"), bool(meta.get("handed"))))
+        queue.start()
+        server = main.Server(("127.0.0.1", 0), main.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        home_client = Client(port)
+        watchroute.W.status = status
+        watchroute.W.funnel_cache = None
+        watchroute.W.fails.clear()
+        watchroute.W.locked_until = 0.0
+        before = "watchroute" in main.features()
+
+        # 1. 時計の合言葉と、受け口を始める
+        started = watchroute.start(main, 0)
+        wport = watchroute.W.port
+        token_path = Path(main.HOME) / watchroute.TOKEN_FILE
+        token = token_path.read_text(encoding="utf-8").strip() if token_path.exists() else ""
+        ok = started and bool(wport) and token == watchroute.W.token and len(token) >= 40 and token != KEY \
+            and watchroute.token(main.HOME) == token and not before and "watchroute" in main.features()
+        failed += say(ok, f"時計の合言葉を HOME/{watchroute.TOKEN_FILE} に作り（{len(token)} 文字・2 回目も同じ）、"
+                          f"127.0.0.1 の空いている番号で待つ。features に watchroute（始める前は無い）")
+        watch = Client(wport)
+
+        # 2. GET /w/ping
+        good = watch.call("GET", "/w/ping", key=token)
+        bad = watch.call("GET", "/w/ping", key="wrong-token")
+        none = watch.call("GET", "/w/ping", key=None)
+        main_key = watch.call("GET", "/w/ping", key=KEY)
+        ok = good[0] == 200 and good[1] == {"ok": True} and bad[0] == 401 and none[0] == 401 and main_key[0] == 401 \
+            and good[2].get("cache-control") == "no-store"
+        failed += say(ok, f"GET /w/ping: 時計の合言葉なら 200 {good[1]}、違う・無い・ふだんの合言葉なら 401"
+                          f"（{bad[0]}・{none[0]}・{main_key[0]}）")
+
+        # 3. ほかは全部 404（時計の合言葉があっても）
+        tried = [("GET", "/dash"), ("GET", "/dash/records"), ("GET", "/records"), ("GET", "/records/2026-11-07"),
+                 ("GET", "/jobs"), ("GET", "/jobs/x.m4a"), ("GET", "/hello"), ("GET", "/watch-route"), ("GET", "/"),
+                 ("GET", "/w/jobs"), ("POST", "/w/ping"), ("POST", "/jobs?name=20261107-135444-w.m4a"),
+                 ("POST", "/transcribe"), ("POST", "/dash/restart"), ("DELETE", "/jobs/x.m4a"), ("PUT", "/w/jobs")]
+        answers = {f"{m} {p}": watch.call(m, p, b"x" if m in ("POST", "PUT") else None, key=token) for m, p in tried}
+        wrong = {k: v[0] for k, v in answers.items() if v[0] != 404 or v[1] != {"error": "not found"}}
+        tiny = raw(wport, "GET", "/dash", token)
+        ok = not wrong and tiny[0] == 404 and len(tiny[1]) < 64 and not queue.jobs
+        failed += say(ok, f"時計の外の道では /w/ping・/w/jobs のほかは全部 404（{len(tried)} 通り。中身は {len(tiny[1])} バイト）"
+                          + (f": 違う {wrong}" if wrong else ""))
+
+        # 4. 名前の形
+        names = ["foo.m4a", "20261107-135444.m4a", "20261107-135444-w.wav", "20261107-1354-w.m4a", "../x-w.m4a",
+                 "2026110-135444-w.m4a", ""]
+        codes = [watch.call("POST", f"/w/jobs?name={n}", b"audio", key=token)[0] for n in names]
+        ok = all(c == 400 for c in codes) and not queue.jobs
+        failed += say(ok, f"名前は 年月日-時分秒…-w.m4a の形だけ（ほかは 400: {codes}）")
+
+        # 5. 8MB まで
+        limit = jobqueue.WATCH_BODY_LIMIT
+        big = raw(wport, "POST", "/w/jobs?name=20261107-100000-w.m4a", token, length=limit + 1)
+        full_name = "20261107-100500-w.m4a"
+        full = watch.call("POST", f"/w/jobs?name={full_name}", b"a" * limit, key=token)
+        ok = big[0] == 413 and "20261107-100000-w.m4a" not in queue.jobs and full[0] == 200 \
+            and (queue.jobs.get(full_name) or {}).get("size") == limit
+        failed += say(ok, f"8MB（{limit} バイト）までは預かり、1 バイトでも大きければ 413（{big[0]}・{full[0]}）")
+
+        # 6. 待ち合わせをしない・origin を付ける・時刻を残す
+        n1 = "20261107-135444-w.m4a"
+        gates[n1] = threading.Event()
+        stamp = "2026-11-07T04:54:44.000Z"
+        began = time.time()
+        stored = watch.call("POST", f"/w/jobs?name={n1}&wait=1&chunk_start={stamp}&chunk_end={stamp}&sent={stamp}"
+                                    "&hints=%E3%83%92%E3%83%9F%E3%83%84", b"audio-1", key=token)
+        took = time.time() - began
+        wait_until(lambda: (queue.jobs.get(n1) or {}).get("status") == "working", 5)
+        meta = dict(queue.jobs.get(n1) or {})
+        ok = stored[0] == 200 and stored[1] == {"id": n1, "status": "queued"} and took < 2.0 \
+            and n1 not in queue.waiters and meta.get("origin") == "watch" and "chunk_end" in (meta.get("times") or {}) \
+            and any(f"時計から（外の道） {n1}: " in line and "を預かりました" in line for line in logged) \
+            and not any("ヒミツ" in line for line in logged)
+        failed += say(ok, f"POST /w/jobs: wait=1 でも待たずに答え（{took:.2f} 秒・{stored[1]}）、origin watch と時刻を残し、"
+                          "記録に「時計から（外の道）」と書く（ヒントは書かない）")
+
+        # 7. あとから iPhone が同じ名前を送っても（wait なし）、2つにならない
+        seq = meta.get("seq")
+        phone = home_client.call("POST", f"/jobs?name={n1}", b"audio-from-phone")
+        ok = phone[0] == 200 and phone[1] == {"id": n1, "status": "working"} and queue.jobs[n1].get("seq") == seq \
+            and queue.jobs[n1].get("origin") == "watch" and queue.jobs[n1].get("size") == len(b"audio-1")
+        failed += say(ok, f"あとから iPhone が同じ名前を POST /jobs で送っても、預かっている仕事の様子を返すだけ（{phone[1]}）")
+
+        # 8. iPhone が wait=1 で送ると、預かっている仕事のでき上がりを待って答え、渡したので通知しない
+        box: dict = {}
+        thread = threading.Thread(target=lambda: box.update(raw_post(port, f"/jobs?name={n1}&wait=1", b"audio-again")),
+                                  daemon=True)
+        thread.start()
+        entered = wait_until(lambda: n1 in queue.waiters, 5)
+        gates[n1].set()
+        thread.join(15)
+        answer = box.get("answer") or {}
+        time.sleep(0.3)
+        ok = entered and box.get("status") == 200 and answer.get("status") == "done" \
+            and (answer.get("result") or {}).get("lines", [{}])[0].get("text") == "でき上がり" \
+            and answer.get("origin") == "watch" and queue.jobs[n1].get("seq") == seq and queue.jobs[n1].get("handed") is True \
+            and not any(n == n1 for n, _, _ in notified)
+        failed += say(ok, f"iPhone が同じ名前を wait=1 で送ると、時計から預かった仕事のでき上がりで答え（{answer.get('status')}）、"
+                          "渡したので「できた」の通知はしない")
+
+        # 9. 時計から預かって、だれも待っていなかった仕事は、でき上がりで通知の口（on_done）を呼ぶ
+        n2 = "20261107-140000-w.m4a"
+        watch.call("POST", f"/w/jobs?name={n2}", b"audio-2", key=token)
+        wait_until(lambda: any(n == n2 for n, _, _ in notified), 5)
+        ok = (n2, "watch", False) in notified
+        failed += say(ok, f"時計から預かって渡せなかった仕事は、でき上がりで「できた」の通知の口を呼ぶ {[x for x in notified]}")
+
+        # 10. 時計から同じ名前をもう一度送っても、2つにならない
+        again = watch.call("POST", f"/w/jobs?name={n2}", b"audio-2-again", key=token)
+        ok = again[0] == 200 and again[1].get("id") == n2 and again[1].get("status") == "done" \
+            and any(f"時計から（外の道） {n2}: もう預かっています" in line for line in logged)
+        failed += say(ok, f"時計から同じ名前をもう一度送っても、預かっている仕事の様子を返すだけ（{again[1]}）")
+
+        # 11. GET /jobs?origin=watch と、ふだんの GET /jobs
+        home_client.call("POST", "/jobs?name=phone-only.m4a", b"audio-phone")
+        wait_until(lambda: (queue.jobs.get("phone-only.m4a") or {}).get("status") == "done", 5)
+        only = home_client.call("GET", "/jobs?origin=watch")
+        plain = home_client.call("GET", "/jobs")
+        one = home_client.call("GET", f"/jobs/{n1}")
+        listed = [j.get("id") for j in (only[1] or {}).get("jobs", [])] if only[0] == 200 else []
+        everything = {j.get("id"): j for j in (plain[1] or {}).get("jobs", [])} if plain[0] == 200 else {}
+        phone_job = everything.get("phone-only.m4a") or {}
+        ok = listed == [n2, n1, full_name] \
+            and all(j.get("origin") == "watch" for j in only[1]["jobs"]) \
+            and set(phone_job) == {"id", "status", "queued_at", "done_at"} \
+            and (everything.get(n1) or {}).get("origin") == "watch" and len(everything) == 4 \
+            and one[0] == 200 and one[1].get("origin") == "watch"
+        failed += say(ok, f"GET /jobs?origin=watch は時計から預かった仕事だけ（新しい順 {listed}）。ふだんの GET /jobs は "
+                          "origin が付くだけで、iPhone の仕事の形は今までどおり")
+
+        # 12. GET /watch-route（ふだんの合言葉）
+        no_key = home_client.call("GET", "/watch-route", key=None)
+        wrong_key = home_client.call("GET", "/watch-route", key="wrong")
+        with_token = home_client.call("GET", "/watch-route", key=token)
+        off = home_client.call("GET", "/watch-route")
+        body = off[1] if isinstance(off[1], dict) else {}
+        ok = no_key[0] == 401 and wrong_key[0] == 401 and with_token[0] == 401 and off[0] == 200 \
+            and set(body) == {"url", "token", "funnel", "port"} and body.get("token") == token \
+            and body.get("port") == wport and body.get("funnel") is False and body.get("url") is None \
+            and off[2].get("cache-control") == "no-store"
+        failed += say(ok, f"GET /watch-route: ふだんの合言葉でだけ答え（無い・違う・時計の合言葉は 401）、"
+                          f"Funnel がオフなら url は null（{ {k: v for k, v in body.items() if k != 'token'} }）")
+        status_box["config"] = serve_config(HOST, f"http://127.0.0.1:{wport}")
+        watchroute.W.funnel_cache = None
+        calls = status_box["calls"]
+        on = home_client.call("GET", "/watch-route")
+        status_box["config"] = {}
+        cached = home_client.call("GET", "/watch-route")
+        ok = on[0] == 200 and on[1].get("funnel") is True and on[1].get("url") == f"https://{HOST}" \
+            and cached[1].get("funnel") is True and status_box["calls"] == calls + 1
+        failed += say(ok, f"Funnel がこの受け口に向いていれば funnel true・url {on[1].get('url')}。"
+                          f"様子は {watchroute.FUNNEL_CACHE:.0f} 秒覚えておく（読んだ回数 {status_box['calls'] - calls}）")
+        hello = home_client.call("GET", "/hello")
+        ok = hello[0] == 200 and "watchroute" in (hello[1].get("features") or []) and hello[1].get("version") == main.VERSION
+        failed += say(ok, f"/hello: 版 {hello[1].get('version')}・features に watchroute")
+
+        # 13. 見守りの画面（時計の合言葉は出さない）
+        info = watchroute.dash_info()
+        page = dashboard.render({"version": main.VERSION, "watch": info})
+        ok = info.get("listening") is True and info.get("funnel") is True and info.get("today") == 3 \
+            and info.get("locked") is False and "時計の外の道" in page and "今日預かった区切り" in page \
+            and token not in page and token not in json.dumps(info) and "token" not in info
+        failed += say(ok, f"見守りの画面の「時計の外の道」: 受け口・Funnel・今日預かった数 {info.get('today')}・断っているか"
+                          "（時計の合言葉は出さない）")
+
+        # 14. 番号が使われていても止まらない
+        taken = watchroute.start(main, wport)
+        ok = taken is False and watchroute.running() and watchroute.W.port == wport \
+            and any("ほかのソフトが使っている" in line for line in logged) \
+            and watch.call("GET", "/w/ping", key=token)[0] == 200
+        failed += say(ok, "番号がほかに使われていれば、記録に書いて、時計の外の道は無しで続ける")
+
+        # 15. 10 分に 10 回違えば、10 分のあいだ、だれにも 429
+        watchroute.W.fails.clear()
+        wrongs = [watch.call("GET", "/w/ping", key=f"wrong-{i}")[0] for i in range(10)]
+        blocked = watch.call("GET", "/w/ping", key=token)
+        blocked_post = watch.call("POST", f"/w/jobs?name=20261107-141000-w.m4a", b"audio", key=token)
+        blocked_other = watch.call("GET", "/dash", key=token)
+        more = [watch.call("GET", "/w/ping", key="wrong")[0] for _ in range(3)]
+        lock_lines = [line for line in logged if "だれからも受け付けません" in line]
+        locked_info = watchroute.dash_info()
+        page = dashboard.render({"version": main.VERSION, "watch": locked_info})
+        real_clock = watchroute.W.clock
+        watchroute.W.clock = lambda: real_clock() + watchroute.LOCK_SECONDS + 1
+        after = watch.call("GET", "/w/ping", key=token)
+        watchroute.W.clock = real_clock
+        ok = wrongs == [401] * 10 and blocked[0] == 429 and blocked[2].get("retry-after") == "600" \
+            and blocked_post[0] == 429 and blocked_other[0] == 429 and more == [429] * 3 and len(lock_lines) == 1 \
+            and "20261107-141000-w.m4a" not in queue.jobs and locked_info.get("locked") is True \
+            and "だれからも受け付けません" in page and after[0] == 200
+        failed += say(ok, f"合言葉が 10 回違うと、正しい合言葉でも 429（{blocked[0]}・{blocked_post[0]}・{blocked_other[0]}）。"
+                          f"記録には始めたときに 1 回だけ（{len(lock_lines)} 行）。10 分たてば戻る（{after[0]}）")
+        watchroute.W.locked_until = 0.0
+        watchroute.W.fails.clear()
+
+        # 16. 記録に時計の合言葉を書かない
+        ok = bool(logged) and not any(token in line for line in logged)
+        failed += say(ok, f"記録（{len(logged)} 行）に時計の合言葉を書かない")
+
+        # 17. 止めると features から消え、GET /watch-route は 503
+        watchroute.stop()
+        gone = home_client.call("GET", "/watch-route")
+        ok = "watchroute" not in main.features() and gone[0] == 503 and not watchroute.running()
+        failed += say(ok, f"時計の外の道が動いていなければ、features に watchroute は無く、GET /watch-route は {gone[0]}")
+    finally:
+        for gate in gates.values():
+            gate.set()
+        watchroute.stop()
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        engine = getattr(main.Handler, "engine", None)
+        pool = getattr(engine, "pool", None)
+        if pool is not None:
+            pool.shutdown(wait=False)
+        (main.App.jobs, main.Handler.engine, main.Handler.key, main.log, watchroute.W.status, watchroute.W.clock,
+         watchroute.W.funnel_cache) = saved
+    return failed
+
+
+# MARK: - 見えない通知
+
+
+def check_push() -> int:
+    """ops.job_done は、時計から預かった仕事（送ってきた iPhone の宛先が無い）にも、名前つきで job の通知を送る"""
+
+    class Pusher:
+        def __init__(self) -> None:
+            self.sent: list = []
+
+        def ready(self) -> bool:
+            return True
+
+        def usable(self, device) -> bool:
+            return True
+
+        def send(self, kind, devices=None, job=None):
+            self.sent.append((kind, devices, job))
+            return [{"ok": True}]
+
+    class Diag:
+        def device_for_ip(self, ip):
+            return None
+
+    names = ("started", "pusher", "diag", "home", "job_ip")
+    saved = {n: getattr(ops.O, n, None) for n in names}
+    pusher = Pusher()
+    name = "20261107-135444-w.m4a"
+    with tempfile.TemporaryDirectory() as folder:
+        try:
+            ops.O.started, ops.O.pusher, ops.O.diag, ops.O.home = True, pusher, Diag(), Path(folder)
+            ops.O.job_ip = {}
+            ops.job_done("20261107-130000-w.m4a", {"status": "done", "origin": "watch", "handed": True})
+            ops.job_done(name, {"status": "done", "origin": "watch"})
+            wait_until(lambda: pusher.sent, 3)
+            time.sleep(0.2)
+        finally:
+            for n, v in saved.items():
+                setattr(ops.O, n, v)
+    return say(pusher.sent == [("job", None, name)],
+               f"見えない通知: 時計から預かった仕事も、でき上がりで名前つきの job を送る（渡したものには送らない） {pusher.sent}")

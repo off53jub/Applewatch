@@ -74,7 +74,7 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 - 待っているものが2つ以上なら、新しく受けたものから文字にする
     LifeLogPC.exe --check-v8   版 8 を、一時フォルダと作り物のモデルで確かめる
     LifeLogPC.exe --check-gpu  GPU に余裕を作る直し（2026-11-07。--check-v8 にも入っている）だけを確かめる
-確かめ（--check-vote・--check-v7-ops・--check-v7-records・--check-v8・--check-v9・--check-gpu）は、本物の HOME に書かない
+確かめ（--check-vote・--check-v7-ops・--check-v7-records・--check-v8・--check-v9・--check-v10・--check-gpu）は、本物の HOME に書かない
 （isolate_home）。
 
 版 9 で足したもの（VERSION は 8 のまま。中身は records.py・recordsui.py・lifelog_mcp.py）:
@@ -82,6 +82,12 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 - 記録の画面の「聞いて直す」（/dash/records/review）。直した行・「合っている」行は、PC の音声から材料を作って足す
 - この PC の Claude Code から記録を読む MCP サーバー（LifeLogPC.exe --mcp。職場の会話と分からない会話は返さない）
     LifeLogPC.exe --check-v9   版 9 を、一時フォルダと作り物の記録で確かめる
+
+版 10 で足したもの（中身は watchroute.py。決まりは docs/v10-watch-route.md。features に "watchroute"）:
+- 時計の外の道: この PC の中の 127.0.0.1:47617（--watch-port。0 で使わない）で、GET /w/ping と POST /w/jobs だけを受ける
+  （Tailscale Funnel から届く。合言葉は HOME/watch-token.txt の時計の合言葉。10 分に 10 回違えば 10 分断る）
+- GET /watch-route（ふだんの合言葉）→ {"url", "token", "funnel", "port"}。GET /jobs?origin=watch は時計から預かった仕事だけ
+    LifeLogPC.exe --check-v10  版 10 を、一時フォルダと作り物のモデルで確かめる
 """
 
 from __future__ import annotations
@@ -119,8 +125,10 @@ import updater
 # 版 7（records）: 記録・音声の保存・直し（records.py）と、その画面（recordsui.py）
 import records
 import recordsui
+# 版 10: 時計の外の道（Tailscale Funnel から届く、預けるだけの別の受け口）
+import watchroute
 
-VERSION = 8
+VERSION = 10
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
 INSTALL_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 BUILD = updater.read_build(INSTALL_DIR)
@@ -2079,6 +2087,9 @@ def features(engines: list | None = None) -> list[str]:
         found += ["records", "edits"]
     # 版 7（ops）: diag（POST /diag）・push（見えない通知を送れるとき）・autotrain（自動の学び直しができるとき）
     found.extend(ops.features())
+    # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
+    if watchroute.running():
+        found.append("watchroute")
     return found
 
 
@@ -2250,7 +2261,9 @@ def dash_info() -> dict:
             # 版 9: 学び直しの材料の数（見守りの画面の「学び直し」と「聞いて直す」への入口）
             "personal": personal_info(),
             # 版 7（ops）: 実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割（動いていなければ空）
-            "ops": ops.dash_info()}
+            "ops": ops.dash_info(),
+            # 版 10: 時計の外の道（時計の合言葉は入れない）
+            "watch": watchroute.dash_info()}
 
 
 def personal_info() -> dict:
@@ -2617,13 +2630,17 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/dash/ops/"):  # 版 7（ops）: TestFlight の報告の詳しい画面・鍵を入れる画面
             ops.dash_get(self, url)
             return
-        if path not in ("/hello", "/train-status", "/jobs", "/index/status") and not path.startswith("/jobs/"):
+        if path not in ("/hello", "/train-status", "/jobs", "/index/status", "/watch-route") \
+                and not path.startswith("/jobs/"):
             self.send_json(404, {"error": "not found"})
             return
         if not self.authorized():
             return
         if path == "/jobs" or path.startswith("/jobs/"):
-            jobqueue.http_get(self, App.jobs, path)
+            jobqueue.http_get(self, App.jobs, path, url.query)  # 版 10: GET /jobs?origin=watch
+            return
+        if path == "/watch-route":  # 版 10: 時計の外の道の宛先と時計の合言葉（iPhone が時計に渡す）
+            watchroute.http_route(self)
             return
         if path == "/index/status":
             semantic.http_status(self, App.semantic)
@@ -2927,7 +2944,7 @@ class Server(ThreadingHTTPServer):
         super().server_bind()
 
 
-def serve(engine_factory, port: int, threads: int = 4) -> None:
+def serve(engine_factory, port: int, threads: int = 4, watch_port: int = watchroute.WATCH_PORT) -> None:
     key = passphrase()
     Handler.extra_threads = max(1, threads // 2)
     # モデルを読み込む前に、番号が使えるか確かめる
@@ -2957,6 +2974,13 @@ def serve(engine_factory, port: int, threads: int = 4) -> None:
         ops.start(sys.modules[__name__])
     except Exception as error:  # noqa: BLE001
         log(f"版 7 の見守りを始められませんでした: {error!r}")
+    # 版 10: 時計の外の道（127.0.0.1 だけで待つ、預けるだけの別の受け口）。番号が使われていれば無しで続ける
+    watch = False
+    if watch_port > 0:
+        try:
+            watch = watchroute.start(sys.modules[__name__], watch_port)
+        except Exception as error:  # noqa: BLE001 — 始められなくても、ふだんの受け付けは始める
+            log(f"時計の外の道を始められませんでした: {error!r}")
     log(f"LifeLog PC 版 {VERSION}（番号 {BUILD}）を始めます")
     print()
     print("=" * 60)
@@ -2980,6 +3004,10 @@ def serve(engine_factory, port: int, threads: int = 4) -> None:
     home = home_addresses()
     if home:
         print(" 時計から直接送るとき（iPhone の 家の PC →「時計から直接」）は、家の中の住所 " + " か ".join(home) + " を入れます")
+    # 版 10: 時計の外の道（合言葉そのものは出さない。iPhone が GET /watch-route で受け取って時計に渡す）
+    if watch:
+        print(f" 時計の外の道: この PC の中の 127.0.0.1:{watchroute.W.port} で待っています（Tailscale Funnel から届きます）")
+        print(" 時計の外の道の合言葉: 用意しました")
     print("=" * 60)
     print(flush=True)
     try:
@@ -3674,6 +3702,12 @@ def main() -> None:
     # 版 9
     parser.add_argument("--check-v9", action="store_true",
                         help="版 9（職場の会話の印・聞いて直す・記録を読む MCP サーバー）を、一時フォルダと作り物の記録で確かめる")
+    # 版 10
+    parser.add_argument("--watch-port", type=int, default=watchroute.WATCH_PORT,
+                        help=f"時計の外の道（Tailscale Funnel から届く、預けるだけの受け口）を、この PC の中で待つ番号"
+                             f"（既定 {watchroute.WATCH_PORT}。0 で使わない）")
+    parser.add_argument("--check-v10", action="store_true",
+                        help="版 10（時計の外の道）を、一時フォルダと作り物のモデルで確かめる")
     parser.add_argument("--mcp", action="store_true",
                         help="この PC の Claude Code から記録を読む MCP サーバー（stdio）として動く。読むだけで、"
                              "職場の会話は返さない（ほかに --home・--ollama-url を付けられる。くわしくは README.txt）")
@@ -3686,7 +3720,7 @@ def main() -> None:
         set_startup(args.startup)
         return
     if args.check_vote or args.check_v7_ops or args.check_v7_records or args.check_v8 or args.check_v9 \
-            or args.check_crash or args.check_gpu:
+            or args.check_v10 or args.check_crash or args.check_gpu:
         # 版 8: 確かめるときは、本物の HOME（log.txt・データ）に書かない
         isolate_home()
     if args.check_crash:  # 2026-11-07 の落ち方の直し
@@ -3712,6 +3746,10 @@ def main() -> None:
         import v9checks
 
         sys.exit(1 if v9checks.run(sys.modules[__name__]) else 0)
+    if args.check_v10:  # 版 10: 時計の外の道
+        import v10checks
+
+        sys.exit(1 if v10checks.run(sys.modules[__name__]) else 0)
     if args.check_extras:
         check_extras(args.check_extras, max(1, args.threads // 2))
         return
@@ -3786,7 +3824,7 @@ def main() -> None:
         # --test・--download・--fake-models は書かない。動いている LifeLog PC の様子を上書きしないため）
         gpu.STATE_PATH = HOME / gpu.STATE_FILE
     try:
-        serve(factory, args.port, args.threads)
+        serve(factory, args.port, args.threads, args.watch_port)
     except Exception as error:  # noqa: BLE001
         log(f"始められませんでした: {error!r}")
         if getattr(sys, "frozen", False):
