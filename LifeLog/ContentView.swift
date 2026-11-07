@@ -84,6 +84,10 @@ private struct TodayView: View {
                             .foregroundStyle(.orange)
                     }
                     LabeledContent("時計", value: pipeline.watchStatus)
+                    // iPhone で録っているマイク（外付けのマイクをつないだとき。2026-11-07。MicInput.swift）
+                    if pipeline.isRecording {
+                        LabeledContent("iPhone のマイク", value: MicRoute.shared.text)
+                    }
                     if let last = pipeline.watchDelays.entries.last {
                         NavigationLink {
                             WatchDelayView()
@@ -678,6 +682,9 @@ private struct SettingsView: View {
                          : "時計の録音は、アプリを開いたときや充電中にまとめて文字起こしします。")
                          + "\n「音がしないあいだは書かない」をオンにすると、時計と iPhone で1分続けて静かなときは録音ファイルに書かず、音がしたらその1秒前から書き始めます（マイクは聞き続けます）。無音を送ったり文字にしたりしないぶん、電池が長持ちします。\n「区切りの長さ」は、録音を区切って送る長さです。短め（初め）は45秒を過ぎた話の切れ目で区切り、長くても2分で区切るので、文字になるまでが早くなります。ふつうは今までどおり5分ほどで区切ります（送る回数が少ないぶん、時計の電池が少し長持ちします）。どちらも次の区切りから変わります。時計の設定は、時計と iPhone がつながったときに伝わります。")
                 }
+
+                // 外付けマイク（2026-11-07。MicViews.swift）
+                MicSettingsSection()
 
                 Section {
                     NavigationLink {

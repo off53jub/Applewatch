@@ -219,14 +219,20 @@ final class HomePC {
 
     // MARK: - あなた向けのモデルの材料（PC の版 4 から。2026-11-06）
 
-    /// 直した文とその音声の区間を PC に渡す（PC の中だけに置く。学び直しは PC で本人が動かす）。PC にたまった数を返す
-    func sendTrainSample(_ url: URL, start: TimeInterval, end: TimeInterval, text: String) async throws -> Int {
+    /// 直した文とその音声の区間を PC に渡す（PC の中だけに置く。学び直しは PC で本人が動かす）。PC にたまった数を返す。
+    /// audio・offset は、その行の音声の名前（Line.audio）と行の位置の秒（Line.offset）。PC の「聞いて直す」画面で
+    /// 直した行と2重に入らないよう、PC が見分けに使う（2026-11-07。版 9。古い PC は読み飛ばす）
+    func sendTrainSample(_ url: URL, start: TimeInterval, end: TimeInterval, text: String,
+                         audio: String? = nil, offset: TimeInterval? = nil) async throws -> Int {
         struct Reply: Decodable { let count: Int }
         var upload = try request("train-sample")
         var components = URLComponents(url: upload.url!, resolvingAgainstBaseURL: false)
-        components?.queryItems = [URLQueryItem(name: "start", value: String(format: "%.2f", start)),
-                                  URLQueryItem(name: "end", value: String(format: "%.2f", end)),
-                                  URLQueryItem(name: "text", value: text)]
+        var items = [URLQueryItem(name: "start", value: String(format: "%.2f", start)),
+                     URLQueryItem(name: "end", value: String(format: "%.2f", end)),
+                     URLQueryItem(name: "text", value: text)]
+        if let audio { items.append(URLQueryItem(name: "audio", value: audio)) }
+        if let offset { items.append(URLQueryItem(name: "offset", value: String(format: "%.3f", offset))) }
+        components?.queryItems = items
         upload.url = components?.url
         upload.httpMethod = "POST"
         upload.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
