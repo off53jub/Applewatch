@@ -3261,10 +3261,18 @@ final class Pipeline {
             done += 1
             let duration = Self.duration(of: url)
             let days = Set([start, start.addingTimeInterval(max(duration, 1))].map { dayFormatter.string(from: $0) })
-            let targets = days.sorted()
-                .flatMap { day in conversations.conversations(on: day).flatMap(\.lines) }
-                .filter { $0.audio == name && $0.speakerID == nil && $0.speaker == nil && $0.media == nil && $0.checked != true }
-                .sorted { $0.time < $1.time }
+            // 型を書いて小分けにする（一つの式だと、コンパイラーが型を決めきれない）
+            var found: [ConversationLog.Line] = []
+            for day in days.sorted() {
+                for conversation in conversations.conversations(on: day) {
+                    for line in conversation.lines where line.audio == name {
+                        let unlabeled: Bool = line.speakerID == nil && line.speaker == nil
+                        let plain: Bool = line.media == nil && line.checked != true
+                        if unlabeled && plain { found.append(line) }
+                    }
+                }
+            }
+            let targets: [ConversationLog.Line] = found.sorted { $0.time < $1.time }
             guard !targets.isEmpty else {
                 Tally.add(PCFirst.speakersSkippedKey)
                 continue
