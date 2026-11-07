@@ -94,6 +94,22 @@ final class CalendarLink {
 
     func event(at time: Date) -> Event? { events(from: time, to: time).first }
 
+    /// その日の終日の予定（休みの日の見分けに使う。2026-11-07）。
+    /// 祝日のカレンダーは「使わない」にしていても読む。ほかのカレンダーは、使わないカレンダーの予定を除く（家族の休みを本人の休みとみなさないように）。
+    func allDayEvents(on day: Date, calendar cal: Calendar = .current) -> [DayOff.AllDay] {
+        guard enabled, authorized else { return [] }
+        let start = cal.startOfDay(for: day)
+        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return [] }
+        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
+        return store.events(matching: predicate)
+            .filter { $0.isAllDay && $0.startDate < end && $0.endDate > start }
+            .compactMap { e -> DayOff.AllDay? in
+                let holiday = DayOff.isHolidayCalendar(e.calendar?.title ?? "")
+                if !holiday, let id = e.calendar?.calendarIdentifier, ignoredCalendars.contains(id) { return nil }
+                return DayOff.AllDay(title: e.title ?? "", notes: e.notes ?? "", holidayCalendar: holiday)
+            }
+    }
+
     /// その時間に職場の予定があれば職場（職場のカレンダーを選んでいなければ nil）
     func context(at time: Date) -> SpeakerLabeler.Context? {
         guard !workCalendars.isEmpty, let event = event(at: time) else { return nil }
