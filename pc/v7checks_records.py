@@ -153,6 +153,8 @@ def tone_wav(seconds: float) -> bytes:
 
 
 def run(main) -> int:
+    # 版 8: LOCALAPPDATA を一時にしていなくても、本物の HOME（log.txt・データ）に書かない
+    main.isolate_home()
     failed = 0
     failed += check_times()
     failed += check_parse()
@@ -780,12 +782,7 @@ def try_serve(main, port: int, home: str | None, dry: bool = False) -> None:
         return
     folder.mkdir(parents=True, exist_ok=True)
     # ふだんの置き場所を使わないよう、置き場所をすべて一時のフォルダに替える
-    main.HOME = folder
-    for name, sub in (("MODEL_DIR", "model"), ("REAZON_DIR", "reazon"), ("WHISPER_DIR", "whisper"), ("CUDA_DIR", "cuda"),
-                      ("CONFIG", "config.json"), ("LOG", "log.txt"), ("PERSONAL_DIR", "personal"),
-                      ("PERSONAL_DATA", "personal/data"), ("PERSONAL_MODEL", "personal/model"), ("JOBS_DIR", "jobs"),
-                      ("SEMANTIC_DB", "semantic.db")):
-        setattr(main, name, folder / sub)
+    main.use_home(folder)
     key = main.passphrase()
     main.App.auto_update = False
     main.App.use_semantic = False

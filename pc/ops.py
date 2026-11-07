@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import collections
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -98,6 +99,13 @@ class FakeEngine:
         self.model = object()
 
     def run(self, audio, segments, hints, prompt):
+        # 版 8: 試すときだけ、環境変数 LIFELOG_FAKE_SECONDS で GPU の作り物（whisper・kotoba）を遅くできる
+        # （待ち合わせの空白・下書きが先に出ることを、起動して確かめるため）
+        if self.provider == "cuda":
+            try:
+                time.sleep(max(0.0, min(600.0, float(os.environ.get("LIFELOG_FAKE_SECONDS") or 0))))
+            except ValueError:
+                pass
         with self.lock:
             return ["作り物の文です" if self.model is not None else "" for _ in segments]
 
@@ -263,8 +271,9 @@ def seen(handler) -> None:
 
 
 def job_done(name: str, meta: dict) -> None:
-    """後で受け取る文字起こしが1つ終わった（jobqueue から呼ばれる）。でき上がったら、その端末に job の通知"""
-    if not O.started or meta.get("status") != "done" or not O.pusher.ready():
+    """後で受け取る文字起こしが1つ終わった（jobqueue から呼ばれる）。でき上がったら、その端末に job の通知。
+    版 8: 待ち合わせ（wait=1）の答えで iPhone に渡した仕事（"handed"）には送らない（渡せなかったときの保険）"""
+    if not O.started or meta.get("status") != "done" or meta.get("handed") or not O.pusher.ready():
         return
     if config().get("push") is False:
         return
@@ -389,6 +398,14 @@ def write_summary(now: float | None = None) -> Path | None:
              f"もとのファイル: {O.home / 'diag'}（端末ごとの latest.json と日ごとの .jsonl）・{O.home / 'feedback'}", "",
              "## 気になる所", ""]
     lines.extend(worries or ["- 今は、気になる所はありません"])
+    # 版 8: 文字になるまでの時間（PC で測った分。iPhone で測った分は端末ごとの「文字になるまでの時間」の行）
+    lines += ["", "## 文字になるまでの時間（PC で測った分・直近 50 件のでき上がり）", ""]
+    jobs = getattr(getattr(O.main, "App", None), "jobs", None)
+    try:
+        stats = jobs.latency() if jobs is not None else None
+    except Exception:  # noqa: BLE001
+        stats = None
+    lines.extend(f"- {text}" for text in diag.pc_latency(stats))
     lines += ["", "## 端末ごと", ""]
     lines.extend(devices or ["（まだ様子が届いていません）", ""])
     lines += ["## TestFlight の報告（新しい 10 件）", ""]

@@ -85,6 +85,8 @@ def tone_wav(seconds: float, voiced: list[tuple[float, float]]) -> bytes:
 
 
 def run(main) -> int:
+    # 版 8: LOCALAPPDATA を一時にしていなくても、本物の HOME（log.txt・データ）に書かない
+    main.isolate_home()
     failed = 0
     failed += check_jobs(main)
     failed += check_dashboard(main)
@@ -247,11 +249,12 @@ def check_jobs_restart(folder: Path) -> int:
     done = again.get("a.m4a")
     # 7 日より前にでき上がったものは消す
     removed = again.clean(now=time.time() + jobqueue.KEEP_SECONDS + 10)
+    # 版 8: 待っているものが2つ以上なら、新しく受けたもの（c）から文字にする
     ok = full == "full" and states == {"a.m4a": "queued", "b.m4a": "failed", "c.m4a": "queued"} \
-        and not (folder / "stray.audio.part").exists() and order == [["a.m4a"], ["a.m4a", "c.m4a"]] \
+        and not (folder / "stray.audio.part").exists() and order == [["c.m4a"], ["a.m4a", "c.m4a"]] \
         and done["status"] == "done" and done["result"] == {"lines": [1]} and removed == 3 and not again.jobs \
         and list(folder.iterdir()) == []
-    return say(ok, f"起動し直したとき: 途中のもの・音声の無いもの {states}、来た順 {order}、7 日で片付け {removed} 個")
+    return say(ok, f"起動し直したとき: 途中のもの・音声の無いもの {states}、新しい順 {order}、7 日で片付け {removed} 個")
 
 
 # MARK: - 見守りの画面
