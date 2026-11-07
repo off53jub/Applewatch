@@ -114,9 +114,14 @@ class Reader:
         return parsed
 
 
+# 2026-11-07 本人の決定「情報は全部わたしてよい・どこにも全部よい」: 職場の会話も返す（既定）。
+# --exclude-work で起動したときだけ、前と同じく職場の会話と分からない会話を外す
+INCLUDE_WORK = True
+
+
 def is_open(conversation: dict) -> bool:
-    """返してよい会話か: 職場の印が「職場ではない」とはっきりしている会話だけ（職場・分からない は返さない）"""
-    return conversation.get("work") is False
+    """返してよい会話か。既定は全部。--exclude-work のときは「職場ではない」とはっきりしている会話だけ"""
+    return INCLUDE_WORK or conversation.get("work") is False
 
 
 def conversation_id(day: str, conversation: dict) -> str:
@@ -150,7 +155,9 @@ def line_out(line: dict) -> dict:
 def day_summary(parsed: dict) -> dict | None:
     """1日のまとめ。職場の会話も分からない会話も無い日だけ（まとめには職場の話も混ざるので）"""
     summary = parsed.get("summary")
-    if not summary or parsed.get("work") is None or not all(is_open(c) for c in parsed["conversations"]):
+    if not summary:
+        return None
+    if not INCLUDE_WORK and (parsed.get("work") is None or not all(is_open(c) for c in parsed["conversations"])):
         return None
     return summary
 
@@ -424,7 +431,7 @@ class Tools:
             raise RuntimeError("この PC の Ollama が動いていないか、bge-m3 がありません。search_text を使ってください")
         # 職場の行（iPhone の work の印）を除いて、多めに探してから、記録の職場の印でも外す
         request = {"query": query, "k": min(semantic.K_MAX, k * 4), "from": start, "to": end, "speaker": None,
-                   "include_work": False}
+                   "include_work": INCLUDE_WORK}
         raw = self.index.search(request)
         hits = []
         excluded = 0
@@ -436,7 +443,7 @@ class Tools:
             c = None
             if match and match.group(1) == day:
                 _, c, _ = self._find(conversation)
-            if c is None or not is_open(c) or hit.get("work"):
+            if c is None or not is_open(c) or (hit.get("work") and not INCLUDE_WORK):
                 excluded += 1
                 continue
             if len(hits) >= k:
@@ -579,10 +586,14 @@ def make_tools(home: Path, ollama_url: str | None = None) -> Tools:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="LifeLog の記録を読む MCP サーバー（stdio・読むだけ・職場の会話は返さない）")
+    parser = argparse.ArgumentParser(description="LifeLog の記録を読む MCP サーバー（stdio・読むだけ）")
+    parser.add_argument("--exclude-work", action="store_true",
+                        help="職場の会話と、職場かどうか分からない会話を返さない（既定は全部返す。2026-11-07 本人の決定）")
     parser.add_argument("--home", default=None, help="LifeLog PC の置き場所（既定 %%LOCALAPPDATA%%\\LifeLogPC）")
     parser.add_argument("--ollama-url", default=None, help="この PC の中の Ollama（既定 config.json の ollama_url か 127.0.0.1:11434）")
     args = parser.parse_args(argv)
+    global INCLUDE_WORK
+    INCLUDE_WORK = not args.exclude_work
     home = Path(args.home) if args.home else default_home()
     tools = make_tools(home, args.ollama_url)
     note(f"始めました（記録のある日 {len(tools.reader.days())}）")
