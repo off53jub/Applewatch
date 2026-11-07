@@ -160,6 +160,10 @@ extension Pipeline {
 
         // いまの状態
         add("状態", "録音", isRecording ? (recordingHeld ? "録音中（休む場所にいるので書いていない）" : "録音中") : "止まっている")
+        // iPhone で録っているマイクの種類（名前は入れない。2026-11-07。MicInput.swift）
+        add("状態", "iPhone のマイク", MicRoute.shared.checkText)
+        add("設定", "iPhone のマイク", MicChoice.mode.label + (MicChoice.mode == .auto && MicChoice.bluetoothOn ? "（Bluetooth も）" : "")
+            + (StereoMic.isOn ? "・" + StereoMic.selfSideLabel : ""))
         add("状態", "時計", watchStatus + (watchLowPower == true ? "・低電力モード" : ""))
         add("状態", "文字起こし待ち", "\(pendingCount) 個", pendingCount < ChunkCutter.scaled(6))
         add("状態", "ドライブに上げる前の音声", "\(backupPending) 個", backupPending < 300)

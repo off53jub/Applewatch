@@ -2240,9 +2240,18 @@ final class Pipeline {
         nightlyProgress = (0, 0)
         defer { nightlyProgress = nil }
         if let queueTask { await queueTask.value }
-        let targets = conversations.linesByAudio().filter { item in
+        let waiting = conversations.linesByAudio().filter { item in
             Storage.keptAudio(named: item.audio) != nil && !NightlyRecheck.isNightDone(item.audio)
                 && !item.audio.hasSuffix("-i.m4a")
+        }
+        // 言語モデルに頼む回数が今夜の上限に達していたら、端末の外の言語モデルに頼む区切りは次の夜に回す
+        // （2026-11-07。NightBudget。端末の中の言語モデルで直す職場の区切りなどは、そのまま聞き直す）
+        let targets = NightBudget.left() > 0 ? waiting : waiting.filter { !nightNeedsBudget(lines: $0.lines) }
+        if targets.isEmpty, !waiting.isEmpty {
+            if force {
+                nightlyResult = "今夜は言語モデルに頼む回数の上限（\(NightBudget.perNight) 回）に達したので、残りの \(waiting.count) 区切りは次の夜に聞き直します。"
+            }
+            return
         }
         guard !targets.isEmpty else {
             if force { nightlyResult = "聞き直す音声がありません（聞き直していない1日分の音声が手元にありません）。" }
@@ -2253,6 +2262,13 @@ final class Pipeline {
         var changedLines = 0
         var processed = 0
         var hints: [String: [String]] = [:]
+        // 言語モデルに頼む前の区切り（同じ日・職場かどうかが同じものを、合わせて5分までまとめて1回で頼む。2026-11-07。NightBudget）
+        var batch: [NightItem] = []
+        var batchSeconds: TimeInterval = 0
+        /// まとめのために、今夜の1回分を先に取ってあるか
+        var batchReserved = false
+        /// 記録に書けなかったので、ここで止めた
+        var stopped = false
         for (n, target) in targets.enumerated() {
             if Task.isCancelled { break }
             nightlyProgress = (n, targets.count)
@@ -2264,10 +2280,30 @@ final class Pipeline {
                 continue
             }
             let context = vocabularyContext(at: lines[0].time)
+            let work = context == .work
+            let duration = Self.duration(of: url)
+            // まとめに足せない区切り（日・職場かどうかが違う・合わせて5分を超える）なら、先にまとめを頼んで当てる
+            if let open = batch.first,
+               open.day != target.day || open.work != work || !NightBudget.fits(batch: batchSeconds, adding: duration) {
+                let result = await flushNightBatch(batch, reserved: batchReserved)
+                batch = []
+                batchSeconds = 0
+                batchReserved = false
+                changedLines += result.changed
+                processed += result.done
+                if !result.ok {
+                    stopped = true
+                    break
+                }
+            }
+            // 新しいまとめを端末の外の言語モデルに頼むときは、先に今夜の1回分を取る（取れなければ、この区切りは次の夜に）
+            if batch.isEmpty, !batchReserved, nightNeedsBudget(lines: lines) {
+                guard NightBudget.take() else { continue }
+                batchReserved = true
+            }
             let words: [String]
             if let known = hints[target.day] { words = known } else { words = await dayHints(target.day, context: context) }
             hints[target.day] = words
-            let duration = Self.duration(of: url)
             guard let local = try? await Transcriber.transcribe(url, words: words) else { continue }
             // 行ごとの時間（同じ音声の次の行まで）と、その時間の端末内の聞き取り
             let all = target.lines
@@ -2361,34 +2397,16 @@ final class Pipeline {
                     }
                 }
             }
-            // 確からしさの低い行と、書き直した行は、その日の言葉をヒントに言語モデルで直す
-            if correctionOn, let key = llmKey {
-                let picks = lines.indices.filter { texts[$0] != lines[$0].text || lines[$0].isUncertain }
-                let work = lines.first.map { vocabularyContext(at: $0.time) == .work } ?? false
-                if !picks.isEmpty,
-                   let fixed = try? await Summarizer.$sensitive.withValue(work, operation: {
-                       try await Summarizer.correct(picks.map { texts[$0] }, keywords: words, previous: nil,
-                                                    alternatives: picks.map { heard[$0] }, apiKey: key)
-                   }) {
-                    for (k, i) in picks.enumerated() where !fixed[k].isEmpty { texts[i] = fixed[k] }
-                }
-            }
-            let changes = lines.indices.filter { texts[$0] != lines[$0].text }.map {
-                ConversationLog.TextChange(line: lines[$0], text: texts[$0], confidence: confidence[$0], manual: false,
-                                           by: "夜の聞き直し")
-            }
-            if !changes.isEmpty {
-                // 書き足しと重ならないよう、処理中ならそれを待つ
-                if let queueTask { await queueTask.value }
-                do {
-                    changedLines += try await conversations.editText(changes, day: target.day)
-                } catch {
-                    break
-                }
-            }
-            NightlyRecheck.markNightDone(target.audio)
-            Tally.add("night.lines", lines.count)
-            processed += 1
+            // 確からしさの低い行と、書き直した行は、その日の言葉をヒントに言語モデルで直す。
+            // 区切りが短いので、続く区切りとまとめてから1回で頼む（flushNightBatch。2026-11-07）
+            batch.append(NightItem(day: target.day, audio: target.audio, lines: lines, texts: texts, confidence: confidence,
+                                   heard: heard, words: words, work: work, seconds: duration))
+            batchSeconds += duration
+        }
+        if !stopped, !batch.isEmpty || batchReserved {
+            let result = await flushNightBatch(batch, reserved: batchReserved)
+            changedLines += result.changed
+            processed += result.done
         }
         Tally.add("night.changed", changedLines)
         // 家の PC の別の種類のモデルで、話者と場面を見比べる（2026-11-06）
@@ -2399,9 +2417,71 @@ final class Pipeline {
         // 意味で探す索引を、変わった日だけ入れ直す（2026-11-07）
         await refreshSemanticIndex()
         nightlyResult = "\(Date.now.formatted(date: .abbreviated, time: .shortened)) に \(processed) 区切りを聞き直し、\(changedLines) 行を直しました。"
-            + (processed < targets.count ? "（残りは次の充電中に続けます）" : "")
-        notePCNightly(done: processed >= targets.count)  // 夜の処理を済ませた日（家の PC への様子。2026-11-07）
+            + (processed < waiting.count ? "（残りは次の充電中に続けます）" : "")
+            + (NightBudget.left() == 0 && processed < waiting.count
+               ? "今夜は言語モデルに頼む回数の上限（\(NightBudget.perNight) 回）に達しました。" : "")
+        notePCNightly(done: processed >= waiting.count)  // 夜の処理を済ませた日（家の PC への様子。2026-11-07）
         await makeMorningBriefAtNight()  // 朝の読み上げを作る（2026-11-07。MorningBrief.swift）
+    }
+
+    /// 夜の聞き直しで、この区切りの直しを端末の外の言語モデルに頼むか（今夜の回数に数えるもの。2026-11-07。NightBudget）。
+    /// 誤変換の直しがオフ・キーが無い・端末の中の言語モデルで直すとき（職場の会話は端末内で、など）は数えない
+    private func nightNeedsBudget(lines: [ConversationLog.Line]) -> Bool {
+        guard correctionOn, let key = llmKey, let first = lines.first(where: { $0.checked != true }) else { return false }
+        let work = vocabularyContext(at: first.time) == .work
+        return !Summarizer.$sensitive.withValue(work) { Summarizer.usesLocal(apiKey: key) }
+    }
+
+    /// まとめた区切りの直しを、言語モデルに1回で頼んでから記録に当てる（2026-11-07。NightBudget）。
+    /// reserved は、今夜の1回分を先に取ってあるか（頼まなかったら戻す）。まとめはどれも同じ日・職場かどうかが同じ。
+    /// 記録に書けなかったら ok は false（その区切りは聞き直し済みにせず、次の機会にやり直す）
+    private func flushNightBatch(_ batch: [NightItem], reserved: Bool) async -> (changed: Int, done: Int, ok: Bool) {
+        var items = batch
+        var asked = false
+        if let first = items.first, correctionOn, let key = llmKey {
+            let picks = NightBudget.picks(items)
+            let local = Summarizer.$sensitive.withValue(first.work) { Summarizer.usesLocal(apiKey: key) }
+            if !picks.isEmpty, local || reserved {
+                asked = !local
+                let inputs = picks.map { items[$0.item].texts[$0.line] }
+                let others = picks.map { items[$0.item].heard[$0.line] }
+                let words = first.words
+                let work = first.work
+                let fixed = try? await Summarizer.$sensitive.withValue(work, operation: {
+                    try await Summarizer.correct(inputs, keywords: words, previous: nil, alternatives: others, apiKey: key)
+                })
+                if let fixed {
+                    for (k, pick) in picks.enumerated() where k < fixed.count && !fixed[k].isEmpty {
+                        items[pick.item].texts[pick.line] = fixed[k]
+                    }
+                }
+            }
+        }
+        if reserved, !asked { NightBudget.giveBack() }
+        if asked { Tally.add("night.asked") }
+        guard let day = items.first?.day else { return (0, 0, true) }
+        var changes: [ConversationLog.TextChange] = []
+        for item in items {
+            for i in item.lines.indices where item.texts[i] != item.lines[i].text {
+                changes.append(ConversationLog.TextChange(line: item.lines[i], text: item.texts[i], confidence: item.confidence[i],
+                                                          manual: false, by: "夜の聞き直し"))
+            }
+        }
+        var changed = 0
+        if !changes.isEmpty {
+            // 書き足しと重ならないよう、処理中ならそれを待つ
+            if let queueTask { await queueTask.value }
+            do {
+                changed = try await conversations.editText(changes, day: day)
+            } catch {
+                return (0, 0, false)
+            }
+        }
+        for item in items {
+            NightlyRecheck.markNightDone(item.audio)
+            Tally.add("night.lines", item.lines.count)
+        }
+        return (changed, items.count, true)
     }
 
     /// 2つの言語モデルの直しを見比べる（2026-11-06）。直した行は、もう片方もほぼ同じに直したか、
@@ -2872,10 +2952,23 @@ final class Pipeline {
             guard let pcLines, pcLines.count == entries.count else { return nil }
             return pcLines[i].end > offsets[i] ? pcLines[i].end : nil
         }
-        let names = await speakerNames(for: offsets, in: url, context: places.context(at: start),
+        var names = await speakerNames(for: offsets, in: url, context: places.context(at: start),
                                        selfLevel: officeFilter.selfLevel(watch: fromWatch),
                                        expected: expectedSpeakers(at: start, fromWatch: fromWatch),
                                        segments: labeledSegments, ends: knownEnds)
+        // 左右に分けて録れるマイクで「左＝自分」がオンだったときは、その行の声がどちらのチャンネルで大きいかを手がかりに足す
+        // （2026-11-07。MicInput.swift の ChannelHint。聞き分けの結果は変えずに、行ごとに直すだけ）
+        if speakerLabelsOn, !fromWatch, let track = ChannelStore.load(url.lastPathComponent), track.selfChannel != nil {
+            let lineSpans = offsets.indices.map { i -> (start: TimeInterval, end: TimeInterval) in
+                let next = i + 1 < offsets.count ? offsets[i + 1] : max(duration, offsets[i])
+                let end = i < knownEnds.count ? min(next, knownEnds[i] ?? next) : next
+                return (offsets[i], max(end, offsets[i] + 0.3))
+            }
+            let hinted = ChannelHint.apply(names, spans: lineSpans, track: track)
+            names = hinted.names
+            if hinted.me > 0 { Tally.add("channel.me", hinted.me) }
+            if hinted.other > 0 { Tally.add("channel.other", hinted.other) }
+        }
         // この区切りで聞こえた名前のある人を覚えておく（次の区切りで、その人の言葉をヒントにする）
         var heardPeople: [String] = []
         for segment in names.compactMap({ $0 }) where segment.personID != SpeakerLabeler.selfID

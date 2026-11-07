@@ -7,6 +7,9 @@ import UIKit
 //   （ISO 8601・UTC・ミリ秒）で JSON にする。PC とつながったときに10分に1回まで、前に送ってから変わった日だけ
 //   （日ごとの記録の更新時刻と中身の SHA-256 を UserDefaults に残す）。初めは60日さかのぼって、1回に5日ずつ。
 //   職場の会話も送る（家の PC の中だけなので外に出ない）。iPad は送らない（同期で iPhone が両方の分を持つので）。
+//   職場の会話には印を付ける（2026-11-07。版 9）: 中身に "work": [職場の会話の start, …] を足す（日時の書き方は会話と同じ）。
+//   職場かどうかは、アプリが職場の会話を外に出さない決まりで使っている判断（isWorkTime＝ConversationLog の isWork）と同じ。
+//   PC は、この印の付いた会話を、PC から Claude に見せる道具や母艦への写しから外す。印を付ける前に送った日は、一度だけ送り直す。
 // - 戻す: GET /edits?after= → 当てる → POST /edits/ack → 当てた日を早めに送り直す（PC は送り直すまで、当てた直しを
 //   次の直しの「直す前」にする）。GET は1回に500件までで続きの印が無いので、最後の番号のあとを0件になるまで聞く。
 //   同じ時刻の行が2つあると、どちらを直すか決められないので当てない（PC でも直せないようにしてある）。
@@ -259,6 +262,30 @@ private struct PCEditsAck: Encodable {
     let results: [PCEditResult]
 }
 
+// MARK: - 送る中身
+
+/// POST /records/<日> の中身。同期と同じ1日分（SyncDay）に、職場の会話の印（work）を足したもの（2026-11-07。版 9）。
+/// 同期の形（SyncDay）は変えない（同期のファイルには work を入れない）。
+struct PCRecordsBody: Encodable {
+    let day: ConversationLog.SyncDay
+    /// 職場の会話の start（会話の start と同じ書き方で JSON にする）。職場の会話が無ければ空
+    let work: [Date]
+
+    private enum Keys: String, CodingKey { case work }
+
+    func encode(to encoder: Encoder) throws {
+        // 1日分の項目をそのまま書いてから、同じ入れ物に work を足す
+        try day.encode(to: encoder)
+        var container = encoder.container(keyedBy: Keys.self)
+        try container.encode(work, forKey: .work)
+    }
+
+    /// 1日分と、その時刻が職場かを見る関数から作る（閉じた会話のうち、職場の時刻に始まったもの）
+    static func make(_ day: ConversationLog.SyncDay, isWork: (Date) -> Bool) -> PCRecordsBody {
+        PCRecordsBody(day: day, work: day.conversations.map(\.start).filter(isWork))
+    }
+}
+
 // MARK: - 記録の送り方
 
 enum PCRecords {
@@ -279,6 +306,20 @@ enum PCRecords {
     private static let hashKey = "pcRecordsHash"
     private static let atKey = "pcRecordsAt"
     private static let resultKey = "pcRecordsResult"
+    /// 送る中身の版（2 = 職場の会話の印つき。2026-11-07）
+    static let format = 2
+    private static let formatKey = "pcRecordsFormat"
+
+    /// 中身の版が上がったら、前に送った日を全部「送り直す日」にする（送った時刻を、どの更新時刻とも合わない値にする）
+    static func resendAll(_ sent: [String: Double]) -> [String: Double] { sent.mapValues { _ in -1 } }
+
+    /// 職場の会話の印を付ける前に送った日を、一度だけ送り直す
+    static func upgradeFormatIfNeeded() {
+        guard UserDefaults.standard.integer(forKey: formatKey) < format else { return }
+        let sent = sentStamps
+        if !sent.isEmpty { UserDefaults.standard.set(resendAll(sent), forKey: sentKey) }
+        UserDefaults.standard.set(format, forKey: formatKey)
+    }
 
     /// この端末が記録を送り、直しを当てるか（iPad は送らない）
     @MainActor static var isSender: Bool { UIDevice.current.userInterfaceIdiom != .pad }
@@ -512,6 +553,7 @@ extension Pipeline {
     /// 変わった日の記録を PC に送る（1回に5日まで。first の日を先に）
     private func pushPCRecords(until deadline: Date?, first: Set<String>) async {
         let now = Date.now
+        PCRecords.upgradeFormatIfNeeded()
         var sent = PCRecords.sentStamps
         var hashes = PCRecords.sentHashes
         let days = recordedDays()
@@ -534,7 +576,9 @@ extension Pipeline {
             let payload = recordsPayload(day)
             // 閉じた会話がまだ無い日（朝の今日など）は、閉じてから送る
             if payload.conversations.isEmpty, payload.removed.isEmpty, sent[day] == nil { continue }
-            guard let data = try? encoder.encode(payload) else {
+            // 職場の会話の印を足す（判断はアプリが職場の会話を外に出さない決まりと同じ）
+            let body = PCRecordsBody.make(payload) { self.isWorkTime($0) }
+            guard let data = try? encoder.encode(body) else {
                 Tally.add("records.unencodable")
                 sent[day] = stamp
                 continue

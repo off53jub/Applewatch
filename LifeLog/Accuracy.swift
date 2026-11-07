@@ -386,8 +386,9 @@ extension Pipeline {
             guard !sent.contains(id), let url = await archive.playableURL(for: t.audio) else { continue }
             let clip = await clipped(url, start: span.start, end: end)
             defer { if let temp = clip.temp { try? FileManager.default.removeItem(at: temp) } }
+            // 行の音声の名前と位置も付ける（PC の画面で直した行と2重にしないため。2026-11-07）
             guard (try? await homePC.sendTrainSample(clip.url, start: span.start - clip.shift, end: end - clip.shift,
-                                                     text: t.right)) != nil else { break }
+                                                     text: t.right, audio: t.audio, offset: t.offset)) != nil else { break }
             sent.insert(id)
             done += 1
         }
