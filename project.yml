@@ -133,6 +133,10 @@ targets:
         # 裏での録音（WKBackgroundModes の audio は App Store では受け付けられないので、UIBackgroundModes で書く。2026-11-07）
         UIBackgroundModes: [audio]
         NSMicrophoneUsageDescription: 会話を録音して iPhone に送るためにマイクを使います。
+        # 家の Wi-Fi にいるとき、時計から家の PC に録音を直接送る（宛先は家の中の住所だけ。2026-11-07。WatchPC.swift）
+        NSLocalNetworkUsageDescription: 家の Wi-Fi にいるとき、録音を家の PC（LifeLog PC）にも直接送って、早く文字にしてもらうために使います。
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
   # コントロールセンター・ロック画面・アクションボタンに置く LifeLog のボタン
   LifeLogWidgets:
     type: app-extension

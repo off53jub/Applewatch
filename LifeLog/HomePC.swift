@@ -17,7 +17,35 @@ final class HomePC {
     static let port = 47615
 
     var enabled = UserDefaults.standard.bool(forKey: "homePCOn") {
-        didSet { UserDefaults.standard.set(enabled, forKey: "homePCOn") }
+        didSet { UserDefaults.standard.set(enabled, forKey: "homePCOn"); onWatchSettingsChange?() }
+    }
+    /// 家の中の住所（例 192.168.1.20）。入れると、家の Wi-Fi にいるとき時計から PC に区切りを直接送る（2026-11-07。WatchPC.swift）。
+    /// 時計には Tailscale が無いので、上の宛先（〜.ts.net）とは別に、家の中の番号を入れる
+    var homeAddress = UserDefaults.standard.string(forKey: "homePCHomeAddress") ?? "" {
+        didSet { UserDefaults.standard.set(homeAddress, forKey: "homePCHomeAddress"); onWatchSettingsChange?() }
+    }
+    /// 時計から家の PC に直接送る（家の中の住所を入れたときだけ働く。初めはオン）
+    var watchDirect = UserDefaults.standard.object(forKey: "homePCWatchDirect") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(watchDirect, forKey: "homePCWatchDirect"); onWatchSettingsChange?() }
+    }
+    /// 時計に送る設定（住所・合言葉・オンオフ）が変わったら呼ぶ（Pipeline が時計に送り直す）
+    @ObservationIgnored var onWatchSettingsChange: (@MainActor () -> Void)?
+
+    /// 時計から直接送るときの家の中の住所（使えないときは空）と合言葉。
+    /// 家の PC が切れている・時計から送らない・住所が家の中でない・合言葉が無いときは住所が空（時計は合言葉を消す）
+    func watchCredentials() -> (address: String, key: String?) {
+        let address = homeAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard enabled, watchDirect, WatchDelivery.homeBaseURL(address) != nil, let key = PCKeychain.read() else {
+            return ("", nil)
+        }
+        return (address, key)
+    }
+
+    /// 家の中の住所の書き方が正しいか（空なら nil。画面に出す）
+    var homeAddressProblem: String? {
+        let address = homeAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !address.isEmpty, WatchDelivery.homeBaseURL(address) == nil else { return nil }
+        return "家の中の住所（192.168.… や 10.… の番号）を入れてください。〜.ts.net や 100.… は時計からは使えません。"
     }
     var address = UserDefaults.standard.string(forKey: "homePCAddress") ?? "" {
         didSet { UserDefaults.standard.set(address, forKey: "homePCAddress"); forgetFailure() }
@@ -47,6 +75,7 @@ final class HomePC {
         if trimmed.isEmpty { PCKeychain.delete() } else { PCKeychain.save(trimmed) }
         hasKey = PCKeychain.read() != nil
         forgetFailure()
+        onWatchSettingsChange?()
     }
 
     func forgetFailure() { failedAt = nil }

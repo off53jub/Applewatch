@@ -216,6 +216,32 @@ extension Pipeline {
             let slow = arrivals.last ?? 0
             add("時計", "届くまで（直近24時間）",
                 "ふつう \(WatchDelayLog.text(arrivals[arrivals.count / 2]))・いちばん遅い \(WatchDelayLog.text(slow))", slow < 12 * 60)
+            // 内訳: 時計で待ったのか、受け渡し（iPhone のアプリが受け取るまで）が遅いのか（2026-11-07。時計が控えを添えた区切りだけ）
+            if let split = WatchDelayLog.splitText(watchDelays.recent) {
+                add("時計", "届くまでの内訳（直近24時間）", split)
+            }
+            // 時計が低電力モードだった区切り（まとめて送るので遅れる）
+            let lowPowerArrivals = watchDelays.recent.filter { $0.lowPower == true }.map(\.arrival).sorted()
+            if !lowPowerArrivals.isEmpty {
+                add("時計", "届くまで（時計が低電力モードのとき）",
+                    "\(lowPowerArrivals.count) 個・ふつう \(WatchDelayLog.text(lowPowerArrivals[lowPowerArrivals.count / 2]))")
+            }
+        }
+        // 届かないとき（直近24時間に1つも届かないと上の行は出ない）にも分かるように、最後に届いた時刻と、時計に残っている数（2026-11-07）
+        if let last = watchDelays.entries.last {
+            let late = Date.now.timeIntervalSince(last.received)
+            add("時計", "最後に届いた時計の区切り", Self.when(last.received), isWatchRecording ? late < 3600 : nil)
+        } else if isWatchRecording {
+            add("時計", "最後に届いた時計の区切り", "まだ届いていません", false)
+        }
+        let detail = UserDefaults.standard.dictionary(forKey: PCDiag.watchDetailKey) ?? [:]
+        if let pending = detail["watchPending"] as? Int {
+            let kept = detail["watchKept"] as? Int ?? 0
+            let moving = detail["watchOutstanding"] as? Int
+            var text = "まだ送っていない \(pending) 個" + (moving.map { "（うち送っている途中 \($0) 個）" } ?? "") + "・返事待ち \(kept) 個"
+            if let cut = detail["watchLastCut"] as? Double { text += "・最後に区切った " + Self.when(Date(timeIntervalSince1970: cut)) }
+            if detail["watchHeld"] as? Bool == true { text += "・休む場所にいると思っている" }
+            add("時計", "時計に残っている区切り", text, pending + kept <= ChunkCutter.scaled(4))
         }
         // 時計の区切りの長さ（電池が少ないので自動で5分にしているか。2026-11-07。WatchPresence.swift）
         add("時計", "区切りの長さ", watchChunkLengthText)

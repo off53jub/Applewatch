@@ -95,6 +95,8 @@ enum PCDiag {
     private static let deviceKey = "pcDiagDeviceID"
     private static let watchSeenKey = "pcWatchSeenAt"
     private static let watchKeptKey = "pcWatchKept"
+    /// 時計に残っている区切りの内訳（2026-11-07）
+    static let watchDetailKey = "pcWatchDelivery"
     private static let nightlyKey = "pcNightlyDoneFor"
 
     /// 送る間隔（1時間に1回ほど）
@@ -509,6 +511,14 @@ extension Pipeline {
         state["held"] = recordingHeld
         if let at = PCDiag.watchSeenAt { state["watchHeartbeatAt"] = PCJSON.string(at) }
         if let kept = PCDiag.watchUnsent { state["watchUnsent"] = kept }
+        // 時計に残っている区切りの内訳（2026-11-07。時計の最後に区切った時刻は ISO 8601）
+        for (key, value) in UserDefaults.standard.dictionary(forKey: PCDiag.watchDetailKey) ?? [:] {
+            if key == "watchLastCut", let seconds = value as? Double {
+                state[key] = PCJSON.string(Date(timeIntervalSince1970: seconds))
+            } else {
+                state[key] = value
+            }
+        }
         // 時計が静かで書くのを休んでいる（区切りが来ないのは正常）
         if isWatchRecording, let last = ledger.lastState { state["watchResting"] = last.resting }
         if let run = diagnostics.runs.last { state["lastProcessedAt"] = PCJSON.string(run.start.addingTimeInterval(run.seconds)) }
@@ -535,7 +545,17 @@ extension Pipeline {
     /// 時計から知らせが来るたびに呼ぶ（noteWatchState）。最後に来た時刻と、時計の控えの数を覚える
     func notePCWatchState(_ state: PhoneReceiver.WatchState) {
         if PCDiag.watchSeenAt.map({ state.at > $0 }) ?? true { PCDiag.watchSeenAt = state.at }
-        if let kept = state.kept { PCDiag.watchUnsent = kept }
+        // 「時計に残っている」は、まだ送っていない数＋返事待ちの数（新しい時計のアプリ）。古い時計のアプリでは返事待ちの数だけ（2026-11-07）
+        if let left = state.leftOnWatch { PCDiag.watchUnsent = left }
+        // 内訳（まだ送っていない・送っている途中・返事待ち・最後に区切った時刻・休む場所・録音しているつもりか）
+        var detail: [String: Any] = [:]
+        if let unsent = state.unsent { detail["watchPending"] = unsent }
+        if let outstanding = state.outstanding { detail["watchOutstanding"] = outstanding }
+        if let kept = state.kept { detail["watchKept"] = kept }
+        if let cut = state.lastCut { detail["watchLastCut"] = cut.timeIntervalSince1970 }
+        if let held = state.held { detail["watchHeld"] = held }
+        if let wanted = state.wanted { detail["watchWanted"] = wanted }
+        UserDefaults.standard.set(detail, forKey: PCDiag.watchDetailKey)
     }
 
     /// 夜の聞き直しが終わったときに呼ぶ（runNightly）。全部済んだら、どの日の夜の分かを覚える
