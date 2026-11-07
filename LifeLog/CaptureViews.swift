@@ -130,24 +130,27 @@ struct NewVoicesSection: View {
         if !open.isEmpty {
             Section {
                 ForEach(open.prefix(5)) { note in
-                    NavigationLink {
-                        PersonView(id: note.personID)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            if let other = note.pcSuggests {
-                                let name = { (id: String) in pipeline.people.first { $0.id == id }?.displayName ?? "人物\(id)" }
-                                Text("記録では \(name(note.personID)) ですが、PC の声のモデルでは \(name(other)) の声に近い行です")
-                                Button("\(name(other)) に直す") { Task { await pipeline.applyPCSuggestion(note) } }
-                                    .font(.callout)
-                                    .buttonStyle(.bordered)
-                            } else if let place = note.unusualPlace {
-                                Text("\(pipeline.people.first { $0.id == note.personID }?.displayName ?? "人物\(note.personID)") の声が、ふだん話さない「\(place)」で聞こえました。合っていますか？")
-                            } else {
-                                Text(note.claimed.map { "人物\(note.personID) が「\($0)」と名乗りました" }
-                                     ?? "初めての人の印のころに話した 人物\(note.personID)")
+                    let name = { (id: String) in pipeline.people.first { $0.id == id }?.displayName ?? "人物\(id)" }
+                    // 行の中にボタンを入れると、行を押してもボタンが取ってしまい、声の画面に進めなかった（2026-11-07）。
+                    // 「〜に直す」は別の行にする
+                    Group {
+                        if pipeline.people.contains(where: { $0.id == note.personID }) {
+                            NavigationLink {
+                                PersonView(id: note.personID)
+                            } label: {
+                                label(note, name: name)
                             }
-                            Text("\(note.time.formatted(date: .abbreviated, time: .shortened))「\(note.quote.prefix(40))」")
-                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            // まとめた・消した声（開いても中身が無く、真っ黒な画面になっていた）
+                            VStack(alignment: .leading, spacing: 2) {
+                                label(note, name: name)
+                                Text("この声は、もうありません（ほかの人にまとめたか、消した声です）。左へ払って消してください。")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        if let other = note.pcSuggests, pipeline.people.contains(where: { $0.id == other }) {
+                            Button("\(name(other)) に直す") { Task { await pipeline.applyPCSuggestion(note) } }
+                                .font(.callout)
                         }
                     }
                     .swipeActions {
@@ -162,6 +165,23 @@ struct NewVoicesSection: View {
             } footer: {
                 Text("押すと、その声を聞いて名前を付けたり直したりできます。名前は自動では付けも変えもしません。違うもの・合っているものは左へ払って消せます。名前を付ける人には、声を覚えることの了承をもらってください。")
             }
+        }
+    }
+
+    /// 候補の行の文（どの声か・いつ・何と言ったか）
+    @ViewBuilder
+    private func label(_ note: NewVoiceBox.Note, name: (String) -> String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let other = note.pcSuggests {
+                Text("記録では \(name(note.personID)) ですが、PC の声のモデルでは \(name(other)) の声に近い行です")
+            } else if let place = note.unusualPlace {
+                Text("\(name(note.personID)) の声が、ふだん話さない「\(place)」で聞こえました。合っていますか？")
+            } else {
+                Text(note.claimed.map { "人物\(note.personID) が「\($0)」と名乗りました" }
+                     ?? "初めての人の印のころに話した 人物\(note.personID)")
+            }
+            Text("\(note.time.formatted(date: .abbreviated, time: .shortened))「\(note.quote.prefix(40))」")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }
