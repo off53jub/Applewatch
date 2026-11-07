@@ -14,6 +14,7 @@ Python のまま動かしているとき（exe でないとき）は、新しい
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -186,12 +187,26 @@ def _say(log: Path, text: str) -> str:
     return f">>{_cmd_quote(log)} echo %date% %time% {text}"
 
 
+def _stop_mcp_lines() -> list[str]:
+    """入れ替えの前に、Claude の道具として動いている LifeLogPC.exe --mcp を止める .cmd の行。
+    PowerShell の文は -EncodedCommand で渡す（.cmd の中の引用符の扱いに左右されないように）。"""
+    script = ("Get-CimInstance Win32_Process -Filter \"Name='LifeLogPC.exe'\" -ErrorAction SilentlyContinue | "
+              "Where-Object { $_.CommandLine -match '--mcp' } | "
+              "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }")
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return [f"powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encoded} >nul 2>&1",
+            "ping -n 2 127.0.0.1 >nul"]
+
+
 def update_script(pid: int, install: Path, staging: Path, backup: Path, task: str | None, argv: list[str],
                   cwd: Path, log: Path) -> str:
     """入れ替えの .cmd の中身。1行目と2行目は英数字だけ（chcp 65001 のあとから UTF-8 の名前が読める）。"""
     q = _cmd_quote
     lines = ["@echo off", "chcp 65001 >nul", *_wait_lines(pid, log),
              _say(log, "更新の手順: 前の版を終えました。入れ替えます"),
+             # この PC の Claude が使う道具（LifeLogPC.exe --mcp）も同じフォルダを使うので、先に止める
+             # （止めないと入れ替えられず、今の版のままになる。2026-11-07）
+             *_stop_mcp_lines(),
              f"if exist {q(backup)} rmdir /s /q {q(backup)}",
              f"if exist {q(backup)} goto keepold",
              "set /a m=0",
