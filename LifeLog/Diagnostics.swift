@@ -18,7 +18,14 @@ final class DiagnosticsLog {
 
     struct Run: Codable {
         let start: Date
+        /// 始めから終わりまで（家の PC を待った・裏にいた時間も入る）
         let seconds: Double
+        /// そのうち、家の PC が文字にし終わるのを待っていた秒（2026-11-07 から。前の記録は nil。RunClock.swift）
+        var waited: Double? = nil
+        /// そのうち、アプリが裏にいた秒（iOS がアプリを止めていた時間も入る。2026-11-07 から）
+        var background: Double? = nil
+        /// 裏で使える時間が切れた（iOS に止められた。2026-11-07 から）
+        var expired: Bool? = nil
     }
 
     private(set) var problems: [Problem] = []
@@ -51,8 +58,15 @@ final class DiagnosticsLog {
     }
 
     /// 1回の処理（区切りの文字起こしから、まとめ・同期まで）にかかった時間（新しい300回まで）
-    func ran(from start: Date) {
-        runs = Array((runs + [Run(start: start, seconds: Date.now.timeIntervalSince(start))]).suffix(300))
+    /// parts は、そのあいだに家の PC を待った・裏にいた時間（RunClock.swift）。expired は裏で使える時間が切れたか
+    func ran(from start: Date, parts: RunClock.Parts? = nil, expired: Bool = false) {
+        var run = Run(start: start, seconds: Date.now.timeIntervalSince(start))
+        if let parts {
+            run.waited = parts.waited
+            run.background = parts.background
+        }
+        if expired { run.expired = true }
+        runs = Array((runs + [run]).suffix(300))
         save()
     }
 
@@ -164,7 +178,7 @@ extension Pipeline {
         add("状態", "iPhone のマイク", MicRoute.shared.checkText)
         add("設定", "iPhone のマイク", MicChoice.mode.label + (MicChoice.mode == .auto && MicChoice.bluetoothOn ? "（Bluetooth も）" : "")
             + (StereoMic.isOn ? "・" + StereoMic.selfSideLabel : ""))
-        add("状態", "時計", watchStatus + (watchLowPower == true ? "・低電力モード" : ""))
+        add("状態", "時計", watchStatusNow + (watchLowPower == true ? "・低電力モード" : ""))
         add("状態", "文字起こし待ち", "\(pendingCount) 個", pendingCount < ChunkCutter.scaled(6))
         add("状態", "ドライブに上げる前の音声", "\(backupPending) 個", backupPending < 300)
         if !lastEngine.isEmpty { add("状態", "直近の文字起こし", lastEngine) }
@@ -181,13 +195,14 @@ extension Pipeline {
         // 処理の重さ
         let runs = diagnostics.runs
         if let last = runs.last {
-            add("処理", "最後の処理", Self.when(last.start) + "・" + Self.seconds(last.seconds))
+            // 待ち・裏にいた時間があれば、自分で動いていた時間も添える（2026-11-07）
+            let own = last.working < last.seconds - 0.5 ? "（自分で動いていたのは \(Self.seconds(last.working))）" : ""
+            add("処理", "最後の処理", Self.when(last.start) + "・" + Self.seconds(last.seconds) + own)
         }
-        let recent = runs.filter { Date.now.timeIntervalSince($0.start) < 86400 }.map(\.seconds).sorted()
-        if !recent.isEmpty {
-            let slow = recent.last ?? 0
-            add("処理", "直近24時間の処理", "\(recent.count) 回・ふつう \(Self.seconds(recent[recent.count / 2]))・いちばん長い \(Self.seconds(slow))",
-                slow < 25)
+        // 「ふつう・いちばん長い」は iPhone が自分で動いていた時間。家の PC を待った・裏にいた時間は別の行に出す（2026-11-07。RunClock.swift）
+        if let summary = RunStats.summary(runs) {
+            add("処理", "直近24時間の処理", summary.value, summary.ok)
+            if let detail = summary.detail { add("処理", "直近24時間の処理の待ち", detail) }
         }
         let stats = recordStats
         add("処理", "記録のある日", "\(stats.days) 日")
@@ -202,6 +217,8 @@ extension Pipeline {
             add("時計", "届くまで（直近24時間）",
                 "ふつう \(WatchDelayLog.text(arrivals[arrivals.count / 2]))・いちばん遅い \(WatchDelayLog.text(slow))", slow < 12 * 60)
         }
+        // 時計の区切りの長さ（電池が少ないので自動で5分にしているか。2026-11-07。WatchPresence.swift）
+        add("時計", "区切りの長さ", watchChunkLengthText)
 
         // 文字になるまで（区間ごとの中央値。2026-11-07。Latency.swift）
         for row in Latency.rows() { add("文字になるまで", row.label, row.value, row.ok) }

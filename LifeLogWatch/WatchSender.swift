@@ -416,10 +416,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if let acks = context["acks"] as? Bool { UserDefaults.standard.set(acks, forKey: "phoneAcks") }
         // 会議モードのあいだは、録音の音質を上げる（次の区切りから）
         if let meeting = context["meeting"] as? Bool { UserDefaults.standard.set(meeting, forKey: "meetingOn") }
-        // 区切りの長さ（短め・ふつう。次の区切りから。2026-11-07）
-        if let raw = context[ChunkCutter.lengthKey] as? String, let length = ChunkCutter.Length(rawValue: raw) {
-            ChunkCutter.length = length
-        }
+        // 区切りの長さ（短め・ふつう）と「電池が少ないときは5分に」（次の区切りから。2026-11-07）
+        ChunkCutter.readSettings(context)
     }
 
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {

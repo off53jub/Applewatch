@@ -86,14 +86,67 @@ final class GoogleDocs {
 
     /// 名前 name のドキュメントの中身を、まるごと書き換える（このアプリが作った案内や索引のドキュメント用。日ごとの記録には使わない）。
     /// paragraphs は段落の文字（改行なし）と、見出しの種類（"HEADING_1" など。nil なら普通の文字）。
+    ///
+    /// 2026-11-05・11-06 に「わかったこと帳」で「deleteContentRange: Index 4402 must be less than the end index of the
+    /// referenced segment, 2266」が出ていた。終わりの位置（4403）を読んでから消すまでのあいだに、同じドキュメントの
+    /// 書き直しがもう1つ走って中身を短くしていた（答えるたびに書き直しを始めるので、続けて答えると重なる）。
+    /// そこで、同じドキュメントの書き直しは1つずつ順に行い、それでも位置が合わなければ、読み直して1回だけやり直す。
     func overwrite(_ paragraphs: [(text: String, style: String?)], name: String) async throws {
+        let previous = overwriting[name]
+        let task = Task<Void, Error> { [weak self] in
+            // 前の書き直しが終わるまで待つ（うまくいかなくても待つだけ）
+            _ = await previous?.result
+            guard let self else { return }
+            try await self.overwriteNow(paragraphs, name: name)
+        }
+        overwriting[name] = task
+        defer { if overwriting[name] == task { overwriting[name] = nil } }
+        try await task.value
+    }
+
+    /// 書き直している途中のドキュメント（名前ごと）
+    private var overwriting: [String: Task<Void, Error>] = [:]
+
+    private func overwriteNow(_ paragraphs: [(text: String, style: String?)], name: String) async throws {
         let docId = try await documentId(for: name)
-        let end = try await endIndex(day: name)
+        do {
+            let requests = Self.overwriteRequests(paragraphs, segmentEnd: try await segmentEnd(docId: docId))
+            guard !requests.isEmpty else { return }
+            _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
+                                  json: ["requests": requests])
+        } catch GoogleError.http(400, let body) where Self.isStaleRange(body) {
+            // ほかの書き直し（ドライブの画面で直したなど）で長さが変わっていた。読み直して1回だけやり直す
+            let requests = Self.overwriteRequests(paragraphs, segmentEnd: try await segmentEnd(docId: docId))
+            guard !requests.isEmpty else { return }
+            _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
+                                  json: ["requests": requests])
+        }
+    }
+
+    /// 本文の終わりの位置（いちばん後ろの段落の endIndex。ドキュメントは必ず改行で終わり、その改行の次の位置）
+    private func segmentEnd(docId: String) async throws -> Int {
+        let doc = try await request("GET", "https://docs.googleapis.com/v1/documents/\(docId)?fields=body.content(endIndex)")
+        let content = (doc["body"] as? [String: Any])?["content"] as? [[String: Any]] ?? []
+        return content.last?["endIndex"] as? Int ?? 2
+    }
+
+    /// 書いた位置が、読んだあとで変わっていたときの答え（400 の本文）
+    nonisolated static func isStaleRange(_ body: String) -> Bool {
+        body.contains("end index of the referenced segment")
+    }
+
+    /// まるごと書き換える頼みごと。segmentEnd は本文の終わりの位置（いちばん後ろの段落の endIndex）。
+    /// - 本文の最後の改行は消せないので、消すのは 1 から segmentEnd - 1 の手前まで（何も無ければ消さない）
+    /// - 新しい中身は 1 に差し込む。差し込んだ中身の最後の改行のあとに、元の最後の改行（空の段落）が残る
+    /// - 中身が空なら、消すだけ
+    nonisolated static func overwriteRequests(_ paragraphs: [(text: String, style: String?)], segmentEnd: Int) -> [[String: Any]] {
         let text = paragraphs.map { $0.text + "\n" }.joined()
         var requests: [[String: Any]] = []
-        if end > 1 {
-            requests.append(["deleteContentRange": ["range": ["startIndex": 1, "endIndex": end]]])
+        let deleteEnd = segmentEnd - 1
+        if deleteEnd > 1 {
+            requests.append(["deleteContentRange": ["range": ["startIndex": 1, "endIndex": deleteEnd]]])
         }
+        guard !text.isEmpty else { return requests }
         requests.append(["insertText": ["location": ["index": 1], "text": text]])
         requests.append(["updateParagraphStyle": [
             "range": ["startIndex": 1, "endIndex": 1 + text.utf16.count],
@@ -112,8 +165,7 @@ final class GoogleDocs {
             }
             at += length
         }
-        _ = try await request("POST", "https://docs.googleapis.com/v1/documents/\(docId):batchUpdate",
-                              json: ["requests": requests])
+        return requests
     }
 
     /// その日のドキュメントの、前の版の文字（新しい版から順に、多くても limit 個）。

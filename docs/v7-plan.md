@@ -54,6 +54,8 @@ iPhone（と iPad）が1時間に1回ほど・アプリを開いたとき・見�
   そのまま JSON にしたもの）。合わせて 1MB まで。送れたら、送った分は iPhone から消す。
 - `tally` は今日と昨日の数（NightReport の Tally）。
 - `state` の項目は、分からなければ null か省く。
+  `lastWatchChunkAt`・`lastPhoneChunkAt`（2026-11-07 に足した）は `lastChunkAt` を時計の区切りと iPhone の区切りに分けたもの。
+  `watchUnsent` は時計が「送り終えて iPhone の返事を待っている」区切りの数で、時計がまだ送っていない区切りは入らない。
 - `push` は通知の登録ができたときだけ。`environment` は TestFlight・App Store なら `production`、それ以外は `development`。
   `team` は Info.plist の `AppIdentifierPrefix`（`$(AppIdentifierPrefix)`。末尾の `.` は取る）。
 - 答え: `{"ok": true}`。

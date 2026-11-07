@@ -83,7 +83,7 @@ private struct TodayView: View {
                         Label("録音を休む場所にいるので、書くのを休んでいます", systemImage: "pause.circle")
                             .foregroundStyle(.orange)
                     }
-                    LabeledContent("時計", value: pipeline.watchStatus)
+                    LabeledContent("時計", value: pipeline.watchStatusNow)
                     // iPhone で録っているマイク（外付けのマイクをつないだとき。2026-11-07。MicInput.swift）
                     if pipeline.isRecording {
                         LabeledContent("iPhone のマイク", value: MicRoute.shared.text)
@@ -674,17 +674,26 @@ private struct SettingsView: View {
                             Text(length.label).tag(length)
                         }
                     }
+                    // 時計の電池が少ないあいだは、自動で5分の区切りにする（2026-11-07）
+                    if pipeline.chunkLength == .short {
+                        Toggle("電池が少ないときは5分に", isOn: Binding(
+                            get: { pipeline.chunkBatterySaver },
+                            set: { pipeline.chunkBatterySaver = $0 }))
+                    }
                 } header: {
                     Text("Apple Watch")
                 } footer: {
                     Text((pipeline.standbyOn
                          ? "時計が録音しているあいだだけ無音を流してアプリを起こしておき、時計の録音を区切りごとにすぐ文字起こしします。電池を少し多く使います。"
                          : "時計の録音は、アプリを開いたときや充電中にまとめて文字起こしします。")
-                         + "\n「音がしないあいだは書かない」をオンにすると、時計と iPhone で1分続けて静かなときは録音ファイルに書かず、音がしたらその1秒前から書き始めます（マイクは聞き続けます）。無音を送ったり文字にしたりしないぶん、電池が長持ちします。\n「区切りの長さ」は、録音を区切って送る長さです。短め（初め）は45秒を過ぎた話の切れ目で区切り、長くても2分で区切るので、文字になるまでが早くなります。ふつうは今までどおり5分ほどで区切ります（送る回数が少ないぶん、時計の電池が少し長持ちします）。どちらも次の区切りから変わります。時計の設定は、時計と iPhone がつながったときに伝わります。")
+                         + "\n「音がしないあいだは書かない」をオンにすると、時計と iPhone で1分続けて静かなときは録音ファイルに書かず、音がしたらその1秒前から書き始めます（マイクは聞き続けます）。無音を送ったり文字にしたりしないぶん、電池が長持ちします。\n「区切りの長さ」は、録音を区切って送る長さです。短め（初め）は45秒を過ぎた話の切れ目で区切り、長くても2分で区切るので、文字になるまでが早くなります。ふつうは今までどおり5分ほどで区切ります（送る回数が少ないぶん、時計の電池が少し長持ちします）。どちらも次の区切りから変わります。\n「電池が少ないときは5分に」をオンにすると（初めはオン）、時計の電池が 30% より少ないときと低電力モードのあいだは、短めの設定でも時計が自動で5分ごとに区切ります。電池が 35% まで戻るか充電を始めると、短めに戻ります。いま5分にしているかは、時計の画面と自己点検に出ます。時計の設定は、時計と iPhone がつながったときに伝わります。")
                 }
 
                 // 外付けマイク（2026-11-07。MicViews.swift）
                 MicSettingsSection()
+
+                // 会話の横に、その時間に撮った写真を出す（2026-11-07。DayPhotos.swift）
+                DayPhotoSettingsSection()
 
                 Section {
                     NavigationLink {

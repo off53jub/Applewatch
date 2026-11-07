@@ -248,7 +248,9 @@ extension Pipeline {
         updateWidgets()
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
-        guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
+        // isWatchAppInstalled が false のままでも、時計から最近便りがあれば送る（2026-11-07。WatchPresence.swift）
+        guard session.activationState == .activated, session.isPaired || WatchPresence.lastHeard != nil,
+              WatchPresence.installed(session) else { return }
         let state = WatchInfoState.shared
         guard force || Date.now.timeIntervalSince(state.sentAt) >= 59 else { return }
         let info = buildWatchInfo()
