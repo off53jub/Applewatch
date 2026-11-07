@@ -1,8 +1,16 @@
 import GoogleSignIn
 import SwiftUI
 
-/// iOS が、裏での転送（家の PC に区切りを送る）の知らせを渡すためにアプリを起こしたときの受け口（2026-11-07）
+/// iOS が、裏での転送（家の PC に区切りを送る）の知らせを渡すためにアプリを起こしたときの受け口（2026-11-07）。
+/// 家の PC からの見えない通知の宛先と、届いた通知の受け口も（中身は Push.swift。2026-11-07）
+@MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        PushWake.register(application)
+        return true
+    }
+
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
                      completionHandler: @escaping () -> Void) {
         guard identifier == PCJobUploader.identifier else {
@@ -10,6 +18,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             return
         }
         PCJobUploader.shared.handleEvents(completion: completionHandler)
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        PushWake.registered(deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        PushWake.failed(error)
+    }
+
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        PushWake.receive(userInfo, completion: completionHandler)
     }
 }
 
@@ -54,6 +75,8 @@ struct LifeLogApp: App {
         Recall.lastTalk = { pipeline.lastTalk(with: $0) }
         // 職場の会話を家の PC の言語モデルで作るとき（本人がオンにしたときだけ。2026-11-06）
         Summarizer.pcLLM = { system, prompt in try await pipeline.homePC.llm(system: system, prompt: prompt) }
+        // 家の PC からの見えない通知で起きたときの動き（2026-11-07。Push.swift）
+        PushWake.pipeline = pipeline
         _pipeline = State(initialValue: pipeline)
     }
 

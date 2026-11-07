@@ -205,6 +205,8 @@ def render(info: dict) -> str:
     """見守りの画面の HTML。info は lifelog_pc.dash_info() が作る。"""
     parts = [f"<h1>LifeLog PC 版 {_e(info.get('version'))}"
              f"<span class='sub'>（番号 {_e(info.get('build') or '—')}）</span></h1>"]
+    # 版 7（records）: 記録の画面への入口
+    parts.append("<p><a href='/dash/records' style='color:var(--btn)'>記録を読む・探す・直す →</a></p>")
     # 動いているもの
     rows = [("動いている時間", _seconds(info.get("uptime"))),
             ("ディスクの空き", f"{info['disk_free'] / 1e9:.1f} GB（{_e(info.get('disk_path'))}）"
@@ -270,6 +272,8 @@ def render(info: dict) -> str:
                  f"<div>数えた回数</div><div>{_e(pairs.get('requests', 0))} 回（声のある区間 {_e(pairs.get('heard_lines', 0))}）"
                  "</div></div><div class='scroll'><table><tr><th>モデルの組</th><th class='num'>近さ</th><th class='num'>区間</th></tr>"
                  f"{pair_rows}</table></div><p class='sub'>何も書かなかった区間: {silent}</p></section>")
+    # 版 7（ops）: 実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割
+    parts.extend(ops_sections(info.get("ops") or {}))
     # 更新
     update = info.get("update") or {}
     parts.append("<section><h2>更新</h2><div class='kv'>"
@@ -292,6 +296,263 @@ def render(info: dict) -> str:
             "<meta name='color-scheme' content='light dark'><meta http-equiv='refresh' content='60'>"
             f"<title>LifeLog PC</title><style>{STYLE}</style></head><body><main>{''.join(parts)}</main>"
             f"<script>{SCRIPT}</script></body></html>")
+
+
+# MARK: - 版 7（ops）: 実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割
+# 中身は ops.dash_info() が作る。ボタンは /dash/ops/… に、画面の中だけが付ける印（X-LifeLog-Dash）を付けて送る。
+# この画面は 60 秒ごとに新しくなるので、鍵を入れる欄は別の画面（/dash/ops/keys）にしてある。
+
+# TestFlight の報告の詳しい画面だけは、スクショ（この PC の中の /dash/ops/feedback-file）を出すので img-src を許す
+FEEDBACK_CSP = ("default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; script-src 'unsafe-inline'; "
+                "connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'")
+
+OPS_SCRIPT = """
+async function opsPost(path, body, ask, out){
+  if(ask && !confirm(ask)) return;
+  const msg=document.getElementById(out||'opsMsg'); msg.textContent='送っています…';
+  try{
+    const r=await fetch(path,{method:'POST',credentials:'same-origin',
+      headers:{'X-LifeLog-Dash':'1','Content-Type':'application/json'},body:JSON.stringify(body||{})});
+    const j=await r.json().catch(()=>({}));
+    msg.textContent=j.message||j.error||('答え '+r.status);
+  }catch(e){msg.textContent='送れませんでした: '+e}
+}
+function opsKey(kind){
+  const out=kind==='apns'?'opsMsgPush':'opsMsgAsc';
+  const f=document.getElementById(kind+'File').files[0];
+  if(!f){document.getElementById(out).textContent='.p8 のファイルを選んでください'; return}
+  const typed=(document.getElementById(kind+'Key').value||'').trim();
+  const id=typed||((f.name.match(/AuthKey_([A-Z0-9]{10})/)||[])[1]||'');
+  const reader=new FileReader();
+  reader.onload=()=>{
+    const body={key_id:id, p8:String(reader.result||'')};
+    if(kind==='apns') body.team=(document.getElementById('apnsTeam').value||'').trim();
+    else body.issuer_id=(document.getElementById('ascIssuer').value||'').trim();
+    opsPost('/dash/ops/'+kind+'-key', body, null, out);
+  };
+  reader.readAsText(f);
+}
+"""
+
+OPS_STYLE = ".dev{border-top:1px solid var(--line);padding:8px 0}.dev:first-of-type{border-top:0}" \
+            "section p,section li{overflow-wrap:anywhere}" \
+            "details{margin:6px 0}summary{cursor:pointer;color:var(--sub)}ul{margin:4px 0;padding-left:20px}" \
+            "input{font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;margin:0 8px 8px 0;" \
+            "max-width:100%;background:var(--card);color:var(--ink)}a{color:var(--btn)}"
+
+
+def _when(when) -> str:
+    """時刻と、どれだけ前か（"11/07 15:58（12 分前）"）"""
+    if not when:
+        return "—"
+    return f"{_clock(when)}（{_seconds(max(0.0, time.time() - float(when)))}前）"
+
+
+def _iso_clock(text) -> str:
+    """ISO 8601 の日時を、この PC の時刻の "11/07 15:58" にする"""
+    import datetime
+
+    if not text:
+        return "—"
+    try:
+        moment = datetime.datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except ValueError:
+        return _e(text)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=datetime.timezone.utc)
+    return _clock(moment.timestamp())
+
+
+def _ops_devices(ops: dict) -> str:
+    rows = []
+    for device in ops.get("devices") or []:
+        record = device.get("record") or {}
+        concerns = device.get("concerns") or []
+        worry = ("<ul class='ng'>" + "".join(f"<li>{_e(c)}</li>" for c in concerns) + "</ul>") if concerns \
+            else ("<p class='sub'>しばらく届いていない端末です</p>" if device.get("old")
+                  else "<p class='ok'>気になる所はありません</p>")
+        state = "".join(f"<div>{_e(k)}</div><div>{_e(v)}</div>" for k, v in
+                        [("最後に届いた", _when(device.get("received"))),
+                         *[(text.split(":", 1)[0], text.split(":", 1)[1].strip()) for text in device.get("state") or []
+                           if ":" in text]])
+        checks = [r for r in record.get("rows") or [] if isinstance(r, dict)]
+        bad = sum(1 for r in checks if r.get("ok") is False)
+        table = "".join(f"<tr><td>{_e(r.get('group'))}</td><td>{_e(r.get('name'))}</td><td>{_e(r.get('value'))}</td>"
+                        f"<td class='{'ng' if r.get('ok') is False else 'ok' if r.get('ok') else ''}'>"
+                        f"{'×' if r.get('ok') is False else '○' if r.get('ok') else '—'}</td></tr>" for r in checks)
+        crashes = [c for c in record.get("crashes") or [] if isinstance(c, dict)]
+        crash_rows = "".join(f"<tr><td>{_iso_clock(c.get('at'))}</td><td>{_e(c.get('kind'))}</td>"
+                             f"<td>{_e(c.get('detail'))}</td></tr>" for c in crashes[-30:][::-1])
+        push = record.get("push") if isinstance(record.get("push"), dict) else {}
+        rows.append(f"<div class='dev'><b>{_e(device.get('label'))}</b> <span class='sub'>iOS {_e(record.get('os') or '—')}・"
+                    f"build {_e(record.get('build') or '—')}・{_e(record.get('install') or '—')}・"
+                    f"通知の登録 {'あり' if push.get('token') else 'なし'}</span>"
+                    f"<div class='kv'>{state}</div>{worry}"
+                    f"<details><summary>自己点検（{len(checks)} 行・ok でない {bad} 行）</summary><div class='scroll'><table>"
+                    f"<tr><th>まとまり</th><th>名前</th><th>値</th><th>ok</th></tr>{table}</table></div></details>"
+                    + (f"<details><summary>落ちた・固まった記録（{len(crashes)} 件）</summary><div class='scroll'><table>"
+                       f"<tr><th>時刻</th><th>種類</th><th>くわしく</th></tr>{crash_rows}</table></div></details>"
+                       if crashes else "")
+                    + "</div>")
+    body = "".join(rows) or "<p class='sub'>まだ届いていません（iPhone の LifeLog が1時間に1回ほど送ってきます）</p>"
+    return (f"<section><h2>実機の様子</h2>{body}<p class='sub'>まとめのファイル（この PC で動く Claude が読みます）: "
+            f"{_e(ops.get('summary'))}</p></section>")
+
+
+def _ops_push(ops: dict) -> str:
+    push = ops.get("push") or {}
+    key = f"AuthKey_{_e(push.get('key_id'))}.p8" if push.get("key_id") else \
+        ("<span class='ng'>鍵のファイルが読めません</span>" if push.get("key_file") else "<span class='warn'>まだありません</span>")
+    team = _e(push.get("team")) if push.get("team") else "<span class='warn'>まだ分かりません（iPhone が様子を送ると分かります）</span>"
+    state = "<span class='ok'>送れます</span>" if push.get("ready") else "<span class='warn'>まだ送れません（鍵とチームの ID が要ります）</span>"
+    devices = "".join(
+        f"<tr><td>{_e(d.get('device'))}<br><span class='sub'>{_e(d.get('model'))}</span></td><td>{_e(d.get('environment'))}</td>"
+        f"<td>…{_e(d.get('token_tail'))}" + ("<br><span class='ng'>使えなくなりました（"
+                                             f"{_e((d.get('dead') or {}).get('status'))} {_e((d.get('dead') or {}).get('reason'))}）</span>"
+                                             if d.get("dead") else "") + "</td>"
+        f"<td>{_e('・'.join(f'{k} {v}' for k, v in (d.get('today') or {}).items() if v) or '—')}</td>"
+        f"<td>{_e((d.get('last') or {}).get('kind') or '—')} → {_e((d.get('last') or {}).get('status') or '—')}"
+        f"<br><span class='sub'>{_clock((d.get('last') or {}).get('at'))}</span></td></tr>"
+        for d in push.get("devices") or []) or "<tr><td colspan=5>まだありません（iPhone の LifeLog を開くと登録されます）</td></tr>"
+    history = "".join(f"<tr><td>{_clock(h.get('at'))}</td><td>{_e(h.get('kind'))}</td><td>{_e(h.get('status'))}</td>"
+                      f"<td>{_e(h.get('reason') or '')}</td></tr>" for h in (push.get("history") or [])[::-1])
+    error = f"<div>最後の失敗</div><div class='ng'>{_e(push.get('last_error'))}</div>" if push.get("last_error") else ""
+    return ("<section><h2>見えない通知（家の PC から iPhone を起こす）</h2><div class='kv'>"
+            f"<div>様子</div><div>{state}</div><div>鍵</div><div>{key}</div><div>チームの ID</div><div>{team}</div>"
+            f"<div>HTTP/2 の部品</div><div>{'あります' if push.get('http2') else '<span class=ng>ありません</span>'}</div>{error}</div>"
+            "<div class='scroll'><table><tr><th>端末</th><th>環境</th><th>トークン</th><th>この 24 時間</th><th>最後</th></tr>"
+            f"{devices}</table></div>"
+            + (f"<details><summary>最近送ったもの</summary><div class='scroll'><table><tr><th>時刻</th><th>種類</th>"
+               f"<th>答え</th><th>理由</th></tr>{history}</table></div></details>" if history else "")
+            + "<p class='sub'>送るとき: 文字にし終えた（job・同じ端末へ10分に1回）・録音中なのに30分なにも来ない（wake・1時間に2回、1日12回）・"
+              "3時間様子が来ない（diag・1日4回）・毎日 3:30（nightly）</p>"
+              "<button onclick=\"opsPost('/dash/ops/apns-test',{},'iPhone にテストの通知を送ります。よろしいですか？','opsMsgPush')\">"
+              "テスト通知を送る</button><a href='/dash/ops/keys'>鍵を入れる画面を開く</a>"
+              "<div id='opsMsgPush' class='sub'></div></section>")
+
+
+def _ops_feedback(ops: dict) -> str:
+    feedback = ops.get("feedback") or {}
+    kinds = {"screenshot": "スクショつき", "crash": "落ちた"}
+    rows = "".join(
+        f"<tr><td>{_iso_clock(item.get('created'))}</td><td>{_e(kinds.get(item.get('kind'), item.get('kind')))}</td>"
+        f"<td>{_e(item.get('build') or '—')}</td><td>{_e(item.get('device') or '—')}<br>"
+        f"<span class='sub'>iOS {_e(item.get('os') or '—')}</span></td><td>{_e((item.get('comment') or '')[:120]) or '—'}</td>"
+        f"<td><a href='/dash/ops/feedback?id={_e(item.get('id'))}'>詳しく</a></td></tr>"
+        for item in feedback.get("recent") or []) or "<tr><td colspan=6>まだありません</td></tr>"
+    key = f"AuthKey_{_e(feedback.get('key_id'))}.p8" if feedback.get("configured") else "<span class='warn'>まだありません</span>"
+    error = f"<div>失敗</div><div class='ng'>{_e(feedback.get('error'))}</div>" if feedback.get("error") else ""
+    return ("<section><h2>TestFlight の報告</h2><div class='kv'>"
+            f"<div>App Store Connect のキー</div><div>{key}</div><div>最後に読んだ</div><div>{_when(feedback.get('checked'))}</div>"
+            f"<div>様子</div><div>{_e(feedback.get('state'))}（全部で {_e(feedback.get('count', 0))} 件）</div>{error}</div>"
+            "<div class='scroll'><table><tr><th>日時</th><th>種類</th><th>build</th><th>端末</th><th>コメント</th><th></th></tr>"
+            f"{rows}</table></div><p class='sub'>1日に4回読みます。置き場所: {_e(feedback.get('folder'))}（PC の外には出しません）</p>"
+            "<button onclick=\"opsPost('/dash/ops/asc-fetch',{},null,'opsMsgAsc')\">今すぐ読む</button>"
+            "<a href='/dash/ops/keys'>キーを入れる画面を開く</a><div id='opsMsgAsc' class='sub'></div></section>")
+
+
+def _ops_train(ops: dict) -> str:
+    train = ops.get("train") or {}
+    plan = ops.get("gpu") or {}
+    last = train.get("last") or {}
+    labels = {"improved": "良くなったので入れ替えました", "not_improved": "良くならなかったので前のまま",
+              "refused": "学び直しませんでした", "failed": "うまくいきませんでした", "timeout": "時間がかかりすぎたので止めました"}
+    if last:
+        cers = ""
+        if isinstance(last.get("cer_before"), (int, float)) and isinstance(last.get("cer_after"), (int, float)):
+            cers = f"（誤りの割合 {last['cer_before']:.2%} → {last['cer_after']:.2%}）"
+        result = (f"{_iso_clock(last.get('at'))} {_e(labels.get(last.get('result'), last.get('result')))}{cers}"
+                  + (f"<br><span class='sub'>{_e(last.get('message'))}</span>" if last.get("message") else ""))
+    else:
+        result = "まだありません"
+    memory = plan.get("memory") or {}
+    night = plan.get("night") or {}
+    rows = [("自動の学び直し", _e(train.get("state"))),
+            ("時間帯", f"{_e(train.get('window'))}（次は {_iso_clock(train.get('next'))}）"),
+            ("材料", f"{_e(train.get('count'))} 個（前回から +{_e(train.get('since_last'))}。{_e(train.get('min_samples'))} 個以上で、"
+                     f"{_e(train.get('min_new'))} 個増えたら学び直します）"),
+            ("学び直しの部品", _e(train.get("runtime")) + (f"<br><span class='ng'>{_e(train.get('runtime_error'))}</span>"
+                                                     if train.get("runtime_error") else "")),
+            ("前回", result),
+            ("GPU の割り当て", _e(plan.get("text"))),
+            ("下ろしているもの", _e("・".join(plan.get("down") or [])) or "—"),
+            ("夜の割り当て", f"{_e(night.get('start'))}〜{_e(night.get('end'))} に {_e(night.get('idle_minutes'))} 分仕事が無いとき"
+             if night else "使わない設定です"),
+            ("GPU のメモリー", f"{memory['used']} / {memory['total']} MB" if memory.get("total") else "—")]
+    failed = plan.get("failed") or {}
+    if failed:
+        rows.append(("戻せなかったもの", "<span class='ng'>" + _e("・".join(f"{k}: {v}" for k, v in failed.items())) + "</span>"))
+    body = "".join(f"<div>{_e(k)}</div><div>{v}</div>" for k, v in rows)
+    return f"<section><h2>学び直しと GPU の時間割</h2><div class='kv'>{body}</div></section>"
+
+
+def ops_sections(ops: dict) -> list[str]:
+    """見守りの画面の版 7 の節（ops.dash_info() が空なら、何も出さない）"""
+    if not ops:
+        return []
+    return [f"<style>{OPS_STYLE}</style>", _ops_devices(ops), _ops_push(ops), _ops_feedback(ops), _ops_train(ops),
+            f"<script>{OPS_SCRIPT}</script>"]
+
+
+def _page(title: str, body: str, refresh: bool = False) -> str:
+    return ("<!doctype html><html lang='ja'><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'><meta name='color-scheme' content='light dark'>"
+            + ("<meta http-equiv='refresh' content='60'>" if refresh else "")
+            + f"<title>{_e(title)}</title><style>{STYLE}{OPS_STYLE}</style></head><body><main>{body}</main>"
+            f"<script>{OPS_SCRIPT}</script></body></html>")
+
+
+def keys_page(push: dict, feedback: dict) -> str:
+    """鍵を入れる画面（/dash/ops/keys）。ファイルは、この PC の LifeLog PC の置き場所の下（apns・asc）にだけ置く。"""
+    body = ("<h1>鍵を入れる</h1><p><a href='/dash'>見守りの画面に戻る</a></p>"
+            "<section><h2>見えない通知の鍵（APNs）</h2>"
+            f"<p class='sub'>今の鍵: {('AuthKey_' + _e(push.get('key_id')) + '.p8') if push.get('key_id') else 'まだありません'}・"
+            f"チームの ID: {_e(push.get('team') or '—')}</p>"
+            "<p class='sub'>Apple Developer の「Certificates, Identifiers &amp; Profiles」→「Keys」で、Apple Push Notifications service（APNs）に"
+            "チェックを入れて作った鍵のファイル（AuthKey_XXXXXXXXXX.p8）を選びます。鍵の ID はファイルの名前から入ります。"
+            "チームの ID は空でかまいません（iPhone の LifeLog が様子を送ると分かります）。</p>"
+            "<input type='file' id='apnsFile' accept='.p8'><br><input id='apnsKey' placeholder='鍵の ID（10 文字）'>"
+            "<input id='apnsTeam' placeholder='チームの ID（10 文字・空でもよい）'><br>"
+            "<button onclick=\"opsKey('apns')\">通知の鍵を入れる</button><div id='opsMsgPush' class='sub'></div></section>"
+            "<section><h2>App Store Connect のキー（TestFlight の報告を読む）</h2>"
+            f"<p class='sub'>今のキー: {('AuthKey_' + _e(feedback.get('key_id')) + '.p8') if feedback.get('key_id') else 'まだありません'}</p>"
+            "<p class='sub'>App Store Connect の「ユーザとアクセス」→「統合」→「App Store Connect API」で作ったキー"
+            "（役割は Developer 以上）のファイル（AuthKey_XXXXXXXXXX.p8）を選び、同じ画面の上にある issuer ID を入れます"
+            "（個人のキーなら issuer ID は空にします）。</p>"
+            "<input type='file' id='ascFile' accept='.p8'><br><input id='ascKey' placeholder='キーの ID（10 文字）'>"
+            "<input id='ascIssuer' placeholder='issuer ID（36 文字）'><br>"
+            "<button onclick=\"opsKey('asc')\">App Store Connect のキーを入れる</button><div id='opsMsgAsc' class='sub'></div>"
+            "</section><p class='sub'>鍵は、この PC の中だけに置きます（GitHub などには置きません）。</p>")
+    return _page("LifeLog PC 鍵を入れる", body)
+
+
+def feedback_page(info: dict, crash: str | None) -> str:
+    """TestFlight の報告の詳しい画面（/dash/ops/feedback?id=…）"""
+    from urllib.parse import quote
+
+    kinds = {"screenshot": "スクショつきの報告", "crash": "落ちた報告"}
+    battery = info.get("batteryPercentage")
+    free, total = info.get("diskBytesAvailable"), info.get("diskBytesTotal")
+    uptime = info.get("appUptimeInMilliseconds")
+    rows = [("種類", kinds.get(info.get("kind"), info.get("kind"))), ("日時", _iso_clock(info.get("createdDate"))),
+            ("build", info.get("build") or "—"), ("端末", info.get("deviceModel") or "—"),
+            ("iOS", info.get("osVersion") or "—"), ("時計", info.get("pairedAppleWatch") or "—"),
+            ("電池", f"{battery}%" if battery is not None else "—"),
+            ("空き容量", f"{free / 1e9:.1f} / {total / 1e9:.1f} GB" if isinstance(free, (int, float)) and isinstance(total, (int, float)) else "—"),
+            ("つながり", info.get("connectionType") or "—"),
+            ("アプリが動いていた時間", _seconds(uptime / 1000) if isinstance(uptime, (int, float)) else "—")]
+    table = "".join(f"<div>{_e(k)}</div><div>{v if k == '日時' else _e(v)}</div>" for k, v in rows)
+    sid = quote(str(info.get("id") or ""), safe="")
+    images = "".join(f"<p><img src='/dash/ops/feedback-file?id={sid}&amp;name={quote(str(name), safe='')}' alt='スクショ {n}' "
+                     "style='max-width:100%;border:1px solid var(--line);border-radius:8px'></p>"
+                     for n, name in enumerate(info.get("files") or [], 1))
+    comment = _e(info.get("comment")) or "（コメントはありません）"
+    body = (f"<h1>{_e(kinds.get(info.get('kind'), 'TestFlight の報告'))}</h1><p><a href='/dash'>見守りの画面に戻る</a></p>"
+            f"<section><h2>コメント</h2><p style='white-space:pre-wrap'>{comment}</p></section>"
+            f"<section><h2>様子</h2><div class='kv'>{table}</div></section>"
+            + (f"<section><h2>スクショ</h2>{images}</section>" if images else "")
+            + (f"<section><h2>落ちた記録</h2><pre class='log'>{_e(crash)}</pre></section>" if crash else ""))
+    return _page("TestFlight の報告", body)
 
 
 def login_page() -> str:

@@ -266,8 +266,9 @@ final class HomePC {
     }
     /// PC の LifeLog PC の版（hello で分かる。古い PC は 1）
     var version: Int?
-    /// このアプリが前提にしている PC の版（多数決・ヒント・重み）
-    nonisolated static let expectedVersion = 6
+    /// このアプリが前提にしている PC の版（多数決・ヒント・重み。版 7 は実機の様子・見えない通知・記録と直し。2026-11-07）。
+    /// 新しい働きは版ではなく features を見て使うので、PC が古くても文字起こしはそのまま使える（古い版の知らせは7日に1回まで）
+    nonisolated static let expectedVersion = 7
 
     /// 声の区間の長さに対する処理の時間（直近をならした値。1 より大きいと録音に追いつかない）。2026-11-06
     var speed: Double? = UserDefaults.standard.object(forKey: "homePCSpeed") as? Double {
@@ -494,6 +495,35 @@ final class HomePC {
         return data
     }
 
+    // MARK: - 実機の様子・記録・直し（PC の版 7 から。2026-11-07。中身は PCDiag.swift・PCRecords.swift）
+
+    /// できあがった JSON を送り、答えを受け取る（/diag・/records/<日>・/edits/ack）
+    func postJSONData(_ path: String, body: Data, timeout: TimeInterval) async throws -> Data {
+        var req = try request(path)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        let session = makeSession(timeout: timeout)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: req)
+        try Self.check(response, data: data)
+        return data
+    }
+
+    /// 答えを受け取る（/edits?after=…）
+    func getJSONData(_ path: String, query: [URLQueryItem] = [], timeout: TimeInterval) async throws -> Data {
+        var req = try request(path)
+        if !query.isEmpty, let url = req.url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.queryItems = query
+            req.url = components.url
+        }
+        let session = makeSession(timeout: timeout)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: req)
+        try Self.check(response, data: data)
+        return data
+    }
+
     // MARK: - クラウドの票を足す
 
     /// PC の多数決で食い違った行（確からしさが cloudVoteBelow 未満）に、クラウドの Whisper の文をもう1票として足し、選び直す。
@@ -679,6 +709,11 @@ final class PCJobUploader: NSObject, URLSessionTaskDelegate, @unchecked Sendable
 
     /// アプリが起動したときに呼ぶ（前の起動で送っていた分の知らせを受け取れるように）
     func start() { _ = session }
+
+    /// PC に送っている途中の区切りの数（写しの数。家の PC への様子に使う。2026-11-07）
+    static var stagedCount: Int {
+        ((try? FileManager.default.contentsOfDirectory(at: stage, includingPropertiesForKeys: nil)) ?? []).count
+    }
 
     func upload(_ url: URL, request: URLRequest, cellular: Bool) {
         let copy = Self.stage.appendingPathComponent(url.lastPathComponent)

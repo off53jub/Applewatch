@@ -4,13 +4,15 @@ import SwiftUI
 import WidgetKit
 
 /// コントロールセンター・ロック画面・アクションボタンに置ける LifeLog のボタンと、録音中の Live Activity。
-/// アプリとデータを共有する仕組み（App Group）は Sideloadly で入れられないので、ボタンには状態を出さない。
+/// ボタン（コントロール）と開くボタンには状態を出さない。録音中か・頼まれごと・次の予定などの様子は、
+/// ロック画面・ホーム画面の「LifeLog の様子」に出す（2026-11-07。StatusWidget.swift。App Group が使えない入れ方では「—」）。
 @main
 struct LifeLogWidgets: WidgetBundle {
     var body: some Widget {
         RecordControl()
         MarkControl()
         LauncherWidget()
+        StatusWidget()
         RecordingLiveActivity()
     }
 }

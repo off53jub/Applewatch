@@ -359,6 +359,13 @@ struct PersonView: View {
 
     var body: some View {
         Form {
+            // まとめた・消した声を開いたとき、中身が何も無く真っ黒な画面になっていた（2026-11-07）
+            if person == nil {
+                Section {
+                    Text("この声は、もうありません（ほかの人にまとめたか、消した声です）。")
+                        .foregroundStyle(.secondary)
+                }
+            }
             if let person {
                 if !person.isSelf {
                     Section {

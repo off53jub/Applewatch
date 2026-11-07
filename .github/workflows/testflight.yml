@@ -88,6 +88,18 @@ jobs:
             echo "ASC_UNUSABLE=true" >> "$GITHUB_ENV"
           fi
 
+      # CI はビルドのたびに開発用の証明書を1枚作る。たまると上限（10枚）で署名できなくなる（2026-11-07 のビルド 154）。
+      # API で作られた開発用のもののうち、2時間より前に作られたものを片づける（Sideloadly などほかの証明書には触らない）
+      - name: 使い終わった開発用の証明書を片づける
+        if: env.HAS_ASC == 'true' && env.ASC_UNUSABLE != 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/ascpy"
+          "$RUNNER_TEMP/ascpy/bin/pip" install --quiet pyjwt cryptography requests
+          ASC_KEY_PATH="$RUNNER_TEMP/asc/key.p8" "$RUNNER_TEMP/ascpy/bin/python" .github/scripts/asc.py cleanup-certs ||             echo "::warning::証明書を片づけられませんでした（署名に失敗するかもしれません）"
+
       - name: アーカイブ（署名は書き出し時にクラウドで行う）
         env:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -223,50 +235,24 @@ jobs:
             -authenticationKeyIssuerID "$ASC_ISSUER_ID"
 
       # 送れても、Apple の受け付けの検査で弾かれることがある（2026-11-06 は ITMS-90626 で3回とも弾かれていた）。
-      # 結果が出るまで待ち、弾かれたら理由を出してこのジョブを失敗にする
+      # 結果が出るまで待ち、弾かれたら理由を出してこのジョブを失敗にする。
+      # main のときだけ、内部テストのグループにビルドを渡す（PR のビルドは本人に届かない。2026-11-07）
       - name: Apple の受け付け結果を待つ
         if: env.HAS_ASC == 'true' && env.ASC_UNUSABLE != 'true'
         timeout-minutes: 40
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          BUILD_NUMBER: ${{ github.run_number }}
+        run: ASC_KEY_PATH="$RUNNER_TEMP/asc/key.p8" "$RUNNER_TEMP/ascpy/bin/python" .github/scripts/asc.py wait-upload "${{ github.run_number }}"
+
+      # この CI で作った開発用の証明書を片づける（失敗しても、ほかの手順の結果は変えない）
+      - name: この CI で作った証明書を片づける
+        if: always() && env.HAS_ASC == 'true'
+        continue-on-error: true
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
-          python3 -m venv "$RUNNER_TEMP/ascpy"
-          "$RUNNER_TEMP/ascpy/bin/pip" install --quiet pyjwt cryptography requests
-          "$RUNNER_TEMP/ascpy/bin/python" - <<'PY'
-          import os, time, jwt, requests
-          pem = open(os.path.join(os.environ["RUNNER_TEMP"], "asc", "key.p8")).read()
-          B = "https://api.appstoreconnect.apple.com"
-          def get(path, **params):
-              now = int(time.time())
-              tok = jwt.encode({"iss": os.environ["ASC_ISSUER_ID"], "iat": now, "exp": now + 600, "aud": "appstoreconnect-v1"},
-                               pem, algorithm="ES256", headers={"kid": os.environ["ASC_KEY_ID"], "typ": "JWT"})
-              r = requests.get(B + path, headers={"Authorization": f"Bearer {tok}"}, params=params, timeout=60)
-              r.raise_for_status()
-              return r.json()
-          number = os.environ["BUILD_NUMBER"]
-          apps = get("/v1/apps", **{"filter[bundleId]": "com.off53jub.lifelog"}).get("data", [])
-          if not apps:
-              print("::warning::App Store Connect にアプリが見つからないので、受け付け結果を確かめられません"); raise SystemExit
-          app = apps[0]["id"]
-          deadline = time.time() + 35 * 60
-          state = None
-          while time.time() < deadline:
-              ups = [u for u in get(f"/v1/apps/{app}/buildUploads", limit=20).get("data", [])
-                     if str(u["attributes"].get("cfBundleVersion")) == number]
-              if ups:
-                  state = ups[0]["attributes"].get("state") or {}
-                  name = state.get("state")
-                  print(time.strftime("%H:%M:%S"), "受け付けの状態:", name)
-                  if name == "FAILED":
-                      for e in state.get("errors", []):
-                          print(f"::error::Apple に弾かれました（ITMS-{e.get('code')}）: {e.get('description')}")
-                      raise SystemExit(1)
-                  if name == "COMPLETE":
-                      for w in state.get("warnings", []):
-                          print(f"::warning::Apple からの注意（ITMS-{w.get('code')}）: {w.get('description')}")
-                      print("Apple が受け付けました。TestFlight に出てきます"); raise SystemExit
-              time.sleep(60)
-          print("::warning::35 分待っても受け付けの結果が出ませんでした。App Store Connect の TestFlight を見てください")
-          PY
+          [ -x "$RUNNER_TEMP/ascpy/bin/python" ] || exit 0
+          [ -f "$RUNNER_TEMP/asc/key.p8" ] || exit 0
+          ASC_KEY_PATH="$RUNNER_TEMP/asc/key.p8" "$RUNNER_TEMP/ascpy/bin/python" .github/scripts/asc.py revoke-own-cert

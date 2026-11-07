@@ -18,6 +18,8 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     var onWatchResting: (@MainActor (Date?) -> Void)?
     /// 時計の様子（電池・充電中・控えの数など。知らせが来るたび）
     var onWatchState: (@MainActor (WatchState) -> Void)?
+    /// 時計の様子を読み終えた（上の知らせをすべて渡したあと。iPhone のウィジェットを出し直す。2026-11-07）
+    var onWatchContext: (@MainActor () -> Void)?
     /// 時計で「初めての人」の印が押された
     var onNewPerson: (@MainActor (Date) -> Void)?
     /// 時計で会議モードを始めた・終えた
@@ -196,6 +198,7 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
             self.onWatchResting?(recording ? resting : nil)
             self.onWatchRecording?(recording, at)
             self.onWatchState?(state)
+            self.onWatchContext?()
         }
     }
 
