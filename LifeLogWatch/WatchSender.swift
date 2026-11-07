@@ -6,7 +6,10 @@ import WatchKit
 /// 録音した区切りを iPhone に送る。
 /// iPhone が近くに無いときは WatchConnectivity が溜めておき、つながったときに送る。
 /// 時計が低電力モードのときは、無線を起こす回数を減らすため、15分ほど溜まってからまとめて送る
-/// （5分の区切りなら3つ、短めの区切りなら12個。2026-11-07）。
+/// （5分の区切りなら3つ、短めの区切りなら12個。2026-11-07）。数が溜まらなくても、いちばん古い区切りが15分待ったら送る
+/// （静かな日に何時間も送らないことがあったため。2026-11-07。WatchDelivery）。
+/// 区切りには「時計で区切った時刻・送り始めた時刻」を添える（iPhone が時計で待った時間と受け渡しの時間を分けて測る）。
+/// 家の Wi-Fi にいるときは、家の PC にも直接送る（WatchPC。iPhone への送りは今までどおり）。
 /// 送り終わった区切りは「送った」フォルダに控えとして残し、iPhone が「受け取った」と返事したら消す（2026-11-06）。
 /// 30分たっても返事が無ければ送り直す（3回まで）。控えは3日・300MB まで。
 /// 返事をしない古い iPhone のアプリには、今までどおり送り終わったら消す。
@@ -51,6 +54,9 @@ final class WatchSender: NSObject, WCSessionDelegate {
 
     /// 送れた・つながりが変わったときに呼ぶ（画面の数を出し直す）
     var onChange: (@Sendable () -> Void)?
+
+    /// 家の PC に直接送る（2026-11-07）
+    let pc = WatchPC()
 
     /// iPhone から届いた知らせ（こもり・音割れなど）。時計を震わせて画面に出す
     var onAlert: (@Sendable (String) -> Void)?
@@ -118,12 +124,14 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// 様子の知らせ（updateApplicationContext）や区切りの送り（transferFile）では、止まっている iPhone のアプリは起きない。
     /// sendMessage は、iPhone のアプリが止まっていても裏で起こせるので、録音を始めたときと、区切るたびに（2分に1回まで）送る。
     /// 起きた iPhone は待機モード（無音を流してアプリを起こしておく）に入り、届いた区切りをその場で文字にする。
-    func wakePhone(force: Bool = false) {
+    /// 時計の画面が消えているあいだは、ふつう「つながっている」（isReachable）にならないので起こせない（Apple の決まり）。
+    /// そのため、つながったとき（画面を見た・iPhone が近くに来た）にも、届いていない区切りがあれば起こす（2026-11-07）
+    func wakePhone(force: Bool = false, minGap: TimeInterval = 120) {
         guard WCSession.isSupported(), WCSession.default.activationState == .activated,
               WCSession.default.isReachable else { return }
         let now = Date.now
         let due = lock.withLock { () -> Bool in
-            guard force || now.timeIntervalSince(lastWake) >= 120 else { return false }
+            guard force || now.timeIntervalSince(lastWake) >= minGap else { return false }
             lastWake = now
             return true
         }
@@ -151,6 +159,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// 区切るたびに呼ぶ。iPhone は、しばらく知らせが無いと「止まっているかも」と通知する。
     func heartbeat() {
         publish()
+        // 送れずに残っている区切りを送る（つながる前に区切った・低電力モードで溜めた・低電力モードを切った。2026-11-07）
+        flushIfDue()
         resendUnacknowledged()
         // 録音中・まだ届いていない区切りがあるときは、iPhone のアプリを起こしておく
         if isRecording || unsentCount() > 0 || !WCSession.default.outstandingFileTransfers.isEmpty { wakePhone() }
@@ -284,7 +294,9 @@ final class WatchSender: NSObject, WCSessionDelegate {
             let sent = stored.sentAt[name].map { Date(timeIntervalSince1970: $0) } ?? .distantPast
             guard Date.now.timeIntervalSince(sent) >= Self.resendAfter else { continue }
             counts[name, default: 0] += 1
-            WCSession.default.transferFile(url, metadata: ["resend": counts[name] ?? 1, "tz": TimeZone.current.identifier])
+            WCSession.default.transferFile(url, metadata: WatchDelivery.metadata(
+                zone: .current, cut: Self.cutTime(url), sent: .now, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                viaPC: WatchPC.wasSent(name), resend: counts[name] ?? 1))
         }
         if counts != stored.resent {
             lock.withLock { UserDefaults.standard.set(counts, forKey: Self.resentKey) }
@@ -334,25 +346,52 @@ final class WatchSender: NSObject, WCSessionDelegate {
         UserDefaults.standard.set([Double](), forKey: "marks")
     }
 
-    /// 書き終わった区切りを送る。低電力モードなら、溜まるまで待ってからまとめて送る。
+    /// 書き終わった区切りを送る。低電力モードなら、溜まるか、いちばん古いものが15分待つまで待ってからまとめて送る。
     func deliver(_ url: URL) {
         if ProcessInfo.processInfo.isLowPowerModeEnabled {
-            if unsentCount() >= Self.batch { resendPending() }
+            flushIfDue()
         } else {
             send(url)
         }
     }
 
-    func send(_ url: URL) {
-        guard WCSession.default.activationState == .activated else { return }
-        let queued = WCSession.default.outstandingFileTransfers.contains { $0.file.fileURL == url }
-        // 名前の時刻は時計の時間帯。iPhone が自分の時間帯に直せるよう、時間帯も送る（2026-11-06）
-        if !queued { WCSession.default.transferFile(url, metadata: ["tz": TimeZone.current.identifier]) }
+    /// まだ送っていない区切りを、送ってよければ送る（区切るたび・静かで休んでいるあいだ5分ごと・つながったとき）。
+    /// ふだんはすぐ送る。低電力モードでは、数が溜まったか、いちばん古いものが15分待ったときだけ（2026-11-07）
+    func flushIfDue(now: Date = .now) {
+        let files = unsentFiles()
+        guard !files.isEmpty else { return }
+        if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            let oldest = files.compactMap { Self.cutTime($0) }.min()
+            guard WatchDelivery.lowPowerDue(count: files.count, batch: Self.batch, oldest: oldest, now: now) else { return }
+        }
+        resendPending()
     }
 
-    /// 前回送れなかった区切りを送り直す。書き込み中のファイルは送らない。
+    /// 区切りを閉じた時刻（ファイルを書き終えた時刻。控えに移しても変わらない）
+    static func cutTime(_ url: URL) -> Date? {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    }
+
+    func send(_ url: URL) {
+        let active = WCSession.default.activationState == .activated
+        if active, WCSession.default.outstandingFileTransfers.contains(where: { $0.file.fileURL == url }) { return }
+        let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        // 家の Wi-Fi にいるときは、家の PC にも直接送る（電池の決まりは WatchDelivery.directAllowed。2026-11-07）
+        let battery = lock.withLock { batteryInfo }
+        let direct = pc.send(url, lowPower: lowPower, battery: battery?.level, charging: battery?.charging ?? false)
+        guard active else { return }
+        // 名前の時刻は時計の時間帯。iPhone が自分の時間帯に直せるよう、時間帯も送る（2026-11-06）。
+        // 区切った時刻と送り始めた時刻も添える（iPhone が「時計で待った」と「受け渡し」を分けて測る。2026-11-07）
+        WCSession.default.transferFile(url, metadata: WatchDelivery.metadata(
+            zone: .current, cut: Self.cutTime(url), sent: .now, lowPower: lowPower,
+            viaPC: direct || WatchPC.wasSent(url.lastPathComponent)))
+    }
+
+    /// 前回送れなかった区切りを送り直す。書き込み中のファイルと、送っている途中のファイルは送らない。
     func resendPending() {
-        for url in unsentFiles() {
+        let outstanding: Set<String> = WCSession.default.activationState == .activated
+            ? Set(WCSession.default.outstandingFileTransfers.map { $0.file.fileURL.lastPathComponent }) : []
+        for url in unsentFiles() where !outstanding.contains(url.lastPathComponent) {
             // 書いている途中でアプリが終わった区切りは開けない（iPhone でも読めない）ので消す
             guard (try? AVAudioFile(forReading: url)) != nil else {
                 try? FileManager.default.removeItem(at: url)
@@ -387,7 +426,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if state == .activated {
             Self.readSettings(session.receivedApplicationContext)
             if let info = session.receivedApplicationContext["watchInfo"] as? Data { onInfo?(info) }
-            if !ProcessInfo.processInfo.isLowPowerModeEnabled || unsentCount() >= Self.batch { resendPending() }
+            flushIfDue()
             publish()
             flushMarks()
             flushQueuedInfo()
@@ -400,6 +439,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         if let got = userInfo["got"] as? String { acknowledged(got) }
         if let alert = userInfo["alert"] as? String { onAlert?(alert) }
+        // 家の PC の家の中の住所と合言葉（合言葉は時計の Keychain に置く。2026-11-07。WatchPC）
+        WatchPC.applyCredentials(userInfo)
         if let answer = userInfo["answer"] as? String { onAnswer?(answer, userInfo["question"] as? String ?? "") }
         onChange?()
     }
@@ -420,6 +461,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if let raw = context[ChunkCutter.lengthKey] as? String, let length = ChunkCutter.Length(rawValue: raw) {
             ChunkCutter.length = length
         }
+        // 家の PC に直接送るか・聞き取りのヒント・iPhone の時間帯（2026-11-07。WatchPC）
+        WatchPC.applyContext(context)
     }
 
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
@@ -427,6 +470,15 @@ final class WatchSender: NSObject, WCSessionDelegate {
         onChange?()
     }
 
-    func sessionReachabilityDidChange(_ session: WCSession) { onChange?() }
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        // つながった（時計の画面を見た・iPhone が近くに来た）とき、録音中か届いていない区切りがあれば、
+        // iPhone のアプリを起こして、溜まっていた区切りを受け取ってもらう（2026-11-07）
+        if session.activationState == .activated, session.isReachable,
+           isRecording || unsentCount() > 0 || !session.outstandingFileTransfers.isEmpty {
+            wakePhone(minGap: 15)
+            flushIfDue()
+        }
+        onChange?()
+    }
     func sessionCompanionAppInstalledDidChange(_ session: WCSession) { onChange?() }
 }

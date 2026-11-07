@@ -2677,6 +2677,22 @@ def addresses() -> list[str]:
     return sorted(found, key=order)
 
 
+def home_addresses() -> list[str]:
+    """時計に入れる、家の中の住所の候補（10.・172.16〜31.・192.168. の番号。2026-11-07）"""
+    import ipaddress
+
+    ranges = [ipaddress.IPv4Network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+    out = []
+    for ip in addresses():
+        try:
+            value = ipaddress.IPv4Address(ip)
+        except ValueError:
+            continue
+        if any(value in r for r in ranges):
+            out.append(ip)
+    return out
+
+
 def tailscale_name() -> str | None:
     """この PC の Tailscale の名前（例: my-pc.tail1234.ts.net）。iPhone のアプリはこの名前で送る。"""
     import shutil
@@ -2748,6 +2764,10 @@ def serve(engine_factory, port: int, threads: int = 4) -> None:
     print(f" 見守りの画面: http://{name or 'この PC の名前'}:{port}/dash（パスワードの欄に合言葉）")
     print()
     print(" （iPhone のアプリは、番号の宛先 " + ", ".join(addresses()) + " には送れません。上の名前を使います）")
+    # 時計から家の PC に直接送るときの、家の中の住所（2026-11-07。時計には Tailscale が無い）
+    home = home_addresses()
+    if home:
+        print(" 時計から直接送るとき（iPhone の 家の PC →「時計から直接」）は、家の中の住所 " + " か ".join(home) + " を入れます")
     print("=" * 60)
     print(flush=True)
     try:

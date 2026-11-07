@@ -65,3 +65,15 @@ PC の版は 8（上げるのはつなぐ人）。`/hello` の features に、�
 - 区切りが増えても困らないか確かめる: 時計の送る回数と電池・PC の仕事の数・夜の聞き直し・会話のまとまり（ConversationLog の
   区切り方）・クラウドの票や Groq の回数（区切りごとに数えているもの）。区切りごとに使う回数の上限があるものは、
   短くした分だけ増えすぎないようにする。
+
+## 時計の区切りを早く届ける（2026-11-07 に足した。PC の版は 8 のまま）
+
+- 時計は、家の Wi-Fi にいるとき（iPhone の設定に家の中の住所があるとき）、区切りを家の PC にも `POST /jobs` で直接送る。
+  名前は iPhone で付く名前（iPhone の時間帯に直し、`-w` を付けたもの）。query は `name`・`chunk_start`・`chunk_end`・`sent`
+  （時計が送り始めた時刻）・`hints`・`weights`（iPhone から時計に渡したもの）。`wait=1` と `arrived` は付けない。
+- PC は今までどおり、同じ名前の仕事を1つにまとめる（あとから iPhone が同じ名前で送ると、音声は読み捨て、`wait=1` なら預かっている仕事の答えを返す）。
+  文字にするときの設定（ヒント・重み）と timing の iPhone の時刻は、先に届いた送り（ふつうは時計）のもの。
+- 時計から iPhone への区切り（WatchConnectivity の `transferFile`）の metadata に、省ける項目を足した:
+  `cut`（時計で区切った時刻）・`sentAt`（時計が送り始めた時刻）・`lowPower`（送ったとき低電力モードか）・`pc`（PC にも送った）。時刻は 1970 年からの秒。
+- iPhone の `/diag` の `state.latency` に、省ける項目 `watchWait`（`cut`→`sentAt`）と `handoff`（`sentAt`→iPhone のアプリが受け取った）を足した（秒）。
+  PC は分かれば実機の様子の行に出す。

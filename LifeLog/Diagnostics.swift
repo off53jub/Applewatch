@@ -201,6 +201,16 @@ extension Pipeline {
             let slow = arrivals.last ?? 0
             add("時計", "届くまで（直近24時間）",
                 "ふつう \(WatchDelayLog.text(arrivals[arrivals.count / 2]))・いちばん遅い \(WatchDelayLog.text(slow))", slow < 12 * 60)
+            // 内訳: 時計で待ったのか、受け渡し（iPhone のアプリが受け取るまで）が遅いのか（2026-11-07。時計が控えを添えた区切りだけ）
+            if let split = WatchDelayLog.splitText(watchDelays.recent) {
+                add("時計", "届くまでの内訳（直近24時間）", split)
+            }
+            // 時計が低電力モードだった区切り（まとめて送るので遅れる）
+            let lowPowerArrivals = watchDelays.recent.filter { $0.lowPower == true }.map(\.arrival).sorted()
+            if !lowPowerArrivals.isEmpty {
+                add("時計", "届くまで（時計が低電力モードのとき）",
+                    "\(lowPowerArrivals.count) 個・ふつう \(WatchDelayLog.text(lowPowerArrivals[lowPowerArrivals.count / 2]))")
+            }
         }
 
         // 文字になるまで（区間ごとの中央値。2026-11-07。Latency.swift）

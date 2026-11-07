@@ -231,7 +231,9 @@ def _yes(value) -> str:
 
 # 版 8: iPhone が state.latency で送る、区間ごとの時間（直近24時間の中央値。秒）
 LATENCY_PARTS = (("toPhone", "録音の終わり→iPhone"), ("toPC", "iPhone→PC"), ("pcWait", "PC の待ち"),
-                 ("pcWork", "PC の作業"), ("toRecord", "PC→記録"), ("total", "合計"))
+                 ("pcWork", "PC の作業"), ("toRecord", "PC→記録"), ("total", "合計"),
+                 # 2026-11-07: 時計→iPhone の内訳（時計で区切ってから送り始めるまで・送り始めてから iPhone のアプリが受け取るまで）
+                 ("watchWait", "時計で待った"), ("handoff", "時計→iPhone の受け渡し"))
 
 
 def _secs(value: float) -> str:

@@ -319,7 +319,7 @@ final class Pipeline {
             self?.processQueue()
         }
         receiver.onStateChange = { [weak self] in self?.watchStatus = $0 }
-        receiver.onArrival = { [weak self] url, time in
+        receiver.onArrival = { [weak self] url, time, stamp in
             guard let self, let start = Storage.startDate(of: url) else { return }
             // もう文字にした区切りが送り直されてきたら、二重に書かないよう捨てる
             if ledger.isTranscribed(url.lastPathComponent) {
@@ -327,18 +327,26 @@ final class Pipeline {
                 return
             }
             let ended = start.addingTimeInterval(Self.duration(of: url))
-            watchDelays.received(url.lastPathComponent, ended: ended, at: time, lowPower: watchLowPower)
+            // 低電力モードだったかは、時計が送ったときの値を先に使う（2026-11-07）
+            watchDelays.received(url.lastPathComponent, ended: ended, at: time, lowPower: stamp.lowPower ?? watchLowPower,
+                                 cut: stamp.cut, sent: stamp.sent)
             ledger.received(url, at: time)
-            // 文字になるまでの時間を測る（時計の区切りの終わりは「名前の時刻＋音声の長さ」。2026-11-07。Latency.swift）
-            Latency.noteChunk(url.lastPathComponent, start: start, end: ended, arrived: time, watch: true)
-            // 届いたらすぐ、アプリが止まっても続く転送で家の PC に送っておく（2026-11-07）
-            homePC.enqueueJob(url, hints: keywords(for: vocabularyContext(at: start)))
+            // 文字になるまでの時間を測る（時計の区切りの終わりは「名前の時刻＋音声の長さ」。2026-11-07。Latency.swift）。
+            // 時計が添えた「区切った時刻・送り始めた時刻」で、時計で待った時間と受け渡しの時間も分ける
+            Latency.noteChunk(url.lastPathComponent, start: start, end: ended, arrived: time, watch: true,
+                              watchCut: stamp.cut, watchSent: stamp.sent)
+            // 届いたらすぐ、アプリが止まっても続く転送で家の PC に送っておく（2026-11-07）。
+            // 時計が家の PC にも直接送っていて、もうでき上がっていれば、その答えをすぐ使う（WatchDirect.swift）
+            sendWatchChunkToPC(url, hints: keywords(for: vocabularyContext(at: start)), viaPC: stamp.viaPC)
+            // 時計が PC に送るときのヒントも、ときどき新しくする（10分に1回まで）
+            refreshWatchPCHints()
         }
         receiver.onWatchState = { [weak self] state in self?.noteWatchState(state) }
         receiver.onNewPerson = { [weak self] time in self?.markNewPerson(at: time) }
         receiver.onMeeting = { [weak self] on in self?.setMeeting(on) }
         receiver.onAsk = { [weak self] _ in self?.recentWords() ?? "" }
         setUpWatchApp()  // 時計のアプリ: 済み・聞く・時計に送る中身（2026-11-07。WatchInfo.swift）
+        setUpWatchDirect()  // 時計から家の PC に直接送る設定（2026-11-07。WatchDirect.swift）
         // 時計に起こされたら、待機モードを確かめて、届いた区切りを文字にする（2026-11-06）
         receiver.onWake = { [weak self] in
             guard let self else { return }

@@ -23,6 +23,10 @@ enum Latency {
         var started: Date?
         var draftAt: Date?
         var finished: Date?
+        /// 時計で区切った時刻（時計が添えた控え。古い時計のアプリでは nil。2026-11-07）
+        var watchCut: Date? = nil
+        /// 時計が送り始めた時刻（同じ）
+        var watchSent: Date? = nil
     }
 
     /// 1つの区切りの、区間ごとの秒数（分からない区間は nil）
@@ -40,6 +44,10 @@ enum Latency {
         var toRecord: Double?
         /// 合計（録音の終わり → 記録に入れた）
         var total: Double?
+        /// 時計→iPhone の内訳1: 時計で待った（区切った → 時計が送り始めた。低電力モードでまとめて送るときなど。2026-11-07）
+        var watchWait: Double? = nil
+        /// 時計→iPhone の内訳2: 受け渡し（時計が送り始めた → iPhone のアプリが受け取った）
+        var handoff: Double? = nil
     }
 
     /// 直近の中央値
@@ -51,6 +59,9 @@ enum Latency {
         var pcWork: Double?
         var toRecord: Double?
         var total: Double?
+        /// 時計で待った・受け渡し（時計→iPhone の内訳。2026-11-07）
+        var watchWait: Double? = nil
+        var handoff: Double? = nil
 
         /// 家の PC に送る形（秒。分からない区間は省く）
         var json: [String: Any] {
@@ -64,6 +75,8 @@ enum Latency {
             put("pcWork", pcWork)
             put("toRecord", toRecord)
             put("total", total)
+            put("watchWait", watchWait)
+            put("handoff", handoff)
             return out
         }
     }
@@ -83,11 +96,13 @@ enum Latency {
 
     // MARK: - 覚える
 
-    /// 区切りができた・届いた（初めの1回だけ覚える）
-    static func noteChunk(_ name: String, start: Date, end: Date, arrived: Date, watch: Bool) {
+    /// 区切りができた・届いた（初めの1回だけ覚える）。時計の区切りなら、時計で区切った時刻と送り始めた時刻も（分かれば）
+    static func noteChunk(_ name: String, start: Date, end: Date, arrived: Date, watch: Bool,
+                          watchCut: Date? = nil, watchSent: Date? = nil) {
         update { store in
             guard store.marks[name] == nil else { return }
-            store.marks[name] = Marks(watch: watch, chunkStart: start, chunkEnd: end, arrived: arrived)
+            store.marks[name] = Marks(watch: watch, chunkStart: start, chunkEnd: end, arrived: arrived,
+                                      watchCut: watchCut, watchSent: watchSent)
         }
     }
 
@@ -174,7 +189,9 @@ enum Latency {
                pcWait: span(m.received, m.started),
                pcWork: span(m.started, m.finished),
                toRecord: span(m.finished, applied),
-               total: span(m.chunkEnd, applied))
+               total: span(m.chunkEnd, applied),
+               watchWait: m.watch ? span(m.watchCut, m.watchSent) : nil,
+               handoff: m.watch ? span(m.watchSent, m.arrived) : nil)
     }
 
     static func median(_ values: [Double]) -> Double? {
@@ -193,7 +210,9 @@ enum Latency {
                        pcWait: median(recent.compactMap(\.pcWait)),
                        pcWork: median(recent.compactMap(\.pcWork)),
                        toRecord: median(recent.compactMap(\.toRecord)),
-                       total: median(recent.compactMap(\.total)))
+                       total: median(recent.compactMap(\.total)),
+                       watchWait: median(recent.compactMap(\.watchWait)),
+                       handoff: median(recent.compactMap(\.handoff)))
     }
 
     /// 自己点検の行（見出し・中身・良いか）
@@ -210,6 +229,14 @@ enum Latency {
                                          ("PC の作業", s.pcWork), ("PC→記録", s.toRecord)]
         let known = parts.compactMap { name, value in value.map { name + " " + text($0) } }
         if !known.isEmpty { rows.append(("区間ごと（ふつう）", known.joined(separator: "・"), nil)) }
+        // 時計→iPhone の内訳（時計が控えを添えた区切りだけ。2026-11-07）
+        let watchParts: [(String, Double?)] = [("時計で待った", s.watchWait), ("受け渡し", s.handoff)]
+        let watchKnown = watchParts.compactMap { name, value in value.map { name + " " + text($0) } }
+        if !watchKnown.isEmpty {
+            rows.append(("時計→iPhone の内訳（ふつう）",
+                         watchKnown.joined(separator: "・") + "（時計で待った＝区切ってから時計が送り始めるまで。受け渡し＝送り始めてから iPhone のアプリが受け取るまで）",
+                         nil))
+        }
         return rows
     }
 

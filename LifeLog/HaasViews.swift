@@ -84,6 +84,22 @@ struct HomePCView: View {
                 Text("PC で LifeLogPC.exe を起動すると、宛先（〜.ts.net の名前）と合言葉が表示されます。Tailscale の名前なので、外にいるときもモバイル通信で届きます。送るのは声のあった区切りだけで、1つ約1.2MB です。PC が切れているときは、iPhone 内の Haas-ja かいつもの方法で文字にします。")
             }
 
+            // 家の Wi-Fi にいるとき、時計から PC に直接送る（2026-11-07。WatchDirect.swift・LifeLogWatch/WatchPC.swift）
+            Section {
+                Toggle("時計から家の PC に直接送る", isOn: $pc.watchDirect)
+                TextField("家の中の住所（例: 192.168.1.20）", text: $pc.homeAddress)
+                    .keyboardType(.numbersAndPunctuation)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if let problem = pc.homeAddressProblem {
+                    Text(problem).font(.caption).foregroundStyle(.orange)
+                }
+            } header: {
+                Text("時計から直接")
+            } footer: {
+                Text("家の Wi-Fi にいるとき、時計で録った区切りを iPhone を待たずに家の PC にも送り、早く文字にしてもらいます（iPhone にも今までどおり送ります。PC は同じ区切りを二重には文字にしません）。時計には Tailscale が無いので、上の宛先とは別に、PC の家の中の住所を入れます（PC で LifeLogPC.exe を起動したときの画面の「時計から直接送るとき…」の行に出る 192.168.… の番号）。合言葉は時計の中の鍵の保管場所（キーチェーン）に置きます。時計の電池は、送る量が増える分だけ少し早く減ります。時計が低電力モードのときと、電池が20%より少ないときは送りません。")
+            }
+
             Section {
                 Toggle("食い違った行はクラウドにも聞く", isOn: $pc.cloudVote)
             } header: {
