@@ -1072,10 +1072,12 @@ final class ConversationLog {
 
     /// match に当たる行の話者を name（番号 id）にし、ドキュメントの同じ行も直す。直した行の数を返す。
     /// renaming を渡すと、会話の見出しの「〇〇と」も置き換える（人の名前を付け替えたとき）。
+    /// 記録はいつも直す。ドキュメントを直せなかった日は、直しを覚えて次の機会にやり直す（docError に最初のエラー）。
     @discardableResult
     func relabel(to id: String, name: String, renaming: String? = nil,
-                 where match: (Line) -> Bool) async throws -> Int {
+                 where match: (Line) -> Bool) async -> (count: Int, docError: Error?) {
         var changed = 0
+        var docError: Error?
         for day in days() {
             var log = load(day)
             var fixes: [(find: String, replace: String)] = []
@@ -1101,17 +1103,19 @@ final class ConversationLog {
                     fixes.append((find: a + old + b, replace: a + name + b))
                 }
             }
-            if !fixes.isEmpty { try await docs.replaceAll(fixes, day: day) }
+            if !fixes.isEmpty { await fixDoc(fixes, day: day, error: &docError) }
             save(log, day: day)
         }
-        return changed
+        return (changed, docError)
     }
 
     /// match に当たる行を、テレビ・動画・ラジオなどの放送の行（kind）にし、ドキュメントの同じ行も直す。
     /// 夜の見分けと同じく、元の名前と番号は heardSpeaker / heardSpeakerID に残す。直した行の数を返す。
+    /// 記録はいつも直す。ドキュメントを直せなかった日は、直しを覚えて次の機会にやり直す（docError に最初のエラー）。
     @discardableResult
-    func markMedia(_ kind: String, where match: (Line) -> Bool) async throws -> Int {
+    func markMedia(_ kind: String, where match: (Line) -> Bool) async -> (count: Int, docError: Error?) {
         var changed = 0
+        var docError: Error?
         for day in days() {
             var log = load(day)
             var fixes: [(find: String, replace: String)] = []
@@ -1129,10 +1133,72 @@ final class ConversationLog {
                 }
             }
             guard !fixes.isEmpty else { continue }
-            try await docs.replaceAll(fixes, day: day)
+            await fixDoc(fixes, day: day, error: &docError)
             save(log, day: day)
         }
-        return changed
+        return (changed, docError)
+    }
+
+    // MARK: - ドキュメントの直しのやり直し（2026-11-08）
+
+    /// ドキュメントに当てられなかった直し（日ごと）。記録の中はもう直っている。端末ごとのファイルで、同期しない。
+    private static let docFixesURL = URL.applicationSupportDirectory.appendingPathComponent("doc-fixes.json")
+
+    /// まだドキュメントに当てていない直し（日 → 直し）
+    func pendingDocFixes() -> [String: DocFixQueue] {
+        guard let data = try? Data(contentsOf: Self.docFixesURL),
+              let value = try? JSONDecoder().decode([String: DocFixQueue].self, from: data) else { return [:] }
+        return value
+    }
+
+    private func savePendingDocFixes(_ value: [String: DocFixQueue]) {
+        if value.isEmpty {
+            try? FileManager.default.removeItem(at: Self.docFixesURL)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        try? data.write(to: Self.docFixesURL, options: .atomic)
+    }
+
+    /// その日のドキュメントに直しを当てる。前に当てられなかった直しがあれば、それを先に当てる
+    /// （名前を2回直したとき、順に当てないと合わない）。当てられなければ覚えておき、error が空なら入れる。
+    /// 前の日で失敗していれば（error がある）、この日は送らずに覚えるだけにする。
+    private func fixDoc(_ fixes: [(find: String, replace: String)], day: String, error: inout Error?) async {
+        let new = fixes.map { DocFix(find: $0.find, replace: $0.replace) }
+        if error != nil {
+            var pending = pendingDocFixes()
+            pending[day] = DocFixQueue(fixes: (pending[day]?.fixes ?? []) + new, failures: pending[day]?.failures ?? 0)
+            savePendingDocFixes(pending)
+            return
+        }
+        if let failed = await applyDocFixes(new, day: day) { error = failed }
+    }
+
+    /// 覚えている直しと new を、その日のドキュメントに当てる。失敗したらエラーを返す（直しは覚えたまま）。
+    private func applyDocFixes(_ new: [DocFix], day: String) async -> Error? {
+        let snapshot = pendingDocFixes()[day]
+        let tried = (snapshot?.fixes ?? []) + new
+        guard !tried.isEmpty else { return nil }
+        var failure: Error?
+        do {
+            try await docs.replaceAll(tried.map { (find: $0.find, replace: $0.replace) }, day: day)
+        } catch {
+            failure = error
+        }
+        // 待っているあいだに、同じ日の直しが足されたかもしれないので、読み直して合わせる
+        var pending = pendingDocFixes()
+        pending[day] = DocFixQueue.after(tried: tried, snapshot: snapshot?.fixes ?? [], now: pending[day],
+                                         failed: failure != nil, failures: snapshot?.failures ?? 0)
+        savePendingDocFixes(pending)
+        return failure
+    }
+
+    /// 前に当てられなかったドキュメントの直しを、日の順にやり直す。失敗したら（止められたときも）そこでやめる。
+    func retryDocFixes() async {
+        for day in pendingDocFixes().keys.sorted() {
+            if Task.isCancelled { return }
+            if await applyDocFixes([], day: day) != nil { return }
+        }
     }
 
     // MARK: - 印
