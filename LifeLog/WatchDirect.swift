@@ -27,6 +27,8 @@ final class WatchDirectState {
     var sentPublicURL: String?
     var sentPublicKey: String?
     var hintsSentAt = Date.distantPast
+    /// 時計が受け取っていないので送り直した時刻（checkWatchPCDelivery。送りすぎないため）
+    var resentAt = Date.distantPast
     /// アプリが前に出たときの知らせ
     var activeObserver: NSObjectProtocol?
 }
@@ -147,11 +149,15 @@ extension HomePC {
 extension PhoneReceiver {
     /// PC の外の道と時計用の合言葉を時計に送る（時計は合言葉を Keychain に置く）。宛先が空なら、時計は合言葉を消す。
     /// 合言葉は、時計にずっと残る applicationContext には入れず、届いたら消える transferUserInfo で送る
-    func sendWatchPCPublic(url: String, key: String?) {
+    /// 送れたら true（つながっていない・時計にアプリが無いと思われるときは false。送ったことにしない）。
+    /// isWatchAppInstalled は TestFlight で入れ直したあと false のままのことがあるので、時計からの最近の便りも見る（2026-11-08）
+    @discardableResult
+    func sendWatchPCPublic(url: String, key: String?) -> Bool {
         guard WCSession.isSupported(), WCSession.default.activationState == .activated,
-              WCSession.default.isWatchAppInstalled else { return }
+              WatchPresence.installed(WCSession.default) else { return false }
         WCSession.default.transferUserInfo([WatchDelivery.publicURLKey: url,
                                             WatchDelivery.publicSecretKey: url.isEmpty ? "" : (key ?? "")])
+        return true
     }
 }
 
@@ -159,6 +165,8 @@ extension Pipeline {
     /// init から1回だけ呼ぶ
     func setUpWatchDirect() {
         homePC.onWatchSettingsChange = { [weak self] in self?.scheduleWatchPCSync() }
+        // 時計が外の道・直接送るを受け取っていなければ、送り直す（10分に1回まで。2026-11-08）
+        receiver.onWatchPCState = { [weak self] in self?.checkWatchPCDelivery() }
         receiver.onActivated = { [weak self] in
             self?.syncWatchPC()
             // PC の外の道を聞く（6時間に1回まで）
@@ -198,18 +206,45 @@ extension Pipeline {
     func syncWatchPC() {
         let state = WatchDirectState.shared
         let credentials = homePC.watchCredentials()
-        if state.sentAddress != credentials.address || state.sentKey != credentials.key {
-            receiver.sendWatchPCCredentials(address: credentials.address, key: credentials.key)
+        // 送れたときだけ「送った」と覚える（送れなかったら、次の機会にまた送る。2026-11-08）
+        if state.sentAddress != credentials.address || state.sentKey != credentials.key,
+           receiver.sendWatchPCCredentials(address: credentials.address, key: credentials.key) {
             state.sentAddress = credentials.address
             state.sentKey = credentials.key
         }
         let open = publicWatchCredentials()
-        if state.sentPublicURL != open.url || state.sentPublicKey != open.key {
-            receiver.sendWatchPCPublic(url: open.url, key: open.key)
+        if state.sentPublicURL != open.url || state.sentPublicKey != open.key,
+           receiver.sendWatchPCPublic(url: open.url, key: open.key) {
             state.sentPublicURL = open.url
             state.sentPublicKey = open.key
         }
         refreshWatchPCHints(force: true)
+    }
+
+    /// 時計の様子の知らせを見て、時計が外の道を持っていない・直接送るがオフのままなら、もう一度送る（2026-11-08）。
+    /// 送ったはずの知らせが時計に届かないことがあった（入れ直しのあと・古い版の時計が受け取って捨てた）。
+    /// 送りすぎないよう、WatchDelivery.resendGap に1回まで。古い版の時計（知らせに項目が無い）には送らない
+    func checkWatchPCDelivery(now: Date = .now) {
+        guard WCSession.isSupported() else { return }
+        let watch = WCSession.default.receivedApplicationContext
+        let open = publicWatchCredentials()
+        let credentials = homePC.watchCredentials()
+        let expectedOn = !credentials.address.isEmpty || !open.url.isEmpty
+        let need = WatchDelivery.needsResend(watchHasPublic: watch["pcPublic"] as? Bool,
+                                             watchDirectOn: watch["pcDirect"] as? Bool,
+                                             phoneHasPublic: !open.url.isEmpty, phoneDirectOn: expectedOn)
+        let state = WatchDirectState.shared
+        guard need, now.timeIntervalSince(state.resentAt) >= WatchDelivery.resendGap else { return }
+        state.resentAt = now
+        if receiver.sendWatchPCCredentials(address: credentials.address, key: credentials.key) {
+            state.sentAddress = credentials.address
+            state.sentKey = credentials.key
+        }
+        if receiver.sendWatchPCPublic(url: open.url, key: open.key) {
+            state.sentPublicURL = open.url
+            state.sentPublicKey = open.key
+        }
+        refreshWatchPCHints(force: true, resend: true)
     }
 
     /// PC の外の道（GET /watch-route）を聞いて覚え、変わっていれば時計に送る。
@@ -281,6 +316,9 @@ extension Pipeline {
         }
         var ok: Bool?
         let watch = WCSession.isSupported() ? WCSession.default.receivedApplicationContext : [:]
+        if watch["pcDirect"] as? Bool == false {
+            text += "・時計: 直接送るがオフのまま"
+        }
         if let ready = watch["pcPublic"] as? Bool {
             text += ready ? "・時計: 受け取り済み" : "・時計: まだ受け取っていない"
             if let sent = watch["pcPublicSent"] as? Int { text += "・外の道で送れた \(sent) 個（直近24時間）" }
@@ -293,7 +331,7 @@ extension Pipeline {
     }
 
     /// 聞き取りのヒントと重みを時計に送る（10分に1回まで。中身が変わったときだけ送られる）
-    func refreshWatchPCHints(force: Bool = false) {
+    func refreshWatchPCHints(force: Bool = false, resend: Bool = false) {
         let state = WatchDirectState.shared
         guard force || Date.now.timeIntervalSince(state.hintsSentAt) >= 600 else { return }
         state.hintsSentAt = .now
@@ -310,7 +348,7 @@ extension Pipeline {
             }
         }
         let weights = on && !HomePC.skipWeights ? HomePC.weightsText(noisy: false) : nil
-        receiver.sendWatchPCContext(direct: on, hints: words.joined(separator: "\n"), weights: weights)
+        receiver.sendWatchPCContext(direct: on, hints: words.joined(separator: "\n"), weights: weights, force: resend)
     }
 
     /// 時計の区切りが届いたとき、PC に送る（今までどおり）。時計が PC にも直接送っていたら、先に PC の答えを見て、

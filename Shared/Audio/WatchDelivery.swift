@@ -172,6 +172,18 @@ enum WatchDelivery {
     /// 外の道で「混んでいる・しばらく受け付けない」（429）と言われたら、これだけ待つ
     static let publicBusyWait: TimeInterval = 15 * 60
 
+    /// 時計が受け取っていないとき、iPhone が送り直す間（2026-11-08）
+    static let resendGap: TimeInterval = 10 * 60
+
+    /// 時計の様子の知らせ（pcPublic・pcDirect）と iPhone の設定が食い違っていて、送り直したほうがよいか（2026-11-08）。
+    /// 古い版の時計（どちらの項目も無い）には送らない（受け取っても使えない）
+    static func needsResend(watchHasPublic: Bool?, watchDirectOn: Bool?, phoneHasPublic: Bool, phoneDirectOn: Bool) -> Bool {
+        if watchHasPublic == nil && watchDirectOn == nil { return false }
+        if let has = watchHasPublic, has != phoneHasPublic { return true }
+        if let on = watchDirectOn, on != phoneDirectOn { return true }
+        return false
+    }
+
     /// PC の外の道の宛先（例 https://desktop-xxxx.tail1234.ts.net）。
     /// https で、名前が「.ts.net」で終わり、道（/…）・問い（?…）・番号（443 以外）が付いていないものだけ。ほかは nil
     static func publicBaseURL(_ text: String) -> URL? {
