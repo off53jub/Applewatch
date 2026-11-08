@@ -7,7 +7,10 @@
   中身（やることの文）は記録（log.txt）に書かない。
 - POST /todo/done {"id": "<12文字の16進>", "text": "…"} → 母艦の inbox/app-todo-done/<日>.jsonl に1行足す
   （{"id", "text", "done_at"}）。母艦が15分ごとに TODO.md に「アプリで済み」として反映する。
-- どちらも iPhone の合言葉（Bearer）が要る。時計の外の道（Funnel）からは届かない。
+- GET /card → ドライブの「LifeLog/カード利用/card-mail.json」（Google の Apps Script が PayPay カードの利用速報メールから作る。
+  2026-11-09。docs/card-payments.md）の支払いを返す。無ければ {"available": false}。中身は記録（log.txt）に書かない。
+  場所は config.json の "card_mail_file"（無ければ、どのドライブ文字でも「マイドライブ/LifeLog/カード利用/card-mail.json」を探す）。
+- どれも iPhone の合言葉（Bearer）が要る。時計の外の道（Funnel）からは届かない。
 """
 
 from __future__ import annotations
@@ -18,14 +21,19 @@ import threading
 import time
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
-GETS = ("/todo",)
+GETS = ("/todo", "/card")
 POSTS = ("/todo/done",)
 BODY_LIMIT = 16 * 1024
 DEFAULT_HOME = Path(r"D:\Lifelog")
 EXPORT = Path("state") / "todo_for_app.json"
 DONE_DIR = Path("inbox") / "app-todo-done"
 ID = re.compile(r"[0-9a-f]{12}")
+CARD_FILE = Path("マイドライブ") / "LifeLog" / "カード利用" / "card-mail.json"
+CARD_ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
+CARD_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})")
+CARD_LIMIT = 2000
 _lock = threading.Lock()
 
 
@@ -33,6 +41,48 @@ def home(config: dict) -> Path:
     """母艦の場所（config.json の "lifelog_home"。無ければ D:\\Lifelog）"""
     value = str(config.get("lifelog_home") or "").strip()
     return Path(value) if value else DEFAULT_HOME
+
+
+def card_file(config: dict) -> Path | None:
+    """カードの利用速報の支払いのファイル（config.json の "card_mail_file"。無ければドライブ文字を順に探す）"""
+    value = str(config.get("card_mail_file") or "").strip()
+    if value:
+        return Path(value)
+    for letter in "GHIJKLMNOPQRSTUVWXYZDEF":
+        path = Path(f"{letter}:\\") / CARD_FILE
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def read_card(path: Path | None) -> dict:
+    """card-mail.json を確かめて返す。おかしな行は落とす。無い・読めないときは {"available": false}"""
+    if path is None:
+        return {"available": False, "reason": "ドライブにカードの利用速報がまだありません"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return {"available": False, "reason": "ドライブにカードの利用速報がまだありません"}
+    except (OSError, ValueError) as error:
+        return {"available": False, "reason": f"カードの利用速報を読めませんでした: {type(error).__name__}"}
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        return {"available": False, "reason": "カードの利用速報の形が違います"}
+    items = []
+    for item in data["items"][-CARD_LIMIT:]:
+        if not isinstance(item, dict):
+            continue
+        item_id, when, amount = str(item.get("id") or ""), str(item.get("time") or ""), item.get("amount")
+        if not CARD_ID.fullmatch(item_id) or not CARD_TIME.fullmatch(when):
+            continue
+        if not isinstance(amount, int) or isinstance(amount, bool) or not 0 < amount < 100_000_000:
+            continue
+        items.append({"id": item_id, "time": when, "amount": amount,
+                      "shop": str(item.get("shop") or "").strip()[:100],
+                      "card": str(item.get("card") or "").strip()[:40]})
+    return {"available": True, "generated_at": str(data.get("generated_at") or ""), "items": items}
 
 
 def read_export(base: Path) -> dict:
@@ -94,6 +144,9 @@ def _offset(when: time.struct_time) -> str:
 
 
 def http_get(handler, config: dict) -> None:
+    if urlparse(handler.path).path == "/card":
+        handler.send_json(200, read_card(card_file(config)))
+        return
     handler.send_json(200, read_export(home(config)))
 
 

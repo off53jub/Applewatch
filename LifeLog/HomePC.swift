@@ -293,6 +293,16 @@ final class HomePC {
         return data
     }
 
+    /// GET /card（カードの利用速報メールの支払い。家の PC がドライブの「LifeLog/カード利用」から読む。2026-11-09）
+    func cardMail() async throws -> Data {
+        guard features.contains("card") else { throw Failure.notConfigured }
+        let session = makeSession(timeout: 10)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: try request("card"))
+        try Self.check(response, data: data)
+        return data
+    }
+
     /// POST /todo/done（母艦が15分ごとに TODO.md に「アプリで済み」として反映する）
     func mothershipDone(id: String, text: String) async throws {
         guard features.contains("todo") else { throw Failure.notConfigured }

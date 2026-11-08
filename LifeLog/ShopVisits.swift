@@ -505,7 +505,7 @@ final class ShopVisitBook {
     private(set) var googleCalls: ShopGuess.Calls = ShopGuess.callCounts(ShopVisitBook.savedCalls(), now: .now)
 
     @ObservationIgnored private weak var places: PlaceLog?
-    /// PayPay の明細（Payments.swift）。答え合わせと、会話の見出しの名前に使う
+    /// PayPay の明細・カードの利用速報・かざした記録（Payments.swift）。答え合わせと、会話の見出しの名前に使う
     @ObservationIgnored weak var paymentBook: PaymentBook?
     /// その時間の会話の行（端末の中の記録から）
     @ObservationIgnored var lines: (Date, Date) -> [ConversationLog.Line] = { _, _ in [] }
@@ -831,7 +831,7 @@ final class ShopVisitBook {
 
     /// その立ち寄りのあいだの PayPay の支払い（明細を読み込んであれば）
     func paid(_ v: ShopVisit) -> Payment? {
-        guard let payments = paymentBook?.payments, !payments.isEmpty else { return nil }
+        guard let payments = paymentBook?.all, !payments.isEmpty else { return nil }
         return PaymentMatch.payment(for: v, in: payments)
     }
 
@@ -839,7 +839,7 @@ final class ShopVisitBook {
     func name(for v: ShopVisit) -> String? {
         switch v.state {
         case .confirmed, .notShop: return v.shownName
-        case .guessed, .waiting: return paid(v).map { $0.shop + "（PayPay）" } ?? v.shownName
+        case .guessed, .waiting: return paid(v).map { $0.shop + "（\($0.via)）" } ?? v.shownName
         }
     }
 
