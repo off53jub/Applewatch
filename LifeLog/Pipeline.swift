@@ -187,6 +187,8 @@ final class Pipeline {
     let suggestions = SuggestionBox()
     /// 頼まれごと帳（会話・議事録・手書き・写真から）
     let tasks = TaskBook()
+    /// 行ったお店（立ち寄り・近くのお店・会話から推測。2026-11-08。ShopVisits.swift）
+    let shopVisits = ShopVisitBook()
     /// 仕事のまとめ（職場の Claude の答えを写真・貼り付けで取り込む。2026-11-08。WorkDigest.swift）
     let workDigests = WorkDigest()
     /// AI からの質問と、わかったこと帳
@@ -263,6 +265,7 @@ final class Pipeline {
         conversations.healthLine = { [weak self] dayStart in await self?.health.dayLine(dayStart) }
         conversations.placeName = { [weak self] time in await self?.places.name(at: time) }
         places.onChange = { [weak self] in self?.updateHold() }
+        shopVisits.attach(self)
         conversations.eventInfo = { [weak self] start, end in
             guard let event = self?.calendar.events(from: start, to: end).first, !event.title.isEmpty else { return nil }
             let detail = event.title + (event.location.map { "（場所: \($0)）" } ?? "")
@@ -1456,6 +1459,7 @@ final class Pipeline {
         prepareReviewNudge()
         morningBriefOnActive()  // 朝の読み上げ（まだなら作る）と時計に送る中身（2026-11-07。MorningBrief.swift）
         pcLinkOnActive()  // 家の PC に様子を送り、記録と直しをやり取りする（2026-11-07。PCDiag.swift）
+        shopVisits.retryRecent()  // 会話がまだ文字になっていなかった立ち寄りを推測し直す（2026-11-08。ShopVisits.swift）
         startDraftPolling()  // 送ってまだの区切りの下書き（仮）を15秒ごとに見に行く（版 8。2026-11-07。Drafts.swift）
         liveAutoOff?.cancel()
         liveAutoOff = nil

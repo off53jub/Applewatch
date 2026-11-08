@@ -413,6 +413,8 @@ struct ConversationsView: View {
         let end = group.map(\.end).max() ?? c.end
         var parts = ["\(Self.timeFormatter.string(from: c.start))〜\(Self.timeFormatter.string(from: end))"]
         if let place = group.compactMap(\.place).first { parts.append(place) }
+        // 行ったお店（その会話と重なる立ち寄り。画面に出すだけで、記録には書かない。2026-11-08）
+        if let shop = pipeline.shopVisits.label(from: c.start, to: end) { parts.append(shop) }
         // 場面（PC の音の分類と iPhone の背景の音の多数決。2026-11-06）
         if let scene = group.compactMap(\.scene).first { parts.append("［\(scene)］") }
         let people = Array(NSOrderedSet(array: group.flatMap(\.people))) as? [String] ?? []
