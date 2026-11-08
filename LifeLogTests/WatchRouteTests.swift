@@ -130,4 +130,31 @@ final class WatchRouteTests: XCTestCase {
         XCTAssertEqual(WatchDelivery.catchUpPick([], skip: [], now: t), [])
         XCTAssertEqual(WatchDelivery.catchUpPick(files, skip: ["b.m4a", "c.m4a", "d.m4a", "e.m4a", "h.m4a"], now: t), [])
     }
+
+    // MARK: - 時計に届いていなければ送り直す（2026-11-08）
+
+    func testNeedsResendWhenWatchLacksPublicRoute() {
+        // iPhone は外の道を持っているのに、時計は「まだ受け取っていない」
+        XCTAssertTrue(WatchDelivery.needsResend(watchHasPublic: false, watchDirectOn: true,
+                                                phoneHasPublic: true, phoneDirectOn: true))
+        // 時計の「直接送る」がオフのまま
+        XCTAssertTrue(WatchDelivery.needsResend(watchHasPublic: true, watchDirectOn: false,
+                                                phoneHasPublic: true, phoneDirectOn: true))
+        // iPhone で外の道が無くなったのに、時計がまだ持っている（消してもらう）
+        XCTAssertTrue(WatchDelivery.needsResend(watchHasPublic: true, watchDirectOn: true,
+                                                phoneHasPublic: false, phoneDirectOn: true))
+    }
+
+    func testNoResendWhenInStepOrOldWatch() {
+        XCTAssertFalse(WatchDelivery.needsResend(watchHasPublic: true, watchDirectOn: true,
+                                                 phoneHasPublic: true, phoneDirectOn: true))
+        XCTAssertFalse(WatchDelivery.needsResend(watchHasPublic: false, watchDirectOn: false,
+                                                 phoneHasPublic: false, phoneDirectOn: false))
+        // 古い版の時計（項目が無い）には送らない
+        XCTAssertFalse(WatchDelivery.needsResend(watchHasPublic: nil, watchDirectOn: nil,
+                                                 phoneHasPublic: true, phoneDirectOn: true))
+        // 外の道の項目だけある時計（版 10 の最初）でも、外の道を受け取っていれば送らない
+        XCTAssertFalse(WatchDelivery.needsResend(watchHasPublic: true, watchDirectOn: nil,
+                                                 phoneHasPublic: true, phoneDirectOn: true))
+    }
 }

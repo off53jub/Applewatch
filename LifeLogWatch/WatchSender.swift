@@ -176,6 +176,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if lastCut > 0 { out["lastCut"] = lastCut }
         // 家の PC の外の道（Funnel。2026-11-07）: 使えるか・直近24時間に外の道で送れた数・合言葉が違うと言われたか
         out["pcPublic"] = WatchPC.hasPublicRoute
+        // 直接送るがオンになっているか（iPhone が食い違いを見つけたら送り直す。2026-11-08）
+        out["pcDirect"] = UserDefaults.standard.object(forKey: WatchDelivery.directKey) as? Bool ?? false
         out["pcPublicSent"] = WatchPC.publicSentCount()
         if WatchPC.publicRefused { out["pcPublicRefused"] = true }
         return out

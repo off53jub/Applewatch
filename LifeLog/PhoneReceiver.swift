@@ -20,6 +20,8 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     var onWatchState: (@MainActor (WatchState) -> Void)?
     /// 時計の様子を読み終えた（上の知らせをすべて渡したあと。iPhone のウィジェットを出し直す。2026-11-07）
     var onWatchContext: (@MainActor () -> Void)?
+    /// 時計の様子の知らせが届いた（家の PC に直接送る設定が時計に届いているかを見る。2026-11-08。WatchDirect.swift）
+    var onWatchPCState: (@MainActor () -> Void)?
     /// 時計で「初めての人」の印が押された
     var onNewPerson: (@MainActor (Date) -> Void)?
     /// 時計で会議モードを始めた・終えた
@@ -175,8 +177,8 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
 
     // MARK: - 時計から家の PC に直接送る（2026-11-07。WatchPC.swift）
 
-    /// 直接送るか・聞き取りのヒント・多数決の重みを、設定と一緒に送る（変わったときだけ）
-    func sendWatchPCContext(direct: Bool, hints: String, weights: String?) {
+    /// 直接送るか・聞き取りのヒント・多数決の重みを、設定と一緒に送る（変わったときだけ。force なら変わっていなくても送る）
+    func sendWatchPCContext(direct: Bool, hints: String, weights: String?, force: Bool = false) {
         var next = lastSettings
         next[WatchDelivery.directKey] = direct
         next[WatchDelivery.hintsKey] = hints
@@ -186,20 +188,24 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
             || (lastSettings[WatchDelivery.hintsKey] as? String) != hints
             || (lastSettings[WatchDelivery.weightsKey] as? String) != (weights ?? "")
             || (lastSettings[WatchDelivery.phoneZoneKey] as? String) != TimeZone.current.identifier
-        guard changed else { return }
+        guard changed || force else { return }
         lastSettings = next
+        // isWatchAppInstalled は TestFlight で入れ直したあと false のままのことがあるので、時計からの最近の便りも見る（2026-11-08）
         guard WCSession.isSupported(), WCSession.default.activationState == .activated,
-              WCSession.default.isWatchAppInstalled else { return }
+              WatchPresence.installed(WCSession.default) else { return }
         try? WCSession.default.updateApplicationContext(lastSettings)
     }
 
     /// 家の中の住所と合言葉を時計に送る（時計は合言葉を Keychain に置く）。住所が空なら、時計は合言葉を消す。
     /// 合言葉は、時計にずっと残る applicationContext には入れず、届いたら消える transferUserInfo で送る
-    func sendWatchPCCredentials(address: String, key: String?) {
+    /// 送れたら true（つながっていない・時計にアプリが無いと思われるときは false。送ったことにしない）
+    @discardableResult
+    func sendWatchPCCredentials(address: String, key: String?) -> Bool {
         guard WCSession.isSupported(), WCSession.default.activationState == .activated,
-              WCSession.default.isWatchAppInstalled else { return }
+              WatchPresence.installed(WCSession.default) else { return false }
         WCSession.default.transferUserInfo([WatchDelivery.addressKey: address,
                                             WatchDelivery.secretKey: address.isEmpty ? "" : (key ?? "")])
+        return true
     }
 
     /// 時計に知らせを送る（時計が震えて画面に出す）
@@ -269,6 +275,7 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
             self.onWatchRecording?(recording, at)
             self.onWatchState?(snapshot)
             self.onWatchContext?()
+            self.onWatchPCState?()
         }
     }
 

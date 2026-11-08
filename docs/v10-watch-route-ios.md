@@ -41,3 +41,9 @@ PC が Tailscale の Funnel で「送るだけの入口」を外に出せるよ�
 - iPhone への様子（applicationContext）に `pcPublic`（外の道があるか）・`pcPublicSent`（直近24時間に外の道で送れた数）・`pcPublicRefused`（合言葉が違うと言われた）を足した。
 
 どれも実機ではまだ確かめていない。
+
+## 2026-11-08 追記: 時計に届かなかったときの送り直し
+
+- 住所・合言葉・外の道・「直接送る」を時計に送る3つの所が `isWatchAppInstalled` だけを見ていた。TestFlight で入れ直したあとはこれが false のままのことがあり（`WatchPresence.swift`）、そのあいだは何も送っていないのに「送った」と覚えていた。`WatchPresence.installed` を見るようにし、送れたときだけ覚える。
+- 時計は様子の知らせに `pcDirect`（直接送るがオンか）も入れる。iPhone は知らせが届くたびに `WatchDelivery.needsResend` で iPhone の設定と比べ、食い違っていれば10分に1回まで送り直す（`checkWatchPCDelivery`）。古い版の時計（項目が無い）には送らない。
+- 自己点検の「時計から PC への外の道」に「時計: 直接送るがオフのまま」も出す。
