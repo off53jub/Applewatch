@@ -189,6 +189,8 @@ final class Pipeline {
     let tasks = TaskBook()
     /// 行ったお店（立ち寄り・近くのお店・会話から推測。2026-11-08。ShopVisits.swift）
     let shopVisits = ShopVisitBook()
+    /// 仕事のまとめ（職場の Claude の答えを写真・貼り付けで取り込む。2026-11-08。WorkDigest.swift）
+    let workDigests = WorkDigest()
     /// AI からの質問と、わかったこと帳
     let asks = AskBook()
     /// 正解帳（週に1回の答え合わせ）
@@ -1652,6 +1654,7 @@ final class Pipeline {
             await scheduleTaskReminders()
             await writeTaskBook()
             await writeAskBook()
+            await writeWorkDigests()
         }
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
@@ -1781,6 +1784,15 @@ final class Pipeline {
         try await docs.overwrite(paragraphs, name: "頼まれごと帳")
         let key = "taskBookFileID"
         if let id = try await docs.uploadSync(json, name: "頼まれごと帳.json", id: UserDefaults.standard.string(forKey: key)) {
+            UserDefaults.standard.set(id, forKey: key)
+        }
+    }
+
+    /// 仕事のまとめを、ドライブの「仕事のまとめ」ドキュメント（読む用）と、同期フォルダの「仕事のまとめ.json」（同期では読まない名前）に書く
+    func writeWorkDigestFiles(_ paragraphs: [(text: String, style: String?)], json: Data) async throws {
+        try await docs.overwrite(paragraphs, name: "仕事のまとめ")
+        let key = "workDigestFileID"
+        if let id = try await docs.uploadSync(json, name: "仕事のまとめ.json", id: UserDefaults.standard.string(forKey: key)) {
             UserDefaults.standard.set(id, forKey: key)
         }
     }

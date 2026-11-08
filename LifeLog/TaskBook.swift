@@ -990,6 +990,8 @@ struct TaskBookView: View {
     @State private var reading = false
     @State private var note: String?
     @State private var showSettings = false
+    /// 仕事のまとめを取り込む画面（2026-11-08）
+    @State private var importingDigest = false
     /// Pipeline.taskRemindKey などと同じ名前
     @AppStorage("taskRemind") private var remindOn = true
     @AppStorage("taskMorning") private var morning = 8 * 60
@@ -1044,6 +1046,8 @@ struct TaskBookView: View {
                     Button("写真を撮って読み取る", systemImage: "camera") { takingPhoto = true }
                         .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
                     Button("写真から読み取る", systemImage: "photo") { choosingPhoto = true }
+                    // 職場の Claude の「この日に何があったか」の答え（2026-11-08）
+                    Button("仕事のまとめを取り込む", systemImage: "doc.text") { importingDigest = true }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -1072,6 +1076,11 @@ struct TaskBookView: View {
                     }
                     editing = nil
                 }
+            }
+        }
+        .sheet(isPresented: $importingDigest) {
+            NavigationStack {
+                WorkDigestImportView { note = $0 }
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -1184,6 +1193,20 @@ struct TaskBookView: View {
                 if box.waiting.count > 3 || !box.kept.isEmpty {
                     NavigationLink("すべて見る（まだ \(box.waiting.count) 件・残している \(box.kept.count) 件）") {
                         SuggestionsView()
+                    }
+                }
+            }
+        }
+        // 職場の Claude の答えを取り込んだ「仕事のまとめ」（2026-11-08。仕事以外だけを見ているときは出さない）
+        if scope != .life {
+            Section {
+                NavigationLink {
+                    WorkDigestListView()
+                } label: {
+                    LabeledContent {
+                        Text(pipeline.workDigests.entries.isEmpty ? "写真・貼り付けから" : "\(pipeline.workDigests.entries.count) 件")
+                    } label: {
+                        Label("仕事のまとめ", systemImage: "doc.text")
                     }
                 }
             }
