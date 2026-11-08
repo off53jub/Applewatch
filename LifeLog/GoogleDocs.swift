@@ -28,7 +28,8 @@ final class GoogleDocs {
         GIDSignIn.sharedInstance.signOut()
         defaults.removeObject(forKey: "folderId")
         defaults.removeObject(forKey: "syncFolder")
-        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("doc-") || key.hasPrefix("audioFolder") || key.hasPrefix("driveStamp-") {
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("doc-") || key.hasPrefix("audioFolder") || key.hasPrefix("driveStamp-")
+            || key.hasPrefix("subfolder-") {
             defaults.removeObject(forKey: key)
         }
     }
@@ -508,6 +509,35 @@ final class GoogleDocs {
         }.sorted { $0.name > $1.name }
         for old in mine.dropFirst(keep) {
             _ = try? await request("PATCH", "https://www.googleapis.com/drive/v3/files/\(old.id)", json: ["trashed": true])
+        }
+    }
+
+    /// LifeLog フォルダの中のフォルダ（folder）に、JSON のファイルを1つ置く。同じ名前がもうあれば何もしない。2026-11-08
+    func uploadIfMissing(_ data: Data, name: String, folder: String) async throws {
+        let key = "subfolder-\(folder)"
+        func parent() async throws -> String {
+            if let id = defaults.string(forKey: key) { return id }
+            let id = try await findOrCreate(name: folder, mimeType: "application/vnd.google-apps.folder", parent: try await folderId())
+            defaults.set(id, forKey: key)
+            return id
+        }
+        var id = try await parent()
+        func exists(_ parent: String) async throws -> Bool {
+            let quoted = name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+            var comps = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
+            comps.queryItems = [URLQueryItem(name: "q", value: "name = '\(quoted)' and '\(parent)' in parents and trashed = false"),
+                                URLQueryItem(name: "fields", value: "files(id)")]
+            let found = try await request("GET", comps.url!.absoluteString)
+            return !((found["files"] as? [[String: Any]]) ?? []).isEmpty
+        }
+        do {
+            if try await exists(id) { return }
+            try await uploadFile(data, name: name, parent: id)
+        } catch GoogleError.http(404, _) {
+            // フォルダが消されていたら作り直す
+            defaults.removeObject(forKey: key)
+            id = try await parent()
+            try await uploadFile(data, name: name, parent: id)
         }
     }
 
