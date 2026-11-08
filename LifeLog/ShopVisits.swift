@@ -423,6 +423,8 @@ enum GoogleNearby {
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.setValue(key, forHTTPHeaderField: "X-Goog-Api-Key")
         r.setValue(fieldMask, forHTTPHeaderField: "X-Goog-FieldMask")
+        // キーを「iOS アプリ」で制限したとき、Google はこの印でアプリを見分ける（2026-11-08）
+        if let bundle = Bundle.main.bundleIdentifier { r.setValue(bundle, forHTTPHeaderField: "X-Ios-Bundle-Identifier") }
         let center: [String: Any] = ["latitude": latitude, "longitude": longitude]
         let circle: [String: Any] = ["center": center, "radius": radius]
         let body: [String: Any] = [
@@ -503,6 +505,8 @@ final class ShopVisitBook {
     private(set) var googleCalls: ShopGuess.Calls = ShopGuess.callCounts(ShopVisitBook.savedCalls(), now: .now)
 
     @ObservationIgnored private weak var places: PlaceLog?
+    /// PayPay の明細（Payments.swift）。答え合わせと、会話の見出しの名前に使う
+    @ObservationIgnored weak var paymentBook: PaymentBook?
     /// その時間の会話の行（端末の中の記録から）
     @ObservationIgnored var lines: (Date, Date) -> [ConversationLog.Line] = { _, _ in [] }
     /// その時刻は仕事の時間・職場か（会話を読まない）
@@ -552,6 +556,7 @@ final class ShopVisitBook {
     /// Pipeline とつなぐ（位置・会話・仕事の時間）
     func attach(_ pipeline: Pipeline) {
         places = pipeline.places
+        paymentBook = pipeline.payments
         pipeline.places.onVisit = { [weak self] raw in self?.received(raw) }
         isWork = { [weak pipeline] time in pipeline?.vocabularyContext(at: time) == .work }
         lines = { [weak pipeline] start, end in
@@ -824,14 +829,28 @@ final class ShopVisitBook {
         save()
     }
 
-    /// 会話の見出しに添える名前（その会話と重なる立ち寄りの、決めた名前か「たぶん〇〇」）。保存はしない
+    /// その立ち寄りのあいだの PayPay の支払い（明細を読み込んであれば）
+    func paid(_ v: ShopVisit) -> Payment? {
+        guard let payments = paymentBook?.payments, !payments.isEmpty else { return nil }
+        return PaymentMatch.payment(for: v, in: payments)
+    }
+
+    /// 見出しに出す名前。本人が決めたものがいちばん。次に PayPay で払った先、次に推測（たぶん）
+    func name(for v: ShopVisit) -> String? {
+        switch v.state {
+        case .confirmed, .notShop: return v.shownName
+        case .guessed, .waiting: return paid(v).map { $0.shop + "（PayPay）" } ?? v.shownName
+        }
+    }
+
+    /// 会話の見出しに添える名前（その会話と重なる立ち寄りの名前）。保存はしない
     func label(from start: Date, to end: Date) -> String? {
         guard isOn else { return nil }
         let hit = visits.last { v in
             let vEnd = v.departure ?? .distantFuture
-            return v.arrival <= end && vEnd >= start && v.shownName != nil
+            return v.arrival <= end && vEnd >= start && name(for: v) != nil
         }
-        return hit?.shownName
+        return hit.flatMap { name(for: $0) }
     }
 
     // MARK: - Google のキー（Keychain。この端末だけ）
