@@ -258,7 +258,7 @@ struct ConfirmBoxView: View {
         let answers = samples.isEmpty ? AnswerKey.perWeek : samples.filter { !$0.isAnswered }.count
         List {
             Section {
-                Text("上から順に片付けると、1日5分ほどで終わります。終わったものは消えます。")
+                Text("1日に上から5つまでで十分です（5分ほど）。残りは明日に回して大丈夫です。終わったものは消えます。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if !pipeline.tasks.candidates.isEmpty {

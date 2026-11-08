@@ -117,13 +117,7 @@ private struct TodayView: View {
 
                 taskBook()
 
-                answerNudge()
-
-                NewVoicesSection()
-
-                questions()
-
-                todo(today: today, talks: talks)
+                // 答え合わせの入口・名前を付ける候補の声・AI からの質問・見直すものは、上の確認箱にまとめた（2026-11-09）
 
                 // 「こんなのあったけど、どう？」は、タスクの確かめ待ちにまとめた（2026-11-09。Suggestions.swift）
 
@@ -204,7 +198,7 @@ private struct TodayView: View {
             } header: {
                 Text("確認箱")
             } footer: {
-                Text("押すと、確かめ待ちを大事な順に1つの画面に並べます（タスクの候補 → AI からの質問 → 声 → 聞き間違い → 答え合わせ）。1日5分で、上から片付けてください。")
+                Text("押すと、確かめ待ちを大事な順に1つの画面に並べます（タスクの候補 → AI からの質問 → 声 → 聞き間違い → 答え合わせ）。1日に上から5つまでで十分です。残りは明日に回して大丈夫です。")
             }
         }
     }
@@ -584,7 +578,7 @@ private struct SettingsView: View {
     @AppStorage("morningCheck") private var morningCheck = true
     @State private var exportNote: String?
     @AppStorage(Storage.japanTimeKey) private var japanTime = false
-    @AppStorage("secondOpinion") private var secondOpinion = true
+    @AppStorage("secondOpinion") private var secondOpinion = false
     @AppStorage(Summarizer.pcLLMKey) private var pcLLMForWork = false
     /// LocalModel.modeKey と同じ名前
     @AppStorage("localModelMode") private var localModelMode = LocalModel.Mode.fallback.rawValue

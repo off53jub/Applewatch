@@ -207,9 +207,16 @@ private struct CalendarsView: View {
 /// 夜の充電中の聞き直し。
 struct NightlyView: View {
     @Environment(Pipeline.self) private var pipeline
+    /// 家の PC の多数決で書けた区切りも聞き直す（2026-11-09 から初めはオフ）
+    @AppStorage(Pipeline.nightRecheckAllKey) private var all = false
 
     var body: some View {
         Form {
+            Section {
+                Toggle("家の PC で書けた区切りも聞き直す", isOn: $all)
+            } footer: {
+                Text("家の PC の3つのモデルの多数決で書けた区切りは、初めは聞き直しません（7日で1,321行を聞き直して、書き直したのは0行だったため）。外にいて PC に届かなかった区切りだけを聞き直します。")
+            }
             Section {
                 if let progress = pipeline.nightlyProgress {
                     HStack {

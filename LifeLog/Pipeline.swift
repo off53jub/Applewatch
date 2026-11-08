@@ -1657,6 +1657,11 @@ final class Pipeline {
             await writeWorkDigests()
             // ヘルスケアの終わった日を、母艦に渡すためドライブに書く
             await exportHealthIfDue()
+            // 朝の「昨日と今日」（充電しない夜にも。作り終えていれば何もしない。2026-11-09。MorningBrief.swift）
+            let hour = Calendar.current.component(.hour, from: .now)
+            if hour >= 20 || hour < 7 { await makeMorningBriefAtNight() }
+            // 人物ノートを「人物ノート」フォルダに移す（1回だけ。2026-11-09）
+            if email != nil { await docs.movePersonNotesIfNeeded() }
         }
         // 前に直せなかったドキュメントの名前・テレビの行を、やり直す（記録の中はもう直っている）
         await conversations.retryDocFixes()
@@ -2341,9 +2346,12 @@ final class Pipeline {
         nightlyProgress = (0, 0)
         defer { nightlyProgress = nil }
         if let queueTask { await queueTask.value }
+        // 家の PC の多数決（3つのモデル）で書けた区切りは、端末で聞き直さない（2026-11-09。7日で1,321行を聞き直して、
+        // 書き直したのが0行だったため。「夜の聞き直し」の画面の「PC で書けた区切りも聞き直す」で前のように）
+        let all = Self.nightRecheckAll
         let waiting = conversations.linesByAudio().filter { item in
             Storage.keptAudio(named: item.audio) != nil && !NightlyRecheck.isNightDone(item.audio)
-                && !item.audio.hasSuffix("-i.m4a")
+                && !item.audio.hasSuffix("-i.m4a") && (all || !NightlyRecheck.isEnsembleDone(item.audio))
         }
         // 言語モデルに頼む回数が今夜の上限に達していたら、端末の外の言語モデルに頼む区切りは次の夜に回す
         // （2026-11-07。NightBudget。端末の中の言語モデルで直す職場の区切りなどは、そのまま聞き直す）
@@ -2355,8 +2363,14 @@ final class Pipeline {
             return
         }
         guard !targets.isEmpty else {
-            if force { nightlyResult = "聞き直す音声がありません（聞き直していない1日分の音声が手元にありません）。" }
+            if force { nightlyResult = "聞き直す音声がありません（聞き直していない1日分の音声が手元にありません。家の PC で書けた区切りは聞き直しません）。" }
             notePCNightly(done: true)  // 聞き直す音声が無い＝夜の処理は済んだ（家の PC への様子。2026-11-07）
+            // 聞き直す区切りが無い夜も、あとのことは1晩に1回する（2026-11-09。前は聞き直す区切りがある夜だけだった）
+            let night = TaskBook.dayFormat.string(from: Date.now.addingTimeInterval(-12 * 3600))
+            if force || UserDefaults.standard.string(forKey: Self.nightlyTailKey) != night {
+                UserDefaults.standard.set(night, forKey: Self.nightlyTailKey)
+                await nightlyTail()
+            }
             return
         }
         nightlyProgress = (0, targets.count)
@@ -2510,6 +2524,22 @@ final class Pipeline {
             processed += result.done
         }
         Tally.add("night.changed", changedLines)
+        nightlyResult = "\(Date.now.formatted(date: .abbreviated, time: .shortened)) に \(processed) 区切りを聞き直し、\(changedLines) 行を直しました。"
+            + (processed < waiting.count ? "（残りは次の充電中に続けます）" : "")
+            + (NightBudget.left() == 0 && processed < waiting.count
+               ? "今夜は言語モデルに頼む回数の上限（\(NightBudget.perNight) 回）に達しました。" : "")
+        notePCNightly(done: processed >= waiting.count)  // 夜の処理を済ませた日（家の PC への様子。2026-11-07）
+        UserDefaults.standard.set(TaskBook.dayFormat.string(from: Date.now.addingTimeInterval(-12 * 3600)), forKey: Self.nightlyTailKey)
+        await nightlyTail()
+    }
+
+    /// 夜の聞き直しで、家の PC の多数決で書けた区切りも聞き直すか（2026-11-09 から初めはオフ）
+    static let nightRecheckAllKey = "nightRecheckAll"
+    static var nightRecheckAll: Bool { UserDefaults.standard.bool(forKey: nightRecheckAllKey) }
+    private static let nightlyTailKey = "nightlyTailNight"
+
+    /// 夜の聞き直しのあとにすること。聞き直す区切りが無い夜も1晩に1回（2026-11-09）
+    private func nightlyTail() async {
         // 家の PC の別の種類のモデルで、話者と場面を見比べる（2026-11-06）
         await crossCheckWithPC()
         // 精度の物差し（答え合わせの行を今の設定で文字にし直して測る）と、自分向けのモデルの材料を PC に渡す
@@ -2517,12 +2547,7 @@ final class Pipeline {
         await sendPersonalSamples()
         // 意味で探す索引を、変わった日だけ入れ直す（2026-11-07）
         await refreshSemanticIndex()
-        nightlyResult = "\(Date.now.formatted(date: .abbreviated, time: .shortened)) に \(processed) 区切りを聞き直し、\(changedLines) 行を直しました。"
-            + (processed < waiting.count ? "（残りは次の充電中に続けます）" : "")
-            + (NightBudget.left() == 0 && processed < waiting.count
-               ? "今夜は言語モデルに頼む回数の上限（\(NightBudget.perNight) 回）に達しました。" : "")
-        notePCNightly(done: processed >= waiting.count)  // 夜の処理を済ませた日（家の PC への様子。2026-11-07）
-        await makeMorningBriefAtNight()  // 朝の読み上げを作る（2026-11-07。MorningBrief.swift）
+        await makeMorningBriefAtNight()  // 朝の「昨日と今日」を作る（2026-11-07。MorningBrief.swift）
     }
 
     /// 夜の聞き直しで、この区切りの直しを端末の外の言語モデルに頼むか（今夜の回数に数えるもの。2026-11-07。NightBudget）。
