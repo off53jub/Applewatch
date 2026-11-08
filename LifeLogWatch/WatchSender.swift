@@ -494,8 +494,10 @@ final class WatchSender: NSObject, WCSessionDelegate {
     private func unsentFiles() -> [URL] {
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: Self.pendingDir, includingPropertiesForKeys: nil)) ?? []
-        let current = recording
-        return urls.filter { $0.pathExtension == "m4a" && $0 != current }
+        // URL どうしで比べると、同じファイルでも書き方（/private/var と /var など）が違って一致しないことがある。
+        // 名前で比べる（2026-11-08。書いている途中の区切りを PC に送ったり、開けないとして消したりしていた）
+        let current = recording?.lastPathComponent
+        return urls.filter { $0.pathExtension == "m4a" && $0.lastPathComponent != current }
     }
 
     func unsentCount() -> Int { unsentFiles().count }

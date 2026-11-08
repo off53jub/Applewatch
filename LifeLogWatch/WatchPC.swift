@@ -176,7 +176,9 @@ final class WatchPC: @unchecked Sendable {
         // 送っているあいだに控えに移されても困らないよう、中身を先に読んでおく（1つ 0.5〜1.2MB）
         let isPublic = route.isPublic
         let chosenKey = isPublic ? publicKey : homeKey
-        guard let key = chosenKey, let body = try? Data(contentsOf: url), !body.isEmpty,
+        // 書き終わっていない区切りは開けない（PC でも読めない）ので送らない（2026-11-08）
+        guard let key = chosenKey, let audio = try? AVAudioFile(forReading: url), audio.length > 0,
+              let body = try? Data(contentsOf: url), !body.isEmpty,
               !isPublic || body.count <= WatchDelivery.publicMaxBytes else {
             release(fileName)
             return false
@@ -186,8 +188,8 @@ final class WatchPC: @unchecked Sendable {
         let name = WatchDelivery.phoneName(fileName, watchZone: watchZone, phoneZone: phoneZone)
         let start = WatchDelivery.startDate(fileName, zone: watchZone)
         var end: Date?
-        if let start, let file = try? AVAudioFile(forReading: url), file.fileFormat.sampleRate > 0 {
-            end = start.addingTimeInterval(Double(file.length) / file.fileFormat.sampleRate)
+        if let start, audio.fileFormat.sampleRate > 0 {
+            end = start.addingTimeInterval(Double(audio.length) / audio.fileFormat.sampleRate)
         }
         var components = URLComponents(url: route.uploadURL, resolvingAgainstBaseURL: false)
         components?.queryItems = WatchDelivery.jobQuery(name: name, chunkStart: start, chunkEnd: end, sent: now,
