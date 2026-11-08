@@ -39,6 +39,7 @@ def run(main) -> int:
     failed += check_routes(main)
     failed += check_push()
     failed += check_mothership()
+    failed += check_card()
     print(("NG の数: " + str(failed)) if failed else "版 10: 全部 OK", flush=True)
     return failed
 
@@ -447,4 +448,29 @@ def check_mothership() -> int:
         failed += say(path.name == "2026-11-09.jsonl" and len(lines) == 1
                       and json.loads(lines[0])["id"] == "0123456789ab",
                       f"母艦のやることの済み: 日ごとの jsonl に1行（同じ日の同じ id は1回だけ） {path.name} {len(lines)}")
+    return failed
+
+
+# MARK: - カードの利用速報（2026-11-09）
+
+def check_card() -> int:
+    failed = 0
+    failed += say(mothership.read_card(None).get("available") is False, "カードの利用速報: ファイルが無いときは available=false")
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "card-mail.json"
+        failed += say(mothership.card_file({"card_mail_file": str(path)}) == path, "カードの利用速報: config.json の card_mail_file")
+        path.write_text('{"items": "x"}', encoding="utf-8")
+        failed += say(mothership.read_card(path).get("available") is False, "カードの利用速報: 形の違うものは読まない")
+        data = {"generated_at": "2026-11-09T07:00:00+09:00", "items": [
+            {"id": "19a0b1c2d3e4f5a6", "time": "2026-10-20T07:10:00+09:00", "amount": 35000, "shop": "テスト銀行",
+             "card": "PayPayカード ゴールド（Visa）"},
+            {"id": "bad id!", "time": "2026-10-20T07:10:00+09:00", "amount": 1, "shop": "x"},
+            {"id": "a1", "time": "きのう", "amount": 1, "shop": "x"},
+            {"id": "a2", "time": "2026-10-20T07:10:00+09:00", "amount": True, "shop": "x"},
+            {"id": "a3", "time": "2026-10-20T07:10:00+09:00", "amount": 0, "shop": "x"}]}
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8-sig")
+        got = mothership.read_card(path)
+        failed += say(got.get("available") is True and [i["id"] for i in got["items"]] == ["19a0b1c2d3e4f5a6"]
+                      and got["items"][0]["shop"] == "テスト銀行", "カードの利用速報: おかしな行は落として返す")
+    failed += say("/card" in mothership.GETS, "カードの利用速報: GET /card")
     return failed

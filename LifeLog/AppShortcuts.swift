@@ -27,6 +27,10 @@ struct LifeLogShortcuts: AppShortcutsProvider {
                     phrases: ["\(.applicationName)でさっき何て言った", "\(.applicationName)の直近の記録"],
                     shortTitle: "さっき何て言った？",
                     systemImageName: "text.bubble")
+        AppShortcut(intent: RecordPaymentIntent(),
+                    phrases: ["\(.applicationName)に支払いを記録"],
+                    shortTitle: "支払いを記録",
+                    systemImageName: "creditcard")
         AppShortcut(intent: LastTalkIntent(),
                     phrases: ["\(.applicationName)で前回の話"],
                     shortTitle: "この人と前回何を話した？",
@@ -59,5 +63,30 @@ struct LastTalkIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         .result(dialog: IntentDialog(stringLiteral: Recall.lastTalk?(name) ?? "LifeLog の準備ができていません。一度アプリを開いてください。"))
+    }
+}
+
+/// 「支払いを記録」（2026-11-09）。ショートカットの「取引」オートメーション（ウォレットでかざしたとき）から呼ぶ。
+/// 時刻はこれが動いた時刻。店・金額・カードは、オートメーションの「ショートカットの入力」の「販売者」「金額」「カードまたはパス」を渡す
+/// （カードによっては空で届く。空でも、払った時刻は残る）。端末の中（card-taps.jsonl）だけに置く。
+struct RecordPaymentIntent: AppIntent {
+    static let title: LocalizedStringResource = "支払いを記録"
+    static let description: IntentDescription? = IntentDescription("ウォレットで払った時刻と、店・金額・カードを LifeLog に残します。行ったお店の答え合わせに使います。")
+    static let openAppWhenRun = false
+
+    @Parameter(title: "店")
+    var shop: String?
+
+    @Parameter(title: "金額")
+    var amount: String?
+
+    @Parameter(title: "カード")
+    var card: String?
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        try CardTap.append(CardTap.make(shop: shop, amount: amount, card: card, at: .now))
+        CardTap.added?()
+        return .result()
     }
 }

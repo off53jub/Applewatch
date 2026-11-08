@@ -2060,6 +2060,8 @@ def features(engines: list | None = None) -> list[str]:
     found.append("vad")
     # GET /todo・POST /todo/done（母艦のやること。2026-11-09）
     found.append("todo")
+    # GET /card（カードの利用速報メールの支払い。ドライブから読む。2026-11-09）
+    found.append("card")
     # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）
     if "vad" in _extras:
         found.append("silero")
@@ -2639,7 +2641,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self.authorized():
             return
-        if path in mothership.GETS:  # 母艦のやること（2026-11-09。中身は mothership.py）
+        if path in mothership.GETS:  # 母艦のやること・カードの利用速報（2026-11-09。中身は mothership.py）
             mothership.http_get(self, load_config())
             return
         if path == "/jobs" or path.startswith("/jobs/"):

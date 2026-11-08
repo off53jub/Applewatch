@@ -10,7 +10,7 @@ struct PaymentSection: View {
 
     var body: some View {
         let book = pipeline.payments
-        let score = PaymentMatch.score(pipeline.shopVisits.visits, payments: book.payments)
+        let score = PaymentMatch.score(pipeline.shopVisits.visits, payments: book.all)
         Section {
             Button("明細（CSV）を読み込む") { picking = true }
             if !message.isEmpty { Text(message).font(.footnote).foregroundStyle(.secondary) }
@@ -19,16 +19,27 @@ struct PaymentSection: View {
                 if let latest = book.latest {
                     LabeledContent("いちばん新しい支払い", value: latest.formatted(date: .abbreviated, time: .omitted))
                 }
-                if score.hit + score.miss + score.none > 0 {
-                    LabeledContent("推測の答え合わせ", value: "当たり \(score.hit)・外れ \(score.miss)・推測なし \(score.none)")
-                }
-                NavigationLink("PayPay で払ったお店（立ち寄りの記録が無い分）") { UnmatchedPaymentsView() }
                 Button("読み込んだ明細を消す", role: .destructive) { confirmRemove = true }
             }
         } header: {
             Text("PayPay の明細")
         } footer: {
-            Text("PayPay には、払うたびに自動で知らせを受け取る口がありません。月に1回くらい、PayPay のアプリの取引履歴から明細（CSV）を書き出して、ここで読み込んでください（毎月1日に知らせます）。同じ支払いは重ねません。\n\n立ち寄りの時間にあった支払いの「取引先」を、そのお店の名前として見出しに使い、推測が当たっていたかを数えます。残すのは支払いの時刻・金額・取引先だけで、この iPhone の中だけに置きます。")
+            Text("PayPay には、払うたびに自動で知らせを受け取る口がありません。月に1回くらい、PayPay のアプリの取引履歴から明細（CSV）を書き出して、ここで読み込んでください（毎月1日に知らせます）。同じ支払いは重ねません。")
+        }
+        Section {
+            LabeledContent("カードの利用速報", value: "\(book.mail.count) 件")
+            if let error = book.mailError { Text(error).font(.footnote).foregroundStyle(.secondary) }
+            LabeledContent("ウォレットでかざした記録", value: "\(book.taps.count) 件")
+            if score.hit + score.miss + score.none > 0 {
+                LabeledContent("推測の答え合わせ", value: "当たり \(score.hit)・外れ \(score.miss)・推測なし \(score.none)")
+            }
+            if !book.all.isEmpty {
+                NavigationLink("払ったお店（立ち寄りの記録が無い分）") { UnmatchedPaymentsView() }
+            }
+        } header: {
+            Text("カードとウォレット")
+        } footer: {
+            Text("カードの利用速報: PayPay カードの利用速報メールを、Google の中の小さな仕組み（Apps Script）が読み、家の PC を通ってここに届きます（30分ごと）。\n\nウォレットでかざした記録: ショートカットの「オートメーション」→「取引」でカードを選び、動作に LifeLog の「支払いを記録」を入れて、店・金額・カードに「ショートカットの入力」の「販売者」「金額」「カードまたはパス」を入れてください。「すぐに実行」にすると、かざすたびに残ります。\n\n同じ支払いは1件にまとめます。立ち寄りの時間にあった支払いの払った先を、そのお店の名前として見出しに使い、推測が当たっていたかを数えます。残すのは時刻・金額・払った先・カードの名前だけで（番号は残しません）、この iPhone の中だけに置きます。")
         }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.commaSeparatedText, .plainText, .data]) { result in
             message = Self.read(result, into: book)
@@ -71,7 +82,7 @@ struct UnmatchedPaymentsView: View {
     }()
 
     var body: some View {
-        let list = PaymentMatch.unmatched(pipeline.payments.payments, visits: pipeline.shopVisits.visits)
+        let list = PaymentMatch.unmatched(pipeline.payments.all, visits: pipeline.shopVisits.visits)
         let calendar = Calendar.current
         let groups = Dictionary(grouping: list) { calendar.startOfDay(for: $0.time) }
         let days = groups.keys.sorted(by: >)
@@ -84,14 +95,15 @@ struct UnmatchedPaymentsView: View {
                     ForEach(groups[day] ?? []) { p in
                         HStack {
                             Text(Self.clock.string(from: p.time)).font(.caption).foregroundStyle(.secondary)
-                            Text(p.shop)
+                            Text(p.hasShop ? p.shop : "（店名なし）")
+                            Text(p.via).font(.caption2).foregroundStyle(.secondary)
                             Spacer()
-                            Text("\(p.amount.formatted())円").font(.caption).foregroundStyle(.secondary)
+                            Text(p.amount > 0 ? "\(p.amount.formatted())円" : "").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                 }
             }
         }
-        .navigationTitle("PayPay で払ったお店")
+        .navigationTitle("払ったお店")
     }
 }

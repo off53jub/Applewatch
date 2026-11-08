@@ -428,5 +428,8 @@ iPhone のタスクの「母艦のやること」に、母艦（D:\Lifelog）の
 ・GET /todo … 母艦の state\todo_for_app.json をそのまま返します（無ければ {"available": false}）。
 ・POST /todo/done … iPhone で済みにしたものを、母艦の inbox\app-todo-done\<日>.jsonl に1行足します。
   TODO.md を書き換えるのは母艦だけです（15分ごとに「アプリで済み」として反映します）。
+・GET /card … ドライブの「マイドライブ\LifeLog\カード利用\card-mail.json」の支払いを返します（2026-11-09）。
+  このファイルは、Google の Apps Script が PayPay カードの利用速報メールから作ります（docs/card-payments.md）。
+  別の場所に置くときは config.json に "card_mail_file"。
 ・どちらも iPhone の合言葉が要ります。時計の外の道（Funnel）からは届きません。やることの文は log.txt に書きません。
 ・母艦の場所は config.json の "lifelog_home"（無ければ D:\Lifelog）。

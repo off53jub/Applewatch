@@ -1458,6 +1458,8 @@ final class Pipeline {
         prepareReviewNudge()
         morningBriefOnActive()  // 朝の「昨日と今日」（まだなら作る）と時計に送る中身（2026-11-07。MorningBrief.swift）
         Task { await mothership.refresh(homePC) }  // 母艦のやること（10分に1回まで。2026-11-09。Mothership.swift）
+        payments.reloadTaps()  // ウォレットでかざした記録（2026-11-09。Payments.swift）
+        Task { await payments.refreshMail(homePC) }  // カードの利用速報（30分に1回まで）
         pcLinkOnActive()  // 家の PC に様子を送り、記録と直しをやり取りする（2026-11-07。PCDiag.swift）
         shopVisits.retryRecent()  // 会話がまだ文字になっていなかった立ち寄りを推測し直す（2026-11-08。ShopVisits.swift）
         startDraftPolling()  // 送ってまだの区切りの下書き（仮）を15秒ごとに見に行く（版 8。2026-11-07。Drafts.swift）
@@ -1653,6 +1655,8 @@ final class Pipeline {
         addSummaryCandidates()
         // 母艦のやることを家の PC から読み直す（10分に1回まで。2026-11-09。Mothership.swift）
         await mothership.refresh(homePC)
+        // カードの利用速報メールの支払いを家の PC から読み直す（30分に1回まで。2026-11-09。Payments.swift）
+        await payments.refreshMail(homePC)
         // 予定の前に、会う人と前回話したことを知らせる（iPad と二重に出さないよう iPhone だけ）
         if UIDevice.current.userInterfaceIdiom != .pad {
             await scheduleMeetingBriefs()

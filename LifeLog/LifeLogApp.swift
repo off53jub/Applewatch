@@ -73,6 +73,8 @@ struct LifeLogApp: App {
         // Siri・ショートカットから記録を聞く（2026-11-06）
         Recall.recent = { pipeline.recentWords() }
         Recall.lastTalk = { pipeline.lastTalk(with: $0) }
+        // ウォレットでかざしたとき（ショートカットの「支払いを記録」）に読み直す（2026-11-09）
+        CardTap.added = { pipeline.payments.reloadTaps() }
         // 職場の会話を家の PC の言語モデルで作るとき（本人がオンにしたときだけ。2026-11-06）
         Summarizer.pcLLM = { system, prompt in try await pipeline.homePC.llm(system: system, prompt: prompt) }
         // 家の PC からの見えない通知で起きたときの動き（2026-11-07。Push.swift）

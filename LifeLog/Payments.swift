@@ -15,6 +15,135 @@ struct Payment: Codable, Identifiable, Equatable {
     var amount: Int
     /// 払った先（明細の「取引先」）
     var shop: String
+    /// どこから来たか（2026-11-09）。nil＝PayPay の明細・"card-mail"＝カードの利用速報メール・"tap"＝ウォレットでかざした
+    var source: String? = nil
+    /// カードの名前（「PayPayカード ゴールド（Visa）」・ウォレットのカード名。番号は持たない。2026-11-09）
+    var card: String? = nil
+}
+
+extension Payment {
+    static let cardMail = "card-mail"
+    static let tap = "tap"
+
+    /// お店の名前として使えるか（空や「JCB国内加盟店」のような大まかな名前は使わない）
+    var hasShop: Bool { !PaymentMerge.isGeneric(shop) }
+
+    /// 見出しに添える出どころ
+    var via: String {
+        switch source {
+        case nil: "PayPay"
+        case .some(Payment.cardMail): "カード"
+        default: "かざした"
+        }
+    }
+}
+
+/// PayPay の明細・カードの利用速報メール・ウォレットでかざした記録を1つに並べる（2026-11-09）
+enum PaymentMerge {
+    /// かざした記録と利用速報メールを同じ支払いとみなす時刻の差
+    static let window: TimeInterval = 15 * 60
+    /// PayPay の支払いにカードを使ったとき、PayPay の明細と利用速報メールを同じとみなす時刻の差
+    static let payPayWindow: TimeInterval = 10 * 60
+
+    private static func key(_ s: String) -> String {
+        s.precomposedStringWithCompatibilityMapping.uppercased().filter { !$0.isWhitespace }
+    }
+
+    /// 空・「国内加盟店」のような、お店の名前にならないもの
+    static func isGeneric(_ shop: String) -> Bool {
+        let k = key(shop)
+        return k.isEmpty || k.contains("加盟店") || k == "PAYPAY"
+    }
+
+    static func isPayPay(_ shop: String) -> Bool { key(shop).hasPrefix("PAYPAY") }
+
+    /// 3つを1つに（古い順）。同じ支払いは1件にする:
+    /// - 利用速報メールの払った先が「PayPay」で、同じ金額の PayPay の明細が近くにあれば、明細のほうを残す（PayPay にカードを使った分）
+    /// - かざした記録は、近くの同じ金額の利用速報メールと1件にする（時刻はかざした方・名前は分かる方）
+    static func combine(paypay: [Payment], mail: [Payment], taps: [Payment]) -> [Payment] {
+        var mails = mail.filter { m in
+            !(isPayPay(m.shop) && paypay.contains { $0.amount == m.amount && abs($0.time.timeIntervalSince(m.time)) <= payPayWindow })
+        }
+        var used = Set<Int>()
+        var loose: [Payment] = []
+        for t in taps.sorted(by: { $0.time < $1.time }) {
+            let near = mails.indices.filter { i in
+                !used.contains(i) && abs(mails[i].time.timeIntervalSince(t.time)) <= window
+                    && (t.amount == 0 || t.amount == mails[i].amount)
+            }
+            guard let i = near.min(by: { abs(mails[$0].time.timeIntervalSince(t.time)) < abs(mails[$1].time.timeIntervalSince(t.time)) }) else {
+                loose.append(t)
+                continue
+            }
+            used.insert(i)
+            mails[i].time = t.time
+            if !mails[i].hasShop && t.hasShop { mails[i].shop = t.shop }
+        }
+        return (paypay + mails + loose).sorted { $0.time < $1.time }
+    }
+}
+
+/// ウォレットでかざしたときの記録（2026-11-09）。ショートカットの「取引」オートメーションから「支払いを記録」で届く。
+/// 足すだけのファイル（card-taps.jsonl）に1行ずつ書く。読み込む前に上書きすることが無い。
+enum CardTap {
+    static let url = URL.applicationSupportDirectory.appendingPathComponent("card-taps.jsonl")
+    /// 足したあとに画面を読み直す（アプリが動いていれば）
+    @MainActor static var added: (() -> Void)?
+
+    /// 「¥1,234」「1,234円」「1234.00」などから円を取り出す（読めなければ 0）
+    static func yen(_ text: String?) -> Int {
+        guard let text else { return 0 }
+        let t = text.precomposedStringWithCompatibilityMapping
+        let whole = t.split(separator: ".", maxSplits: 1).first.map(String.init) ?? t
+        return Int(String(whole.filter(\.isNumber).prefix(9))) ?? 0
+    }
+
+    static func make(shop: String?, amount: String?, card: String?, at time: Date) -> Payment {
+        let shopText = String((shop ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
+        let cardText = String((card ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+        return Payment(id: "tap-" + UUID().uuidString, time: time, amount: yen(amount), shop: shopText,
+                       source: Payment.tap, card: cardText.isEmpty ? nil : cardText)
+    }
+
+    static func append(_ p: Payment) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var line = try encoder.encode(p)
+        line.append(0x0A)
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: line)
+        } else {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try line.write(to: url, options: .atomic)
+        }
+    }
+
+    /// 読めない行は飛ばす
+    static func read(_ data: Data) -> [Payment] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return data.split(separator: 0x0A).compactMap { try? decoder.decode(Payment.self, from: Data($0)) }
+    }
+}
+
+/// 家の PC から届く、カードの利用速報メールの支払い（2026-11-09。GET /card）
+enum CardMailExport {
+    /// {"available": true, "items": [{"id","time","amount","shop","card"}]}。available でなければ nil
+    static func parse(_ data: Data) -> [Payment]? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj["available"] as? Bool == true, let items = obj["items"] as? [[String: Any]] else { return nil }
+        let iso = ISO8601DateFormatter()
+        return items.compactMap { item in
+            guard let id = item["id"] as? String, !id.isEmpty, let timeText = item["time"] as? String,
+                  let time = iso.date(from: timeText), let amount = item["amount"] as? Int, amount > 0 else { return nil }
+            let shop = (item["shop"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let card = (item["card"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(40)) }
+            return Payment(id: "mail-" + id, time: time, amount: amount, shop: String(shop.prefix(100)),
+                           source: Payment.cardMail, card: card)
+        }
+    }
 }
 
 enum PayPayCSV {
@@ -102,7 +231,7 @@ enum PaymentMatch {
         let start = v.arrival.addingTimeInterval(-before)
         let end = (v.departure ?? v.arrival.addingTimeInterval(openSpan)).addingTimeInterval(after)
         let middle = v.arrival.addingTimeInterval((v.departure ?? v.arrival).timeIntervalSince(v.arrival) / 2)
-        return payments.filter { $0.time >= start && $0.time <= end }
+        return payments.filter { $0.hasShop && $0.time >= start && $0.time <= end }
             .min { abs($0.time.timeIntervalSince(middle)) < abs($1.time.timeIntervalSince(middle)) }
     }
 
@@ -144,9 +273,65 @@ final class PaymentBook {
     nonisolated static let reminderID = "payments-monthly"
     @ObservationIgnored private var loaded = false
     private static let url = URL.applicationSupportDirectory.appendingPathComponent("payments.json")
+    /// カードの利用速報メールの支払い（家の PC から。端末に写しを置く。2026-11-09）
+    private(set) var mail: [Payment] = []
+    /// ウォレットでかざした記録（2026-11-09）
+    private(set) var taps: [Payment] = []
+    /// PayPay の明細・利用速報メール・かざした記録を1つにしたもの（同じ支払いは1件。答え合わせと見出しはこちらを使う）
+    private(set) var all: [Payment] = []
+    private(set) var mailFetchedAt: Date?
+    private(set) var mailError: String?
+    @ObservationIgnored private var mailLoaded = false
+    @ObservationIgnored private var fetching = false
+    private static let mailURL = URL.applicationSupportDirectory.appendingPathComponent("card-mail.json")
+    private static let mailEvery: TimeInterval = 30 * 60
 
     init() {
         load()
+        loadMail()
+        reloadTaps()
+    }
+
+    /// かざした記録を読み直す（ショートカットから足されたあと・アプリを開いたとき）
+    func reloadTaps() {
+        taps = (try? Data(contentsOf: CardTap.url)).map(CardTap.read) ?? []
+        rebuild()
+    }
+
+    private func rebuild() {
+        all = PaymentMerge.combine(paypay: payments, mail: mail, taps: taps)
+    }
+
+    private func loadMail() {
+        defer { mailLoaded = true }
+        guard let data = try? Data(contentsOf: Self.mailURL) else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        mail = (try? decoder.decode([Payment].self, from: data)) ?? []
+    }
+
+    /// 家の PC から、カードの利用速報メールの支払いを読み直す（30分に1回まで）
+    func refreshMail(_ pc: HomePC, force: Bool = false) async {
+        guard mailLoaded, !fetching, pc.features.contains("card") else { return }
+        if !force, let mailFetchedAt, Date.now.timeIntervalSince(mailFetchedAt) < Self.mailEvery { return }
+        fetching = true
+        defer { fetching = false }
+        do {
+            let data = try await pc.cardMail()
+            mailFetchedAt = .now
+            guard let parsed = CardMailExport.parse(data) else {
+                mailError = "カードの利用速報が、まだ家の PC に届いていません"
+                return
+            }
+            mail = parsed.sorted { $0.time < $1.time }
+            mailError = nil
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let data = try? encoder.encode(mail) { try? data.write(to: Self.mailURL, options: .atomic) }
+            rebuild()
+        } catch {
+            mailError = "家の PC から読めませんでした"
+        }
     }
 
     var latest: Date? { payments.map(\.time).max() }
@@ -156,6 +341,7 @@ final class PaymentBook {
         guard let data = try? Data(contentsOf: Self.url) else { return }
         if let saved = try? JSONDecoder().decode([Payment].self, from: data) {
             payments = saved
+            rebuild()
         } else {
             // 読めないファイルは上書きせず、脇に置く
             let aside = Self.url.deletingLastPathComponent().appendingPathComponent("payments-unreadable.json")
@@ -176,6 +362,7 @@ final class PaymentBook {
         let count = added.count - payments.count
         payments = added
         save()
+        rebuild()
         importedAt = now
         UserDefaults.standard.set(now, forKey: Self.importedKey)
         Self.scheduleMonthlyReminder()
@@ -196,6 +383,7 @@ final class PaymentBook {
     func removeAll() {
         payments = []
         save()
+        rebuild()
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.reminderID])
     }
 
