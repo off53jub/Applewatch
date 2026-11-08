@@ -1075,17 +1075,15 @@ final class Pipeline {
 
     /// match に当たる行を放送の行（kind）にする。直した行の数を返す。
     func markMedia(_ kind: String, where match: (ConversationLog.Line) -> Bool) async -> Int {
-        do {
-            let count = try await conversations.markMedia(kind, where: match)
-            if count > 0 {
-                placeIndexBuilt = .distantPast
-                recordsVersion += 1
-            }
-            return count
-        } catch {
-            message = "ドキュメントの行を直せませんでした: \(error.localizedDescription)"
-            return 0
+        let result = await conversations.markMedia(kind, where: match)
+        if result.count > 0 {
+            placeIndexBuilt = .distantPast
+            recordsVersion += 1
         }
+        if let error = result.docError, !error.isCancellation {
+            message = "ドキュメントの行を直せませんでした（あとでやり直します）: \(error.localizedDescription)"
+        }
+        return result.count
     }
 
     /// 分けたうち moved の行を target の人にする。id の覚えている声から moved に近いものを外し、target の声として覚える。
@@ -1287,10 +1285,9 @@ final class Pipeline {
     private func relabel(to id: String, renaming: String? = nil,
                          where match: (ConversationLog.Line) -> Bool) async {
         guard let name = await speakers.name(of: id) else { return }
-        do {
-            try await conversations.relabel(to: id, name: name, renaming: renaming, where: match)
-        } catch {
-            message = "ドキュメントの名前を直せませんでした: \(error.localizedDescription)"
+        let result = await conversations.relabel(to: id, name: name, renaming: renaming, where: match)
+        if let error = result.docError, !error.isCancellation {
+            message = "ドキュメントの名前を直せませんでした（あとでやり直します）: \(error.localizedDescription)"
         }
         people = await speakers.people()
     }
@@ -1322,11 +1319,8 @@ final class Pipeline {
         }
         for (old, new) in map.sorted(by: { $0.key < $1.key }) {
             let name = await speakers.name(of: new) ?? "人物\(new)"
-            do {
-                try await conversations.relabel(to: new, name: name) { $0.speakerID == old }
-            } catch {
-                return false
-            }
+            // 記録はここで直る。ドキュメントを直せなかった分は、覚えて次の機会にやり直す
+            await conversations.relabel(to: new, name: name) { $0.speakerID == old }
         }
         UserDefaults.standard.removeObject(forKey: pendingKey)
         people = await speakers.people()
@@ -1660,6 +1654,8 @@ final class Pipeline {
             // ヘルスケアの終わった日を、母艦に渡すためドライブに書く
             await exportHealthIfDue()
         }
+        // 前に直せなかったドキュメントの名前・テレビの行を、やり直す（記録の中はもう直っている）
+        await conversations.retryDocFixes()
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
         backupPending = archive.pendingCount
@@ -1706,7 +1702,10 @@ final class Pipeline {
                 do {
                     try await docs.uploadIfMissing(data, name: HealthExport.fileName(day.day), folder: HealthExport.folderName)
                 } catch {
-                    diagnostics.problem("ヘルスケアをドライブに書けませんでした: \(error.localizedDescription)")
+                    // iOS に止められただけ（cancelled）なら、エラーにしない。次の機会に続きから書く
+                    if !error.isCancellation {
+                        diagnostics.problem("ヘルスケアをドライブに書けませんでした: \(error.localizedDescription)")
+                    }
                     break
                 }
             }
@@ -2697,7 +2696,9 @@ final class Pipeline {
             do {
                 try await conversations.append(batch, text: lines.map { $0 + "\n" }.joined(), day: day)
             } catch {
-                message = "ドキュメントに書けませんでした（あとで再試行します）: \(error.localizedDescription)"
+                if !error.isCancellation {
+                    message = "ドキュメントに書けませんでした（あとで再試行します）: \(error.localizedDescription)"
+                }
                 return false
             }
             merger.sent(batch.count)
