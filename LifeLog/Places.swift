@@ -41,6 +41,8 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     private(set) var authorization: CLAuthorizationStatus = .notDetermined
     /// 位置や場所の登録が変わったら呼ぶ
     @ObservationIgnored var onChange: (() -> Void)?
+    /// しばらくいた所（立ち寄り）の知らせ。「行ったお店」がオンのときだけ受け取る（2026-11-08。ShopVisits.swift）
+    @ObservationIgnored var onVisit: ((RawVisit) -> Void)?
 
     @ObservationIgnored private let manager = CLLocationManager()
     @ObservationIgnored private var samples: [Sample] = []
@@ -71,6 +73,19 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         }
         // 位置の変化でアプリが起こされたときも、ここで受け取りを続ける
         if isOn { start() }
+        if UserDefaults.standard.bool(forKey: ShopVisitBook.onKey) { manager.startMonitoringVisits() }
+    }
+
+    /// 立ち寄りの知らせを受け取る・やめる（電池はほとんど使わない。「常に」の許可が要る）
+    func setVisits(_ on: Bool) {
+        guard on else {
+            manager.stopMonitoringVisits()
+            return
+        }
+        if manager.authorizationStatus == .notDetermined || manager.authorizationStatus == .authorizedWhenInUse {
+            manager.requestAlwaysAuthorization()
+        }
+        manager.startMonitoringVisits()
     }
 
     private func start() {
@@ -294,6 +309,12 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         let latest = locations.last
         Task { @MainActor in self.received(latest) }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
+        let raw = RawVisit(arrival: visit.arrivalDate, departure: visit.departureDate, latitude: visit.coordinate.latitude,
+                           longitude: visit.coordinate.longitude, accuracy: visit.horizontalAccuracy)
+        Task { @MainActor in self.onVisit?(raw) }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {

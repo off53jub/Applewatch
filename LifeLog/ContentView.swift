@@ -552,6 +552,12 @@ private struct PeoplePlacesView: View {
                             get: { pipeline.places.isOn },
                             set: { pipeline.places.isOn = $0 }))
                     }
+                    // 行ったお店（2026-11-08。ShopVisitViews.swift）
+                    NavigationLink {
+                        ShopVisitsView()
+                    } label: {
+                        LabeledContent("行ったお店", value: pipeline.shopVisits.isOn ? "オン" : "オフ")
+                    }
                 } header: {
                     Text("場所")
                 } footer: {
