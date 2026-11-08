@@ -189,6 +189,8 @@ final class Pipeline {
     let tasks = TaskBook()
     /// 行ったお店（立ち寄り・近くのお店・会話から推測。2026-11-08。ShopVisits.swift）
     let shopVisits = ShopVisitBook()
+    /// PayPay の明細（行ったお店の答え合わせ。Payments.swift）
+    let payments = PaymentBook()
     /// 仕事のまとめ（職場の Claude の答えを写真・貼り付けで取り込む。2026-11-08。WorkDigest.swift）
     let workDigests = WorkDigest()
     /// AI からの質問と、わかったこと帳

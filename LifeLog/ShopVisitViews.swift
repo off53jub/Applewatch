@@ -39,11 +39,12 @@ struct ShopVisitsView: View {
                         NavigationLink {
                             ShopVisitDetailView(visitID: visit.id)
                         } label: {
-                            ShopVisitRow(visit: visit)
+                            ShopVisitRow(visit: visit, paid: book.paid(visit))
                         }
                     }
                 }
             }
+            PaymentSection()
             ShopVisitSettings()
         }
         .navigationTitle("行ったお店")
@@ -84,6 +85,7 @@ private enum ShopTime {
 
 private struct ShopVisitRow: View {
     let visit: ShopVisit
+    var paid: Payment? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -108,6 +110,9 @@ private struct ShopVisitRow: View {
                 }
             case .waiting:
                 Text(visit.departure == nil ? "いる途中" : "まだ調べていません").foregroundStyle(.secondary)
+            }
+            if let paid {
+                Text("PayPay: \(paid.shop)　\(paid.amount.formatted())円").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -138,6 +143,15 @@ private struct ShopVisitDetailView: View {
                 if visit.state == .guessed, visit.guess?.name != nil {
                     Section {
                         Button("合っている") { book.confirm(visitID) }
+                    }
+                }
+                if let paid = book.paid(visit), visit.state != .confirmed || visit.confirmedName != paid.shop {
+                    Section {
+                        Button("「\(paid.shop)」にする") { book.setName(visitID, paid.shop) }
+                    } header: {
+                        Text("PayPay の支払い")
+                    } footer: {
+                        Text("\(ShopTime.clock.string(from: paid.time)) に \(paid.amount.formatted())円。読み込んだ明細の中で、この立ち寄りの時間にあった支払いです。")
                     }
                 }
                 let named = visit.candidates.filter { $0.name != nil }
