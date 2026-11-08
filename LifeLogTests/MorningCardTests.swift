@@ -81,6 +81,20 @@ final class MorningCardTests: XCTestCase {
         XCTAssertEqual(three.map(\.text), ["牛乳を買う", "スノーボードの宿"])
     }
 
+    func testPickThreeFillsWithRecentMothershipTodos() {
+        let now = at(9, 7)
+        let recent = [MothershipTodo(id: "000000000001", text: "下期目標を直す", work: true, added: "2026-11-06"),
+                      MothershipTodo(id: "000000000002", text: "古いもの", work: true, added: "2026-08-01"),
+                      MothershipTodo(id: "000000000003", text: "宿を取る", work: false, added: "2026-11-05")]
+        let three = MorningBrief.pickThree(open: [], mothership: [], mothershipWork: [], recent: recent,
+                                           dayOff: false, now: now, calendar: tokyo)
+        XCTAssertEqual(three.map(\.text), ["下期目標を直す", "宿を取る"])
+        XCTAssertEqual(three.first?.why, "母艦・11/06 に足した")
+        let off = MorningBrief.pickThree(open: [], mothership: [], mothershipWork: [], recent: recent,
+                                         dayOff: true, now: now, calendar: tokyo)
+        XCTAssertEqual(off.map(\.text), ["宿を取る"])
+    }
+
     func testPickThreeSkipsSimilar() {
         let now = at(9, 7)
         let a = TaskBook.Item(what: "資料を送る", due: at(9), said: at(1), source: .manual, state: .open, work: true)

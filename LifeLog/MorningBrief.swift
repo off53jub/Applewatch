@@ -123,10 +123,12 @@ enum MorningBrief {
         return lines.joined(separator: "\n")
     }
 
-    /// 今日の三つを選ぶ。期限を過ぎた・今日までのタスク（急ぎを先に）→ 母艦が選んだもの → 急ぎ → 今週まで。
+    /// 今日の三つを選ぶ。期限を過ぎた・今日までのタスク（急ぎを先に）→ 母艦が選んだもの → 急ぎ → 今週まで
+    /// → 母艦の TODO で14日以内に足されたもの（期限の近い順・新しい順。recent）。
     /// 休みの日は仕事のものを入れない（仕事の印の付いた母艦のものも）。同じらしいものは1つ
     static func pickThree(open: [TaskBook.Item], mothership: [MothershipExport.Three], mothershipWork: Set<String>,
-                          dayOff: Bool, now: Date, calendar: Calendar = .current) -> [Pick] {
+                          recent: [MothershipTodo] = [], dayOff: Bool, now: Date,
+                          calendar: Calendar = .current) -> [Pick] {
         let items = tasksToRead(open, dayOff: dayOff)
         func sorted(_ list: [TaskBook.Item]) -> [TaskBook.Item] {
             list.sorted { a, b in
@@ -147,6 +149,10 @@ enum MorningBrief {
         }
         for item in sorted(items.filter { $0.urgent == true }) { add(item.what, "急ぎ") }
         for item in sorted(items.filter { bucket($0) == .week }) { add(item.what, "今週") }
+        let fresh = TaskBook.dayFormat.string(from: now.addingTimeInterval(-14 * 86400))
+        for todo in recent where (todo.added ?? "") >= fresh && !(dayOff && todo.work == true) {
+            add(todo.text, "母艦・" + (todo.added.map { String($0.suffix(5)).replacingOccurrences(of: "-", with: "/") } ?? "") + " に足した")
+        }
         return picks
     }
 
@@ -244,9 +250,12 @@ extension Pipeline {
 
     /// 今日の三つ（タスクの「やる」の上にも出す）
     func todayThree(on day: Date = .now) -> [MorningBrief.Pick] {
-        let workIDs = Set((mothership.export?.items ?? []).filter { $0.work == true }.map(\.id))
-        return MorningBrief.pickThree(open: tasks.todo, mothership: mothership.todayThree, mothershipWork: workIDs,
-                                      dayOff: isDayOff(day), now: day)
+        let items = mothership.export?.items ?? []
+        let workIDs = Set(items.filter { $0.work == true }.map(\.id))
+        // 母艦の「今日の三つ」のうち、TODO にあるものだけ（決めごとの期限切れなどは、アプリで済みにできないので出さない）
+        let ids = Set(items.map(\.id))
+        return MorningBrief.pickThree(open: tasks.todo, mothership: mothership.todayThree.filter { ids.contains($0.id) },
+                                      mothershipWork: workIDs, recent: mothership.open(.all), dayOff: isDayOff(day), now: day)
     }
 
     /// 材料を集める。hadSummary は前の日の1日のまとめがあったか
