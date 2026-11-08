@@ -1655,6 +1655,8 @@ final class Pipeline {
             await writeTaskBook()
             await writeAskBook()
             await writeWorkDigests()
+            // ヘルスケアの終わった日を、母艦に渡すためドライブに書く
+            await exportHealthIfDue()
         }
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
@@ -1680,6 +1682,35 @@ final class Pipeline {
     func driveQuota() async -> (used: Int64, limit: Int64?)? {
         guard email != nil else { return nil }
         return try? await docs.storageQuota()
+    }
+
+    /// ヘルスケアの終わった日を、ドライブの「LifeLog/ヘルスケア」に1日1ファイルで書く（母艦が毎朝取り込む）。
+    /// iPhone だけ。止まっていた日の分も、1回に少しずつ書く。2026-11-08
+    func exportHealthIfDue(now: Date = .now) async {
+        guard email != nil, health.enabled, health.available, UIDevice.current.userInterfaceIdiom != .pad else { return }
+        var done = Set(UserDefaults.standard.stringArray(forKey: HealthExport.doneKey) ?? [])
+        let due = HealthExport.dueDays(now: now, done: done)
+        guard !due.isEmpty else { return }
+        var days: [HealthExport.Day] = []
+        for key in due {
+            guard let start = HealthExport.dayDate(key), let day = await health.exportDay(start, key: key) else { return }
+            days.append(day)
+        }
+        // どの日も空なら、ヘルスケアの読む許可が無いのかもしれない。書いた印は付けずに、次の機会にまた見る
+        guard days.contains(where: { !$0.isEmpty }) else { return }
+        for day in days {
+            if !day.isEmpty {
+                guard let data = HealthExport.json(day) else { continue }
+                do {
+                    try await docs.uploadIfMissing(data, name: HealthExport.fileName(day.day), folder: HealthExport.folderName)
+                } catch {
+                    diagnostics.problem("ヘルスケアをドライブに書けませんでした: \(error.localizedDescription)")
+                    break
+                }
+            }
+            done.insert(day.day)
+        }
+        UserDefaults.standard.set(done.sorted(), forKey: HealthExport.doneKey)
     }
 
     /// 書き出しをドライブの「控え」に置く（同じ名前の頭のものは新しい2つだけ残す）

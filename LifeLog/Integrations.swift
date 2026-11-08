@@ -340,6 +340,53 @@ final class HealthLink {
         return parts.isEmpty ? nil : parts.joined(separator: "・")
     }
 
+    /// 母艦に書き出す1日分（歩数・心拍・安静時心拍と、前の日の18時からその日の12時までの睡眠）。2026-11-08
+    func exportDay(_ dayStart: Date, key: String) async -> HealthExport.Day? {
+        guard enabled, available else { return nil }
+        let dayEnd = dayStart.addingTimeInterval(86400)
+        let perMinute = HKUnit.count().unitDivided(by: .minute())
+        var day = HealthExport.Day(day: key)
+        if let steps = await statistics(.stepCount, from: dayStart, to: dayEnd, options: .cumulativeSum)?
+            .sumQuantity()?.doubleValue(for: .count()), steps > 0 {
+            day.steps = Int(steps.rounded())
+        }
+        if let heart = await statistics(.heartRate, from: dayStart, to: dayEnd, options: [.discreteMin, .discreteMax, .discreteAverage]) {
+            day.heartMin = heart.minimumQuantity()?.doubleValue(for: perMinute)
+            day.heartMax = heart.maximumQuantity()?.doubleValue(for: perMinute)
+            day.heartAverage = heart.averageQuantity()?.doubleValue(for: perMinute)
+        }
+        day.resting = await statistics(.restingHeartRate, from: dayStart, to: dayEnd, options: .discreteAverage)?
+            .averageQuantity()?.doubleValue(for: perMinute)
+        let nightFrom = dayStart.addingTimeInterval(-6 * 3600), nightTo = dayStart.addingTimeInterval(12 * 3600)
+        let samples = await categorySamples(.sleepAnalysis, from: nightFrom, to: nightTo)
+        day.sleep = Self.sleep(samples.map { (source: $0.sourceRevision.source.bundleIdentifier, value: $0.value,
+                                              start: $0.startDate, end: $0.endDate) }, from: nightFrom, to: nightTo)
+        return day
+    }
+
+    /// 睡眠の記録から、一晩の睡眠をまとめる。時計と iPhone の両方が書くと重なるので、
+    /// 寝ていた長さがいちばん長い記録元（ふつうは時計）の分だけを使う。
+    nonisolated static func sleep(_ samples: [(source: String, value: Int, start: Date, end: Date)],
+                                  from: Date, to: Date) -> HealthExport.Day.Sleep? {
+        typealias V = HKCategoryValueSleepAnalysis
+        let asleepValues: Set<Int> = [V.asleepUnspecified.rawValue, V.asleepCore.rawValue, V.asleepDeep.rawValue, V.asleepREM.rawValue]
+        func length(_ s: (source: String, value: Int, start: Date, end: Date)) -> TimeInterval {
+            max(0, min(s.end, to).timeIntervalSince(max(s.start, from)))
+        }
+        let bySource = Dictionary(grouping: samples, by: { $0.source })
+        let best = bySource.values.max { a, b in
+            a.filter { asleepValues.contains($0.value) }.reduce(0) { $0 + length($1) }
+                < b.filter { asleepValues.contains($0.value) }.reduce(0) { $0 + length($1) }
+        } ?? []
+        let asleep = best.filter { asleepValues.contains($0.value) && length($0) > 0 }
+        guard let start = asleep.map({ max($0.start, from) }).min(), let end = asleep.map({ min($0.end, to) }).max() else { return nil }
+        func total(_ value: V) -> TimeInterval { best.filter { $0.value == value.rawValue }.reduce(0) { $0 + length($1) } }
+        let inBed = total(.inBed)
+        return HealthExport.Day.Sleep(start: start, end: end, asleep: asleep.reduce(0) { $0 + length($1) },
+                                      inBed: inBed > 0 ? inBed : nil, deep: total(.asleepDeep), rem: total(.asleepREM),
+                                      core: total(.asleepCore), awake: total(.awake))
+    }
+
     private func categorySamples(_ id: HKCategoryTypeIdentifier, from start: Date, to end: Date) async -> [HKCategorySample] {
         await withCheckedContinuation { continuation in
             let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
