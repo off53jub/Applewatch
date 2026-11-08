@@ -138,3 +138,25 @@ struct SuggestionsView: View {
         .navigationTitle("こんなのあった")
     }
 }
+
+// MARK: - タスクにまとめる（2026-11-09）
+
+extension Pipeline {
+    /// 1日のまとめの「やること」（まだ判断していない・残しているもの）を、タスクの確かめ待ちに入れ、
+    /// 「こんなのあったけど、どう？」からは外す。同じ文は SuggestionBox が覚えているので、二度は入らない。
+    /// 休みの日に出たものは仕事以外、それ以外は印を付けない（印の無いものは仕事とみなす。前からの決まり）
+    func addSummaryCandidates() {
+        let box = suggestions
+        let items = box.waiting + box.kept
+        guard !items.isEmpty else { return }
+        let new = items.map { s -> TaskBook.Item in
+            let start = TaskBook.dayFormat.date(from: s.day)
+            return TaskBook.Item(what: s.text, said: start.map { $0.addingTimeInterval(21 * 3600) } ?? .now, day: s.day,
+                                 quote: "1日のまとめ（\(s.day)）のやること", source: .summary, state: .candidate,
+                                 work: start.map { isDayOff($0) ? false : nil } ?? nil)
+        }
+        tasks.add(new)
+        for s in items { box.remove(s) }
+        tasksChanged()
+    }
+}

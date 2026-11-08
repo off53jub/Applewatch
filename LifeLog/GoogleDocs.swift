@@ -472,10 +472,49 @@ final class GoogleDocs {
 
     private func documentId(for day: String) async throws -> String {
         if let id = defaults.string(forKey: "doc-\(day)") { return id }
-        let folder = try await folderId()
+        // 人物ノートは「人物ノート」フォルダに作る（2026-11-09。LifeLog フォルダの中が増えすぎたため）
+        let folder = day.hasPrefix(Self.personNotePrefix) ? try await subfolder(Self.personNoteFolder) : try await folderId()
         let id = try await findOrCreate(name: day, mimeType: "application/vnd.google-apps.document", parent: folder)
         defaults.set(id, forKey: "doc-\(day)")
         return id
+    }
+
+    // MARK: - 人物ノートのフォルダ（2026-11-09）
+
+    static let personNotePrefix = "人物ノート - "
+    static let personNoteFolder = "人物ノート"
+    private static let notesMovedKey = "personNotesMoved"
+
+    /// LifeLog フォルダの中のフォルダ（無ければ作る）
+    private func subfolder(_ name: String) async throws -> String {
+        let key = "subfolder-\(name)"
+        if let id = defaults.string(forKey: key) { return id }
+        let id = try await findOrCreate(name: name, mimeType: "application/vnd.google-apps.folder", parent: try await folderId())
+        defaults.set(id, forKey: key)
+        return id
+    }
+
+    /// LifeLog フォルダの直下にある「人物ノート - 名前」を、「人物ノート」フォルダに移す（消さない。1回だけ。中身と id はそのまま）
+    func movePersonNotesIfNeeded() async {
+        guard !defaults.bool(forKey: Self.notesMovedKey) else { return }
+        do {
+            let root = try await folderId()
+            let target = try await subfolder(Self.personNoteFolder)
+            var comps = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
+            comps.queryItems = [URLQueryItem(name: "q", value: "'\(root)' in parents and trashed = false"
+                                             + " and mimeType = 'application/vnd.google-apps.document'"),
+                                URLQueryItem(name: "fields", value: "files(id,name)"),
+                                URLQueryItem(name: "pageSize", value: "1000")]
+            let page = try await request("GET", comps.url!.absoluteString)
+            for file in page["files"] as? [[String: Any]] ?? [] {
+                guard let id = file["id"] as? String, (file["name"] as? String)?.hasPrefix(Self.personNotePrefix) == true else { continue }
+                _ = try await request("PATCH", "https://www.googleapis.com/drive/v3/files/\(id)?addParents=\(target)&removeParents=\(root)",
+                                      json: [:])
+            }
+            defaults.set(true, forKey: Self.notesMovedKey)
+        } catch {
+            // 次の機会にもう一度（移したものは、もう直下に無いので二度は動かない）
+        }
     }
 
     // MARK: - 控え

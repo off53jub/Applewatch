@@ -69,10 +69,8 @@ private struct TodayView: View {
 
                 confirmBox()
 
-                // 今日の聞いて直す（10行・3分ほど。まだ答えていない行があるときだけ。2026-11-07。ReviewNudge.swift）
-                ReviewNudgeEntry()
-
-                // 朝の読み上げ（2026-11-07。MorningBrief.swift）
+                // 朝の「昨日と今日」（2026-11-09。前の「朝の読み上げ」。MorningBrief.swift）。
+                // 毎朝の「聞いて直す」の入口はやめた（7日で1行だけだったため。「記録」からは開ける）
                 MorningBriefSection()
 
                 Section("いまの様子") {
@@ -119,23 +117,9 @@ private struct TodayView: View {
 
                 taskBook()
 
-                answerNudge()
+                // 答え合わせの入口・名前を付ける候補の声・AI からの質問・見直すものは、上の確認箱にまとめた（2026-11-09）
 
-                NewVoicesSection()
-
-                questions()
-
-                todo(today: today, talks: talks)
-
-                let box = pipeline.suggestions
-                if !box.waiting.isEmpty || !box.kept.isEmpty {
-                    Section("こんなのあったけど、どう？") {
-                        ForEach(box.waiting.prefix(3)) { SuggestionRow(item: $0) }
-                        NavigationLink("すべて見る（まだ \(box.waiting.count) 件・残している \(box.kept.count) 件）") {
-                            SuggestionsView()
-                        }
-                    }
-                }
+                // 「こんなのあったけど、どう？」は、タスクの確かめ待ちにまとめた（2026-11-09。Suggestions.swift）
 
                 Section("今日の会話") {
                     if talks.isEmpty {
@@ -214,7 +198,7 @@ private struct TodayView: View {
             } header: {
                 Text("確認箱")
             } footer: {
-                Text("押すと、確かめ待ちを大事な順に1つの画面に並べます（タスクの候補 → AI からの質問 → 声 → 聞き間違い → 答え合わせ）。1日5分で、上から片付けてください。")
+                Text("押すと、確かめ待ちを大事な順に1つの画面に並べます（タスクの候補 → AI からの質問 → 声 → 聞き間違い → 答え合わせ）。1日に上から5つまでで十分です。残りは明日に回して大丈夫です。")
             }
         }
     }
@@ -594,7 +578,7 @@ private struct SettingsView: View {
     @AppStorage("morningCheck") private var morningCheck = true
     @State private var exportNote: String?
     @AppStorage(Storage.japanTimeKey) private var japanTime = false
-    @AppStorage("secondOpinion") private var secondOpinion = true
+    @AppStorage("secondOpinion") private var secondOpinion = false
     @AppStorage(Summarizer.pcLLMKey) private var pcLLMForWork = false
     /// LocalModel.modeKey と同じ名前
     @AppStorage("localModelMode") private var localModelMode = LocalModel.Mode.fallback.rawValue
@@ -608,7 +592,7 @@ private struct SettingsView: View {
                 Section {
                     Toggle("開くときに Face ID", isOn: $appLock)
                     Toggle("毎朝、前の日の点検を知らせる", isOn: $morningCheck)
-                    // 朝の読み上げの知らせと時刻（2026-11-07。MorningBrief.swift）
+                    // 朝の「昨日と今日」の知らせと時刻（2026-11-09。前の「朝の読み上げ」。MorningBrief.swift）
                     MorningBriefSettingsRows()
                     Toggle("もう1つの言語モデルでも見比べる（充電中か開いているとき）", isOn: $secondOpinion)
                     // 2026-11-06

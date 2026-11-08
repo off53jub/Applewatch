@@ -11,7 +11,12 @@ enum MultiModel {
     /// セカンドオピニオンを取ってよいか（iPhone の中の言語モデルが使え、充電中かアプリを開いている）
     @MainActor
     static var secondOpinionOK: Bool {
-        guard LocalModel.isUsable, UserDefaults.standard.object(forKey: "secondOpinion") as? Bool ?? true else { return false }
+        // 2026-11-09: 頼まれごとで2つが両方拾ったのは0件・30回は動けず、効き目が見えないので、一度だけオフにする（設定で戻せる）
+        if !UserDefaults.standard.bool(forKey: "secondOpinionStopped20261109") {
+            UserDefaults.standard.set(false, forKey: "secondOpinion")
+            UserDefaults.standard.set(true, forKey: "secondOpinionStopped20261109")
+        }
+        guard LocalModel.isUsable, UserDefaults.standard.object(forKey: "secondOpinion") as? Bool ?? false else { return false }
         UIDevice.current.isBatteryMonitoringEnabled = true
         let charging = [.charging, .full].contains(UIDevice.current.batteryState)
         return charging || UIApplication.shared.applicationState == .active

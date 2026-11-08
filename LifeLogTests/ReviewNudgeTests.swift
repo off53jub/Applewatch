@@ -235,27 +235,6 @@ final class ReviewNudgeTests: XCTestCase {
         XCTAssertEqual(ReviewNudge.alternatives(nil, current: "明日の会議は十時からです"), [])
     }
 
-    func testBriefKeepsEightSentencesWithReview() {
-        let eight = "一つ目です。二つ目です。三つ目です。四つ目です。五つ目です。六つ目です。七つ目です。八つ目です。"
-        let with = MorningBrief.withReview(eight, count: 10)
-        let parts = MorningBrief.sentences(with)
-        XCTAssertEqual(parts.count, MorningBrief.maxSentences)
-        XCTAssertEqual(parts.last, "今日の聞いて直すは10行、3分ほどです。")
-        XCTAssertEqual(parts.first, "一つ目です。")
-        // もう一度足しても二重にならない。数が変われば入れ直す
-        XCTAssertEqual(MorningBrief.withReview(with, count: 10), with)
-        XCTAssertEqual(MorningBrief.sentences(MorningBrief.withReview(with, count: 4)).last, "今日の聞いて直すは4行、1分ほどです。")
-        // 0行なら外す。入っていない文はそのまま
-        XCTAssertFalse(MorningBrief.withReview(with, count: 0).contains("聞いて直す"))
-        XCTAssertEqual(MorningBrief.withReview("おはようございます。今日は晴れです。", count: 0), "おはようございます。今日は晴れです。")
-        // 短い読み上げには、そのまま最後に足す
-        let short = MorningBrief.withReview(MorningBrief.template(MorningBrief.Input(date: t0)), count: 10)
-        XCTAssertTrue(short.hasSuffix("今日の聞いて直すは10行、3分ほどです。"))
-        XCTAssertLessThanOrEqual(MorningBrief.sentences(short).count, MorningBrief.maxSentences)
-        // 知らせのはじめの2文には、聞いて直すの文を入れない
-        XCTAssertFalse(MorningBrief.headline(MorningBrief.withReview("一つ目です。\(with)", count: 0)).contains("聞いて直す"))
-    }
-
     // MARK: - 4. 材料の数と音
 
     func testTrainStatusReply() throws {

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 時計の画面。上下にめくる7枚（2026-11-07）:
-/// 録音 / 頼まれごと / 次の予定 / さっきの会話 / 聞く / 朝の読み上げ / 様子。
+/// 録音 / 頼まれごと / 次の予定 / さっきの会話 / 聞く / 昨日と今日 / 様子。
 /// 録音の画面は前と同じ。ほかの画面の中身は iPhone から届く（iPhone が離れていても、前に届いた分を出す）。
 struct WatchContentView: View {
     @Environment(WatchRecorder.self) private var recorder
@@ -309,7 +309,7 @@ private struct AskPage: View {
     }
 }
 
-// MARK: - 朝の読み上げ
+// MARK: - 昨日と今日（2026-11-09。前の「朝の読み上げ」。声で読むのはやめた）
 
 private struct MorningPage: View {
     @Environment(WatchRecorder.self) private var recorder
@@ -318,16 +318,10 @@ private struct MorningPage: View {
         let board = recorder.board
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
-                PageTitle(text: "朝の読み上げ", symbol: "sun.max")
+                PageTitle(text: "昨日と今日", symbol: "sun.max")
                 if board.info == nil {
                     NothingYet()
                 } else if let brief = board.info?.morning {
-                    Button {
-                        board.reader.toggle(brief.text)
-                    } label: {
-                        Label(board.reader.speaking ? "止める" : "読み上げる",
-                              systemImage: board.reader.speaking ? "stop.circle" : "speaker.wave.2")
-                    }
                     Text(brief.text).font(.footnote)
                 } else {
                     Text("まだ今日の分がありません。iPhone の LifeLog を開くと作ります。")

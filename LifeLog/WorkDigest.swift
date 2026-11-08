@@ -482,7 +482,8 @@ extension Pipeline {
         return note
     }
 
-    /// 「自分の宿題」→ 頼まれごと帳の確かめ待ち（仕事）。同じ日の・よく似たものは帳の add が足さない
+    /// 「自分の宿題」→ 頼まれごと帳の「やる」（仕事）。同じ日の・よく似たものは帳の add が足さない。
+    /// 職場の Claude がもう選んだものなので、確かめ待ちを通さない（2026-11-09。前は確かめ待ちに入れていた）
     static func workDigestTasks(_ homework: [String], day: String, now: Date = .now) -> [TaskBook.Item] {
         // 言われた時刻は、その日の18時（今日のまとめなら今）
         let start = TaskBook.dayFormat.date(from: day) ?? now
@@ -493,7 +494,7 @@ extension Pipeline {
             guard !h.what.isEmpty else { continue }
             let due: Date? = h.dueText.flatMap { WorkDigestParser.dueDate($0, digestDay: day) }
             let item = TaskBook.Item(what: h.what, from: h.from, dueText: h.dueText, due: due, said: said, day: day,
-                                     quote: "仕事のまとめ（\(day)）の宿題: " + line, source: .summary, state: .candidate,
+                                     quote: "仕事のまとめ（\(day)）の宿題: " + line, source: .summary, state: .open,
                                      work: true, kind: h.from != nil ? .asked : nil)
             out.append(item)
         }

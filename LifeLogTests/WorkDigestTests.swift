@@ -219,7 +219,7 @@ final class WorkDigestTests: XCTestCase {
         let items = Pipeline.workDigestTasks(homework, day: "2026-11-08", now: today)
         XCTAssertEqual(items.count, 2)
         XCTAssertEqual(items.map(\.what), ["見積書を送る", "議事録をまとめる"])
-        XCTAssertTrue(items.allSatisfy { $0.state == .candidate && $0.work == true && $0.day == "2026-11-08" })
+        XCTAssertTrue(items.allSatisfy { $0.state == .open && $0.work == true && $0.day == "2026-11-08" })
         XCTAssertEqual(items.first?.from, "Aさん")
         XCTAssertEqual(items.first?.due.map { TaskBook.dayFormat.string(from: $0) }, "2026-11-10")
         // 同じまとめをもう一度取り込んでも、似たものとして足さない（帳の add と同じ見分け方）

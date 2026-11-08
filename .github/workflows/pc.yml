@@ -178,7 +178,7 @@ jobs:
             --hidden-import ops --hidden-import diag --hidden-import apns --hidden-import ascfeedback \
             --hidden-import trainer --hidden-import gpu --hidden-import v7checks_ops \
             --hidden-import v8checks --hidden-import v9checks --hidden-import lifelog_mcp \
-            --hidden-import watchroute --hidden-import v10checks \
+            --hidden-import watchroute --hidden-import v10checks --hidden-import mothership \
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \
             --hidden-import cryptography.hazmat.primitives.asymmetric.ec \
