@@ -261,6 +261,10 @@ extension Pipeline {
         add("人", "名前のある人", "\(others.filter(\.isNamed).count) 人")
         add("人", "名前の無い声", "\(others.filter { !$0.isNamed }.count) 人")
         add("人", "記録に出さない人", "\(others.filter { $0.hidden == true }.count) 人")
+        // 名前の無い声の夜の整理（2026-11-09）
+        if let tidy = UserDefaults.standard.string(forKey: Pipeline.voiceTidyResultKey) {
+            add("人", "名前の無い声の夜の整理（前回）", tidy)
+        }
         let review = voiceReview().count
         add("人", "見直したい声のひとこま", "\(review) 個", review == 0)
         add("人", "自分の声", hasSelfVoice ? "登録済み" : "まだ", hasSelfVoice)

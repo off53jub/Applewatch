@@ -311,11 +311,26 @@ extension Pipeline {
         }
         done.append(day)
         UserDefaults.standard.set(Array(done.suffix(60)), forKey: Self.askedDaysKey)
-        let added = asks.add(drafts.prefix(Self.askPerDay).map { question(from: $0, day: day, in: convs) })
+        // 答えても記録が変わらない質問（短い言葉の意味・1回しか出てこない言葉・行の少ない声）は外す（2026-11-09）
+        let texts = convs.flatMap(\.lines).filter { $0.media == nil }.map(\.text)
+        let unnamed = Self.unnamedLineCounts(convs)
+        let useful = drafts.filter { Summarizer.keepsQuestion($0, lines: texts, unnamedLines: unnamed) }
+        Tally.add("ask.dropped", drafts.count - useful.count)
+        let added = asks.add(useful.prefix(Self.askPerDay).map { question(from: $0, day: day, in: convs) })
         guard !added.isEmpty else { return (day, 0) }
         if !pressed { notifyQuestions(asks.open.count, label: day == today ? "今日まで" : "これまで") }
         asksChanged()
         return (day, added.count)
+    }
+
+    /// 名前の無い声（「人物N」）ごとの、その日の行の数（放送の行は数えない）
+    nonisolated static func unnamedLineCounts(_ convs: [ConversationLog.Conversation]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for line in convs.flatMap(\.lines) where line.media == nil {
+            guard let name = line.speaker, name.hasPrefix("人物") else { continue }
+            counts[name, default: 0] += 1
+        }
+        return counts
     }
 
     /// 質問を作るために渡す、その日の記録（会話ごとの見出し・要点と、文字起こしの頭）
@@ -323,6 +338,10 @@ extension Pipeline {
         let clock = Self.askClock
         let per = max(300, 5_000 / max(1, convs.count))
         var text = ""
+        // 「だれか」を聞いてよい声（その日によく話した名前の無い声だけ。2026-11-09）
+        let many = Self.unnamedLineCounts(convs).filter { $0.value >= Summarizer.askWhoMinLines }
+            .sorted { $0.value > $1.value }.prefix(8)
+        text += "行の多い名前の無い声: " + (many.isEmpty ? "なし" : many.map { "\($0.key)（\($0.value) 行）" }.joined(separator: "、")) + "\n"
         if let summary {
             if !summary.decisions.isEmpty { text += "1日のまとめの「決まったこと」: " + summary.decisions.joined(separator: "／") + "\n" }
             if !summary.todos.isEmpty { text += "1日のまとめの「やること」: " + summary.todos.joined(separator: "／") + "\n" }

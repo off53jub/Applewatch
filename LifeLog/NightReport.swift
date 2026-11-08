@@ -117,6 +117,21 @@ enum Tally {
         if n("talk.joined") + n("talk.split") > 0 {
             rows.append(("会話の区切りの手直し", "つないだ \(n("talk.joined"))・分けた \(n("talk.split"))", nil))
         }
+        if n("talk.autoSplit") > 0 {
+            // 見出しが無いまま1時間より長かった前の会話を、自動で分け直した（2026-11-09）
+            rows.append(("長い会話の分け直し", "\(n("talk.autoSplit")) か所で分けた", nil))
+        }
+        if n("voice.tidyMerged") + n("voice.tidyForgot") + n("voice.tidySkipped") > 0 {
+            // 名前の無い声の夜の整理（2026-11-09。Pipeline の tidyUnnamedVoices）
+            rows.append(("名前の無い声の整理", "まとめた \(n("voice.tidyMerged"))・忘れた \(n("voice.tidyForgot"))"
+                + (n("voice.tidySkipped") > 0 ? "・控えが無くて見送った \(n("voice.tidySkipped")) 回" : ""), nil))
+        }
+        if n("ask.dropped") > 0 {
+            rows.append(("AI の質問で外したもの", "記録が変わらない質問 \(n("ask.dropped"))", nil))
+        }
+        if n("summary.todoDropped") > 0 {
+            rows.append(("1日のまとめ", "「決まったこと」と同じで外した「やること」 \(n("summary.todoDropped"))", nil))
+        }
         if n("watch.wake") > 0 {
             rows.append(("時計が iPhone のアプリを起こした", "\(n("watch.wake")) 回", nil))
         }

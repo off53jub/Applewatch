@@ -198,6 +198,81 @@ final class ConversationLog {
     /// あとから見出しを作るとき、1回に読む文字数の上限（無料枠を使い切らないように）
     private static let fillBudget = 12_000
 
+    // MARK: - 長い会話の区切り（2026-11-09）
+
+    /// これだけ続いた会話は、短い間（longTalkPause）でも区切る
+    static let longTalk: TimeInterval = 30 * 60
+    /// 長く続いた会話を区切る間の長さ（前の行を話し終えてから次の行まで）
+    static let longTalkPause: TimeInterval = 20
+    /// 1つの会話の長さの上限（これを超えたら、間が無くても区切る）
+    static let longestTalk: TimeInterval = 60 * 60
+
+    /// 行を話していた長さ（秒）。音声の中の終わりの位置が分からなければ、文字数から見積もる
+    static func spokenLength(_ line: Line) -> TimeInterval {
+        if let end = line.end, let offset = line.offset, end > offset { return end - offset }
+        return Double(line.text.count) * 0.17
+    }
+
+    /// start に始まり、最後の行（last。時刻は lastTime）まで続いた会話を、next の行の前で閉じるか（長い会話のときだけ）。
+    /// 30分を超えたら20秒の間で、60分に届いたら間が無くても閉じる。
+    static func endsLongTalk(start: Date, last: Line?, lastTime: Date, next: Date) -> Bool {
+        if next.timeIntervalSince(start) >= longestTalk { return true }
+        guard lastTime.timeIntervalSince(start) >= longTalk else { return false }
+        let silence = next.timeIntervalSince(lastTime) - (last.map(spokenLength) ?? 0)
+        return silence >= longTalkPause
+    }
+
+    /// 届いた行を、長い会話の区切りで分ける。openStart は続いている会話の始まり（無ければ nil）。
+    static func segments(_ lines: [Line], openStart: Date?) -> [[Line]] {
+        var parts: [[Line]] = []
+        var current: [Line] = []
+        var start = openStart
+        for line in lines {
+            if let s = start, let prev = current.last,
+               endsLongTalk(start: s, last: prev, lastTime: prev.time, next: line.time) {
+                parts.append(current)
+                current = []
+                start = line.time
+            }
+            if start == nil { start = line.time }
+            current.append(line)
+        }
+        if !current.isEmpty { parts.append(current) }
+        return parts
+    }
+
+    /// 見出しが無く、長さの上限より長い、閉じた会話（前の記録。分け直して見出しを付ける）
+    static func needsLongSplit(_ c: Conversation) -> Bool {
+        c.closed && c.title == nil && c.media == nil && c.lines.count >= 2
+            && c.end.timeIntervalSince(c.start) > longestTalk
+    }
+
+    /// 長い会話を分ける所（分けた後ろの会話の、最初の行の時刻。古い順）
+    static func longCuts(_ lines: [Line]) -> [Date] {
+        let sorted = lines.sorted { $0.time < $1.time }
+        var seen = Set<Date>()
+        return segments(sorted, openStart: nil).dropFirst().compactMap(\.first?.time)
+            .filter { $0 > (sorted.first?.time ?? .distantPast) && seen.insert($0).inserted }
+    }
+
+    /// 見出しが無いまま長すぎる前の会話を、「分ける」と同じしかたで1時間以内に分ける（見出しと要点は作り直しで付く）。
+    /// 本人が分けたのではないので、区切りの学びには入れない。分けた数を返す。
+    func splitLongConversations() async -> Int {
+        var made = 0
+        for day in days() {
+            for c in load(day).conversations where Self.needsLongSplit(c) {
+                var start = c.start
+                for cut in Self.longCuts(c.lines) {
+                    if Task.isCancelled { return made }
+                    guard await split(start: start, at: cut, day: day) != nil else { break }
+                    start = cut
+                    made += 1
+                }
+            }
+        }
+        return made
+    }
+
     private let docs: GoogleDocs
     /// 要約に使う Groq のキー。nil なら見出しは時刻と相手だけにする。
     var apiKey: () -> String? = { nil }
@@ -242,10 +317,26 @@ final class ConversationLog {
     // MARK: - 追記
 
     /// 行をドキュメントに追記し、会話として記録する。
+    /// 長く続いた会話は、届いた行の途中でも区切る（長い会話の区切り。2026-11-09）。
     func append(_ lines: [Line], text: String, day: String) async throws {
         guard let first = lines.first else { return }
         await closeOpenConversations(before: first.time, day: day)
+        let openStart = load(day).conversations.last(where: { !$0.closed })?.start
+        let parts = Self.segments(lines, openStart: openStart)
+        guard parts.count > 1 else {
+            try await appendPart(lines, text: text, day: day)
+            return
+        }
+        for (n, part) in parts.enumerated() {
+            guard let head = part.first else { continue }
+            // 前の分で長くなった会話を閉じてから、続きを新しい会話として書く
+            if n > 0 { await closeOpenConversations(before: head.time, day: day) }
+            try await appendPart(part, text: part.map { Self.docLine($0) + "\n" }.joined(), day: day)
+        }
+    }
 
+    private func appendPart(_ lines: [Line], text: String, day: String) async throws {
+        guard let first = lines.first else { return }
         var log = load(day)
         // 続いている会話はこの端末のもの（ほかの端末からは閉じた会話しか来ない）
         if log.conversations.lastIndex(where: { !$0.closed }) == nil {
@@ -284,7 +375,9 @@ final class ConversationLog {
             guard let i = log.conversations.lastIndex(where: { !$0.closed }) else { continue }
             let conversation = log.conversations[i]
             let sameDay = day == nil || day == openDay
-            guard !sameDay || time.timeIntervalSince(conversation.end) > Self.gap else { continue }
+            guard !sameDay || time.timeIntervalSince(conversation.end) > Self.gap
+                    || Self.endsLongTalk(start: conversation.start, last: conversation.lines.last,
+                                         lastTime: conversation.end, next: time) else { continue }
             let work = isWork(conversation.start)
             if let closed = await Summarizer.$sensitive.withValue(work, operation: { await close(conversation, day: openDay) }) {
                 // 閉じているあいだに同期で増えた会話も残すよう、読み直してから置き換える
@@ -376,8 +469,9 @@ final class ConversationLog {
     /// 閉じたのに、見出しが付いていない会話か。
     private static func needsTitle(_ c: Conversation) -> Bool {
         // 作り直しを待っている会話（分けた後ろの会話など）は、作り直しのほうで見出しを付ける（二重に付けない）
+        // 長すぎる会話は、先に分け直してから見出しを付ける（2026-11-09）
         c.closed && c.title == nil && c.media == nil && c.titleSkipped != true && c.resummarize != true
-            && c.lines.reduce(0) { $0 + $1.text.count } >= minimumCharacters
+            && !needsLongSplit(c) && c.lines.reduce(0) { $0 + $1.text.count } >= minimumCharacters
     }
 
     /// 無料枠が足りずに見出しを作れなかった会話に、あとから見出しと要点を付ける。
@@ -1112,8 +1206,10 @@ final class ConversationLog {
     /// match に当たる行を、テレビ・動画・ラジオなどの放送の行（kind）にし、ドキュメントの同じ行も直す。
     /// 夜の見分けと同じく、元の名前と番号は heardSpeaker / heardSpeakerID に残す。直した行の数を返す。
     /// 記録はいつも直す。ドキュメントを直せなかった日は、直しを覚えて次の機会にやり直す（docError に最初のエラー）。
+    /// dropping を渡すと、会話の見出しの「〇〇と」からその名前を外す（名前を付けた人を放送の声にしたとき。2026-11-09）。
     @discardableResult
-    func markMedia(_ kind: String, where match: (Line) -> Bool) async -> (count: Int, docError: Error?) {
+    func markMedia(_ kind: String, dropping name: String? = nil,
+                   where match: (Line) -> Bool) async -> (count: Int, docError: Error?) {
         var changed = 0
         var docError: Error?
         for day in days() {
@@ -1133,10 +1229,16 @@ final class ConversationLog {
                 }
             }
             guard !fixes.isEmpty else { continue }
+            if let name, !name.isEmpty { fixes += Self.headingFixes(dropping: name) }
             await fixDoc(fixes, day: day, error: &docError)
             save(log, day: day)
         }
         return (changed, docError)
+    }
+
+    /// 見出しの相手（「　A、Bと」の形）から name を外す置き換え。ほかの人が残るときは「、」をつめ、name だけなら「　nameと」ごと外す。
+    static func headingFixes(dropping name: String) -> [(find: String, replace: String)] {
+        [("、" + name + "と", "と"), ("　" + name + "、", "　"), ("、" + name + "、", "、"), ("　" + name + "と", "")]
     }
 
     // MARK: - ドキュメントの直しのやり直し（2026-11-08）
@@ -1572,6 +1674,30 @@ final class ConversationLog {
     /// 条件に合う行の時刻（すべての日）
     func lineTimes(where match: (Line) -> Bool) -> [Date] {
         days().flatMap { day in load(day).conversations.flatMap { $0.lines.filter(match).map(\.time) } }
+    }
+
+    /// 声の番号ごとの、すべての日の行の数（名前の無い声の整理に使う。2026-11-09）
+    func speakerLineCounts() -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for day in days() {
+            for line in load(day).conversations.flatMap(\.lines) {
+                if let id = line.speakerID { counts[id, default: 0] += 1 }
+            }
+        }
+        return counts
+    }
+
+    /// 同じ音声の区切りの中で別の声とされた2人（番号の小さい順の組。すべての日）。別の人なので、まとめない
+    func voicesHeardTogether() -> Set<[String]> {
+        var pairs = Set<[String]>()
+        for day in days() {
+            let lines = load(day).conversations.flatMap(\.lines).filter { $0.audio != nil && $0.speakerID != nil }
+            for (_, group) in Dictionary(grouping: lines, by: { $0.audio ?? "" }) {
+                let ids = Array(Set(group.compactMap(\.speakerID))).sorted()
+                for a in ids.indices { for b in ids.indices where a < b { pairs.insert([ids[a], ids[b]]) } }
+            }
+        }
+        return pairs
     }
 
     /// 1日のまとめの中身（まだ付けていなければ nil）

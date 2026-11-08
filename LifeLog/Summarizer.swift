@@ -153,17 +153,46 @@ enum Summarizer {
     }
 
     static func day(_ conversations: String, apiKey: String) async throws -> Day {
+        // 見本の文は入れず、決まりだけを言葉で伝える（2026-11-09）
         let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
-            次は、ある人の1日の会話の見出しと要点の一覧です（時刻・場所・相手・見出し）。1日のまとめを次の JSON で返してください。
-            なければ空の配列にしてください。
-            "flow" は1日の流れです。時間の近い会話や、同じ場所・同じ用事の会話をひとまとめにし、
-            「9:00〜11:30　会社　企画会議と提案資料づくり（田中さん、佐藤さん）」の形で、時刻順に2〜8個にしてください。
-            {"flow": ["..."], "decisions": ["決まったこと"], "todos": ["本人がやること・約束（期限があれば添える）"], "topics": ["話題や気になったこと"]}
+            次は、ある人（本人）の1日の会話の見出しと要点の一覧です（時刻・場所・相手・見出し）。1日のまとめを次の JSON で返してください。
+            なければ空の配列にしてください。一覧に無いことは書かないでください。
+            "flow" は1日の流れです。時刻順に、時刻の範囲・場所・していたこと・一緒にいた人が分かる1行ずつにしてください。
+            1つの塊は長くても2時間くらいまでにしてください。場所・一緒にいる人・していることが変わったら、そこで塊を分けてください。
+            "decisions" は、この日に決まったことです。
+            "todos" は、本人がこれから自分でやることだけです。本人が引き受けた・自分でやると言った・約束したことで、まだ済んでいないものにし、期限があれば添えてください。
+            ほかの人がやること・もう済んだこと・本人が何もしなくてよいことは入れないでください。
+            "decisions" に書いたことを、そのまま "todos" に書き写さないでください。決まったことで本人が動く必要があるときだけ、本人が何をするかの形で書いてください。
+            "topics" は、話題や気になったことです。
+            {"flow": ["..."], "decisions": ["..."], "todos": ["..."], "topics": ["..."]}
             \(known(for: conversations))
             \(conversations)
             """)
         func list(_ key: String) -> [String] { (json[key] as? [String]) ?? [] }
-        return Day(flow: list("flow"), decisions: list("decisions"), todos: list("todos"), topics: list("topics"))
+        let decisions = list("decisions"), todos = list("todos")
+        let kept = todosWithoutDecisions(todos, decisions: decisions)
+        Tally.add("summary.todoDropped", todos.count - kept.count)
+        return Day(flow: list("flow"), decisions: decisions, todos: kept, topics: list("topics"))
+    }
+
+    /// 見比べるための形（空白・句読点・かっこ・記号を除く）
+    static func comparable(_ text: String) -> String {
+        let drop = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters).union(.symbols)
+        return String(text.unicodeScalars.filter { !drop.contains($0) })
+    }
+
+    /// 「やること」から、「決まったこと」の書き写しと、同じものの重なりを外す（2026-11-09）。
+    /// 外すのは、見比べる形が「決まったこと」と同じか、その中に含まれるもの（含むほうが少しだけ長いものも）。
+    static func todosWithoutDecisions(_ todos: [String], decisions: [String]) -> [String] {
+        let decided = decisions.map(comparable).filter { !$0.isEmpty }
+        var seen = Set<String>()
+        return todos.filter { todo in
+            let t = comparable(todo)
+            guard !t.isEmpty, seen.insert(t).inserted else { return false }
+            return !decided.contains { d in
+                d == t || d.contains(t) || (t.contains(d) && Double(d.count) >= Double(t.count) * 0.7)
+            }
+        }
     }
 
     /// 1日の会話の一覧を「何をしていたか」の長い塊に区切る。count は一覧の数。
@@ -172,14 +201,15 @@ enum Summarizer {
                                apiKey: String) async throws -> [(from: Int, to: Int, title: String)] {
         let prompt = """
             次は、ある人（本人）の1日の録音を、会話ごとに時刻順に並べた一覧です（番号. 時刻｜場所｜相手｜〔カレンダーの予定〕｜見出し）。
-            この人が「何をしていたか」で、1日をいくつかの長い時間の塊に分けてください。
+            この人が「何をしていたか」で、1日をいくつかの時間の塊に分けてください。
             ・塊は一覧の番号の連続した範囲です。0 番から \(count - 1) 番まで、すべての番号をちょうど1つの塊に入れ、時刻順に並べてください。
-            ・同じ用事・同じ場所での活動（たとえばダンスの練習、会社での仕事、家族との夕食、買い物）は、途中に短い休憩・電話・雑談・移動が挟まっても1つの塊にしてください。
-              細かく分けすぎないでください（1つの塊は何時間でもかまいません。目安は1日に3〜10個）。
+            ・同じ用事・同じ場所での活動は、途中に短い休憩・電話・雑談が挟まっても1つの塊にしてください。
+            ・1つの塊は長くても2時間くらいまでにしてください。それより長く続く活動は、その中で区切りのよいところで分けてください。
+            ・場所・一緒にいる人・していることが変わったら、2時間より短くても、そこで塊を分けてください。
             ・カレンダーの予定と時間が重なるところは、予定名を参考にしてください（会話の中身と合わないときは使わないでください）。
             ・"title" は、何をしていたかが一目で分かる15文字以内の名前にしてください。
             \(events.isEmpty ? "" : "\nこの日のカレンダーの予定:\n\(events)\n")\
-            \(previous.map { "\n前にまとめたときの塊（会話が増えたので見直しています。変える理由が無ければ、区切りと名前はなるべくそのままに）:\n\($0)\n" } ?? "")
+            \(previous.map { "\n前にまとめたときの塊（会話が増えたので見直しています。変える理由が無ければ、区切りと名前はなるべくそのままに。ただし2時間より長い塊は分けてください）:\n\($0)\n" } ?? "")
             次の JSON で返してください。from と to は番号（整数）です。
             {"blocks": [{"from": 整数, "to": 整数, "title": "塊の名前"}, ...]}
 
@@ -660,15 +690,16 @@ enum Summarizer {
         let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
             次は \(day) の、ある人の記録です。[自分] は記録している本人で、会話ごとに時刻・場所・相手・見出し・要点と、文字起こしの頭があります。
             音声認識と AI が作ったものなので、聞き間違えた言葉・人の名前の取り違え・何の集まりかの取り違え・決まっていないことを決まったことにしている、などの間違いや、中身が分からないあいまいなところがあります。
-            記録を正しくするために、本人に聞くと効きそうな質問を \(count) 個まで作ってください。
+            記録を正しくするために、本人が答えると記録が書き換わる質問だけを \(count) 個まで作ってください。
             答えると、その日の見出しやまとめが正しくなり、次からの記録にも役に立つものを優先してください。
-            記録を読めば分かること・答えても役に立たないこと・テレビや動画の中身・本人のこころの中のことは聞かないでください。
-            聞くことが無ければ空の配列にしてください。数を埋めるために作らないでください。
-            種類は次の4つです。
-            what: 何をしていたか・何の集まりか・何の話か（見出しや要点があいまい・ずれていそうなとき）
-            word: 聞き間違いらしい言葉（とくに人の名前・店や場所・固有名詞）
-            who: 話に出た人や、話していた人がだれか
+            聞いてよいのは次の4つの種類だけです。
+            who: 名前の無い声（[人物N]）がだれか。下の「行の多い名前の無い声」に挙がっている声だけにしてください（挙がっていなければ who は作らない）。
+            what: その会話がどこでの・何の集まりだったか（場所や見出しが違っていそうなときだけ）
+            word: 聞き間違いらしい人の名前・店や場所の名前・固有名詞・専門用語（記録の中に2回以上出てくる、3文字以上のもの）
             decision: 「決まったこと」「やること」が本当にそうか
+            短い言葉や音（あいづち・かけ声・遊びやゲームの言葉など）の意味、言葉の意味そのものは聞かないでください。
+            記録を読めば分かること・答えても記録が変わらないこと・テレビや動画の中身・本人のこころの中のことも聞かないでください。
+            聞くことが無ければ空の配列にしてください。数を埋めるために作らないでください。
             次の JSON で返してください。
             {"questions": [{"kind": "what・word・who・decision のどれか",
                             "question": "本人への短い質問。いつの・どの話かが分かるように書く",
@@ -691,6 +722,37 @@ enum Summarizer {
             return AskDraft(kind: kind, question: question, subject: text("subject"), choices: Array(choices.prefix(4)),
                             quote: text("quote"), time: text("time"))
         }
+    }
+
+    /// 「だれか」を聞いてよい名前の無い声の、その日の行の数の下限
+    static let askWhoMinLines = 10
+
+    /// 答えても記録が変わらない質問を外す（2026-11-09）。lines はその日の行の文、unnamedLines は名前の無い声ごとのその日の行の数。
+    /// ・言葉の質問: 対象が3文字より短いか、2行より少ない行にしか出てこないものは外す
+    /// ・意味を聞く質問: 言葉の質問か、対象が3文字より短いものは外す
+    /// ・だれかの質問: 名前の無い声（人物N）が対象で、その日の行が askWhoMinLines より少ないものは外す
+    static func keepsQuestion(_ d: AskDraft, lines: [String], unnamedLines: [String: Int]) -> Bool {
+        let subject = d.subject.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "「」『』\"'[]［］"))
+        if d.question.contains("意味") && (d.kind == .word || subject.count < 3) { return false }
+        switch d.kind {
+        case .word:
+            guard subject.count >= 3 else { return false }
+            return lines.filter { $0.contains(subject) }.count >= 2
+        case .who:
+            let voices = unnamedVoices(in: subject + " " + d.question)
+            guard !voices.isEmpty else { return true }
+            return voices.contains { (unnamedLines[$0] ?? 0) >= askWhoMinLines }
+        default:
+            return true
+        }
+    }
+
+    /// 文の中の「人物N」
+    static func unnamedVoices(in text: String) -> [String] {
+        guard let pattern = try? NSRegularExpression(pattern: #"人物\d+"#) else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return pattern.matches(in: text, range: range).compactMap { Range($0.range, in: text).map { String(text[$0]) } }
     }
 
     /// 本人が前に質問に答えて教えてくれたことのうち、この中身に関係するもの（無ければ空）。
