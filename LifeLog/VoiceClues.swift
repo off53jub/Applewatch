@@ -355,6 +355,23 @@ extension Pipeline {
         return count
     }
 
+    /// 放送の声の種類（電車・駅・お店のアナウンスなど。夜の見分けと同じ名前）
+    static let broadcastKind = "放送"
+
+    /// 名前を付けた人が、じつは電車や駅・お店のアナウンスなどの放送の声だったとき（本人が押したときだけ。2026-11-09）：
+    /// その人の行をすべて放送の行（「放送」）に書き換え（元の名前と番号は行に残す）、見出しの「〇〇と」からも外して、その人を消す。
+    /// 自分と名前の無い声には使わない（名前の無い声は「テレビ・動画・ラジオの声だった」）。直した行の数を返す。
+    func markNamedPersonAsBroadcast(_ id: String) async -> Int {
+        guard let person = people.first(where: { $0.id == id }), person.isNamed, !person.isSelf else { return 0 }
+        let name = person.displayName
+        let count = await markMedia(Self.broadcastKind, dropping: name) { line in
+            line.speakerID == id || (line.speakerID == nil && line.speaker == name)
+        }
+        await removePerson(id)
+        Self.broadcastCache = (.distantPast, [])
+        return count
+    }
+
     /// 候補を選んだとき：名前のある人に同じ名前の人がいればその人にまとめ、いなければその名前を付ける。
     func applyName(_ candidate: NameCandidate, to id: String) async {
         if let target = candidate.target {

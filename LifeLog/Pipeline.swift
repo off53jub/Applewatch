@@ -1077,8 +1077,8 @@ final class Pipeline {
     static let mediaKinds = ["テレビ", "動画", "ラジオ・音楽"]
 
     /// match に当たる行を放送の行（kind）にする。直した行の数を返す。
-    func markMedia(_ kind: String, where match: (ConversationLog.Line) -> Bool) async -> Int {
-        let result = await conversations.markMedia(kind, where: match)
+    func markMedia(_ kind: String, dropping name: String? = nil, where match: (ConversationLog.Line) -> Bool) async -> Int {
+        let result = await conversations.markMedia(kind, dropping: name, where: match)
         if result.count > 0 {
             placeIndexBuilt = .distantPast
             recordsVersion += 1
@@ -1620,6 +1620,12 @@ final class Pipeline {
         // 1日のまとめ・人物ノート・週のまとめ・AI 向けの案内と索引は、iPhone だけが書く
         // （iPad の会話は同期で iPhone に届くので、iPhone が両方の分をまとめて書く。二重にならないように）
         if UIDevice.current.userInterfaceIdiom != .pad {
+            // 見出しが無いまま1時間より長い前の会話を、1時間以内に分け直す（見出しは作り直しで付く。2026-11-09）
+            let longSplits = await conversations.splitLongConversations()
+            if longSplits > 0 {
+                Tally.add("talk.autoSplit", longSplits)
+                recordsVersion += 1
+            }
             // 無料枠が足りずに見出しを作れなかった会話を、少しずつ埋める
             await conversations.fillMissingTitles()
             // 聞き間違いらしい言葉を探し、直し終わった日の見出しとまとめを作り直す
@@ -1671,6 +1677,8 @@ final class Pipeline {
         // 検索の索引（書き換わった日だけ）と、登録の毎日の控えと、動き具合の診断
         refreshSearchIndex()
         await backups.runIfDue(signedIn: email != nil)
+        // 夜に充電していれば、名前の無い声を1日1回整理する（控えができてから。iPhone だけ。2026-11-09）
+        if UIDevice.current.userInterfaceIdiom != .pad { await tidyUnnamedVoicesIfDue() }
         // 署名の期限の前に知らせる（起動ごとに1回頼む）
         await Provisioning.scheduleRemindersOnce()
         // 前の日の抜け・壊れた区切り・自信の低い行などを、朝の通知に1行で出す
@@ -2140,6 +2148,78 @@ final class Pipeline {
             merged += merges.count
         }
         if merged > 0 { lastEngine += "・同じ人の声を \(merged) つまとめた" }
+    }
+
+    // MARK: - 名前の無い声の夜の整理（2026-11-09）
+
+    /// 前の夜の整理の結果（自己点検に出す。数だけ）
+    static let voiceTidyResultKey = "voiceTidyResult"
+
+    /// 夜（22時〜6時）に充電していれば、1日1回、名前の無い声を整理する。
+    /// - 声の特徴がとても近い（いちばん厳しい聞き分けの線より近い）名前の無い声どうしを、ふだんのまとめと同じしかたでまとめる
+    ///   （記録とドキュメントの名前も直り、人の画面の「まとめた人を分け直す」から戻せる。1晩30組まで）
+    /// - 記録の行が3行以下で、3日より前に聞いたきりの名前の無い声を忘れる（記録の行はそのまま。行の数に関係なく2週間で忘れるのは前から）
+    /// 名前のある人・自分・登録や手直しの声がある声・手で変えた声・まとめを戻した声には触らない。
+    /// その日の登録の控えができていなければ、やらない。初めての整理の前には、覚えた声のファイルを別に写しておく。
+    private func tidyUnnamedVoicesIfDue() async {
+        let dayKey = "voiceTidyDay"
+        let today = dayFormatter.string(from: .now)
+        let hour = Calendar.current.component(.hour, from: .now)
+        guard speakerLabelsOn, Power.isCharging, hour >= 22 || hour < 6,
+              UserDefaults.standard.string(forKey: dayKey) != today else { return }
+        guard let last = backups.lastLocal, Calendar.current.isDateInToday(last), Self.keepCopyBeforeFirstTidy() else {
+            Tally.add("voice.tidySkipped")
+            return
+        }
+        UserDefaults.standard.set(today, forKey: dayKey)
+        // まとめた記録のある声（まとめた先・戻した声）には触らない
+        let keep = Set(MergeLog.all().flatMap { [$0.source.id, $0.target] })
+        let limit = min(0.24, SpeakerLabeler.Strictness.strict.strictLimit)
+        let lines = conversations.speakerLineCounts()
+        let apart = conversations.voicesHeardTogether()
+        guard let plan = await speakers.tidyPlan(lines: lines, apart: apart, keep: keep, limit: limit) else {
+            Tally.add("voice.tidySkipped")
+            return
+        }
+        let forgot = await speakers.forgetTidied(Set(plan.forget))
+        var merged = 0
+        var into = Set<String>()
+        for m in plan.merges {
+            if Task.isCancelled { break }
+            // 決めてから手で直された声は、まとめない（この整理でまとめた先になった声は、続けてまとめてよい）
+            let sourceOK = await speakers.mayTidy(m.source)
+            let targetOK = await speakers.mayTidy(m.target)
+            guard sourceOK, targetOK || into.contains(m.target) else { continue }
+            await mergePerson(m.source, into: m.target, automatic: true)
+            into.insert(m.target)
+            merged += 1
+        }
+        people = await speakers.people()
+        Tally.add("voice.tidyMerged", merged)
+        Tally.add("voice.tidyForgot", forgot)
+        UserDefaults.standard.set("\(Date.now.formatted(date: .abbreviated, time: .shortened))・まとめた \(merged)・忘れた \(forgot)",
+                                  forKey: Self.voiceTidyResultKey)
+        if merged > 0 {
+            placeIndexBuilt = .distantPast
+            recordsVersion += 1
+        }
+    }
+
+    /// 初めての整理の前に、覚えた声のファイル（people.json）と、まとめた記録（merges.json）をそのまま写しておく。
+    /// 7日で入れ替わる毎日の控えとは別に、ずっと残す。写せていれば（前に写してあれば）true。
+    private static func keepCopyBeforeFirstTidy() -> Bool {
+        let base = URL.applicationSupportDirectory
+        let manager = FileManager.default
+        let people = base.appendingPathComponent("people.json")
+        let copy = base.appendingPathComponent("people-before-tidy.json")
+        if manager.fileExists(atPath: copy.path) { return true }
+        guard manager.fileExists(atPath: people.path) else { return false }
+        let merges = base.appendingPathComponent("merges.json")
+        let mergesCopy = base.appendingPathComponent("merges-before-tidy.json")
+        if manager.fileExists(atPath: merges.path), !manager.fileExists(atPath: mergesCopy.path) {
+            try? manager.copyItem(at: merges, to: mergesCopy)
+        }
+        return (try? manager.copyItem(at: people, to: copy)) != nil
     }
 
     // MARK: - 呼ばれた名前

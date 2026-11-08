@@ -336,6 +336,8 @@ struct PersonView: View {
     @State private var sampleInfo: [SpeakerLabeler.Sample: Pipeline.SampleInfo] = [:]
     @State private var askingMedia = false
     @State private var markingMedia = false
+    /// 名前を付けた人を放送の声にするか聞いている（2026-11-09）
+    @State private var askingBroadcast = false
     /// 記録と食い違って、聞き分けから外したひとこま（戻せる）
     @State private var aside: [SpeakerLabeler.SetAside] = []
     @State private var asideInfo: [SpeakerLabeler.Sample: Pipeline.SampleInfo] = [:]
@@ -543,11 +545,16 @@ struct PersonView: View {
                         if !person.isNamed {
                             Button(markingMedia ? "書き換えています…" : "テレビ・動画・ラジオの声だった") { askingMedia = true }
                                 .disabled(markingMedia)
+                        } else {
+                            Button(markingMedia ? "書き換えています…" : "放送にする（アナウンスの声だった）") { askingBroadcast = true }
+                                .disabled(markingMedia)
                         }
                         Button("この声を忘れる", role: .destructive) { deleting = true }
                     } footer: {
                         if !person.isNamed {
                             Text("「テレビ・動画・ラジオの声だった」は、この声の行をすべて「テレビ」などの行に書き換えて、声を忘れます（行は消えず、これからの数にも入りません）。")
+                        } else {
+                            Text("「放送にする」は、電車や駅・お店のアナウンスなど、人ではない声に名前を付けていたときに。この人の行をすべて「放送」の行に書き換え、この人を消します（行は消えず、話した相手にも数えません）。")
                         }
                     }
                 }
@@ -662,6 +669,19 @@ struct PersonView: View {
             }
         } message: {
             Text("この声の行をすべて、その種類の行（「テレビ」など）に書き換え、この声を忘れます。行は消えません。")
+        }
+        .confirmationDialog("「\(person?.displayName ?? "")」を放送にしますか？", isPresented: $askingBroadcast,
+                            titleVisibility: .visible) {
+            Button("放送にする", role: .destructive) {
+                markingMedia = true
+                Task {
+                    _ = await pipeline.markNamedPersonAsBroadcast(id)
+                    markingMedia = false
+                    dismiss()
+                }
+            }
+        } message: {
+            Text("これまでの行をすべて「放送」の行に書き換え（ドキュメントも直します）、この人を消します。行は消えません。名前と声は戻せないので、人だったときは押さないでください。")
         }
         .confirmationDialog("この声を忘れますか？", isPresented: $deleting, titleVisibility: .visible) {
             Button("忘れる", role: .destructive) {

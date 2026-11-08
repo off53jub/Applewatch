@@ -834,6 +834,96 @@ actor SpeakerLabeler {
         return result
     }
 
+    // MARK: - 名前の無い声の夜の整理（2026-11-09）
+
+    /// 夜の整理で触ってよい声か。名前が無く、自分でなく、登録・手直しの声が無く、記録に出さない人でもなく、
+    /// 名前・場・声を一度も手で変えていない（まとめた先になったこともない）声だけ。
+    /// （場は、知らない声を覚えたときにその場の場が入るので、手で変えたかは updated で見る）
+    nonisolated static func mayTidy(_ p: Person) -> Bool {
+        !p.isNamed && !p.isSelf && p.pinnedCount == 0 && p.hidden != true && p.updated == nil
+    }
+
+    /// 忘れる声: 記録の行がこれ以下で、
+    static let tidyForgetLines = 3
+    /// これより前に聞いたきりの声（名前の無い声は、行の数に関係なく2週間聞かなければ聞き分けのときに忘れるので、
+    /// 行のごく少ない声は、それより早く3日で忘れる）
+    static let tidyForgetAfter: TimeInterval = 3 * 86400
+
+    /// 夜の整理の中身（何もしない。決めるだけ）。
+    /// - 忘れる: 行が tidyForgetLines 以下で、最後に聞いてから tidyForgetAfter より前の声（古い順に maxForget まで）
+    /// - まとめる: 声の特徴の近さが limit 以内で、場（職場・職場以外）が同じ2つ（話した時間の短いほうを長いほうへ。maxMerges 組まで）。
+    ///   同じ音声の区切りで別の声とされた2つ（apart）はまとめない。まとめた先をさらにまとめることはしない。
+    /// どちらも mayTidy の声だけで、keep に入っている声には触らない。lines は声の番号ごとの、記録の行の数。
+    nonisolated static func tidyPlan(_ people: [Person], lines: [String: Int], apart: Set<[String]>, keep: Set<String>,
+                                     limit: Float, now: Date, maxMerges: Int = 30,
+                                     maxForget: Int = 300) -> (merges: [(source: String, target: String)], forget: [String]) {
+        let candidates = people.filter { mayTidy($0) && !keep.contains($0.id) }
+        let forget = candidates
+            .filter { (lines[$0.id] ?? 0) <= tidyForgetLines && now.timeIntervalSince($0.lastHeard) > tidyForgetAfter }
+            .sorted { $0.lastHeard < $1.lastHeard }.prefix(maxForget).map(\.id)
+        let forgotten = Set(forget)
+        // まとめるのは、いまのモデルの声があるものだけ
+        struct Entry {
+            let person: Person
+            let voices: [[Float]]
+            let center: [Float]
+        }
+        var pool: [Entry] = []
+        for p in candidates where !forgotten.contains(p.id) {
+            let voices = p.voices.filter { $0.model == model }.map(\.embedding)
+            guard let size = voices.first?.count, size > 0 else { continue }
+            let same = voices.filter { $0.count == size }
+            var sum = [Float](repeating: 0, count: size)
+            for v in same { for k in 0..<size { sum[k] += v[k] } }
+            pool.append(Entry(person: p, voices: same, center: normalized(sum)))
+        }
+        pool.sort { ($0.person.seconds, $0.person.id) < ($1.person.seconds, $1.person.id) }
+        var merges: [(source: String, target: String)] = []
+        var gone = Set<String>(), targets = Set<String>()
+        for (i, p) in pool.enumerated() {
+            guard merges.count < maxMerges else { break }
+            guard !targets.contains(p.person.id) else { continue }
+            var best: (id: String, distance: Float)?
+            // 話した時間の長いほう（並びで後ろ）へまとめる
+            for q in pool[(i + 1)...] where !gone.contains(q.person.id) && q.center.count == p.center.count
+                && q.person.context == p.person.context {
+                guard !apart.contains([p.person.id, q.person.id].sorted()) else { continue }
+                // まず真ん中どうしで大まかに見てから、声ごとに測る
+                let rough = 1 - zip(p.center, q.center).reduce(0) { $0 + $1.0 * $1.1 }
+                guard rough <= limit + 0.08 else { continue }
+                let d = p.voices.map { top3($0, q.voices) }.reduce(0, +) / Float(p.voices.count)
+                if d <= limit, d < (best?.distance ?? .infinity) { best = (q.person.id, d) }
+            }
+            if let best {
+                merges.append((p.person.id, best.id))
+                gone.insert(p.person.id)
+                targets.insert(best.id)
+            }
+        }
+        return (merges, forget)
+    }
+
+    /// 夜の整理の中身を決める。覚えている人を読めていない（名前のある人が1人もいない）ときは、何もしないよう nil。
+    func tidyPlan(lines: [String: Int], apart: Set<[String]>, keep: Set<String>, limit: Float,
+                  now: Date = .now) -> (merges: [(source: String, target: String)], forget: [String])? {
+        let all = store.people
+        guard all.contains(where: { $0.isNamed }) else { return nil }
+        return Self.tidyPlan(all, lines: lines, apart: apart, keep: keep, limit: limit, now: now)
+    }
+
+    /// まだ夜の整理で触ってよい声か（決めてから、まとめるまでのあいだに手で直していないか）
+    func mayTidy(_ id: String) -> Bool { person(id).map { Self.mayTidy($0) } ?? false }
+
+    /// 夜の整理で忘れる（触ってよい声だけ）。忘れた数を返す。
+    func forgetTidied(_ ids: Set<String>) -> Int {
+        let gone = store.people.filter { ids.contains($0.id) && Self.mayTidy($0) }.map(\.id)
+        guard !gone.isEmpty else { return 0 }
+        let set = Set(gone)
+        forget { set.contains($0.id) }
+        save()
+        return gone.count
+    }
+
     /// テレビや動画の声だった、名前の無い声を忘れる（登録・手直しした声は残す）。
     func forgetUnnamed(_ ids: Set<String>) {
         forget { ids.contains($0.id) && !$0.isNamed && $0.pinnedCount == 0 && $0.hidden != true }

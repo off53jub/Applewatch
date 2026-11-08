@@ -1,6 +1,6 @@
 import Foundation
 
-/// 1日の「過ごし方」：何をしていたかの長い時間の塊（例: 12:00〜16:00 ダンスの練習）。
+/// 1日の「過ごし方」：何をしていたかの時間の塊（長くても2時間くらい。2026-11-09 から）。
 /// 会話（話が3分途切れたら区切る細かい単位）を、用事・場所・カレンダーの予定ごとにまとめ直したもの。
 /// 会話の記録とは別のファイルに保存する（作り直しても会話の記録には触らない）。
 struct Activity: Codable, Identifiable {
@@ -144,7 +144,10 @@ enum ActivityBuilder {
                 apiKey: apiKey)
         }
         let smart = blocks != nil
-        let groups = blocks ?? simpleBlocks(units, in: list)
+        // 2時間より長い塊は、会話の切れ目で分ける（2026-11-09。1日の流れを細かく）
+        let groups = capped(blocks ?? simpleBlocks(units, in: list),
+                            starts: units.map { list[$0.indices[0]].start },
+                            ends: units.map { u in u.indices.map { list[$0].end }.max() ?? list[u.indices[0]].end })
 
         var result: [Activity] = groups.map { group in
             let indices = units[group.from...group.to].flatMap(\.indices)
@@ -281,6 +284,35 @@ enum ActivityBuilder {
             lines = convs.flatMap(\.lines).prefix(8).map { "・「" + String($0.text.prefix(40)) + "」" }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// 1つの塊の長さの上限の目安
+    static let maxBlock: TimeInterval = 2 * 3600
+
+    /// limit より長い塊を、まとまり（starts・ends は番号ごとの始まりと終わり）の切れ目で、limit 以内に分ける。
+    /// 1つのまとまりだけで limit を超えるときは、それ以上分けない。名前は元の塊のまま。
+    static func capped(_ blocks: [(from: Int, to: Int, title: String)], starts: [Date], ends: [Date],
+                       limit: TimeInterval = maxBlock) -> [(from: Int, to: Int, title: String)] {
+        var out: [(from: Int, to: Int, title: String)] = []
+        for block in blocks {
+            guard block.from <= block.to, block.to < starts.count, block.to < ends.count else {
+                out.append(block)
+                continue
+            }
+            var from = block.from
+            var end = ends[from]
+            for u in stride(from: block.from + 1, through: block.to, by: 1) {
+                if max(end, ends[u]).timeIntervalSince(starts[from]) > limit {
+                    out.append((from, u - 1, block.title))
+                    from = u
+                    end = ends[u]
+                } else {
+                    end = max(end, ends[u])
+                }
+            }
+            out.append((from, block.to, block.title))
+        }
+        return out
     }
 
     /// 言語モデルが使えないときの区切り方：長く途切れたとき・場所や予定が変わったとき
