@@ -319,24 +319,31 @@ extension Pipeline {
 
     // MARK: 毎朝の点検
 
+    /// 前の日の点検の1行（帳簿が始まる前の日は nil）。朝の「昨日と今日」にも入れる（2026-11-09）
+    func morningCheckLine(for yesterdayStart: Date, now: Date = .now) -> String? {
+        guard UserDefaults.standard.object(forKey: "morningCheck") as? Bool ?? true else { return nil }
+        let yesterday = Self.dayKey.string(from: yesterdayStart)
+        let map = ledger.map(for: yesterdayStart, now: now)
+        let counts = ledger.counts(for: yesterdayStart)
+        // 帳簿が始まる前の日は出さない
+        guard counts.watchReceived + counts.phoneRecorded > 0 || !map.gaps.isEmpty, !ledger.chunks.isEmpty else { return nil }
+        let lines = conversations(on: yesterday).flatMap(\.lines)
+        let uncertain = lines.filter(\.isUncertain).count
+        let unnamed = Set(lines.compactMap(\.speaker).filter { $0.hasPrefix("人物") }).count
+        return RecordingLedger.reportLine(gaps: map.gaps, counts: counts, uncertain: uncertain, unnamedVoices: unnamed)
+    }
+
     /// 前の日の点検を、7時半の通知に1行で出す（もう過ぎていて昼前なら、すぐ）。1日1回。
+    /// 朝の「昨日と今日」を知らせるときは、そちらに入れるので別には出さない（2026-11-09）
     func scheduleMorningCheck() {
-        guard UserDefaults.standard.object(forKey: "morningCheck") as? Bool ?? true else { return }
+        guard UserDefaults.standard.object(forKey: "morningCheck") as? Bool ?? true, !MorningBrief.isOn else { return }
         let now = Date.now
         let calendar = Calendar.current
         let today = Self.dayKey.string(from: now)
         guard UserDefaults.standard.string(forKey: "morningCheckSent") != today,
               calendar.component(.hour, from: now) >= 1, calendar.component(.hour, from: now) < 12,
-              let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now)) else { return }
-        let yesterday = Self.dayKey.string(from: yesterdayStart)
-        let map = ledger.map(for: yesterdayStart, now: now)
-        let counts = ledger.counts(for: yesterdayStart)
-        // 帳簿が始まる前の日は出さない
-        guard counts.watchReceived + counts.phoneRecorded > 0 || !map.gaps.isEmpty, !ledger.chunks.isEmpty else { return }
-        let lines = conversations(on: yesterday).flatMap(\.lines)
-        let uncertain = lines.filter(\.isUncertain).count
-        let unnamed = Set(lines.compactMap(\.speaker).filter { $0.hasPrefix("人物") }).count
-        let body = RecordingLedger.reportLine(gaps: map.gaps, counts: counts, uncertain: uncertain, unnamedVoices: unnamed)
+              let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now)),
+              let body = morningCheckLine(for: yesterdayStart, now: now) else { return }
         let at = calendar.date(bySettingHour: 7, minute: 30, second: 0, of: now) ?? now
         // 7時半より前は、そのつど作り直して予約し直す（夜中に処理が進むと数字が変わるため）
         Self.post(id: "morning-check", title: "昨日の点検", body: body, at: at)

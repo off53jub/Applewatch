@@ -6,6 +6,7 @@
   10 分に 10 回違えば 429・番号が使われていても止まらない・記録に時計の合言葉を書かない
 - ふだんの受け口の GET /watch-route（合言葉・形・Funnel の様子を覚えておく）と /hello の features、見守りの画面
 - 時計から預かった仕事も、でき上がりで「できた」の見えない通知（仕事の名前つき）を送る
+- 母艦のやること（2026-11-09）: 無いときは available=false・形の違うものは読まない・済みの id の形・同じ日の同じ id は1行だけ
 番号はどれも空いているもの（127.0.0.1 の 0 番）を使う。確かめるときは、本物の HOME に書かない（isolate_home）。
 """
 
@@ -21,6 +22,7 @@ from pathlib import Path
 
 import dashboard
 import jobqueue
+import mothership
 import ops
 import watchroute
 from v6checks import KEY, Client, say
@@ -36,6 +38,7 @@ def run(main) -> int:
     failed += check_funnel_parse()
     failed += check_routes(main)
     failed += check_push()
+    failed += check_mothership()
     print(("NG の数: " + str(failed)) if failed else "版 10: 全部 OK", flush=True)
     return failed
 
@@ -405,3 +408,43 @@ def check_push() -> int:
                 setattr(ops.O, n, v)
     return say(pusher.sent == [("job", None, name)],
                f"見えない通知: 時計から預かった仕事も、でき上がりで名前つきの job を送る（渡したものには送らない） {pusher.sent}")
+
+
+# MARK: - 母艦のやること（2026-11-09）
+
+def check_mothership() -> int:
+    failed = 0
+    with tempfile.TemporaryDirectory() as folder:
+        base = Path(folder)
+        config = {"lifelog_home": folder}
+        failed += say(mothership.home(config) == base and mothership.home({}) == mothership.DEFAULT_HOME,
+                      "母艦の場所: config.json の lifelog_home、無ければ D:\\Lifelog")
+        failed += say(mothership.read_export(base).get("available") is False, "母艦のやること: 無いときは available=false")
+        (base / "state").mkdir()
+        (base / "state" / "todo_for_app.json").write_text('{"items": "x"}', encoding="utf-8")
+        failed += say(mothership.read_export(base).get("available") is False, "母艦のやること: 形の違うものは読まない")
+        export = {"generated_at": "2026-11-09T07:05:00+09:00",
+                  "today_three": [{"id": "0123456789ab", "text": "資料を送る", "why": "期限が今日"}],
+                  "items": [{"id": "0123456789ab", "text": "資料を送る", "project": "", "work": True,
+                             "added": "2026-11-01", "due": "2026-11-09", "source": "x"}]}
+        # 母艦が BOM 付きで書いても読める
+        (base / "state" / "todo_for_app.json").write_text(json.dumps(export, ensure_ascii=False), encoding="utf-8-sig")
+        got = mothership.read_export(base)
+        failed += say(got.get("available") is True and len(got.get("items", [])) == 1
+                      and got["today_three"][0]["id"] == "0123456789ab", "母艦のやること: そのまま返す")
+        bad = 0
+        for body in (b"x", b"[]", b'{"id": "XYZ"}', b'{"id": "0123456789abc"}'):
+            try:
+                mothership.parse_done(body)
+            except ValueError:
+                bad += 1
+        failed += say(bad == 4, "母艦のやることの済み: id は12文字の16進だけ")
+        item = mothership.parse_done('{"id": "0123456789AB", "text": "資料を送る"}'.encode("utf-8"))
+        now = time.mktime((2026, 11, 9, 8, 0, 0, 0, 0, -1))
+        path = mothership.append_done(base, item, now=now)
+        mothership.append_done(base, item, now=now + 60)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        failed += say(path.name == "2026-11-09.jsonl" and len(lines) == 1
+                      and json.loads(lines[0])["id"] == "0123456789ab",
+                      f"母艦のやることの済み: 日ごとの jsonl に1行（同じ日の同じ id は1回だけ） {path.name} {len(lines)}")
+    return failed

@@ -183,8 +183,11 @@ final class Pipeline {
     private let conversations: ConversationLog
     /// iPhone と iPad の記録と登録を合わせる
     @ObservationIgnored private(set) var sync: DeviceSync!
-    /// 「こんなのあったけど、どう？」の候補
+    /// 「こんなのあったけど、どう？」の候補。2026-11-09 からは、出したことのある文を覚えるだけにして、
+    /// 中身はタスクの確かめ待ちに入れる（addSummaryCandidates）
     let suggestions = SuggestionBox()
+    /// 母艦（家の PC の D:\Lifelog）のやること（2026-11-09。Mothership.swift）
+    let mothership = MothershipBook()
     /// 頼まれごと帳（会話・議事録・手書き・写真から）
     let tasks = TaskBook()
     /// 行ったお店（立ち寄り・近くのお店・会話から推測。2026-11-08。ShopVisits.swift）
@@ -1453,7 +1456,8 @@ final class Pipeline {
         if UIDevice.current.userInterfaceIdiom != .pad { Task { await scheduleMeetingBriefs() } }
         // 今日の「聞いて直す」（まだ選んでいなければ選ぶ。2026-11-07。ReviewNudge.swift）。朝の読み上げに数を入れるので、その前に
         prepareReviewNudge()
-        morningBriefOnActive()  // 朝の読み上げ（まだなら作る）と時計に送る中身（2026-11-07。MorningBrief.swift）
+        morningBriefOnActive()  // 朝の「昨日と今日」（まだなら作る）と時計に送る中身（2026-11-07。MorningBrief.swift）
+        Task { await mothership.refresh(homePC) }  // 母艦のやること（10分に1回まで。2026-11-09。Mothership.swift）
         pcLinkOnActive()  // 家の PC に様子を送り、記録と直しをやり取りする（2026-11-07。PCDiag.swift）
         shopVisits.retryRecent()  // 会話がまだ文字になっていなかった立ち寄りを推測し直す（2026-11-08。ShopVisits.swift）
         startDraftPolling()  // 送ってまだの区切りの下書き（仮）を15秒ごとに見に行く（版 8。2026-11-07。Drafts.swift）
@@ -1636,13 +1640,13 @@ final class Pipeline {
             // ドライブを読む AI 向けの案内と索引を、中身が変わっていたら書き直す
             await updateDriveGuide()
         }
-        // 1日のまとめの「やること」を、候補として出す
+        // 1日のまとめの「やること」を、タスクの確かめ待ちに入れる（2026-11-09。前の「こんなのあったけど、どう？」をタスクにまとめた。
+        // 出したことのある文は SuggestionBox が覚えていて、二度は出さない。知らせは朝の「昨日と今日」の確かめ待ちの数で）
         let recent = conversations.days().suffix(SuggestionBox.recentDays)
-        let added = suggestions.collect(recent.map { (day: $0, todos: conversations.summary(on: $0)?.todos ?? []) })
-        if let first = added.first {
-            Self.notify(id: "suggestions", title: "こんなのあったけど、どう？",
-                        body: added.count > 1 ? "\(first.text) ほか \(added.count - 1) 件" : first.text)
-        }
+        _ = suggestions.collect(recent.map { (day: $0, todos: conversations.summary(on: $0)?.todos ?? []) })
+        addSummaryCandidates()
+        // 母艦のやることを家の PC から読み直す（10分に1回まで。2026-11-09。Mothership.swift）
+        await mothership.refresh(homePC)
         // 予定の前に、会う人と前回話したことを知らせる（iPad と二重に出さないよう iPhone だけ）
         if UIDevice.current.userInterfaceIdiom != .pad {
             await scheduleMeetingBriefs()

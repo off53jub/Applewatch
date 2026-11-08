@@ -1,21 +1,24 @@
-import AVFoundation
 import Foundation
 import Observation
 import SwiftUI
 import UIKit
 import UserNotifications
 
-/// 朝の読み上げ（2026-11-07）。前の日の1日のまとめ・今日の予定（会う人と前回の話）・今日までと期限を過ぎた頼まれごと・
-/// 点検で気になったこと（文字起こし待ちなど）を、声で読める8つまでの短い文にする。
+/// 朝の「昨日と今日」（2026-11-09。前の「朝の読み上げ」を作り替えた）。
+/// 本人の希望で、声の読み上げはやめ、昨日どんなことがあったか（1日のまとめの流れ・決まったこと・★・体調）と、
+/// 今日の三つ（期限を過ぎた・今日までのタスク、母艦が選んだ「今日の三つ」）を、短い行で1通にまとめる。
+/// 朝に別々に来ていた知らせ（朝の読み上げ・昨日の点検・タスクの朝の知らせ・聞いて直す）も、これ1通にした。
+/// 言語モデルは使わない（決まった形で作るので、職場の中身も外に出ない）。
 /// 夜の聞き直しの終わりと、5時を過ぎてアプリを開いたとき（まだ作っていなければ）に作る。
-/// 言語モデルは短くまとめ直すのにだけ使う。職場の中身が入るときは、外のサービスに送らない設定のときだけ使い、
-/// そうでなければ言語モデルを使わずに決まった形の文で作る。
 /// 作った文は UserDefaults（morningBriefRecord）に日付つきで1つだけ残す。
 enum MorningBrief {
     static let onKey = "morningBriefOn"
     static let timeKey = "morningBriefTime"
-    static let maxSentences = 8
     static let noticeID = "morning-brief"
+    /// 今日の三つの数
+    static let picks = 3
+    /// 昨日の流れを出す行の数
+    static let flowLines = 4
 
     /// 知らせるか（初めはオン）
     static var isOn: Bool { UserDefaults.standard.object(forKey: onKey) as? Bool ?? true }
@@ -23,178 +26,128 @@ enum MorningBrief {
     static var minutes: Int { UserDefaults.standard.object(forKey: timeKey) as? Int ?? 7 * 60 }
 
     struct EventLine: Equatable {
-        /// 「10時」「13時30分」
+        /// 「10:00」
         var time: String
         var title: String
         var people: [String] = []
-        /// 前回の話（1文。無ければ nil）
-        var note: String? = nil
+    }
+
+    /// 今日の三つの1つ
+    struct Pick: Equatable {
+        var text: String
+        /// 「期限切れ」「今日まで」「急ぎ」や、母艦が書いたわけ
+        var why: String
     }
 
     struct Input: Equatable {
         /// その朝の日
         var date: Date
-        var yesterdayTopics: [String] = []
-        var yesterdayDecisions: [String] = []
-        var yesterdayTodos: [String] = []
+        /// 昨日の1日のまとめの流れ（そのまま）
+        var flow: [String] = []
+        var decisions: [String] = []
+        /// 昨日★を付けた行の数
+        var marks: Int = 0
+        /// 昨日の体調（睡眠・歩数の一文。ヘルスケアが使えなければ nil）
+        var health: String? = nil
+        var three: [Pick] = []
         var events: [EventLine] = []
-        var dueToday: [String] = []
-        var overdue: [String] = []
-        /// 点検で気になったこと（1つずつ文になっているもの）
+        /// 気をつけること（1つずつ短い文）
         var checks: [String] = []
     }
 
-    private static let dateLabel: DateFormatter = {
+    /// 「11/8(日)」（calendar の時間帯で）
+    static func dayLabel(_ date: Date, calendar: Calendar = .current) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "ja_JP")
-        f.dateFormat = "M月d日（E）"
-        return f
-    }()
+        f.calendar = calendar
+        f.timeZone = calendar.timeZone
+        f.dateFormat = "M/d(E)"
+        return f.string(from: date)
+    }
 
-    /// 文の終わりの「。」を除いた形（つなげて読むため）
-    static func bare(_ text: String) -> String {
+    /// 「10:00」
+    static func clock(_ date: Date, calendar: Calendar = .current) -> String {
+        let h = calendar.component(.hour, from: date), m = calendar.component(.minute, from: date)
+        return String(format: "%d:%02d", h, m)
+    }
+
+    /// 1日のまとめの流れの1行を、短くする。
+    /// 「06:28〜11:01　ダンス練習（自宅　サピ、ほか8人と）：練習計画／…」→「6:28〜11:01 ダンス練習（自宅　サピ、ほか8人と）」
+    static func flowLine(_ text: String, limit: Int = 44) -> String {
         var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        while let last = s.last, "。．.！!？?".contains(last) { s.removeLast() }
+        // 全角の「：」から後ろ（細かい話題）は落とす。時刻の「:」は半角なので残る
+        if let colon = s.firstIndex(of: "：") { s = String(s[..<colon]) }
+        // 時刻の頭の0（「06:28」→「6:28」）
+        s = s.replacingOccurrences(of: "(^|〜)0([0-9]:)", with: "$1$2", options: .regularExpression)
+        // 時刻のあとの全角の空白は1つの半角に
+        if let range = s.range(of: "^[0-9:〜]+　", options: .regularExpression) {
+            s.replaceSubrange(range, with: s[range].replacingOccurrences(of: "　", with: " "))
+        }
+        s = s.trimmingCharacters(in: .whitespaces)
+        if s.count > limit { s = String(s.prefix(limit - 1)) + "…" }
         return s
     }
 
-    /// 「10時」「13時30分」
-    static func spokenTime(_ date: Date, calendar: Calendar = .current) -> String {
-        let h = calendar.component(.hour, from: date), m = calendar.component(.minute, from: date)
-        return m == 0 ? "\(h)時" : "\(h)時\(m)分"
-    }
-
-    /// 言語モデルを使わずに作る形。8文まで
-    static func template(_ input: Input) -> String {
-        var s: [String] = ["おはようございます、今日は\(dateLabel.string(from: input.date))です。"]
-        // 予定
-        if input.events.isEmpty {
-            s.append("今日の予定は、カレンダーに入っていません。")
-        } else {
-            s.append("今日の予定は\(input.events.count)件です。")
-            for event in input.events.prefix(2) {
-                var line = event.time + "から" + bare(event.title)
-                if !event.people.isEmpty {
-                    line += "、" + event.people.prefix(3).map { WatchInfo.politeName($0) }.joined(separator: "、") + "と"
-                }
-                s.append(line + "。")
-                if let note = event.note, !bare(note).isEmpty { s.append(bare(note) + "。") }
+    /// 知らせと画面に出す文（行ごと）
+    static func card(_ input: Input, calendar: Calendar = .current) -> String {
+        var lines: [String] = []
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: input.date) ?? input.date
+        var past: [String] = input.flow.prefix(flowLines).map { "・" + flowLine($0) }
+        if let decision = input.decisions.first, !decision.isEmpty {
+            past.append("・決まったこと: " + decision.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        var extra: [String] = []
+        if input.marks > 0 { extra.append("★ \(input.marks) か所") }
+        if let health = input.health, !health.isEmpty { extra.append(health) }
+        if !extra.isEmpty { past.append("・" + extra.joined(separator: "／")) }
+        if !past.isEmpty {
+            lines.append("昨日 " + dayLabel(yesterday, calendar: calendar))
+            lines += past
+        }
+        if !input.three.isEmpty {
+            lines.append("今日の三つ")
+            for (i, pick) in input.three.prefix(picks).enumerated() {
+                lines.append("\(i + 1). " + pick.text + (pick.why.isEmpty ? "" : "（\(pick.why)）"))
             }
         }
-        // 頼まれごと
-        if !input.dueToday.isEmpty || !input.overdue.isEmpty {
-            var line = "頼まれごとは、今日までが\(input.dueToday.count)件"
-            if !input.overdue.isEmpty { line += "、期限を過ぎたものが\(input.overdue.count)件" }
-            s.append(line + "です。")
-            if let first = (input.overdue + input.dueToday).first { s.append("まず「\(bare(first))」から。") }
-        }
-        // 前の日
-        if !input.yesterdayTopics.isEmpty {
-            s.append("昨日は、" + input.yesterdayTopics.prefix(3).map { bare($0) }.joined(separator: "、") + "の話をしました。")
-        }
-        if let decision = input.yesterdayDecisions.first {
-            s.append("決まったことは、" + bare(decision) + "。")
-        }
-        // 点検
-        for check in input.checks { s.append(bare(check) + "。") }
-        return s.prefix(maxSentences).joined()
-    }
-
-    /// 言語モデルに渡す材料（箇条書き）
-    static func material(_ input: Input) -> String {
-        var lines: [String] = ["今日の日付: " + dateLabel.string(from: input.date)]
-        if input.events.isEmpty {
-            lines.append("今日の予定: なし")
-        } else {
-            lines.append("今日の予定:")
-            for event in input.events.prefix(6) {
-                var line = "・" + event.time + "から " + event.title
-                if !event.people.isEmpty { line += "（会う人: " + event.people.prefix(4).joined(separator: "、") + "）" }
-                if let note = event.note { line += "（前回: " + note + "）" }
-                lines.append(line)
+        if let first = input.events.first {
+            var line = "予定: " + first.time + " " + first.title
+            if !first.people.isEmpty {
+                line += "（" + first.people.prefix(3).map { WatchInfo.politeName($0) }.joined(separator: "、") + "）"
             }
+            if input.events.count > 1 { line += " ほか\(input.events.count - 1)件" }
+            lines.append(line)
         }
-        if !input.overdue.isEmpty {
-            lines.append("期限を過ぎた頼まれごと:")
-            lines += input.overdue.prefix(5).map { "・" + $0 }
-        }
-        if !input.dueToday.isEmpty {
-            lines.append("今日までの頼まれごと:")
-            lines += input.dueToday.prefix(5).map { "・" + $0 }
-        }
-        if !input.yesterdayTopics.isEmpty { lines.append("昨日の話題: " + input.yesterdayTopics.prefix(5).joined(separator: "、")) }
-        if !input.yesterdayDecisions.isEmpty {
-            lines.append("昨日決まったこと:")
-            lines += input.yesterdayDecisions.prefix(3).map { "・" + $0 }
-        }
-        if !input.yesterdayTodos.isEmpty {
-            lines.append("昨日出たやること:")
-            lines += input.yesterdayTodos.prefix(3).map { "・" + $0 }
-        }
-        if !input.checks.isEmpty {
-            lines.append("気をつけること:")
-            lines += input.checks.map { "・" + $0 }
-        }
+        if !input.checks.isEmpty { lines.append(input.checks.joined(separator: "・")) }
+        if lines.isEmpty { lines.append(dayLabel(input.date, calendar: calendar) + "。昨日の記録と今日のやることはまだありません。") }
         return lines.joined(separator: "\n")
     }
 
-    /// 文に分ける（「。」「！」「？」と改行で区切る）
-    static func sentences(_ text: String) -> [String] {
-        var result: [String] = []
-        var current = ""
-        for ch in text {
-            if ch == "\n" {
-                let t = current.trimmingCharacters(in: .whitespaces)
-                if !t.isEmpty { result.append(t) }
-                current = ""
-                continue
-            }
-            current.append(ch)
-            if "。！？!?".contains(ch) {
-                let t = current.trimmingCharacters(in: .whitespaces)
-                if !t.isEmpty { result.append(t) }
-                current = ""
+    /// 今日の三つを選ぶ。期限を過ぎた・今日までのタスク（急ぎを先に）→ 母艦が選んだもの → 急ぎ → 今週まで。
+    /// 休みの日は仕事のものを入れない（仕事の印の付いた母艦のものも）。同じらしいものは1つ
+    static func pickThree(open: [TaskBook.Item], mothership: [MothershipExport.Three], mothershipWork: Set<String>,
+                          dayOff: Bool, now: Date, calendar: Calendar = .current) -> [Pick] {
+        let items = tasksToRead(open, dayOff: dayOff)
+        func sorted(_ list: [TaskBook.Item]) -> [TaskBook.Item] {
+            list.sorted { a, b in
+                if (a.urgent == true) != (b.urgent == true) { return a.urgent == true }
+                return (a.dueMoment ?? .distantFuture) < (b.dueMoment ?? .distantFuture)
             }
         }
-        let t = current.trimmingCharacters(in: .whitespaces)
-        if !t.isEmpty { result.append(t) }
-        return result
-    }
-
-    /// 言語モデルの答えを、読み上げる形に整える（頭の「・」や番号を除き、8文まで）。使えなければ nil
-    static func tidy(_ text: String) -> String? {
-        // 「記録に見つかりませんでした」などの答えは使わない
-        guard !text.contains("見つかりませんでした") else { return nil }
-        let bullets: Set<Character> = ["・", "-", "*", "•", "●", "◆", "■", " ", "　"]
-        let parts = sentences(text).map { part -> String in
-            var out = part
-            while let first = out.first, bullets.contains(first) { out.removeFirst() }
-            // 頭の番号（「1.」「２）」など）
-            if let range = out.range(of: "^[0-9０-９]+[.)．）、]\\s*", options: .regularExpression) {
-                out.removeSubrange(range)
-            }
-            out = out.trimmingCharacters(in: .whitespaces)
-            if let last = out.last, !"。！？!?".contains(last) { out += "。" }
-            return out
-        }.filter { $0.count >= 2 }
-        // 1文だけの答えは、まとめになっていないとみなす
-        guard parts.count >= 2 else { return nil }
-        return parts.prefix(maxSentences).joined()
-    }
-
-    /// 通知に出す、はじめの2文
-    static func headline(_ text: String) -> String {
-        sentences(text).prefix(2).joined()
-    }
-
-    /// 最後に「今日の聞いて直す」の1文を足す（2026-11-07。ReviewNudge.swift）。全部で8文までにするため、その前は7文まで。
-    /// もう入っていれば入れ直す（0行なら外す）
-    static func withReview(_ text: String, count: Int) -> String {
-        let line = ReviewNudge.briefSentence(count: count)
-        guard line != nil || text.contains(ReviewNudge.briefMark) else { return text }
-        let parts = sentences(text).filter { !$0.contains(ReviewNudge.briefMark) }
-        guard let line else { return parts.joined() }
-        return (Array(parts.prefix(maxSentences - 1)) + [line]).joined()
+        var picks: [Pick] = []
+        func add(_ text: String, _ why: String) {
+            guard picks.count < Self.picks, !picks.contains(where: { TaskBook.similar($0.text, text) }) else { return }
+            picks.append(Pick(text: text, why: why))
+        }
+        let bucket = { (item: TaskBook.Item) in TaskBook.bucket(item, now: now, calendar: calendar) }
+        for item in sorted(items.filter { bucket($0) == .late }) { add(item.what, "期限切れ") }
+        for item in sorted(items.filter { bucket($0) == .today }) { add(item.what, "今日まで") }
+        for three in mothership where !(dayOff && mothershipWork.contains(three.id)) {
+            add(three.text, three.why ?? "")
+        }
+        for item in sorted(items.filter { $0.urgent == true }) { add(item.what, "急ぎ") }
+        for item in sorted(items.filter { bucket($0) == .week }) { add(item.what, "今週") }
+        return picks
     }
 
     /// 読む頼まれごと。休みの日は仕事以外だけ（印の無い古いものは仕事とみなす。2026-11-07）
@@ -203,7 +156,7 @@ enum MorningBrief {
     }
 }
 
-/// 作った朝の読み上げ（1つだけ持つ）
+/// 作った朝の「昨日と今日」（1つだけ持つ）
 struct MorningBriefRecord: Codable, Equatable {
     /// どの日の朝の分か（yyyy-MM-dd）
     var day: String
@@ -211,7 +164,7 @@ struct MorningBriefRecord: Codable, Equatable {
     var made: Date
     /// 前の日の1日のまとめが入っているか（まだ無いときに作ったら、まとめができたあとで作り直す）
     var hadSummary: Bool? = nil
-    /// 言語モデルでまとめたか
+    /// 言語モデルでまとめたか（2026-11-09 からは使わない。前の記録を読むために残す）
     var usedModel: Bool? = nil
 }
 
@@ -238,52 +191,10 @@ final class MorningBriefStore {
     }
 }
 
-/// 文を日本語の声で読み上げる（iPhone）。録音の音の設定を変えないよう、読み上げは自分の音の設定で鳴らす
-@MainActor
-@Observable
-final class BriefReader: NSObject, AVSpeechSynthesizerDelegate {
-    static let shared = BriefReader()
-    private(set) var speaking = false
-    private let synthesizer = AVSpeechSynthesizer()
-
-    override init() {
-        super.init()
-        synthesizer.delegate = self
-        synthesizer.usesApplicationAudioSession = false
-    }
-
-    func toggle(_ text: String) {
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .immediate)
-            speaking = false
-            return
-        }
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "ja-JP")
-        synthesizer.speak(utterance)
-        speaking = true
-    }
-
-    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.speaking = false }
-    }
-
-    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.speaking = false }
-    }
-}
-
 private let briefDayKey: DateFormatter = {
     let f = DateFormatter()
     f.locale = Locale(identifier: "en_US_POSIX")
     f.dateFormat = "yyyy-MM-dd"
-    return f
-}()
-
-private let briefNoteDate: DateFormatter = {
-    let f = DateFormatter()
-    f.locale = Locale(identifier: "ja_JP")
-    f.dateFormat = "M月d日"
     return f
 }()
 
@@ -316,158 +227,95 @@ extension Pipeline {
         return daySummary(briefDayKey.string(from: yesterday)) != nil
     }
 
-    /// 朝の読み上げを作って残し、知らせを頼み、時計にも送る。force なら作り直す
+    /// 朝の分を作って残し、知らせを頼み、時計にも送る。force なら作り直す
     func makeMorningBrief(for day: Date, force: Bool = false) async {
         let store = MorningBriefStore.shared
         guard !store.making, force || needsMorningBrief(for: day) else { return }
         store.making = true
         defer { store.making = false }
-        let cal = Calendar.current
-        let start = cal.startOfDay(for: day)
-        let (input, work, hadSummary) = morningBriefInput(for: start)
-        var text = MorningBrief.template(input)
-        var usedModel = false
-        // 言語モデルで短くまとめ直す。職場の中身が入るときは、外のサービスに送らない設定のときだけ
-        if let key = llmKey {
-            let staysInside = Summarizer.$sensitive.withValue(true) { Summarizer.usesLocal(apiKey: key) }
-            if !work || staysInside {
-                let question = "この材料を、朝に声で読み上げる文にしてください。です・ます調の短い文を8つまで、1つの文は40文字くらいまで。"
-                    + "今日の予定、期限を過ぎた・今日までの頼まれごと、昨日のこと、気をつけること、の順に。"
-                    + "材料に無いことは足さず、記号や箇条書きは使わないでください。"
-                let material = MorningBrief.material(input)
-                let result = try? await Summarizer.$sensitive.withValue(work) {
-                    try await Summarizer.answer(question, material: material, apiKey: key)
-                }
-                if let result, let tidy = MorningBrief.tidy(result.text) {
-                    text = tidy
-                    usedModel = true
-                }
-            }
-        }
-        // 最後に「今日の聞いて直す」の1文（数だけ。言語モデルには渡さない。2026-11-07。ReviewNudge.swift）
-        text = MorningBrief.withReview(text, count: reviewNudgeCount(for: start))
-        store.save(MorningBriefRecord(day: briefDayKey.string(from: start), text: text, made: .now,
-                                      hadSummary: hadSummary, usedModel: usedModel))
+        let start = Calendar.current.startOfDay(for: day)
+        await mothership.refresh(homePC)
+        let (input, hadSummary) = await morningBriefInput(for: start)
+        store.save(MorningBriefRecord(day: briefDayKey.string(from: start), text: MorningBrief.card(input), made: .now,
+                                      hadSummary: hadSummary))
         await scheduleMorningBriefNotice()
         pushWatchInfo(force: true)
     }
 
-    /// 材料を集める。work は職場の中身が入るか、hadSummary は前の日の1日のまとめがあったか
-    func morningBriefInput(for start: Date) -> (input: MorningBrief.Input, work: Bool, hadSummary: Bool) {
+    /// 今日の三つ（タスクの「やる」の上にも出す）
+    func todayThree(on day: Date = .now) -> [MorningBrief.Pick] {
+        let workIDs = Set((mothership.export?.items ?? []).filter { $0.work == true }.map(\.id))
+        return MorningBrief.pickThree(open: tasks.todo, mothership: mothership.todayThree, mothershipWork: workIDs,
+                                      dayOff: isDayOff(day), now: day)
+    }
+
+    /// 材料を集める。hadSummary は前の日の1日のまとめがあったか
+    func morningBriefInput(for start: Date) async -> (input: MorningBrief.Input, hadSummary: Bool) {
         let cal = Calendar.current
         var input = MorningBrief.Input(date: start)
-        var work = false
-        // 前の日
+        // 昨日
         let yesterdayStart = cal.date(byAdding: .day, value: -1, to: start) ?? start
         let yesterday = briefDayKey.string(from: yesterdayStart)
         let summary = daySummary(yesterday)
         if let summary {
-            input.yesterdayTopics = Array(summary.topics.prefix(5))
-            input.yesterdayDecisions = Array(summary.decisions.prefix(3))
-            input.yesterdayTodos = Array(summary.todos.prefix(3))
-            if conversations(on: yesterday).contains(where: { isWorkTime($0.start) }) { work = true }
+            input.flow = summary.flow
+            input.decisions = Array(summary.decisions.prefix(2))
         }
+        input.marks = conversations(on: yesterday).flatMap(\.lines).filter { $0.marked == true }.count
+        input.health = await health.dayLine(yesterdayStart)
+        // 今日の三つ（朝の時刻で選ぶ）
+        let morning = start.addingTimeInterval(TimeInterval(MorningBrief.minutes * 60))
+        input.three = todayThree(on: max(morning, .now))
         // 今日の予定
         let events = calendar.dayEvents(from: start, to: start.addingTimeInterval(24 * 3600))
             .filter { cal.isDate($0.start, inSameDayAs: start) }
         for event in events.prefix(8) {
-            if event.isWork || isWorkTime(event.start) { work = true }
-            let found = eventPeople(event)
-            input.events.append(MorningBrief.EventLine(time: MorningBrief.spokenTime(event.start, calendar: cal),
+            input.events.append(MorningBrief.EventLine(time: MorningBrief.clock(event.start, calendar: cal),
                                                        title: event.title.isEmpty ? "予定" : event.title,
-                                                       people: Array(found.all.prefix(4)),
-                                                       note: lastTalkNote(for: found.known, before: .now)))
+                                                       people: Array(eventPeople(event).all.prefix(3))))
         }
-        // 頼まれごと（その日までのもの・過ぎたもの。人に頼んで待っているものは除く）。
-        // 休みの日（土日・祝日・有休など）は、仕事の頼まれごとを読まない（2026-11-07）
+        // 気をつけること（前は別に知らせていた「昨日の点検」もここに。2026-11-09）
         let dayOff = isDayOff(start)
-        for item in MorningBrief.tasksToRead(tasks.todo, dayOff: dayOff) {
-            switch TaskBook.bucket(item, now: start, calendar: cal) {
-            case .late:
-                input.overdue.append(item.what)
-            case .today:
-                input.dueToday.append(item.what)
-            default:
-                continue
-            }
-            if item.work == true { work = true }
-        }
-        // 点検
-        if pendingCount > 0 { input.checks.append("iPhone に文字起こし待ちが\(pendingCount)件あります") }
         let waiting = MorningBrief.tasksToRead(tasks.candidates, dayOff: dayOff).count
-        if waiting > 0 { input.checks.append("頼まれごとの確かめ待ちが\(waiting)件あります") }
-        return (input, work, summary != nil)
+        if waiting > 0 { input.checks.append("確かめ待ち \(waiting) 件") }
+        if pendingCount > 0 { input.checks.append("文字起こし待ち \(pendingCount) 件") }
+        if let check = morningCheckLine(for: yesterdayStart) { input.checks.append(check) }
+        return (input, summary != nil)
     }
 
-    /// 会う人と前回話したことを1文で（「田中さんとは、前回11月5日に「見積もりの件」を話しました」）
-    private func lastTalkNote(for names: [String], before: Date) -> String? {
-        for day in recordedDays().prefix(60) {
-            for c in conversations(on: day).reversed() where c.closed && c.media == nil && c.start < before {
-                guard let name = names.first(where: { c.people.contains($0) }) else { continue }
-                let when = briefNoteDate.string(from: c.start)
-                if let title = c.title, !title.isEmpty {
-                    return "\(WatchInfo.politeName(name))とは、前回\(when)に「\(MorningBrief.bare(title))」を話しました"
-                }
-                return "\(WatchInfo.politeName(name))とは、前回\(when)に話しました"
-            }
-        }
-        return nil
-    }
-
-    /// 朝の読み上げの知らせを、決めた時刻（初めは7時）に頼む。もう過ぎていれば頼まない。iPad では出さない（二重にならないように）。
-    /// 「今日の聞いて直す」も知らせる設定なら、その数を1行足す。朝の読み上げを知らせない設定のときは、聞いて直すだけを同じ時刻に知らせる（2026-11-07）
+    /// 朝の「昨日と今日」の知らせを、決めた時刻（初めは7時）に頼む。もう過ぎていれば頼まない。iPad では出さない（二重にならないように）
     func scheduleMorningBriefNotice() async {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [MorningBrief.noticeID, ReviewNudge.noticeID])
-        guard MorningBrief.isOn || ReviewNudge.noticeOn, UIDevice.current.userInterfaceIdiom != .pad,
+        guard MorningBrief.isOn, UIDevice.current.userInterfaceIdiom != .pad,
               let record = MorningBriefStore.shared.current,
               let day = briefDayKey.date(from: record.day) else { return }
         let at = day.addingTimeInterval(TimeInterval(MorningBrief.minutes * 60))
         guard at > Date.now.addingTimeInterval(30) else { return }
-        let review = ReviewNudge.noticeOn ? reviewNudgeCount(for: day) : 0
         let content = UNMutableNotificationContent()
-        let id: String
-        if MorningBrief.isOn {
-            content.title = "朝の読み上げ"
-            // はじめの2文（読み上げの最後の「聞いて直す」の1文は除く）と、聞いて直すの1行
-            content.body = MorningBrief.headline(MorningBrief.withReview(record.text, count: 0))
-                + (ReviewNudge.noticeLine(count: review).map { "\n" + $0 } ?? "")
-            id = MorningBrief.noticeID
-        } else if review > 0 {
-            content.title = "今日の聞いて直す"
-            content.body = ReviewNudge.noticeBody(count: review)
-            id = ReviewNudge.noticeID
-        } else {
-            return
-        }
+        content.title = "昨日と今日"
+        content.body = record.text
         content.sound = .default
         let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: at)
         try? await center.add(UNNotificationRequest(
-            identifier: id, content: content,
+            identifier: MorningBrief.noticeID, content: content,
             trigger: UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)))
     }
 }
 
 // MARK: - 画面
 
-/// 「今日」の朝の読み上げ（今日か明日の分があるときだけ）
+/// 「今日」の「昨日と今日」（今日か明日の分があるときだけ）
 struct MorningBriefSection: View {
     @Environment(Pipeline.self) private var pipeline
 
     var body: some View {
         let store = MorningBriefStore.shared
-        let reader = BriefReader.shared
         let today = briefDayKey.string(from: .now)
         if let record = store.current, record.day >= today {
             Section {
                 Text(record.text)
                     .font(.callout)
-                Button {
-                    reader.toggle(record.text)
-                } label: {
-                    Label(reader.speaking ? "止める" : "読み上げる",
-                          systemImage: reader.speaking ? "stop.circle" : "speaker.wave.2")
-                }
                 Button {
                     Task { await pipeline.makeMorningBrief(for: Calendar.current.startOfDay(for: .now), force: true) }
                 } label: {
@@ -479,29 +327,24 @@ struct MorningBriefSection: View {
                 }
                 .disabled(store.making)
             } header: {
-                Text(record.day == today ? "朝の読み上げ" : "朝の読み上げ（明日の分）")
+                Text(record.day == today ? "昨日と今日" : "昨日と今日（明日の分）")
             } footer: {
-                Text(record.made.formatted(date: .abbreviated, time: .shortened) + " に作りました"
-                     + (record.usedModel == true ? "（言語モデルで短くしました）" : ""))
+                Text(record.made.formatted(date: .abbreviated, time: .shortened) + " に作りました")
             }
         }
     }
 }
 
-/// 設定の「朝の読み上げを知らせる」「朝に「今日の聞いて直す」も知らせる」と時刻
+/// 設定の「朝に「昨日と今日」を知らせる」と時刻
 struct MorningBriefSettingsRows: View {
     @Environment(Pipeline.self) private var pipeline
     @AppStorage(MorningBrief.onKey) private var on = true
     @AppStorage(MorningBrief.timeKey) private var minutes = 7 * 60
-    /// 今日の「聞いて直す」の数も朝に知らせる（初めはオン。2026-11-07。ReviewNudge.swift）
-    @AppStorage(ReviewNudge.noticeKey) private var reviewNotice = true
 
     var body: some View {
-        Toggle("朝の読み上げを知らせる", isOn: $on)
-            .onChange(of: on) { Task { await pipeline.scheduleMorningBriefNotice() } }
-        Toggle("朝に「今日の聞いて直す」も知らせる", isOn: $reviewNotice)
-            .onChange(of: reviewNotice) { Task { await pipeline.scheduleMorningBriefNotice() } }
-        if on || reviewNotice {
+        Toggle("朝に「昨日と今日」を知らせる", isOn: $on)
+            .onChange(of: on) { Task { await pipeline.scheduleMorningBriefNotice(); pipeline.tasksChanged() } }
+        if on {
             DatePicker("朝の知らせの時刻", selection: time, displayedComponents: .hourAndMinute)
                 .onChange(of: minutes) { Task { await pipeline.scheduleMorningBriefNotice() } }
         }

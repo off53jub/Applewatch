@@ -281,6 +281,31 @@ final class HomePC {
     /// PC が材料を受け付けなかった（HTTP 400）
     struct SampleRefused: Error {}
 
+    // MARK: - 母艦のやること（2026-11-09。Mothership.swift）
+
+    /// GET /todo（母艦の todo_for_app.json をそのまま）
+    func mothershipTodo() async throws -> Data {
+        guard features.contains("todo") else { throw Failure.notConfigured }
+        let session = makeSession(timeout: 10)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: try request("todo"))
+        try Self.check(response, data: data)
+        return data
+    }
+
+    /// POST /todo/done（母艦が15分ごとに TODO.md に「アプリで済み」として反映する）
+    func mothershipDone(id: String, text: String) async throws {
+        guard features.contains("todo") else { throw Failure.notConfigured }
+        let session = makeSession(timeout: 10)
+        defer { session.finishTasksAndInvalidate() }
+        var request = try request("todo/done")
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["id": id, "text": String(text.prefix(500))])
+        let (data, response) = try await session.data(for: request)
+        try Self.check(response, data: data)
+    }
+
     /// PC にたまった材料の数・学び直したモデルがあるか・学び直しに要る数（PC の自動の学び直しの設定。無ければ 300。2026-11-07）
     func trainStatus() async throws -> (count: Int, model: Bool, need: Int) {
         let session = makeSession(timeout: 8)

@@ -422,3 +422,11 @@ Qwen3-ASR（使う設定のときだけ）: Qwen/Qwen3-ASR-0.6B（Apache License
 この PC の言語モデル（使う設定のときだけ）: Ollama の qwen3:8b（Apache License 2.0）。
 意味で探す（Ollama があるときだけ）: Ollama の bge-m3（BAAI、MIT License）。
 あなた向けのモデルの元: kotoba-whisper v2.0（kotoba-tech/kotoba-whisper-v2.0、MIT License）。
+
+■ 母艦のやること（2026-11-09）
+iPhone のタスクの「母艦のやること」に、母艦（D:\Lifelog）の TODO を出すための受け口です（中身は mothership.py）。
+・GET /todo … 母艦の state\todo_for_app.json をそのまま返します（無ければ {"available": false}）。
+・POST /todo/done … iPhone で済みにしたものを、母艦の inbox\app-todo-done\<日>.jsonl に1行足します。
+  TODO.md を書き換えるのは母艦だけです（15分ごとに「アプリで済み」として反映します）。
+・どちらも iPhone の合言葉が要ります。時計の外の道（Funnel）からは届きません。やることの文は log.txt に書きません。
+・母艦の場所は config.json の "lifelog_home"（無ければ D:\Lifelog）。

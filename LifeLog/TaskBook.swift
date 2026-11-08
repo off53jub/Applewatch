@@ -537,6 +537,10 @@ extension Pipeline {
         return hour >= 8 && hour < 19 && !isDayOff(time)
     }
 
+    /// ★の無い仕事以外の会話からも拾うか（2026-11-09 から初めはオフ。外ればかりだったため）
+    static let lifeAutoKey = "taskLifeAuto"
+    static var lifeAuto: Bool { UserDefaults.standard.bool(forKey: lifeAutoKey) }
+
     /// 仕事以外の会話を見る数（無料枠を使い切らないように。1回に2つ・1日に10まで。2026-11-07）
     static let taskLifePerRun = 2
     static let taskLifePerDay = 10
@@ -549,8 +553,9 @@ extension Pipeline {
     }
 
     /// 閉じた会話（直近3日）から、やること・約束を拾う。
-    /// 仕事の時間の会話（ほかの人の行があるもの）と★を付けた会話は1回に3つまで、
-    /// 仕事以外の会話（家族・友だち・お店など。ほかの人の行と自分の行があるもの）は1回に2つ・1日に10まで（2026-11-07）。
+    /// 仕事の時間の会話（ほかの人の行があるもの）と★を付けた会話は1回に3つまで。
+    /// 仕事以外の会話は★を付けたものだけ（2026-11-09。★の無い仕事以外の会話から拾った13件が、すべて「違う」だったため。
+    /// 前は1回に2つ・1日に10まで見ていた）。
     /// 仕事の時間の会話は「職場の会話は端末内で」のとき外に送らない。仕事以外の会話は、ほかの仕事以外の会話と同じ扱い。
     /// 同じ会話は1回だけ見る（言語モデルが使えなかったときは、次の機会にやり直す）。
     func findTasks() async {
@@ -577,7 +582,8 @@ extension Pipeline {
                 // 仕事以外の会話は、本人も話しているものだけ（周りの人どうしの話・テレビは見ない）
                 let selfSpoke = lines.contains { $0.speakerID == SpeakerLabeler.selfID }
                 let workTalk = work && others && lines.count >= 3
-                let lifeTalk = !work && others && selfSpoke && lines.count >= 4
+                // ★の無い仕事以外の会話は見ない（2026-11-09）。lifeAuto をオンにしたときだけ前のように見る
+                let lifeTalk = Self.lifeAuto && !work && others && selfSpoke && lines.count >= 4
                 guard !marks.isEmpty || workTalk || lifeTalk else {
                     scanned.append(id)
                     continue
@@ -829,6 +835,8 @@ extension Pipeline {
             if Self.taskWeekendOff, offDay { continue }
             let afterOff = !offDay && off[offset - 1] == true
             for (minutes, morning) in [(Self.taskMorning, true), (Self.taskEvening, false)] {
+                // 朝は「昨日と今日」に今日の三つと確かめ待ちの数が入るので、出さない（2026-11-09）。休み明けの朝のまとめは今までどおり
+                if morning, MorningBrief.isOn, !afterOff { continue }
                 let at = day.addingTimeInterval(TimeInterval(minutes * 60))
                 guard at > now.addingTimeInterval(30) else { continue }
                 let end = cal.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)
@@ -998,6 +1006,8 @@ struct TaskBookView: View {
     @AppStorage("taskEvening") private var evening = 18 * 60
     @AppStorage("taskWeekendOff") private var weekendOff = false
     @AppStorage("taskBadgeLateOnly") private var badgeLateOnly = false
+    /// ★の無い仕事以外の会話からも拾う（2026-11-09 から初めはオフ）
+    @AppStorage(Pipeline.lifeAutoKey) private var lifeAuto = false
 
     var body: some View {
         let book = pipeline.tasks
@@ -1094,8 +1104,9 @@ struct TaskBookView: View {
                             Toggle("休みの日は何も知らせない", isOn: $weekendOff)
                         }
                         Toggle("タブの数字は期限切れだけ", isOn: $badgeLateOnly)
+                        Toggle("★の無い仕事以外の会話からも拾う", isOn: $lifeAuto)
                     } footer: {
-                        Text("まだ済んでいないものの数（仕事と仕事以外に分けて）と、期限の近いもの、期限を過ぎた「人に頼んだこと」を知らせます。休みの日（土日・カレンダーの祝日・「有休」「休み」などの終日の予定）は仕事以外の分だけを知らせ、仕事の分は休み明けの朝にまとめて知らせます。カレンダーを使っていなければ、休みの日は土日だけです。\n仕事中（職場にいた時間か、休みでない日の8〜19時）の会話と、時計の★を付けた会話からは仕事のものを、それ以外の、ほかの人と話した会話からは仕事以外のものを拾います。頼まれた瞬間に★を押すと、確実に入ります。ドライブの「頼まれごと帳」にも写します。")
+                        Text("まだ済んでいないものの数（仕事と仕事以外に分けて）と、期限の近いもの、期限を過ぎた「人に頼んだこと」を知らせます。休みの日（土日・カレンダーの祝日・「有休」「休み」などの終日の予定）は仕事以外の分だけを知らせ、仕事の分は休み明けの朝にまとめて知らせます。カレンダーを使っていなければ、休みの日は土日だけです。\n朝の「昨日と今日」を知らせるときは、朝の知らせはそちらにまとめます（休み明けの朝は今までどおり）。\n仕事中（職場にいた時間か、休みでない日の8〜19時）の会話と、時計の★を付けた会話からは仕事のものを拾います。仕事以外の会話からは、★を付けたものだけ拾います（「★の無い仕事以外の会話からも拾う」で前のように）。頼まれた瞬間に★を押すと、確実に入ります。ドライブの「頼まれごと帳」にも写します。")
                     }
                 }
                 .navigationTitle("知らせ")
@@ -1152,6 +1163,21 @@ struct TaskBookView: View {
 
     @ViewBuilder
     private func todoPage(_ book: TaskBook.Lists) -> some View {
+        // 今日の三つ（期限を過ぎた・今日までのもの、母艦が選んだもの。朝の「昨日と今日」と同じ選び方。2026-11-09）
+        let three = pipeline.todayThree()
+        if !three.isEmpty {
+            Section("今日の三つ") {
+                ForEach(Array(three.enumerated()), id: \.offset) { i, pick in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("\(i + 1).").foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(pick.text)
+                            if !pick.why.isEmpty { Text(pick.why).font(.caption).foregroundStyle(.secondary) }
+                        }
+                    }
+                }
+            }
+        }
         if !book.candidates.isEmpty {
             Section {
                 ForEach(book.candidates) { item in
@@ -1171,7 +1197,7 @@ struct TaskBookView: View {
             } header: {
                 Text("確かめてほしい（\(book.candidates.count) 件）")
             } footer: {
-                Text("会話・議事録・写真から拾ったものです。合っていれば「入れる」、違えば「違う」（同じものはもう出しません）。")
+                Text("会話・議事録・写真・1日のまとめから拾ったものです。合っていれば「入れる」、違えば「違う」（同じものはもう出しません）。")
             }
         }
         let groups = TaskBook.grouped(book.todo)
@@ -1186,17 +1212,8 @@ struct TaskBookView: View {
                     .foregroundStyle(group.bucket == .late ? Color.red : Color.secondary)
             }
         }
-        let box = pipeline.suggestions
-        if !box.waiting.isEmpty {
-            Section("こんなのあったけど、どう？") {
-                ForEach(box.waiting.prefix(3)) { SuggestionRow(item: $0) }
-                if box.waiting.count > 3 || !box.kept.isEmpty {
-                    NavigationLink("すべて見る（まだ \(box.waiting.count) 件・残している \(box.kept.count) 件）") {
-                        SuggestionsView()
-                    }
-                }
-            }
-        }
+        // 母艦（家の PC）のやること（2026-11-09。Mothership.swift）。「こんなのあったけど、どう？」は確かめ待ちにまとめた
+        MothershipSection(scope: scope)
         // 職場の Claude の答えを取り込んだ「仕事のまとめ」（2026-11-08。仕事以外だけを見ているときは出さない）
         if scope != .life {
             Section {

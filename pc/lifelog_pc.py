@@ -119,6 +119,7 @@ import numpy as np
 import dashboard
 import gpu  # GPU_LOCK（GPU の文字起こしのモデルは1度に1つだけ動かす。2026-11-07 の落ち方の直し）
 import jobqueue
+import mothership  # 母艦（D:\\Lifelog）のやることを iPhone に渡す・済みを返す（2026-11-09）
 import ops  # 版 7（ops）: 実機の様子・見えない通知・TestFlight の報告・学び直しと GPU の時間割（中身は ops.py）
 import semantic
 import updater
@@ -2057,6 +2058,8 @@ def features(engines: list | None = None) -> list[str]:
                                                   "OfflineZipformerAudioTaggingModelConfig")):
             found.append("scene")
     found.append("vad")
+    # GET /todo・POST /todo/done（母艦のやること。2026-11-09）
+    found.append("todo")
     # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）
     if "vad" in _extras:
         found.append("silero")
@@ -2631,10 +2634,13 @@ class Handler(BaseHTTPRequestHandler):
             ops.dash_get(self, url)
             return
         if path not in ("/hello", "/train-status", "/jobs", "/index/status", "/watch-route") \
-                and not path.startswith("/jobs/"):
+                and path not in mothership.GETS and not path.startswith("/jobs/"):
             self.send_json(404, {"error": "not found"})
             return
         if not self.authorized():
+            return
+        if path in mothership.GETS:  # 母艦のやること（2026-11-09。中身は mothership.py）
+            mothership.http_get(self, load_config())
             return
         if path == "/jobs" or path.startswith("/jobs/"):
             jobqueue.http_get(self, App.jobs, path, url.query)  # 版 10: GET /jobs?origin=watch
@@ -2695,7 +2701,8 @@ class Handler(BaseHTTPRequestHandler):
             ops.dash_post(self, url)
             return
         if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample", "/llm", "/jobs") \
-                and url.path not in semantic.POSTS and url.path not in ops.POSTS:  # 版 7（ops）: /diag
+                and url.path not in semantic.POSTS and url.path not in ops.POSTS \
+                and url.path not in mothership.POSTS:  # 版 7（ops）: /diag・母艦のやることの済み
             self.discard_body()
             self.send_json(404, {"error": "not found"})
             return
@@ -2712,8 +2719,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path in ops.POSTS:  # 版 7（ops）: POST /diag（実機の様子。2MB まで）
             ops.http_diag(self, length)
             return
-        small = url.path == "/llm" or url.path in semantic.POSTS
-        limit = LLM_BODY_LIMIT if url.path == "/llm" else semantic.BODY_LIMIT if small else DRAIN_LIMIT
+        small = url.path == "/llm" or url.path in semantic.POSTS or url.path in mothership.POSTS
+        limit = LLM_BODY_LIMIT if url.path == "/llm" else mothership.BODY_LIMIT if url.path in mothership.POSTS \
+            else semantic.BODY_LIMIT if small else DRAIN_LIMIT
         if length <= 0 or length > limit:
             self.discard_body()
             if small:
@@ -2722,7 +2730,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": "音声がありません"})  # 前の版と同じ答え
             return
         data = self.rfile.read(length)
-        if url.path in semantic.POSTS:
+        if url.path in mothership.POSTS:
+            mothership.http_post(self, load_config(), data, log)
+        elif url.path in semantic.POSTS:
             semantic.http_post(self, App.semantic, url.path, data, log)
         elif url.path == "/llm":
             self.llm(data)
