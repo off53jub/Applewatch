@@ -1667,6 +1667,8 @@ final class Pipeline {
             await writeWorkDigests()
             // ヘルスケアの終わった日を、母艦に渡すためドライブに書く
             await exportHealthIfDue()
+            // 位置の終わった日も、母艦に渡すためドライブに書く（2026-11-09。LocationExport.swift）
+            await exportLocationIfDue()
             // 朝の「昨日と今日」（充電しない夜にも。作り終えていれば何もしない。2026-11-09。MorningBrief.swift）
             let hour = Calendar.current.component(.hour, from: .now)
             if hour >= 20 || hour < 7 { await makeMorningBriefAtNight() }
@@ -1733,6 +1735,42 @@ final class Pipeline {
             done.insert(day.day)
         }
         UserDefaults.standard.set(done.sorted(), forKey: HealthExport.doneKey)
+    }
+
+    /// 位置の終わった日を、ドライブの「LifeLog/位置」に1日1ファイルで書く（母艦が取り込む）。
+    /// 「どこで話したか」（場所）がオンで、iPhone のときだけ。点も立ち寄りも無い日は、書いた印だけ付ける。2026-11-09
+    func exportLocationIfDue(now: Date = .now) async {
+        guard email != nil, places.isOn, UIDevice.current.userInterfaceIdiom != .pad else { return }
+        var done = Set(UserDefaults.standard.stringArray(forKey: LocationExport.doneKey) ?? [])
+        let due = LocationExport.dueDays(now: now, done: done)
+        guard !due.isEmpty else { return }
+        let calendar = Calendar.current
+        for key in due {
+            guard let start = HealthExport.dayDate(key),
+                  let end = calendar.date(byAdding: .day, value: 1, to: start) else { continue }
+            let points = places.points(from: start, to: end).map { p -> LocationExport.Point in
+                var named = p
+                named.name = places.knownName(latitude: p.latitude, longitude: p.longitude, accuracy: p.accuracy)
+                return named
+            }
+            let stays = shopVisits.visits.filter { $0.arrival >= start && $0.arrival < end }.map { v in
+                LocationExport.Stay(start: v.arrival, end: v.departure ?? v.arrival, latitude: v.latitude, longitude: v.longitude,
+                                    name: v.shownName ?? places.knownName(latitude: v.latitude, longitude: v.longitude,
+                                                                          accuracy: v.accuracy))
+            }
+            if let data = LocationExport.json(day: key, points: points, stays: stays, dayEnd: end) {
+                do {
+                    try await docs.uploadIfMissing(data, name: LocationExport.fileName(key), folder: LocationExport.folderName)
+                } catch {
+                    if !error.isCancellation {
+                        diagnostics.problem("位置をドライブに書けませんでした: \(error.localizedDescription)")
+                    }
+                    break
+                }
+            }
+            done.insert(key)
+        }
+        UserDefaults.standard.set(done.sorted(), forKey: LocationExport.doneKey)
     }
 
     /// 書き出しをドライブの「控え」に置く（同じ名前の頭のものは新しい2つだけ残す）

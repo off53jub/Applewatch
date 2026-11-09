@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import WatchConnectivity
 
 /// 時計の区切りが iPhone に届かなくなったときの立て直し（2026-11-07）。
 ///
@@ -27,6 +28,25 @@ extension Pipeline {
         rescue.askedOnLaunch = true
         rescue.resendAskedAt = .now
         receiver.askWatchToResend()
+        remindOpenWatchAfterUpdate()
+    }
+
+    /// アプリを新しくした（版が変わった）あとの最初の起動で、「時計の LifeLog を一度開いて」と知らせる（2026-11-09）。
+    /// 11/9 は 12:15 にビルド 199 へ入れ替えたところから、時計の区切りが PC にも iPhone にも届かなくなり、
+    /// 22 時半に時計の LifeLog を開くまで戻らなかった（入れ替えで時計のアプリが裏だけで動く状態になったと見ている。未確認）
+    func remindOpenWatchAfterUpdate() {
+        let key = "lastLaunchedBuild"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
+        let last = UserDefaults.standard.string(forKey: key)
+        UserDefaults.standard.set(build, forKey: key)
+        guard let last, last != build, !build.isEmpty, WCSession.isSupported(), WCSession.default.isPaired else { return }
+        Tally.add("watch.updateReminder")
+        let content = UNMutableNotificationContent()
+        content.title = "時計の LifeLog を一度開いてください"
+        content.body = "アプリを新しくしたあとは、時計の LifeLog を一度開くまで、時計の録音が iPhone と家の PC に届かないことがあります。"
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "watch-open-after-update", content: content, trigger: nil))
     }
 
     /// 時計の様子が届くたびに呼ぶ

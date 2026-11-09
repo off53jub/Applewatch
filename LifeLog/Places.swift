@@ -114,6 +114,20 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         return names[key]
     }
 
+    /// 通信せずに分かる場所の名前（登録した場所か、前に調べた地名）。位置の書き出し用（2026-11-09。LocationExport.swift）
+    func knownName(latitude: Double, longitude: Double, accuracy: Double) -> String? {
+        let location = CLLocation(latitude: latitude, longitude: longitude)
+        if let place = registered(near: location, accuracy: accuracy) { return place.name }
+        return names[String(format: "%.3f,%.3f", latitude, longitude)]
+    }
+
+    /// 端末に残っている位置の点（7日分）のうち、from〜to のもの。位置の書き出し用（2026-11-09）
+    func points(from: Date, to: Date) -> [LocationExport.Point] {
+        samples.filter { $0.time >= from && $0.time < to }.map {
+            LocationExport.Point(time: $0.time, latitude: $0.latitude, longitude: $0.longitude, accuracy: $0.accuracy)
+        }
+    }
+
     /// これより粗い位置は「たぶん」とし、職場かどうかの切り替えには使わない
     nonisolated static let unsureAccuracy: Double = 150
 
