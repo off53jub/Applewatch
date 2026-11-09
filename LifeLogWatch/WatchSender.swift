@@ -34,6 +34,11 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// 3回送り直しても返事が無ければ、そのあとは6時間ごとに送り直す（控えが残っているかぎり。2026-11-07）。
     /// 前は3回で諦めていて、iPhone のアプリが受け取れない時間が長いと、控えが残っていても二度と送らなかった
     static let slowResendAfter: TimeInterval = 6 * 3600
+    /// 1回に送り直す数の上限と、送っている途中がこれ以上あれば送り直さない数（2026-11-09）。
+    /// 11/9 は返事待ちが1000個を超え、iPhone の「全部送り直して」のたびに全部を送り直して受け渡しの列を埋め、
+    /// 新しい区切りが何時間も iPhone に届かなかった（と見ている）。新しい区切りを先に通すため、送り直しは少しずつにする
+    static let resendPerPass = 5
+    static let resendQueueLimit = 10
     /// 控えを残す長さと大きさ（2026-11-07 に3日から7日へ。iPhone のアプリの入れ替えなどで受け取れない日があっても失わないように）
     static let keepSentFor: TimeInterval = 7 * 86400
     static let keepSentBytes = 300 * 1024 * 1024
@@ -333,7 +338,11 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// 前は送り直した時刻を残していなかったので、30分たつと3回を数分のうちに使い切り、そのあとは送らなかった
     func resendUnacknowledged() {
         guard Self.phoneAcks, WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
-        let outstanding = Set(WCSession.default.outstandingFileTransfers.map { $0.file.fileURL.lastPathComponent })
+        let transfers = WCSession.default.outstandingFileTransfers
+        // 受け渡しの列が混んでいれば、送り直しは待つ（新しい区切りを先に通す。2026-11-09）
+        guard transfers.count < Self.resendQueueLimit else { return }
+        let outstanding = Set(transfers.map { $0.file.fileURL.lastPathComponent })
+        var budget = Self.resendPerPass
         let stored = lock.withLock {
             (sentAt: UserDefaults.standard.dictionary(forKey: Self.sentAtKey) as? [String: Double] ?? [:],
              resent: UserDefaults.standard.dictionary(forKey: Self.resentKey) as? [String: Int] ?? [:])
@@ -341,7 +350,9 @@ final class WatchSender: NSObject, WCSessionDelegate {
         var counts = stored.resent
         var sentAt = stored.sentAt
         let now = Date.now
-        for url in sentFiles() {
+        // 新しい順（名前は区切った時刻）。古い控えは、新しいものが届いたあとで送る
+        for url in sentFiles().sorted(by: { $0.lastPathComponent > $1.lastPathComponent }) {
+            guard budget > 0 else { break }
             let name = url.lastPathComponent
             guard !outstanding.contains(name) else { continue }
             let count = counts[name] ?? 0
@@ -349,6 +360,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
             guard now.timeIntervalSince(sent) >= (count < Self.maxResends ? Self.resendAfter : Self.slowResendAfter) else { continue }
             counts[name] = count + 1
             sentAt[name] = now.timeIntervalSince1970
+            budget -= 1
             WCSession.default.transferFile(url, metadata: WatchDelivery.metadata(
                 zone: .current, cut: Self.cutTime(url), sent: now, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
                 viaPC: WatchPC.wasSent(name), resend: count + 1))
