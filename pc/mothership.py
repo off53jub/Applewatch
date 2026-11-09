@@ -7,6 +7,8 @@
   中身（やることの文）は記録（log.txt）に書かない。
 - POST /todo/done {"id": "<12文字の16進>", "text": "…"} → 母艦の inbox/app-todo-done/<日>.jsonl に1行足す
   （{"id", "text", "done_at"}）。母艦が15分ごとに TODO.md に「アプリで済み」として反映する。
+  "kind" も受ける（2026-11-09。features の "todokind"）: "done"（済み・既定）・"wrong"（タスクではない）・
+  "notyet"（母艦の「済みかも」に、まだと答えた）。done 以外は jsonl の行に "kind" を足す（done は前と同じ形）。
 - GET /card → ドライブの「LifeLog/カード利用/card-mail.json」（Google の Apps Script が PayPay カードの利用速報メールから作る。
   2026-11-09。docs/card-payments.md）の支払いを返す。無ければ {"available": false}。中身は記録（log.txt）に書かない。
   場所は config.json の "card_mail_file"（無ければ、どのドライブ文字でも「マイドライブ/LifeLog/カード利用/card-mail.json」を探す）。
@@ -30,6 +32,7 @@ DEFAULT_HOME = Path(r"D:\Lifelog")
 EXPORT = Path("state") / "todo_for_app.json"
 DONE_DIR = Path("inbox") / "app-todo-done"
 ID = re.compile(r"[0-9a-f]{12}")
+KINDS = ("done", "wrong", "notyet")
 CARD_FILE = Path("マイドライブ") / "LifeLog" / "カード利用" / "card-mail.json"
 CARD_ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
 CARD_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})")
@@ -112,7 +115,10 @@ def parse_done(data: bytes) -> dict:
     if not ID.fullmatch(item_id):
         raise ValueError("id は12文字の16進です")
     text = str(body.get("text") or "").strip()[:500]
-    return {"id": item_id, "text": text}
+    kind = str(body.get("kind") or "done").strip().lower()
+    if kind not in KINDS:
+        raise ValueError("kind は done・wrong・notyet のどれかです")
+    return {"id": item_id, "text": text, "kind": kind}
 
 
 def append_done(base: Path, item: dict, now: float | None = None) -> Path:
@@ -120,14 +126,18 @@ def append_done(base: Path, item: dict, now: float | None = None) -> Path:
     when = time.localtime(now if now is not None else time.time())
     folder = base / DONE_DIR
     path = folder / (time.strftime("%Y-%m-%d", when) + ".jsonl")
+    kind = item.get("kind") or "done"
     line = {"id": item["id"], "text": item.get("text", ""),
             "done_at": time.strftime("%Y-%m-%dT%H:%M:%S", when) + _offset(when)}
+    if kind != "done":
+        line["kind"] = kind
     with _lock:
         folder.mkdir(parents=True, exist_ok=True)
         if path.exists():
             for old in path.read_text(encoding="utf-8").splitlines():
                 try:
-                    if json.loads(old).get("id") == item["id"]:
+                    seen = json.loads(old)
+                    if seen.get("id") == item["id"] and (seen.get("kind") or "done") == kind:
                         return path
                 except ValueError:
                     continue
@@ -163,5 +173,6 @@ def http_post(handler, config: dict, data: bytes, log: Callable[[str], None]) ->
         handler.send_json(503, {"error": "母艦に置けませんでした"})
         return
     # やることの文は書かない（id だけ）
-    log(f"{handler.client_address[0]} から母艦のやることを済みに: {item['id']}")
+    words = {"done": "済みに", "wrong": "「タスクではない」に", "notyet": "「まだ」に"}
+    log(f"{handler.client_address[0]} から母艦のやることを{words.get(item['kind'], '済みに')}: {item['id']}")
     handler.send_json(200, {"ok": True})

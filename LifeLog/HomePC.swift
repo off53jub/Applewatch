@@ -304,14 +304,20 @@ final class HomePC {
     }
 
     /// POST /todo/done（母艦が15分ごとに TODO.md に「アプリで済み」として反映する）
-    func mothershipDone(id: String, text: String) async throws {
+    /// kind: "done"（済み）・"wrong"（タスクではない）・"notyet"（「済みかも」にまだ）。done 以外は "todokind" を持つ PC だけ（2026-11-09）
+    func mothershipDone(id: String, text: String, kind: String = "done") async throws {
         guard features.contains("todo") else { throw Failure.notConfigured }
         let session = makeSession(timeout: 10)
         defer { session.finishTasksAndInvalidate() }
         var request = try request("todo/done")
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["id": id, "text": String(text.prefix(500))])
+        var body: [String: Any] = ["id": id, "text": String(text.prefix(500))]
+        if kind != "done" {
+            guard features.contains("todokind") else { throw Failure.notConfigured }
+            body["kind"] = kind
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await session.data(for: request)
         try Self.check(response, data: data)
     }
