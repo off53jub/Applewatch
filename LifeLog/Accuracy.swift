@@ -125,14 +125,29 @@ enum Benchmark {
         case noWeights
         /// 聞き取ってほしい言葉を渡さない（ヒントが邪魔をしていないか）
         case noHints
+        /// 言葉を登録の順のまま渡す（2026-11-10 より前の渡し方。「いま出そうな順」と見比べる。WordHeat.swift）
+        case registeredOrder
 
         var label: String {
             switch self {
             case .enhance: "雑音を消した音もいつも聞く"
             case .noWeights: "多数決の重みを使わない"
             case .noHints: "言葉のヒントを渡さない"
+            case .registeredOrder: "言葉を登録の順で渡す（前の渡し方）"
             }
         }
+    }
+
+    /// 今夜試す設定。言葉の並べ方は新しいので、30問たまるまでは1晩おきに試す（悪ければ早く元に戻すため。2026-11-10）
+    static func variant(night: Int, available: [Variant], scores: [String: Score]) -> Variant? {
+        guard !available.isEmpty else { return nil }
+        guard available.contains(.registeredOrder),
+              (scores[Variant.registeredOrder.rawValue]?.count ?? 0) < need else {
+            return available[night % available.count]
+        }
+        if night % 2 == 0 { return .registeredOrder }
+        let rest = available.filter { $0 != .registeredOrder }
+        return rest.isEmpty ? .registeredOrder : rest[(night / 2) % rest.count]
     }
 
     struct Score: Codable, Equatable {
@@ -169,6 +184,9 @@ enum Benchmark {
         let day: Date
         let rate: Double
         let count: Int
+        /// 職場の行だけの誤りの割合と問の数（2026-11-10。前の記録には無い）
+        var workRate: Double? = nil
+        var workCount: Int? = nil
     }
 
     static let need = 30
@@ -204,6 +222,15 @@ enum Benchmark {
         (max(0, offset - 0.3), offset + min(15, max(1.5, Double(chars) * 0.17 + 0.8)))
     }
 
+    /// 職場の行だけの誤りの行（答えの分かっている職場の行を測った夜が無ければ nil）
+    static func workRow(_ history: [Point]) -> (label: String, value: String, ok: Bool?)? {
+        let work = history.suffix(14).filter { ($0.workCount ?? 0) > 0 && $0.workRate != nil }
+        guard let last = work.last, let rate = last.workRate else { return nil }
+        let mean = work.compactMap(\.workRate).reduce(0, +) / Double(work.count)
+        return (label: "仕事の行の文字の誤り", value: String(format: "%.1f%%（最後・%d 問）・仕事の行を測った直近 %d 回の平均 %.1f%%",
+                                                       rate * 100, last.workCount ?? 0, work.count, mean * 100), ok: nil)
+    }
+
     /// 自己点検の行
     static func report() -> [(label: String, value: String, ok: Bool?)] {
         let s = saved
@@ -214,6 +241,8 @@ enum Benchmark {
             rows.append(("今の設定の文字の誤り", String(format: "%.1f%%（最後 %.1f%%・%d 問）・直近 %d 回の平均 %.1f%%",
                                                  last.rate * 100, last.rate * 100, last.count, recent.count, mean * 100), nil))
         }
+        // 職場の行だけの誤り（2026-11-10。答えの分かっている職場の行があった夜だけ）
+        if let row = workRow(s.history) { rows.append(row) }
         for v in Variant.allCases {
             guard let score = s.scores[v.rawValue], score.chars > 0 else { continue }
             let base = Double(score.baseErrors) / Double(score.chars) * 100
@@ -272,10 +301,14 @@ extension Pipeline {
         let night = saved.night
         saved.night += 1
         let variants = Benchmark.Variant.allCases.filter { $0 != .enhance || homePC.features.contains("enhance") }
-        let variant = variants.isEmpty ? nil : variants[night % variants.count]
+        let variant = Benchmark.variant(night: night, available: variants, scores: saved.scores)
+        // いまの言葉の渡し方（登録の順に戻っているか）と、家の PC に渡せる言葉の数
+        let usingRegistered = UserDefaults.standard.bool(forKey: Self.registeredOrderKey)
+        let hintLimit = HomePC.hintLimit(speed: homePC.speed)
         let first = (night * limit) % truths.count
         let picks = (0..<min(limit, truths.count)).map { truths[(first + $0) % truths.count] }
         var baseErrors = 0, baseChars = 0, count = 0
+        var workErrors = 0, workChars = 0, workCount = 0
         var score = variant.flatMap { saved.scores[$0.rawValue] } ?? Benchmark.Score()
         var heardTexts: [(heard: String, right: String, context: SpeakerLabeler.Context)] = []
         for truth in picks {
@@ -286,20 +319,40 @@ extension Pipeline {
             defer { if let temp = clip.temp { try? FileManager.default.removeItem(at: temp) } }
             let segment = (start: span.start - clip.shift, end: end - clip.shift)
             let context = vocabularyContext(at: truth.time)
-            let hints = keywords(for: context)
-            func listen(_ v: Benchmark.Variant?) async -> String? {
+            // 言葉は、登録の順と「いま出そうな順」の両方を作っておく（いま使っているほうが「今の設定」）
+            let registered = registeredWords(for: context)
+            let fresh = heatOrdered(registered, context: context)
+            let hints = usingRegistered ? registered : fresh
+            func listen(_ v: Benchmark.Variant?, _ words: [String]) async -> String? {
                 guard let lines = try? await homePC.transcribe(
-                    clip.url, segments: [segment], hints: v == .noHints ? [] : hints, noisy: truth.noisy,
+                    clip.url, segments: [segment], hints: v == .noHints ? [] : words, noisy: truth.noisy,
                     enhance: v == .enhance ? true : nil, weights: v == .noWeights ? false : nil, unionVAD: false) else { return nil }
                 return lines.filter { $0.offset >= segment.start - 0.5 && $0.offset <= segment.end }.map(\.text).joined()
             }
-            guard let base = await listen(nil) else { continue }
+            guard let base = await listen(nil, hints) else { continue }
             let b = Benchmark.errors(base, right: truth.right)
             baseErrors += b.errors
             baseChars += b.chars
             count += 1
+            if context == .work {
+                workErrors += b.errors
+                workChars += b.chars
+                workCount += 1
+            }
             heardTexts.append((base, truth.right, context))
-            if let variant, let other = await listen(variant) {
+            guard let variant else { continue }
+            if variant == .registeredOrder {
+                // 言葉の並べ方の見比べ。PC に渡る枠が同じなら、答えも同じなので比べない
+                guard HintOrder.window(registered, limit: hintLimit) != HintOrder.window(fresh, limit: hintLimit) else { continue }
+                guard let other = await listen(nil, usingRegistered ? fresh : registered) else { continue }
+                let o = Benchmark.errors(other, right: truth.right)
+                // 「今の設定」の側はいつも「いま出そうな順」、「試す設定」の側はいつも登録の順として数える
+                score.baseErrors += usingRegistered ? o.errors : b.errors
+                score.variantErrors += usingRegistered ? b.errors : o.errors
+                score.chars += b.chars
+                score.count += 1
+                score.last = .now
+            } else if let other = await listen(variant, hints) {
                 let o = Benchmark.errors(other, right: truth.right)
                 score.baseErrors += b.errors
                 score.variantErrors += o.errors
@@ -310,14 +363,19 @@ extension Pipeline {
         }
         if let variant, score.count > 0 {
             saved.scores[variant.rawValue] = score
-            // 雑音を消した音と重みは、数で決まったら自動で使う・やめる（言葉のヒントは測るだけ）
+            // 雑音を消した音・重み・言葉の並べ方は、数で決まったら自動で使う・やめる（言葉のヒントを渡さないのは測るだけ）。
+            // 並べ方は、登録の順のほうが1割以上良ければ登録の順に戻し、悪ければ「いま出そうな順」のまま（Pipeline.registeredOrderKey）
             if variant != .noHints, let use = Benchmark.decision(score) {
                 UserDefaults.standard.set(use, forKey: "benchAdopt." + variant.rawValue)
             }
         }
         if count > 0, baseChars > 0 {
-            saved.history = Array((saved.history + [Benchmark.Point(day: .now, rate: Double(baseErrors) / Double(baseChars),
-                                                                    count: count)]).suffix(60))
+            var point = Benchmark.Point(day: .now, rate: Double(baseErrors) / Double(baseChars), count: count)
+            if workCount > 0, workChars > 0 {
+                point.workRate = Double(workErrors) / Double(workChars)
+                point.workCount = workCount
+            }
+            saved.history = Array((saved.history + [point]).suffix(60))
         }
         Benchmark.saved = saved
         Tally.add("bench.lines", count)

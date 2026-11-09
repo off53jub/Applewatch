@@ -313,6 +313,12 @@ extension Pipeline {
         }
         for row in report { add("効き目（直近7日）", row.label, row.value, row.ok) }
 
+        // 仕事の成績表（日ごと。数だけ。2026-11-10。NightReport.swift の Tally.workCard）
+        for row in Tally.workCard(Tally.days(7)) { add("仕事の成績表（日ごと）", row.label, row.value, row.ok) }
+        add("仕事の成績表（日ごと）", "言葉を渡す順", UserDefaults.standard.bool(forKey: Pipeline.registeredOrderKey)
+            ? "登録の順（物差しで、こちらが良いと出た）"
+            : "いま出そうな順（最近よく出た言葉 \(wordHeat.hotCount()) 個を先に）")
+
         // 最近のエラー
         for problem in diagnostics.problems.suffix(15).reversed() {
             add("最近のエラー", Self.diagTime.string(from: problem.time), problem.text, false)
