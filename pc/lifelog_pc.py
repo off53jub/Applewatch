@@ -2060,6 +2060,8 @@ def features(engines: list | None = None) -> list[str]:
     found.append("vad")
     # GET /todo・POST /todo/done（母艦のやること。2026-11-09）
     found.append("todo")
+    # 母艦のやることの「違う」「まだ」（POST /todo/done の kind。2026-11-09）
+    found.append("todokind")
     # GET /card（カードの利用速報メールの支払い。ドライブから読む。2026-11-09）
     found.append("card")
     # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）

@@ -448,6 +448,18 @@ def check_mothership() -> int:
         failed += say(path.name == "2026-11-09.jsonl" and len(lines) == 1
                       and json.loads(lines[0])["id"] == "0123456789ab",
                       f"母艦のやることの済み: 日ごとの jsonl に1行（同じ日の同じ id は1回だけ） {path.name} {len(lines)}")
+        failed += say("kind" not in json.loads(lines[0]), "母艦のやることの済み: done は前と同じ形（kind を書かない）")
+        wrong = mothership.parse_done(b'{"id": "0123456789ab", "text": "x", "kind": "wrong"}')
+        mothership.append_done(base, wrong, now=now + 120)
+        mothership.append_done(base, wrong, now=now + 180)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        failed += say(len(lines) == 2 and json.loads(lines[1]).get("kind") == "wrong",
+                      f"母艦のやることの「違う」: kind を付けて1行（同じ id でも済みとは別に数える） {len(lines)}")
+        try:
+            mothership.parse_done(b'{"id": "0123456789ab", "kind": "delete"}')
+            failed += say(False, "母艦のやること: 知らない kind は受けない")
+        except ValueError:
+            failed += say(True, "母艦のやること: 知らない kind は受けない")
     return failed
 
 

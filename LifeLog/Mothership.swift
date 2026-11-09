@@ -14,6 +14,12 @@ struct MothershipTodo: Codable, Identifiable, Equatable, Sendable {
     var work: Bool? = nil
     var added: String? = nil
     var due: String? = nil
+    /// 母艦の毎朝のまとめが「もう済んだかも」とした理由（2026-11-09。無ければ nil）
+    var maybeDone: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, text, project, work, added, due, maybeDone = "maybe_done"
+    }
 }
 
 struct MothershipExport: Codable, Equatable, Sendable {
@@ -77,12 +83,18 @@ final class MothershipBook {
         var done: [String: Date] = [:]
         /// まだ家の PC に知らせていない済み（id → 文）
         var pending: [String: String] = [:]
+        /// 知らせる種類（id → "wrong"・"notyet"。無ければ済み。2026-11-09。前の版のファイルには無い）
+        var kinds: [String: String]? = nil
+        /// 「済みでは？」に「まだ」と答えた id と時刻（母艦が印を外すまで聞かない。2026-11-09）
+        var cleared: [String: Date]? = nil
     }
 
     private(set) var export: MothershipExport?
     private(set) var fetchedAt: Date?
     private(set) var done: [String: Date] = [:]
     private var pending: [String: String] = [:]
+    private var kinds: [String: String] = [:]
+    private(set) var cleared: [String: Date] = [:]
     /// 読み込めたか（読む前には保存しない）
     private var loaded = false
     private(set) var lastError: String?
@@ -106,6 +118,8 @@ final class MothershipBook {
             fetchedAt = saved.fetchedAt
             done = saved.done
             pending = saved.pending
+            kinds = saved.kinds ?? [:]
+            cleared = saved.cleared ?? [:]
             loaded = true
         } else {
             // 読めないファイルは上書きせず脇に置く
@@ -118,7 +132,7 @@ final class MothershipBook {
 
     private func save() {
         guard loaded else { return }
-        let saved = Saved(export: export, fetchedAt: fetchedAt, done: done, pending: pending)
+        let saved = Saved(export: export, fetchedAt: fetchedAt, done: done, pending: pending, kinds: kinds, cleared: cleared)
         guard let data = try? JSONEncoder().encode(saved) else { return }
         try? data.write(to: Self.url, options: .atomic)
     }
@@ -170,6 +184,9 @@ final class MothershipBook {
             lastError = nil
             let ids = Set(parsed.items.map(\.id))
             done = done.filter { ids.contains($0.key) && Date.now.timeIntervalSince($0.value) < 7 * 86400 }
+            // 母艦が「済みかも」の印を外したら、「まだ」を忘れる
+            let maybe = Set(parsed.items.filter { $0.maybeDone != nil }.map(\.id))
+            cleared = cleared.filter { maybe.contains($0.key) && Date.now.timeIntervalSince($0.value) < 14 * 86400 }
             save()
         } catch {
             lastError = "家の PC から読めませんでした"
@@ -184,20 +201,51 @@ final class MothershipBook {
         await flush(pc)
     }
 
+    /// 「タスクではない」にする（一覧から外し、家の PC に知らせる。母艦は TODO.md から外して、同じ趣旨を足さなくなる）
+    func markWrong(_ item: MothershipTodo, pc: HomePC) async {
+        done[item.id] = .now
+        pending[item.id] = item.text
+        kinds[item.id] = "wrong"
+        save()
+        await flush(pc)
+    }
+
+    /// 「済みでは？」に「まだ」と答える（一覧には残す。母艦は印を「まだ」に替え、しばらく聞かない）
+    func markNotYet(_ item: MothershipTodo, pc: HomePC) async {
+        cleared[item.id] = .now
+        pending[item.id] = item.text
+        kinds[item.id] = "notyet"
+        save()
+        await flush(pc)
+    }
+
+    /// 「済みでは？」と聞くか（印があり、「まだ」と答えていない）
+    func asksDone(_ item: MothershipTodo) -> Bool {
+        item.maybeDone != nil && cleared[item.id] == nil
+    }
+
+    /// 家の PC が「違う」「まだ」を受け付けるか（古い LifeLog PC は済みしか知らない）
+    func acceptsKinds(_ pc: HomePC) -> Bool { pc.features.contains("todokind") }
+
     /// 済みを取り消す（まだ家の PC に知らせていないものだけ）
     func undo(_ id: String) {
         guard pending[id] != nil else { return }
         pending[id] = nil
         done[id] = nil
+        kinds[id] = nil
         save()
     }
 
     private func flush(_ pc: HomePC) async {
         guard !pending.isEmpty, pc.features.contains("todo") else { return }
         for (id, text) in pending.sorted(by: { $0.key < $1.key }) {
+            let kind = kinds[id] ?? "done"
+            // 古い LifeLog PC は kind を知らず、済みにしてしまうので送らない（新しくなるまで待つ）
+            if kind != "done", !pc.features.contains("todokind") { continue }
             do {
-                try await pc.mothershipDone(id: id, text: text)
+                try await pc.mothershipDone(id: id, text: text, kind: kind)
                 pending[id] = nil
+                kinds[id] = nil
             } catch {
                 break
             }
@@ -237,6 +285,7 @@ struct MothershipSection: View {
 
     private func footer(_ book: MothershipBook) -> String {
         var text = "家の PC の毎朝のまとめが会話・LINE・メモから拾ったものです。○で済みにすると、母艦の TODO も済みになります。"
+            + "左にずらすと「違う」（タスクではない）にでき、母艦は同じようなものを拾わなくなります。"
         if let fetchedAt = book.fetchedAt {
             text += "\n" + fetchedAt.formatted(date: .abbreviated, time: .shortened) + " に家の PC から読みました。"
         }
@@ -248,6 +297,7 @@ struct MothershipSection: View {
 struct MothershipRow: View {
     @Environment(Pipeline.self) private var pipeline
     let item: MothershipTodo
+    private var book: MothershipBook { pipeline.mothership }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -264,6 +314,18 @@ struct MothershipRow: View {
                 if !meta.isEmpty {
                     Text(meta.joined(separator: "・")).font(.caption).foregroundStyle(.secondary)
                 }
+                // 母艦が「もう済んだかも」とした（2026-11-09）
+                if book.asksDone(item), let reason = item.maybeDone {
+                    Text("済みでは？ " + reason).font(.caption).foregroundStyle(.orange)
+                    HStack(spacing: 16) {
+                        Button("済み") { Task { await book.markDone(item, pc: pipeline.homePC) } }
+                        if book.acceptsKinds(pipeline.homePC) {
+                            Button("まだ") { Task { await book.markNotYet(item, pc: pipeline.homePC) } }
+                        }
+                    }
+                    .font(.caption.bold())
+                    .buttonStyle(.borderless)
+                }
             }
         }
         .swipeActions(edge: .leading) {
@@ -271,6 +333,14 @@ struct MothershipRow: View {
                 Task { await pipeline.mothership.markDone(item, pc: pipeline.homePC) }
             }
             .tint(.green)
+        }
+        .swipeActions(edge: .trailing) {
+            // タスクではない（2026-11-09。古い LifeLog PC には送れないので出さない）
+            if book.acceptsKinds(pipeline.homePC) {
+                Button("違う", systemImage: "xmark", role: .destructive) {
+                    Task { await book.markWrong(item, pc: pipeline.homePC) }
+                }
+            }
         }
     }
 }
