@@ -2064,6 +2064,8 @@ def features(engines: list | None = None) -> list[str]:
     found.append("todokind")
     # GET /card（カードの利用速報メールの支払い。ドライブから読む。2026-11-09）
     found.append("card")
+    # GET /vocab（母艦の辞書から作った「登録の候補」。2026-11-10）
+    found.append("vocab")
     # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）
     if "vad" in _extras:
         found.append("silero")

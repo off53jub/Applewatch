@@ -12,6 +12,8 @@
 - GET /card → ドライブの「LifeLog/カード利用/card-mail.json」（Google の Apps Script が PayPay カードの利用速報メールから作る。
   2026-11-09。docs/card-payments.md）の支払いを返す。無ければ {"available": false}。中身は記録（log.txt）に書かない。
   場所は config.json の "card_mail_file"（無ければ、どのドライブ文字でも「マイドライブ/LifeLog/カード利用/card-mail.json」を探す）。
+- GET /vocab → 母艦の state/vocab_for_app.json（母艦の辞書から作った「登録の候補」。2026-11-10）を確かめて返す。
+  無ければ {"available": false}。iPhone は候補として見せるだけで、本人が押した言葉だけを登録する。中身は記録（log.txt）に書かない。
 - どれも iPhone の合言葉（Bearer）が要る。時計の外の道（Funnel）からは届かない。
 """
 
@@ -25,7 +27,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
-GETS = ("/todo", "/card")
+GETS = ("/todo", "/card", "/vocab")
 POSTS = ("/todo/done",)
 BODY_LIMIT = 16 * 1024
 DEFAULT_HOME = Path(r"D:\Lifelog")
@@ -37,6 +39,8 @@ CARD_FILE = Path("マイドライブ") / "LifeLog" / "カード利用" / "card-m
 CARD_ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
 CARD_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})")
 CARD_LIMIT = 2000
+VOCAB = Path("state") / "vocab_for_app.json"
+VOCAB_LIMIT = 300
 _lock = threading.Lock()
 
 
@@ -85,6 +89,36 @@ def read_card(path: Path | None) -> dict:
         items.append({"id": item_id, "time": when, "amount": amount,
                       "shop": str(item.get("shop") or "").strip()[:100],
                       "card": str(item.get("card") or "").strip()[:40]})
+    return {"available": True, "generated_at": str(data.get("generated_at") or ""), "items": items}
+
+
+def read_vocab(base: Path) -> dict:
+    """母艦の vocab_for_app.json（登録の候補）を確かめて返す。おかしな行は落とす。無い・読めないときは {"available": false}"""
+    path = base / VOCAB
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return {"available": False, "reason": "母艦の言葉の候補がまだありません"}
+    except (OSError, ValueError) as error:
+        return {"available": False, "reason": f"母艦の言葉の候補を読めませんでした: {type(error).__name__}"}
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        return {"available": False, "reason": "母艦の言葉の候補の形が違います"}
+    items = []
+    for item in data["items"]:
+        if not isinstance(item, dict) or not isinstance(item.get("word"), str):
+            continue
+        word = item["word"].strip()
+        if not 0 < len(word) <= 40 or "<" in word or ">" in word or "\n" in word:
+            continue
+        count = item.get("count")
+        variants = item.get("variants") if isinstance(item.get("variants"), list) else []
+        items.append({"word": word,
+                      "category": str(item.get("category") or "").strip()[:20],
+                      "count": count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else 0,
+                      "last": str(item.get("last") or "").strip()[:10],
+                      "variants": [v.strip()[:40] for v in variants if isinstance(v, str) and v.strip()][:6]})
+        if len(items) >= VOCAB_LIMIT:
+            break
     return {"available": True, "generated_at": str(data.get("generated_at") or ""), "items": items}
 
 
@@ -154,8 +188,12 @@ def _offset(when: time.struct_time) -> str:
 
 
 def http_get(handler, config: dict) -> None:
-    if urlparse(handler.path).path == "/card":
+    path = urlparse(handler.path).path
+    if path == "/card":
         handler.send_json(200, read_card(card_file(config)))
+        return
+    if path == "/vocab":
+        handler.send_json(200, read_vocab(home(config)))
         return
     handler.send_json(200, read_export(home(config)))
 

@@ -431,5 +431,8 @@ iPhone のタスクの「母艦のやること」に、母艦（D:\Lifelog）の
 ・GET /card … ドライブの「マイドライブ\LifeLog\カード利用\card-mail.json」の支払いを返します（2026-11-09）。
   このファイルは、Google の Apps Script が PayPay カードの利用速報メールから作ります（docs/card-payments.md）。
   別の場所に置くときは config.json に "card_mail_file"。
+・GET /vocab … 母艦の state\vocab_for_app.json（母艦が今までの記録から作った辞書）を返します（2026-11-10。無ければ {"available": false}）。
+  iPhone の「言葉の登録」に「母艦の辞書からの候補」として出すためのものです。300 個まで。
+  iPhone は見せるだけで、押した言葉だけを登録します（この PC からは何も登録しません）。
 ・どちらも iPhone の合言葉が要ります。時計の外の道（Funnel）からは届きません。やることの文は log.txt に書きません。
 ・母艦の場所は config.json の "lifelog_home"（無ければ D:\Lifelog）。

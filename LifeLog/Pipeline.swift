@@ -198,6 +198,10 @@ final class Pipeline {
     let payments = PaymentBook()
     /// 仕事のまとめ（職場の Claude の答えを写真・貼り付けで取り込む。2026-11-08。WorkDigest.swift）
     let workDigests = WorkDigest()
+    /// 言葉の登録の候補（母艦の辞書から。押した言葉だけ登録する。2026-11-10。WordCandidates.swift）
+    let wordCandidates = WordCandidateBook()
+    /// 退勤の頃の知らせを用意した日（職場の行を書いた日に1回。2026-11-10。WorkDigest.swift）
+    @ObservationIgnored var workDigestReminderDay = ""
     /// AI からの質問と、わかったこと帳
     let asks = AskBook()
     /// 正解帳（週に1回の答え合わせ）
@@ -1461,6 +1465,7 @@ final class Pipeline {
         morningBriefOnActive()  // 朝の「昨日と今日」（まだなら作る）と時計に送る中身（2026-11-07。MorningBrief.swift）
         Task { await mothership.refresh(homePC) }  // 母艦のやること（10分に1回まで。2026-11-09。Mothership.swift）
         payments.reloadTaps()  // ウォレットでかざした記録（2026-11-09。Payments.swift）
+        scheduleWorkDigestReminder()  // 退勤の頃の「今日のまとめを取り込みましたか」（2026-11-10。WorkDigest.swift）
         Task { await payments.refreshMail(homePC) }  // カードの利用速報（30分に1回まで）
         pcLinkOnActive()  // 家の PC に様子を送り、記録と直しをやり取りする（2026-11-07。PCDiag.swift）
         shopVisits.retryRecent()  // 会話がまだ文字になっていなかった立ち寄りを推測し直す（2026-11-08。ShopVisits.swift）
@@ -3590,6 +3595,7 @@ final class Pipeline {
             Tally.add("reach.inOld", reach.inRegistered, at: time)
         }
         wordHeat.noteHeard(joined, words: heatWords(), at: time)
+        if context == .work { workDigestReminderOnWork(at: time) }  // 退勤の頃の知らせ（その日の1回目だけ用意する）
     }
 
     /// 時刻の分からない行に、前後の分かっている時刻のあいだを文字数で割り振った時刻を付ける。

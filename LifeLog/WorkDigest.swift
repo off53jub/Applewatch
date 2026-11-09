@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import UIKit
+import UserNotifications
 
 /// 仕事のまとめ（2026-11-08）。職場の Claude に「この日に何があったか」を聞いた答えを、
 /// スクリーンショット・写真（iPhone の中で文字を読み取る）か、文字の貼り付けで取り込んで、日ごとに残す。
@@ -29,14 +30,19 @@ final class WorkDigest {
         var others: [String] = []
         var topics: [String] = []
         var checks: [String] = []
+        /// 【よく出た言葉】（2026-11-10。言葉だけ・1つずつ。前の版で保存したものには無いので nil）。
+        /// 「言葉の登録」の候補に出すだけで、自動では登録しない
+        var words: [String]? = nil
 
-        var isEmpty: Bool { decided.isEmpty && homework.isEmpty && others.isEmpty && topics.isEmpty && checks.isEmpty }
+        var isEmpty: Bool {
+            decided.isEmpty && homework.isEmpty && others.isEmpty && topics.isEmpty && checks.isEmpty && (words ?? []).isEmpty
+        }
 
         /// 画面とドライブに並べる順（中身のある見出しだけ）
         var lists: [(title: String, items: [String])] {
             let all: [(title: String, items: [String])] = [
                 ("決まったこと", decided), ("自分の宿題", homework), ("ほかの人の動き", others),
-                ("気になる話題", topics), ("あとで確かめること", checks),
+                ("気になる話題", topics), ("あとで確かめること", checks), ("よく出た言葉", words ?? []),
             ]
             return all.filter { !$0.items.isEmpty }
         }
@@ -124,7 +130,7 @@ final class WorkDigest {
 /// 形が崩れていたり、見出しが欠けていたりしても、読めたところだけ返す。
 enum WorkDigestParser {
     enum Part: String, CaseIterable {
-        case date, decided, homework, others, topics, checks
+        case date, decided, homework, others, topics, checks, words
     }
 
     /// 見出しの言い方（長いものを先に）
@@ -135,6 +141,8 @@ enum WorkDigestParser {
         (.others, ["ほかの人の動き", "他の人の動き", "外の人の動き", "ほかの人"]),
         (.topics, ["気になる話題", "気になった話題", "気になること"]),
         (.checks, ["あとで確かめること", "後で確かめること", "あとで確認すること", "後で確認すること", "あとで確かめる"]),
+        // 「言葉」「用語」だけの短い言い方は入れない（ふつうの文の行を見出しと読み違えるので）
+        (.words, ["よく出た言葉", "よく出たことば", "よく出てきた言葉", "よく出る言葉", "よくでた言葉", "頻出語"]),
     ]
 
     /// 見出しの前のかっこ（【 が [ や（ に読まれることもある）
@@ -288,6 +296,9 @@ enum WorkDigestParser {
             case .others: result.sections.others += kept
             case .topics: result.sections.topics += kept
             case .checks: result.sections.checks += kept
+            case .words:
+                let found: [String] = words((result.sections.words ?? []) + kept)
+                if !found.isEmpty { result.sections.words = found }
             case .date: break
             }
             items = []
@@ -322,8 +333,8 @@ enum WorkDigestParser {
             if let body = bulletBody(line) {
                 items.append(body)
                 bulleted = true
-            } else if bulleted, let last = items.last {
-                // 印の無い行は、前の項目の続き（長い行が折り返されたもの）
+            } else if bulleted, part != .words, let last = items.last {
+                // 印の無い行は、前の項目の続き（長い行が折り返されたもの）。言葉は1行に1つなので、つながない
                 items[items.count - 1] = join(last, line)
             } else {
                 items.append(line)
@@ -340,6 +351,29 @@ enum WorkDigestParser {
             }
         }
         return result
+    }
+
+    /// 【よく出た言葉】の行を、言葉1つずつにする。「、」「／」で並べてあれば分け、後ろの説明（かっこ・「：」の後ろ）は落とす。
+    /// 長すぎるもの（文になっているもの）と同じ言葉は入れない。多すぎるときは先の 30 個まで
+    static func words(_ items: [String]) -> [String] {
+        // 半角の「/」では分けない（CI/CD のような言葉があるので）
+        let separators: Set<Character> = ["、", ",", "，", "／", ";", "；"]
+        let notes: Set<Character> = ["（", "(", "：", ":", "＝", "=", "→", "…"]
+        var out: [String] = []
+        var seen: Set<String> = []
+        for item in items {
+            for piece in item.split(whereSeparator: { separators.contains($0) }) {
+                var word = String(piece.prefix { !notes.contains($0) })
+                word = word.trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "「」『』\"'。・")))
+                guard !word.isEmpty, word.count <= 30, !word.contains("<"), !word.contains(">"),
+                      !nothing.contains(word) else { continue }
+                let key = compact(word).lowercased()
+                guard !key.isEmpty, seen.insert(key).inserted else { continue }
+                out.append(word)
+                if out.count >= 30 { return out }
+            }
+        }
+        return out
     }
 
     /// 折り返された行をつなぐ（英数字どうしなら空白を入れる）
@@ -473,6 +507,7 @@ extension Pipeline {
         let added = tasks.add(items)
         if !added.isEmpty { tasksChanged() }
         Task { await writeWorkDigests() }
+        scheduleWorkDigestReminder(now: now)  // 今日のまとめを入れたら、退勤の頃の知らせは出さない
         var note = "\(Self.workDigestDayTitle(day)) の仕事のまとめを入れました。"
         if !added.isEmpty {
             note += "自分の宿題 \(added.count) 件を、タスクの確かめ待ちに入れました。"
@@ -557,5 +592,72 @@ extension Pipeline {
             }
         }
         return p
+    }
+}
+
+// MARK: - 退勤の頃の知らせ（2026-11-10）
+
+/// 「今日のまとめを取り込みましたか」の知らせ。職場の行を書いた日で、その日のまとめがまだ無いときだけ、決めた時刻に1回出す。
+/// まとめは職場の PC の前でしか作れないので、帰る前に気づけるようにする。中身（職場の文）は知らせに入れない。
+enum WorkDigestReminder {
+    static let noticeID = "work-digest-reminder"
+    /// 知らせるか（設定。無ければ知らせる）
+    static let onKey = "workDigest.reminder"
+    /// 知らせる時刻（0時からの分。無ければ 17:30）
+    static let minuteKey = "workDigest.reminderMinute"
+    static let defaultMinute = 17 * 60 + 30
+
+    /// 今日の知らせを出す時刻。出さないとき（設定がオフ・今日は職場の行が無い・もう取り込んだ・時刻を過ぎた）は nil
+    static func time(now: Date, workedToday: Bool, hasDigest: Bool, on: Bool, minute: Int,
+                     calendar: Calendar = .current) -> Date? {
+        guard on, workedToday, !hasDigest else { return nil }
+        let m = min(max(minute, 0), 24 * 60 - 1)
+        guard let at = calendar.date(bySettingHour: m / 60, minute: m % 60, second: 0, of: now),
+              at > now.addingTimeInterval(30) else { return nil }
+        return at
+    }
+
+    /// 設定の時刻（0時からの分）を、今日のその時刻に
+    static func date(minute: Int, now: Date = .now, calendar: Calendar = .current) -> Date {
+        let m = min(max(minute, 0), 24 * 60 - 1)
+        return calendar.date(bySettingHour: m / 60, minute: m % 60, second: 0, of: now) ?? now
+    }
+
+    /// 時刻を、0時からの分に
+    static func minute(of date: Date, calendar: Calendar = .current) -> Int {
+        let parts = calendar.dateComponents([.hour, .minute], from: date)
+        return (parts.hour ?? 17) * 60 + (parts.minute ?? 30)
+    }
+}
+
+extension Pipeline {
+    /// 退勤の頃の知らせを用意し直す（前のものを消してから。iPhone だけ）。
+    /// アプリを開いたとき・その日はじめて職場の行を書いたとき・まとめを取り込んだとき・設定を変えたときに呼ぶ
+    func scheduleWorkDigestReminder(now: Date = .now) {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [WorkDigestReminder.noticeID])
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
+        let defaults = UserDefaults.standard
+        let on: Bool = defaults.object(forKey: WorkDigestReminder.onKey) as? Bool ?? true
+        let minute: Int = defaults.object(forKey: WorkDigestReminder.minuteKey) as? Int ?? WorkDigestReminder.defaultMinute
+        let today: String = TaskBook.dayFormat.string(from: now)
+        let worked: Bool = (Tally.sums(days: 1, now: now)["work.lines"] ?? 0) > 0
+        let has: Bool = workDigests.entries.contains { $0.day == today }
+        guard let at = WorkDigestReminder.time(now: now, workedToday: worked, hasDigest: has, on: on, minute: minute) else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "仕事のまとめ"
+        content.body = "今日のまとめを取り込みましたか。職場の Claude に聞いた答えを、写真か貼り付けで入れられます。"
+        content.sound = .default
+        let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: at)
+        center.add(UNNotificationRequest(identifier: WorkDigestReminder.noticeID, content: content,
+                                         trigger: UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)))
+    }
+
+    /// 職場の行を書いたとき（その日の1回目だけ、知らせを用意する。アプリを開かない日でも出るように）
+    func workDigestReminderOnWork(at time: Date, now: Date = .now) {
+        let today: String = TaskBook.dayFormat.string(from: now)
+        guard workDigestReminderDay != today, TaskBook.dayFormat.string(from: time) == today else { return }
+        workDigestReminderDay = today
+        scheduleWorkDigestReminder(now: now)
     }
 }

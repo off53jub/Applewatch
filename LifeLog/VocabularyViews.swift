@@ -71,6 +71,9 @@ struct VocabularyView: View {
                 }
             }
 
+            // 仕事のまとめに出た言葉・母艦の辞書からの候補（押した言葉だけ足す。2026-11-10。WordCandidates.swift）
+            WordCandidateSections(group: group)
+
             Section {
                 let fixes = vocabulary.fixes.filter { $0.group == group }
                 ForEach(fixes) { fix in
@@ -120,6 +123,7 @@ struct VocabularyView: View {
         }
         .navigationTitle("言葉の登録")
         .onAppear(perform: loadCandidates)
+        .task { await pipeline.wordCandidates.refresh(pipeline.homePC) }  // 母艦の辞書からの候補（6時間に1回まで）
     }
 
     private func loadCandidates() {

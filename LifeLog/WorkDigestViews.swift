@@ -11,6 +11,9 @@ struct WorkDigestListView: View {
     @State private var importing = false
     @State private var note: String?
     @State private var deleting: WorkDigest.Entry?
+    /// 退勤の頃の知らせ（2026-11-10。WorkDigestReminder）
+    @AppStorage(WorkDigestReminder.onKey) private var remind = true
+    @AppStorage(WorkDigestReminder.minuteKey) private var remindMinute = WorkDigestReminder.defaultMinute
 
     var body: some View {
         let groups = pipeline.workDigests.byDay
@@ -19,6 +22,21 @@ struct WorkDigestListView: View {
                 Button("取り込む（写真・スクショ・貼り付け）", systemImage: "square.and.arrow.down") { importing = true }
             } footer: {
                 Text("職場の Claude に「この日に何があったか」を聞いた答えを、スクリーンショット・写真か、文字の貼り付けで取り込みます。文字の読み取りは iPhone の中だけで行い、AI（言語モデル）には送りません。「自分の宿題」は、タスクの「確かめ待ち」（仕事）に入ります。")
+            }
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                Section {
+                    Toggle("退勤の頃に知らせる", isOn: $remind)
+                    if remind {
+                        DatePicker("知らせる時刻", selection: Binding(
+                            get: { WorkDigestReminder.date(minute: remindMinute) },
+                            set: { remindMinute = WorkDigestReminder.minute(of: $0) }),
+                                   displayedComponents: .hourAndMinute)
+                    }
+                } footer: {
+                    Text("職場で記録した日で、その日のまとめがまだ入っていないときだけ、この時刻に1回知らせます。知らせに会話の中身は入りません。")
+                }
+                .onChange(of: remind) { pipeline.scheduleWorkDigestReminder() }
+                .onChange(of: remindMinute) { pipeline.scheduleWorkDigestReminder() }
             }
             if let note {
                 Section { Text(note).font(.footnote).foregroundStyle(.secondary) }
