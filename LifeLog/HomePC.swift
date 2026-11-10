@@ -293,6 +293,16 @@ final class HomePC {
         return data
     }
 
+    /// GET /vocab（母艦の辞書から作った「登録の候補」。2026-11-10。WordCandidates.swift）
+    func mothershipVocab() async throws -> Data {
+        guard features.contains("vocab") else { throw Failure.notConfigured }
+        let session = makeSession(timeout: 10)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: try request("vocab"))
+        try Self.check(response, data: data)
+        return data
+    }
+
     /// GET /card（カードの利用速報メールの支払い。家の PC がドライブの「LifeLog/カード利用」から読む。2026-11-09）
     func cardMail() async throws -> Data {
         guard features.contains("card") else { throw Failure.notConfigured }

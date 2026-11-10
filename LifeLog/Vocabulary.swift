@@ -101,6 +101,19 @@ final class Vocabulary {
 
     var fixes: [Fix] { store.fixes }
 
+    /// since より後に登録した言葉（新しい順に limit 個まで）。聞き取りに渡す順を決めるのに読むだけで、登録は変えない
+    /// （2026-11-10。WordHeat.swift。登録の時刻が残っていない前からの言葉は入らない）
+    func recentlyAdded(since: Date, limit: Int = 10) -> [String] {
+        var found: [(word: String, at: Date)] = []
+        for group in Group.allCases {
+            for word in words(in: group) {
+                if let at = times.added[Self.wordKey(word, group)], at >= since { found.append((word: word, at: at)) }
+            }
+        }
+        found.sort { $0.at > $1.at }
+        return found.prefix(limit).map { $0.word }
+    }
+
     func add(_ word: String, to group: Group) {
         let word = word.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !word.isEmpty, !word.contains("<"), !word.contains(">"),

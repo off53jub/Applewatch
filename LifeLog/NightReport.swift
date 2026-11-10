@@ -114,6 +114,10 @@ enum Tally {
             rows.append(("言語モデルの書いたものの根拠", "確かめた \(n("ground.checked"))・根拠が見つからず外した要点 \(n("ground.dropped"))"
                 + "・要確認にした項目 \(n("ground.flagged"))", nil))
         }
+        if n("title.made") + n("title.failed") + n("title.filled") + n("title.fillFailed") > 0 {
+            rows.append(("会話の見出し", "作れた \(n("title.made"))・作れなかった \(n("title.failed"))"
+                + "・あとから付けた \(n("title.filled"))（付けようとして作れなかった回数 \(n("title.fillFailed"))）", nil))
+        }
         if n("talk.joined") + n("talk.split") > 0 {
             rows.append(("会話の区切りの手直し", "つないだ \(n("talk.joined"))・分けた \(n("talk.split"))", nil))
         }
@@ -185,6 +189,51 @@ enum Tally {
         }
         if n("learn.updated") > 0 {
             rows.append(("直した記録から学んだ", "値を合わせ直した \(n("learn.updated")) 回", nil))
+        }
+        rows += workRows(s)
+        return rows
+    }
+
+    // MARK: - 仕事の成績表（2026-11-10。数だけ。言葉や文は入らない）
+
+    /// 仕事の会話の行・登録した言葉の先回り・登録した書き方で直した行。数が無ければ出さない。
+    /// 「先回り」は、書いた行に出てきた登録の言葉のうち、その区切りを聞くときに渡した枠に入っていた割合
+    /// （枠に入っていた言葉ほど正しく書かれやすいので、割合は高めに出る。効き目そのものは「精度の物差し」で見る）
+    static func workRows(_ s: [String: Int]) -> [(label: String, value: String, ok: Bool?)] {
+        func n(_ k: String) -> Int { s[k] ?? 0 }
+        func rate(_ a: Int, _ b: Int) -> String { b == 0 ? "—" : "\(Int((Double(a) / Double(b) * 100).rounded()))%" }
+        var rows: [(label: String, value: String, ok: Bool?)] = []
+        if n("work.lines") > 0 {
+            var text = "\(n("work.lines")) 行・自信の低い行 \(n("work.unsure"))（\(rate(n("work.unsure"), n("work.lines")))）"
+            if n("other.lines") > 0 { text += "／仕事以外は \(rate(n("other.unsure"), n("other.lines")))" }
+            rows.append(("仕事の会話の行", text, nil))
+        }
+        if n("reach.heard") > 0 {
+            rows.append(("登録した言葉の先回り（仕事）", "出てきた \(n("reach.heard")) 回・渡した枠に入っていた \(rate(n("reach.in"), n("reach.heard")))"
+                + "／登録の順のままなら \(rate(n("reach.inOld"), n("reach.heard")))", nil))
+        }
+        if n("wordfix.work") + n("wordfix.other") > 0 {
+            rows.append(("登録した書き方で直した行", "仕事 \(n("wordfix.work"))・仕事以外 \(n("wordfix.other"))", nil))
+        }
+        return rows
+    }
+
+    /// 仕事の成績表を日ごとに（新しい日から）。仕事の行が無い日は出さない
+    static func workCard(_ days: [String: [String: Int]]) -> [(label: String, value: String, ok: Bool?)] {
+        var rows: [(label: String, value: String, ok: Bool?)] = []
+        for day in days.keys.sorted(by: >) {
+            let s = days[day] ?? [:]
+            func n(_ k: String) -> Int { s[k] ?? 0 }
+            func rate(_ a: Int, _ b: Int) -> String { b == 0 ? "—" : "\(Int((Double(a) / Double(b) * 100).rounded()))%" }
+            guard n("work.lines") > 0 else { continue }
+            var text = "\(n("work.lines")) 行・自信の低い行 \(rate(n("work.unsure"), n("work.lines")))"
+            if n("other.lines") > 0 { text += "（仕事以外 \(rate(n("other.unsure"), n("other.lines")))）" }
+            if n("reach.heard") > 0 {
+                text += "・登録した言葉 \(n("reach.heard")) 回のうち枠の中 \(rate(n("reach.in"), n("reach.heard")))"
+                    + "（登録の順なら \(rate(n("reach.inOld"), n("reach.heard")))）"
+            }
+            if n("wordfix.work") > 0 { text += "・登録した書き方で直した \(n("wordfix.work")) 行" }
+            rows.append((day, text, nil))
         }
         return rows
     }

@@ -229,6 +229,80 @@ final class WorkDigestTests: XCTestCase {
         }
     }
 
+    // MARK: - よく出た言葉（2026-11-10）
+
+    func testWordsSection() {
+        let text = sample + "\n【よく出た言葉】\n・設備台帳\n・AsIs（今の姿のこと）\n・CI/CD\n・設備台帳\n棚卸し\n・なし"
+        let parsed = WorkDigestParser.parse(text, today: today)
+        // 説明は落とす・同じ言葉は1つ・印の無い行は前の言葉につなげない・「なし」は入れない
+        XCTAssertEqual(parsed.sections.words, ["設備台帳", "AsIs", "CI/CD", "棚卸し"])
+        // ほかの見出しはそのまま
+        XCTAssertEqual(parsed.sections.checks, ["会議室が取れているか"])
+        XCTAssertEqual(parsed.sections.lists.last?.title, "よく出た言葉")
+    }
+
+    func testWordsOnOneLineAndTooLong() {
+        let parsed = WorkDigestParser.parse("【よく出た言葉】設備台帳、業務フロー／ ダミーファイル：試しのファイル", today: today)
+        XCTAssertEqual(parsed.sections.words, ["設備台帳", "業務フロー", "ダミーファイル"])
+        // 文になっている長いものは言葉にしない
+        let long = String(repeating: "あ", count: 31)
+        XCTAssertEqual(WorkDigestParser.words([long, "短い言葉", "<b>"]), ["短い言葉"])
+        // 30 個まで
+        XCTAssertEqual(WorkDigestParser.words((1...40).map { "言葉\($0)" }).count, 30)
+    }
+
+    func testWordsAreOptional() throws {
+        // 見出しが無ければ nil のまま（前の形と同じ）。「言葉」だけの行は見出しにしない
+        let parsed = WorkDigestParser.parse(sample + "\n言葉: これは見出しではない", today: today)
+        XCTAssertNil(parsed.sections.words)
+        XCTAssertFalse(parsed.sections.isEmpty)
+        // 前の版で保存したもの（words が無い）も読める
+        let old = #"{"decided":["a"],"homework":[],"others":[],"topics":[],"checks":[]}"#
+        let back = try JSONDecoder().decode(WorkDigest.Sections.self, from: Data(old.utf8))
+        XCTAssertEqual(back.decided, ["a"])
+        XCTAssertNil(back.words)
+        // 言葉だけのまとめは「空」ではない
+        XCTAssertFalse(WorkDigest.Sections(words: ["設備台帳"]).isEmpty)
+    }
+
+    // MARK: - 退勤の頃の知らせ（2026-11-10）
+
+    private var tokyo: Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        return c
+    }
+
+    func testReminderTime() {
+        // today は 12:00。17:30 に出す
+        let at = WorkDigestReminder.time(now: today, workedToday: true, hasDigest: false, on: true,
+                                         minute: WorkDigestReminder.defaultMinute, calendar: tokyo)
+        let parts = at.map { tokyo.dateComponents([.day, .hour, .minute], from: $0) }
+        XCTAssertEqual([parts?.day, parts?.hour, parts?.minute], [9, 17, 30])
+    }
+
+    func testReminderIsSkipped() {
+        let minute = WorkDigestReminder.defaultMinute
+        // 設定がオフ・今日は職場の行が無い・もう取り込んだ
+        XCTAssertNil(WorkDigestReminder.time(now: today, workedToday: true, hasDigest: false, on: false, minute: minute, calendar: tokyo))
+        XCTAssertNil(WorkDigestReminder.time(now: today, workedToday: false, hasDigest: false, on: true, minute: minute, calendar: tokyo))
+        XCTAssertNil(WorkDigestReminder.time(now: today, workedToday: true, hasDigest: true, on: true, minute: minute, calendar: tokyo))
+        // 時刻を過ぎたあと（12:00 に、11:00 の知らせは出さない。翌日に回さない）
+        XCTAssertNil(WorkDigestReminder.time(now: today, workedToday: true, hasDigest: false, on: true, minute: 11 * 60, calendar: tokyo))
+        // ちょうど今（30秒より先でなければ出さない）
+        XCTAssertNil(WorkDigestReminder.time(now: today, workedToday: true, hasDigest: false, on: true, minute: 12 * 60, calendar: tokyo))
+    }
+
+    func testReminderMinuteRoundTripAndBounds() {
+        let at = WorkDigestReminder.date(minute: 18 * 60 + 5, now: today, calendar: tokyo)
+        XCTAssertEqual(WorkDigestReminder.minute(of: at, calendar: tokyo), 18 * 60 + 5)
+        // おかしな数は、その日の中に収める
+        let late = WorkDigestReminder.time(now: today, workedToday: true, hasDigest: false, on: true, minute: 99_999, calendar: tokyo)
+        let parts = late.map { tokyo.dateComponents([.day, .hour, .minute], from: $0) }
+        XCTAssertEqual([parts?.day, parts?.hour, parts?.minute], [9, 23, 59])
+        XCTAssertNil(WorkDigestReminder.time(now: today, workedToday: true, hasDigest: false, on: true, minute: -5, calendar: tokyo))
+    }
+
     // MARK: - 保存の形
 
     func testEntryRoundTrip() throws {

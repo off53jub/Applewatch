@@ -40,6 +40,7 @@ def run(main) -> int:
     failed += check_push()
     failed += check_mothership()
     failed += check_card()
+    failed += check_vocab()
     print(("NG の数: " + str(failed)) if failed else "版 10: 全部 OK", flush=True)
     return failed
 
@@ -485,4 +486,36 @@ def check_card() -> int:
         failed += say(got.get("available") is True and [i["id"] for i in got["items"]] == ["19a0b1c2d3e4f5a6"]
                       and got["items"][0]["shop"] == "テスト銀行", "カードの利用速報: おかしな行は落として返す")
     failed += say("/card" in mothership.GETS, "カードの利用速報: GET /card")
+    return failed
+
+
+# MARK: - 母艦の言葉の候補（2026-11-10）
+
+def check_vocab() -> int:
+    failed = 0
+    with tempfile.TemporaryDirectory() as folder:
+        base = Path(folder)
+        failed += say(mothership.read_vocab(base).get("available") is False, "言葉の候補: ファイルが無いときは available=false")
+        (base / "state").mkdir()
+        path = base / mothership.VOCAB
+        path.write_text('{"items": "x"}', encoding="utf-8")
+        failed += say(mothership.read_vocab(base).get("available") is False, "言葉の候補: 形の違うものは読まない")
+        data = {"generated_at": "2026-11-10T08:00:00+09:00", "items": [
+            {"word": "設備台帳", "category": "専門用語", "count": 12, "last": "2026-11-09", "variants": ["台帳", 3, ""]},
+            {"word": "", "count": 1},
+            {"word": "<b>", "count": 1},
+            {"word": 5},
+            "x",
+            {"word": "数だけ違う", "count": True, "variants": "x"}]}
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8-sig")
+        got = mothership.read_vocab(base)
+        words = [i["word"] for i in got.get("items", [])]
+        failed += say(got.get("available") is True and words == ["設備台帳", "数だけ違う"], "言葉の候補: おかしな行は落として返す")
+        failed += say(got["items"][0]["variants"] == ["台帳"] and got["items"][0]["count"] == 12
+                      and got["items"][1]["count"] == 0 and got["items"][1]["variants"] == [],
+                      "言葉の候補: 別の書き方と回数を確かめる")
+        many = {"items": [{"word": f"言葉{n}"} for n in range(mothership.VOCAB_LIMIT + 50)]}
+        path.write_text(json.dumps(many, ensure_ascii=False), encoding="utf-8")
+        failed += say(len(mothership.read_vocab(base)["items"]) == mothership.VOCAB_LIMIT, "言葉の候補: 多すぎるときは上限まで")
+    failed += say("/vocab" in mothership.GETS, "言葉の候補: GET /vocab")
     return failed

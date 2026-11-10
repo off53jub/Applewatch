@@ -152,6 +152,8 @@ final class Pipeline {
     let officeFilter = OfficeFilter()
     /// 会話に出てきた言葉の数え上げ（人ごとの言葉・言葉の登録の候補）
     let wordStats = WordStats()
+    /// 登録した言葉の、最近の出方の点（聞き取りに渡す順を決める。2026-11-10。WordHeat.swift）
+    let wordHeat = WordHeat()
     /// 直前の区切りで聞こえた、名前のある人（iPhone・時計それぞれ）。次の区切りのヒントに、その人の言葉を使う
     @ObservationIgnored private var recentPeople: [Bool: (end: Date, names: [String])] = [:]
     /// ほかのアプリ（AUDAY など）の音声の取り込み
@@ -196,6 +198,10 @@ final class Pipeline {
     let payments = PaymentBook()
     /// 仕事のまとめ（職場の Claude の答えを写真・貼り付けで取り込む。2026-11-08。WorkDigest.swift）
     let workDigests = WorkDigest()
+    /// 言葉の登録の候補（母艦の辞書から。押した言葉だけ登録する。2026-11-10。WordCandidates.swift）
+    let wordCandidates = WordCandidateBook()
+    /// 退勤の頃の知らせを用意した日（職場の行を書いた日に1回。2026-11-10。WorkDigest.swift）
+    @ObservationIgnored var workDigestReminderDay = ""
     /// AI からの質問と、わかったこと帳
     let asks = AskBook()
     /// 正解帳（週に1回の答え合わせ）
@@ -1459,6 +1465,7 @@ final class Pipeline {
         morningBriefOnActive()  // 朝の「昨日と今日」（まだなら作る）と時計に送る中身（2026-11-07。MorningBrief.swift）
         Task { await mothership.refresh(homePC) }  // 母艦のやること（10分に1回まで。2026-11-09。Mothership.swift）
         payments.reloadTaps()  // ウォレットでかざした記録（2026-11-09。Payments.swift）
+        scheduleWorkDigestReminder()  // 退勤の頃の「今日のまとめを取り込みましたか」（2026-11-10。WorkDigest.swift）
         Task { await payments.refreshMail(homePC) }  // カードの利用速報（30分に1回まで）
         pcLinkOnActive()  // 家の PC に様子を送り、記録と直しをやり取りする（2026-11-07。PCDiag.swift）
         shopVisits.retryRecent()  // 会話がまだ文字になっていなかった立ち寄りを推測し直す（2026-11-08。ShopVisits.swift）
@@ -1613,6 +1620,9 @@ final class Pipeline {
         // 閉じた会話の言葉を数える（はじめは、これまでの記録を全部）
         let recentDays = wordStats.isEmpty ? conversations.days() : Array(conversations.days().suffix(2))
         wordStats.count(days: recentDays.map { ($0, conversations.conversations(on: $0)) })
+        // 登録した言葉の最近の出方も数える（渡す順を決めるため。はじめと、しばらく動かしていなかったときは 14 日前まで）
+        let heatDays = Array(conversations.days().suffix(wordHeat.needsCatchUp() ? WordHeat.lookBackDays : 2))
+        wordHeat.count(days: heatDays.map { ($0, conversations.conversations(on: $0)) }, words: heatWords())
         // iPad と記録・登録を合わせる（まとめを書く前に、ほかの端末の会話も入れておく）
         await sync.run()
         // 声のひとこまが記録のほかの人の行と食い違っていたら、聞き分けから外す（戻せる形で）
@@ -3199,6 +3209,10 @@ final class Pipeline {
             default: return nil
             }
         }
+        // 仕事と仕事以外の行・登録した言葉の先回りを数える（数だけ。2026-11-10）
+        tallyWritten(texts: entries.map { $0.text }, confidence: confidence,
+                     fixedLines: rewrittenBy.filter { $0.contains("登録した書き方") }.count,
+                     sent: placeWords, context: context, at: start.addingTimeInterval(duration))
         let offsets = Self.fillOffsets(entries.map { ($0.offset, $0.text) }, duration: duration)
         // 行の終わり（PC の多数決の行は PC が返した終わり、ほかは次の行の始まり）
         let knownEnds: [TimeInterval?] = entries.indices.map { i in
@@ -3382,6 +3396,10 @@ final class Pipeline {
         }
         lastEngine = engine + "・音声より先に記録へ（時計）"
         lastTranscript[true] = (end, String(entries.map { $0.text }.joined().suffix(200)))
+        // 仕事と仕事以外の行・登録した言葉の先回りを数える（数だけ。2026-11-10）
+        tallyWritten(texts: entries.map { $0.text }, confidence: agreement,
+                     fixedLines: rewrittenBy.filter { $0.contains("登録した書き方") }.count,
+                     sent: placeWords, context: context, at: end)
         let offsets = Self.fillOffsets(entries, duration: duration)
         // 行の終わり（PC の多数決の行は PC が返した終わり、ほかは次の行の始まり）
         let knownEnds: [TimeInterval?] = entries.indices.map { i in
@@ -3520,12 +3538,64 @@ final class Pipeline {
         places.registeredContext(at: time) ?? calendar.context(at: time) ?? Vocabulary.context(byTime: time)
     }
 
-    /// その場で聞き取ってほしい言葉（名前を付けた人の名前も入れる）
+    /// その場で聞き取ってほしい言葉（名前を付けた人の名前も入れる）。
+    /// 渡せる数に上限があるので、いま出そうな順に並べて渡す（2026-11-10。WordHeat.swift）。
+    /// 精度の物差しで「登録の順のほうが良い」と出たら、登録の順に戻る（benchAdopt.registeredOrder）
     func keywords(for context: SpeakerLabeler.Context) -> [String] {
+        let registered = registeredWords(for: context)
+        if UserDefaults.standard.bool(forKey: Self.registeredOrderKey) { return registered }
+        return heatOrdered(registered, context: context)
+    }
+
+    static let registeredOrderKey = "benchAdopt.registeredOrder"
+
+    /// 登録の順のままの言葉（前の渡し方。見比べにも使う）
+    func registeredWords(for context: SpeakerLabeler.Context) -> [String] {
         let names = people
             .filter { $0.isNamed && !$0.isSelf && ($0.context == nil || $0.context == context) }
             .map(\.displayName)
         return vocabulary.words(for: context, names: names)
+    }
+
+    /// いま出そうな順に並べ替えた言葉（直しの正しい書き方と、登録して7日以内の言葉は先に出す）
+    func heatOrdered(_ registered: [String], context: SpeakerLabeler.Context, now: Date = .now) -> [String] {
+        let pinned = vocabulary.fixes(for: context).map(\.right)
+            + vocabulary.recentlyAdded(since: now.addingTimeInterval(-7 * 86_400))
+        return wordHeat.ordered(registered, pinned: pinned, now: now)
+    }
+
+    /// 最近の出方を数える言葉（登録した言葉のすべて・直しの正しい書き方・名前を付けた人の名前）
+    func heatWords() -> [String] {
+        var words: [String] = []
+        for group in Vocabulary.Group.allCases { words += vocabulary.words(in: group) }
+        words += vocabulary.fixes.map { $0.right }
+        words += people.filter { $0.isNamed && !$0.isSelf }.map { $0.displayName }
+        return words
+    }
+
+    /// 書いた行を数える（仕事と仕事以外の行・自信の低い行・登録した書き方で直した行・登録した言葉の先回り）。
+    /// 残すのは数だけで、言葉や文は残さない。数えたあとで、出てきた言葉を「ついさっき出た言葉」として覚える。
+    /// sent はその区切りを聞くときに渡した言葉（2026-11-10。WordHeat.swift・NightReport.swift）
+    func tallyWritten(texts: [String], confidence: [Double?], fixedLines: Int, sent: [String],
+                      context: SpeakerLabeler.Context, at time: Date) {
+        guard !texts.isEmpty else { return }
+        let side = context == .work ? "work" : "other"
+        Tally.add(side + ".lines", texts.count, at: time)
+        Tally.add(side + ".unsure", confidence.filter { ($0 ?? 1) < ConversationLog.Line.uncertainBelow }.count, at: time)
+        Tally.add("wordfix." + side, fixedLines, at: time)
+        let joined = texts.joined(separator: "\n")
+        if context == .work {
+            let limit = HomePC.hintLimit(speed: homePC.speed)
+            let registered = registeredWords(for: context)
+            let reach = HintOrder.reach(text: joined, words: registered,
+                                        sent: HintOrder.window(sent, limit: limit),
+                                        registered: HintOrder.window(registered, limit: limit))
+            Tally.add("reach.heard", reach.heard, at: time)
+            Tally.add("reach.in", reach.inSent, at: time)
+            Tally.add("reach.inOld", reach.inRegistered, at: time)
+        }
+        wordHeat.noteHeard(joined, words: heatWords(), at: time)
+        if context == .work { workDigestReminderOnWork(at: time) }  // 退勤の頃の知らせ（その日の1回目だけ用意する）
     }
 
     /// 時刻の分からない行に、前後の分かっている時刻のあいだを文字数で割り振った時刻を付ける。
