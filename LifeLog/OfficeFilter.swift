@@ -48,6 +48,25 @@ final class OfficeFilter {
     /// 機器ごとの、最後に自分が話した時刻
     private var lastSelfSpoke: [Bool: Date] = [:]
 
+    // MARK: - 自分が加わった話の続き（会議。2026-11-11）
+    // 会議では、自分が何分も黙って聞いていることがある。前後3分だけを見ると、そのあいだの
+    // 名前の無い参加者の声がすべて「周りの雑談」として外れていた（11/6 の会議で約20分ぶん。
+    // 登録した職場にいた日は名前の無い声が1%しか残らず、「たぶん職場」の日は42%残っていた）。
+    // そこで、自分か名前を付けた人が話してから、間（会話の切れ目の長さ）が空かずに続いている話は、上限まで相手の声とみなす。
+    // 名前を付けた人も入れるのは、会議では自分の声が聞き分けられないことがあるため（11/9 の58分の会議で「自分」の行が0。
+    // 名前を付けた人の行は178あった）。名前を付けた人の声は、もともと外さない。
+
+    /// 自分か名前を付けた人が話してから、これだけのあいだは、話が続いていれば相手の声とみなす
+    static let joinedTalkSpan: TimeInterval = 60 * 60
+    /// 自分が加わった話の最中は、声の大きさの差をここまで許す（机の向こうの参加者の声。
+    /// 距離が10倍で約20dB小さくなる。実際の録音ではまだ合わせていない）
+    static let joinedTalkMargin: Float = 24
+
+    /// 機器ごとの、最後に聞こえた行の時刻（外した行も含む。話が途切れたかを見る）
+    private var lastHeard: [Bool: Date] = [:]
+    /// 機器ごとの、いま続いている話の中で最後に自分か名前を付けた人が話した時刻（話が途切れたら nil）
+    private var joinedAt: [Bool: Date] = [:]
+
     init() {
         for watch in [false, true] {
             let key = "selfLevel-\(watch ? "w" : "p")"
@@ -102,7 +121,10 @@ final class OfficeFilter {
             guard let level = item.level, let reference else { return false }
             return level < reference - (asleep ? Self.sleepMargin : Self.quietMargin)
         }
-        if !asleep && items.count >= 3 && !quiet.contains(false) { quiet = items.map { _ in false } }
+        let allQuiet = !asleep && items.count >= 3 && !quiet.contains(false)
+        if allQuiet { quiet = items.map { _ in false } }
+        // 自分が加わった話の最中か（行ごと。話が途切れたら終わり、自分か名前を付けた人が話したらまた始まる）
+        let joined = joinedTalk(items, fromWatch: fromWatch)
         let result = items.indices.map { i -> Bool in
             let item = items[i]
             let isSelf = item.personID == SpeakerLabeler.selfID
@@ -112,10 +134,16 @@ final class OfficeFilter {
             }
             guard active, !isSelf else { return true }
             // 名前を付けた人の声は、小さくても外さない（1対1の相手の声が自分の声より14dB以上小さく入り、外れていた。2026-11-05）
-            if byLoudness && quiet[i] && !item.isNamed { return false }
+            // 自分が加わった話の最中は、机の向こうの参加者の声も残す（それよりずっと小さい声だけ外す）
+            var tooQuiet = quiet[i]
+            if joined[i], !allQuiet, let level = item.level, let reference {
+                tooQuiet = level < reference - Self.joinedTalkMargin
+            }
+            if byLoudness && tooQuiet && !item.isNamed { return false }
             if byExchange, item.personID != nil, !item.isNamed {
                 let near = selfTimes.contains { abs($0.timeIntervalSince(item.time)) <= Self.exchangeWindow }
                     || lastSelfSpoke[fromWatch].map { item.time.timeIntervalSince($0) <= Self.exchangeWindow } == true
+                    || joined[i]
                 if !near { return false }
             }
             return true
@@ -125,6 +153,31 @@ final class OfficeFilter {
         if count > 0 {
             dropped += count
             UserDefaults.standard.set(dropped, forKey: "officeDropped")
+        }
+        return result
+    }
+
+    /// 行ごとに、自分が加わった話の最中か。自分か名前を付けた人が話した行から、行と行の間が gap を超えずに続くあいだ
+    /// （最後にそのどちらかが話してから joinedTalkSpan まで）。区切りをまたいで覚えておく。
+    /// あとから届いた前の時間の区切り（時計にたまっていた音声など）は、その区切りの中だけで見て、覚えている値を変えない。
+    func joinedTalk(_ items: [Item], fromWatch: Bool, gap: TimeInterval = ConversationGap.current) -> [Bool] {
+        let order = items.indices.sorted { items[$0].time < items[$1].time }
+        guard let first = order.first else { return [] }
+        let late = lastHeard[fromWatch].map { items[first].time < $0.addingTimeInterval(-gap) } ?? false
+        var heard = late ? nil : lastHeard[fromWatch]
+        var joinedTime = late ? nil : joinedAt[fromWatch]
+        var result = Array(repeating: false, count: items.count)
+        for i in order {
+            let t = items[i].time
+            if let h = heard, t.timeIntervalSince(h) > gap { joinedTime = nil }
+            if items[i].personID == SpeakerLabeler.selfID || items[i].isNamed { joinedTime = t }
+            if let j = joinedTime, t.timeIntervalSince(j) > Self.joinedTalkSpan { joinedTime = nil }
+            result[i] = joinedTime != nil
+            heard = max(heard ?? t, t)
+        }
+        if !late {
+            lastHeard[fromWatch] = heard
+            joinedAt[fromWatch] = joinedTime
         }
         return result
     }
