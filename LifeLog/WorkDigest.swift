@@ -213,6 +213,62 @@ enum WorkDigestParser {
         text.filter { !$0.isWhitespace }
     }
 
+    /// 行の終わりの、出どころの番号（「…［1］」「…［1・2］」「…[2]」。2026-11-10）を外す。
+    /// 番号だけが入ったかっこを、終わりから続くだけ読む（「（11/10まで）」のような番号以外の入ったかっこは外さない）
+    static func sourceTags(_ text: String) -> (text: String, tags: [Int]) {
+        var rest: String = text.trimmingCharacters(in: .whitespaces)
+        var tags: [Int] = []
+        let pattern = #"[［\[【]\s*[0-9０-９]{1,2}(\s*[,、・，]\s*[0-9０-９]{1,2})*\s*[］\]】]\s*$"#
+        while let range = rest.range(of: pattern, options: .regularExpression) {
+            let inside: String = String(rest[range])
+            let numbers: [Int] = inside.split(whereSeparator: { !$0.isNumber }).compactMap { Int(halfWidth(String($0))) }
+            tags = numbers + tags
+            rest = String(rest[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+        }
+        return (rest, tags)
+    }
+
+    /// 【出どころ】の行の頭の番号（「［1］チーム＞チャネル…」）と、短い名前（「（いた人：…）」より前）。番号の無い行は nil
+    static func sourceNumber(_ line: String) -> (number: Int, name: String)? {
+        let s: String = line.trimmingCharacters(in: .whitespaces)
+        guard let range = s.range(of: #"^[［\[【]\s*[0-9０-９]{1,2}\s*[］\]】]"#, options: .regularExpression) else { return nil }
+        let digits: String = String(s[range]).filter(\.isNumber)
+        guard let number = Int(halfWidth(digits)) else { return nil }
+        var name: String = String(s[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        if let cut = name.range(of: "（いた人") ?? name.range(of: "(いた人") { name = String(name[..<cut.lowerBound]) }
+        return (number, name.trimmingCharacters(in: .whitespaces))
+    }
+
+    /// 出どころの番号 → 短い名前
+    static func sourceMap(_ sources: [String]) -> [Int: String] {
+        var map: [Int: String] = [:]
+        for line in sources {
+            if let found = sourceNumber(line), map[found.number] == nil { map[found.number] = found.name }
+        }
+        return map
+    }
+
+    /// 【日付】ごとに分ける（2026-11-10。休み明けに何日分かをまとめて貼ったとき）。
+    /// 日付の違う【日付】が2つ以上あるときだけ分ける（1つ目より前の文は、1つ目に入れる）。分けないときは空
+    static func splitDays(_ text: String, today: Date = .now) -> [(day: String, text: String)] {
+        let lines: [String] = text.components(separatedBy: .newlines)
+        var starts: [Int] = []
+        for (i, raw) in lines.enumerated() where header(tidy(raw))?.part == .date {
+            starts.append(i)
+        }
+        guard starts.count >= 2 else { return [] }
+        var pieces: [(day: String, text: String)] = []
+        for (n, start) in starts.enumerated() {
+            let from: Int = n == 0 ? 0 : start
+            let to: Int = n + 1 < starts.count ? starts[n + 1] : lines.count
+            let piece: String = lines[from..<to].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let day = parse(piece, today: today).day else { return [] }
+            pieces.append((day, piece))
+        }
+        guard Set(pieces.map { $0.day }).count >= 2 else { return [] }
+        return pieces
+    }
+
     /// 日本語の字のあいだの余計な空白を除き、続く空白を1つにする（読み取りの癖）
     static func tidy(_ text: String) -> String {
         let chars: [Character] = Array(text.trimmingCharacters(in: .whitespaces))
@@ -548,18 +604,43 @@ extension Pipeline {
         let homework: [String] = parsed.found ? parsed.homeworkTasks : []
         let skipped: Int = (sections?.homework ?? []).count - homework.count
         let items = Self.workDigestTasks(homework, day: day, now: now)
+        // 会話などから拾っていたものと同じ宿題は、足さずに「まとめにもあった」と残す。確かめ待ちだったものは「やる」へ（2026-11-10）
+        let matches: [(index: Int, id: String)] = Self.digestMatches(items, in: tasks.items)
+        let promoted: Int = matches.filter { m in tasks.items.first { $0.id == m.id }?.state == .candidate }.count
+        for m in matches { tasks.confirm(m.id, alsoIn: "仕事のまとめ " + day) }
         let added = tasks.add(items)
-        if !added.isEmpty { tasksChanged() }
+        if !added.isEmpty || !matches.isEmpty { tasksChanged() }
         Task { await writeWorkDigests() }
         scheduleWorkDigestReminder(now: now)  // 今日のまとめを入れたら、退勤の頃の知らせは出さない
         var note = "\(Self.workDigestDayTitle(day)) の仕事のまとめを入れました。"
         if !added.isEmpty {
             note += "自分の宿題 \(added.count) 件を、タスクの「やる」に入れました。"
-        } else if !items.isEmpty {
+        } else if !items.isEmpty && matches.isEmpty {
             note += "自分の宿題は、もうタスクにあるものでした。"
+        }
+        if !matches.isEmpty {
+            note += "会話などから拾っていた \(matches.count) 件と同じ宿題でした"
+            note += promoted > 0 ? "（確かめ待ちだった \(promoted) 件を「やる」に入れました）。" : "。"
         }
         if skipped > 0 { note += "宿題の前に書かれた前置きの文は、タスクにしていません。" }
         return note
+    }
+
+    /// 仕事のまとめの宿題と、会話・★・議事録・写真から拾った頼まれごとの突き合わせ（2026-11-10）。
+    /// 宿題ごとに、よく似た「まだ」か「確かめ待ち」の頼まれごと（仕事のまとめから入ったものは除く）を1つ選ぶ。同じものを二度は選ばない
+    static func digestMatches(_ homework: [TaskBook.Item], in book: [TaskBook.Item]) -> [(index: Int, id: String)] {
+        var out: [(index: Int, id: String)] = []
+        var used: Set<String> = []
+        for (i, item) in homework.enumerated() {
+            let hit = book.first { old in
+                (old.state == .open || old.state == .candidate) && old.digestDay == nil && old.source != .summary
+                    && !used.contains(old.id) && TaskBook.similar(old.what, item.what)
+            }
+            guard let hit else { continue }
+            used.insert(hit.id)
+            out.append((i, hit.id))
+        }
+        return out
     }
 
     /// 「自分の宿題」→ 頼まれごと帳の「やる」（仕事）。同じ日の・よく似たものは帳の add が足さない。
@@ -569,7 +650,9 @@ extension Pipeline {
         let start = TaskBook.dayFormat.date(from: day) ?? now
         let said = min(start.addingTimeInterval(18 * 3600), now)
         var out: [TaskBook.Item] = []
-        for line in homework {
+        for raw in homework {
+            // 行の終わりの出どころの番号（［1］）は、タスクの文に入れない（2026-11-10）
+            let line: String = WorkDigestParser.sourceTags(raw).text
             let h = WorkDigestParser.homework(line)
             guard !h.what.isEmpty else { continue }
             let due: Date? = h.dueText.flatMap { WorkDigestParser.dueDate($0, digestDay: day) }
@@ -651,24 +734,51 @@ extension Pipeline {
         /// 見出し（決まった形でないまとめは空）
         let heading: String
         let text: String
+        /// どの出どころの話か（【出どころ】の番号が付いていれば、その短い名前。2026-11-10）
+        var source: String = ""
         var id: String { entryID + "|" + String(index) }
     }
 
     /// まとめを、見出しつきの行にする。決まった形でないまとめは、取り込んだ文を1行ずつ（見出しは空。【日付】の行は入れない）
-    static func workDigestLines(_ entry: WorkDigest.Entry) -> [(heading: String, text: String)] {
-        var out: [(heading: String, text: String)] = []
+    /// 行の終わりの出どころの番号（［1］）は外し、【出どころ】の短い名前を source に入れる（2026-11-10。番号が無ければ空）
+    static func workDigestLines(_ entry: WorkDigest.Entry) -> [(heading: String, text: String, source: String)] {
+        var out: [(heading: String, text: String, source: String)] = []
         if let sections = entry.sections, !sections.isEmpty {
+            let names: [Int: String] = WorkDigestParser.sourceMap(sections.sources ?? [])
             for list in sections.lists {
-                for item in list.items { out.append((list.title, item)) }
+                let isSources: Bool = list.title == "出どころ"
+                for item in list.items {
+                    let split = WorkDigestParser.sourceTags(item)
+                    let source: String = isSources ? "" : split.tags.compactMap { names[$0] }.joined(separator: "・")
+                    out.append((list.title, isSources ? item : split.text, source))
+                }
             }
             return out
         }
         for raw in entry.text.components(separatedBy: .newlines) {
             let line: String = WorkDigestParser.tidy(raw)
             guard !line.isEmpty, WorkDigestParser.header(line)?.part != .date else { continue }
-            out.append(("", line))
+            out.append(("", line, ""))
         }
         return out
+    }
+
+    /// 答えの文と言葉が重なる、材料のまとめの行（2026-11-10）。言語モデルに番号を返させず、文の重なり（2文字の組の半分以上）で見る。
+    /// 「答えに使われたらしい行」として見せるだけ
+    static func digestLinesUsed(answer: String, lines: [(day: String, heading: String, text: String)])
+        -> [(day: String, heading: String, text: String)] {
+        let said: String = WorkDigestParser.compact(answer)
+        guard said.count >= 2 else { return [] }
+        var pairs: Set<String> = []
+        let chars: [Character] = Array(said)
+        for i in 0..<(chars.count - 1) { pairs.insert(String(chars[i]) + String(chars[i + 1])) }
+        return lines.filter { line in
+            let t: [Character] = Array(WorkDigestParser.compact(line.text))
+            guard t.count >= 4 else { return false }
+            var hit = 0
+            for i in 0..<(t.count - 1) where pairs.contains(String(t[i]) + String(t[i + 1])) { hit += 1 }
+            return Double(hit) / Double(t.count - 1) >= 0.5
+        }
     }
 
     /// 仕事のまとめを言葉で探す（渡した順＝新しい日から）。空白で区切った言葉は、すべてを含む行。見出しの言葉でも見つかる。
@@ -680,10 +790,11 @@ extension Pipeline {
         var seen: Set<String> = []
         for entry in entries {
             for (n, line) in workDigestLines(entry).enumerated() {
-                let hay: String = line.heading + " " + line.text
+                let hay: String = line.heading + " " + line.text + " " + line.source
                 guard terms.allSatisfy({ hay.localizedCaseInsensitiveContains($0) }) else { continue }
                 guard seen.insert(entry.day + "|" + WorkDigestParser.compact(line.text)).inserted else { continue }
-                out.append(DigestHit(entryID: entry.id, index: n, day: entry.day, heading: line.heading, text: line.text))
+                out.append(DigestHit(entryID: entry.id, index: n, day: entry.day, heading: line.heading, text: line.text,
+                                     source: line.source))
                 if out.count >= limit { return out }
             }
         }
@@ -695,38 +806,46 @@ extension Pipeline {
     /// 期間を言わなかった質問（anyDay）なら、前の日のまとめからも探す。
     /// 手がかりが無いときは、期間を言った質問だけ、その期間のまとめをまるごと（期間も手がかりも無い質問には入れない）。
     /// days は、材料に入れたまとめの日（新しい日から・重なりなし）
+    /// near は、家の PC の索引で意味の近かった行（「日|空白を除いた行」。2026-11-10）。手がかりの言葉が無くても、その行は入れる。
+    /// lines は、材料に入れた行（答えに使われたらしい行を見つけるため）
     static func workDigestMaterial(_ entries: [WorkDigest.Entry], keywords: [String], people: [String],
-                                   from: String, to: String, anyDay: Bool, budget: Int) -> (text: String, days: [String]) {
+                                   from: String, to: String, anyDay: Bool, budget: Int, near: Set<String> = [])
+        -> (text: String, days: [String], lines: [(day: String, heading: String, text: String)]) {
         let cues: [String] = (keywords + people).filter { !$0.isEmpty }
         var text = ""
         var days: [String] = []
+        var used: [(day: String, heading: String, text: String)] = []
         var seen: Set<String> = []
         for entry in entries {
             // 残りが少ないときは、見出しだけの切れはしを入れない
             guard budget - text.count >= 40 else { break }
             let inRange: Bool = entry.day >= from && entry.day <= to
-            let wanted: Bool = cues.isEmpty ? (!anyDay && inRange) : (anyDay || inRange)
-            guard wanted else { continue }
+            // 手がかりも近い行も無ければ、期間を言った質問だけ、その期間のまとめをまるごと
+            let whole: Bool = cues.isEmpty && near.isEmpty && !anyDay && inRange
+            let filtered: Bool = (!cues.isEmpty || !near.isEmpty) && (anyDay || inRange)
+            guard whole || filtered else { continue }
             var block = ""
             var heading: String? = nil
             for line in workDigestLines(entry) {
-                if !cues.isEmpty {
-                    let hay: String = "仕事のまとめ " + line.heading + " " + line.text
-                    guard cues.contains(where: { hay.localizedCaseInsensitiveContains($0) }) else { continue }
+                let key: String = entry.day + "|" + WorkDigestParser.compact(line.text)
+                if filtered {
+                    let hay: String = "仕事のまとめ " + line.heading + " " + line.text + " " + line.source
+                    guard cues.contains(where: { hay.localizedCaseInsensitiveContains($0) }) || near.contains(key) else { continue }
                 }
-                guard seen.insert(entry.day + "|" + WorkDigestParser.compact(line.text)).inserted else { continue }
+                guard seen.insert(key).inserted else { continue }
                 if heading != line.heading {
                     heading = line.heading
                     if !line.heading.isEmpty { block += "【" + line.heading + "】\n" }
                 }
-                block += "・" + line.text + "\n"
+                block += "・" + line.text + (line.source.isEmpty ? "" : "（出どころ: " + line.source + "）") + "\n"
+                used.append((entry.day, line.heading, line.text))
             }
             guard !block.isEmpty else { continue }
             let piece: String = "[" + entry.day + " 仕事のまとめ]\n" + block + "\n"
             text += String(piece.prefix(budget - text.count))
             if !days.contains(entry.day) { days.append(entry.day) }
         }
-        return (text, days)
+        return (text, days, used)
     }
 }
 
@@ -781,8 +900,11 @@ extension Pipeline {
         guard let at = WorkDigestReminder.time(now: now, workedToday: worked, hasDigest: has, on: on, minute: minute) else { return }
         let content = UNMutableNotificationContent()
         content.title = "仕事のまとめ"
-        content.body = "今日のまとめを取り込みましたか。職場の Claude に聞いた答えを、写真か貼り付けで入れられます。"
+        content.body = "今日のまとめを取り込みましたか。押すと、取り込む画面を開きます。"
         content.sound = .default
+        // 押すと取り込む画面を開く（2026-11-10。NoticeActions.swift）
+        content.categoryIdentifier = NoticeActions.digestCategory
+        NoticeStats.countOnce(NoticeActions.digestCategory, key: today)
         let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: at)
         center.add(UNNotificationRequest(identifier: WorkDigestReminder.noticeID, content: content,
                                          trigger: UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)))

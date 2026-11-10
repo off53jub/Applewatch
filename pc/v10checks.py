@@ -7,6 +7,9 @@
 - ふだんの受け口の GET /watch-route（合言葉・形・Funnel の様子を覚えておく）と /hello の features、見守りの画面
 - 時計から預かった仕事も、でき上がりで「できた」の見えない通知（仕事の名前つき）を送る
 - 母艦のやること（2026-11-09）: 無いときは available=false・形の違うものは読まない・済みの id の形・同じ日の同じ id は1行だけ
+- 仕事のまとめ（2026-11-10）: 「仕事のまとめ.json」の読み方（見出し・まとめが無いときの生の文・同じ日の同じ行は1回・読むだけ）・
+  意味で探すに置く（kind が work-digest・時刻なし・既定では出ない・変わったときだけ置き直す・無くなった行は消す）・
+  MCP の search_digest・get_digest と、search_text・search_meaning の digest_hits（hits の形は変えない）
 番号はどれも空いているもの（127.0.0.1 の 0 番）を使う。確かめるときは、本物の HOME に書かない（isolate_home）。
 """
 
@@ -25,6 +28,8 @@ import jobqueue
 import mothership
 import ops
 import watchroute
+import lifelog_mcp
+import semantic
 from v6checks import KEY, Client, say
 from v8checks import raw_post, wait_until
 
@@ -41,6 +46,7 @@ def run(main) -> int:
     failed += check_mothership()
     failed += check_card()
     failed += check_vocab()
+    failed += check_digest()
     print(("NG の数: " + str(failed)) if failed else "版 10: 全部 OK", flush=True)
     return failed
 
@@ -518,4 +524,126 @@ def check_vocab() -> int:
         path.write_text(json.dumps(many, ensure_ascii=False), encoding="utf-8")
         failed += say(len(mothership.read_vocab(base)["items"]) == mothership.VOCAB_LIMIT, "言葉の候補: 多すぎるときは上限まで")
     failed += say("/vocab" in mothership.GETS, "言葉の候補: GET /vocab")
+    return failed
+
+
+
+# MARK: - 仕事のまとめ（2026-11-10。made-up の中身だけ）
+
+def digest_sample() -> list[dict]:
+    return [
+        {"id": "e1", "day": "2026-11-09", "text": "【11月9日】\n生の文は使わない", "source": "paste", "addedAt": 1.0e9,
+         "sections": {"decided": ["Aさんが来週の資料を作る", "定例は水曜に移す"], "homework": ["見積もりを確かめる"],
+                      "others": None, "topics": [], "checks": ["Bさんの返事 待ち"], "words": ["台帳"], "sources": ["会議A"]}},
+        {"id": "e2", "day": "2026-11-09", "text": "x", "source": "photo", "addedAt": 1.0e9 + 5,
+         "sections": {"decided": ["定例は 水曜に 移す", "別の決定"], "homework": [], "others": [], "topics": [], "checks": []}},
+        {"id": "e3", "day": "2026-11-08", "text": "【11月8日】\n\n先に掃除を終える\n  \n次の週に回す", "source": "camera", "addedAt": 2.0e9},
+        {"id": "e4", "day": "2026-11-08", "text": "空のまとめ", "source": "paste", "addedAt": 2.0e9 + 1,
+         "sections": {"decided": [], "homework": [], "others": [], "topics": [], "checks": []}},
+        {"id": "e5", "day": "きのう", "text": "日が変", "sections": None},
+        "x"]
+
+
+def check_digest() -> int:
+    failed = 0
+    with tempfile.TemporaryDirectory() as folder:
+        base = Path(folder)
+        path = base / "仕事のまとめ.json"
+        failed += say(mothership.read_digests(path) is None and mothership.read_digests(None) is None,
+                      "仕事のまとめ: ファイルが無いときは静かに空")
+        failed += say(mothership.digest_file({"work_digest_file": str(path)}) == path, "仕事のまとめ: config.json の work_digest_file")
+        path.write_text('{"a": 1}', encoding="utf-8")
+        failed += say(mothership.read_digests(path) is None, "仕事のまとめ: 形の違うものは読まない")
+        path.write_text(json.dumps(digest_sample(), ensure_ascii=False), encoding="utf-8")
+        before = (path.stat().st_mtime_ns, path.read_bytes())
+        got = mothership.read_digests(path)
+        lines = got["lines"] if got else []
+        pairs = [(l["day"], l["heading"], l["text"]) for l in lines]
+        failed += say(pairs[:5] == [("2026-11-09", "出どころ", "会議A"), ("2026-11-09", "決まったこと", "Aさんが来週の資料を作る"),
+                                    ("2026-11-09", "決まったこと", "定例は水曜に移す"), ("2026-11-09", "自分の宿題", "見積もりを確かめる"),
+                                    ("2026-11-09", "あとで確かめること", "Bさんの返事 待ち")],
+                      "仕事のまとめ: 見出しの並びと、日の新しい順")
+        failed += say(("2026-11-09", "決まったこと", "別の決定") in pairs and
+                      sum(1 for p in pairs if "定例" in p[2]) == 1, "仕事のまとめ: 同じ日の同じ行は（空白が違っても）1回だけ")
+        failed += say([p[2] for p in pairs if p[0] == "2026-11-08"] == ["先に掃除を終える", "次の週に回す", "空のまとめ"],
+                      "仕事のまとめ: まとめが無いときは生の文を行にし、【日付】だけの行は飛ばす")
+        failed += say(not any(p[0] == "きのう" for p in pairs) and not any("生の文は使わない" in p[2] for p in pairs),
+                      "仕事のまとめ: 日の形が変な項目は飛ばし、まとめがあれば生の文は使わない")
+        failed += say(before == (path.stat().st_mtime_ns, path.read_bytes()), "仕事のまとめ: 読むだけ（ファイルを書き換えない）")
+
+        # 意味で探す
+        from v9checks import FakeEmbedder
+
+        index = semantic.SemanticIndex(base / "semantic.db", FakeEmbedder(), lambda m: None)
+        index.index([{"id": "c1", "day": "2026-11-09", "time": 1762650000.0, "speaker": "Aさん", "text": "定例は水曜に移す話",
+                      "work": False, "conversation": "k1"}])
+        read = lambda: mothership.read_digests(path)  # noqa: E731
+        count = index.digest_tick(read)
+        failed += say(count == len(lines) and index.digest_tick(read) is None, "仕事のまとめ: 索引に置き、ファイルが同じなら置き直さない")
+        plain = index.search({"query": "定例は水曜に移す", "k": 20, "from": None, "to": None, "speaker": None, "include_work": True})
+        failed += say(plain and all("kind" not in h and h["id"] == "c1" for h in plain), "意味で探す: 既定では仕事のまとめの行を出さない（形も前のまま）")
+        both = index.search({"query": "定例は水曜に移す", "k": 20, "from": None, "to": None, "speaker": None, "include_work": True,
+                             "include_digest": True})
+        digest = [h for h in both if h.get("kind") == "work-digest"]
+        failed += say(digest and digest[0]["text"] == "定例は水曜に移す" and digest[0]["heading"] == "決まったこと"
+                      and digest[0]["day"] == "2026-11-09" and "time" not in digest[0] and "context" not in digest[0]
+                      and any(h["id"] == "c1" for h in both), "意味で探す: 仕事のまとめの行は kind・day・heading つき（時刻なし）")
+        only = index.search({"query": "定例", "k": 50, "from": "2026-11-09", "to": "2026-11-09", "speaker": None, "include_work": True,
+                             "only_digest": True})
+        failed += say(only and all(h.get("kind") == "work-digest" and h["day"] == "2026-11-09" for h in only), "意味で探す: only_digest と日の範囲")
+        spoken = index.search({"query": "定例", "k": 50, "from": None, "to": None, "speaker": "決まった", "include_work": True,
+                               "include_digest": True})
+        failed += say(not any(h.get("kind") for h in spoken), "意味で探す: 話し手で絞るときは、見出しを話し手とみなさない")
+        try:
+            semantic.parse_search(json.dumps({"query": "a", "include_digest": "yes"}).encode())
+            bad = False
+        except ValueError:
+            bad = True
+        ok = semantic.parse_search(json.dumps({"query": "a"}).encode())
+        failed += say(bad and ok["include_digest"] is False and ok["only_digest"] is False, "意味で探す: include_digest は true か false、既定は false")
+        # ファイルが変わったら置き直し、無くなった行は消す
+        changed = digest_sample()
+        changed[0]["sections"]["decided"] = ["Aさんが来週の資料を作る"]
+        time.sleep(0.02)
+        path.write_text(json.dumps(changed, ensure_ascii=False), encoding="utf-8")
+        again = index.digest_tick(read)
+        left = index.search({"query": "定例は水曜に移す", "k": 50, "from": None, "to": None, "speaker": None, "include_work": True,
+                             "only_digest": True})
+        failed += say(again is not None and not any(h["text"] == "定例は水曜に移す" for h in left),
+                      "仕事のまとめ: ファイルが変わったら置き直し、無くなった行は索引から消す")
+        missing = base / "ない.json"
+        failed += say(index.digest_tick(lambda: mothership.read_digests(missing)) is None and left, "仕事のまとめ: ファイルが消えても索引はそのまま")
+
+        # MCP
+        home = base / "LifeLogPC"
+        home.mkdir()
+        shutil_copy = (base / "semantic.db").read_bytes()
+        (home / "semantic.db").write_bytes(shutil_copy)
+        tools = lifelog_mcp.Tools(home, FakeEmbedder(), {"work_digest_file": str(path)})
+        found = tools.call("search_digest", {"query": "資料 aさん"})
+        failed += say(len(found["hits"]) == 1 and found["hits"][0]["kind"] == "work-digest" and found["hits"][0]["day"] == "2026-11-09"
+                      and "time" not in found["hits"][0], "MCP search_digest: 言葉が全部ある行だけ（全角・半角と大文字・小文字は同じ）")
+        failed += say(not tools.call("search_digest", {"query": "資料", "from": "2026-11-10"})["hits"]
+                      and len(tools.call("search_digest", {"query": "掃除", "to": "2026-11-08"})["hits"]) == 1, "MCP search_digest: 日の範囲")
+        one = tools.call("get_digest", {"day": "2026-11-09"})
+        failed += say([x["heading"] for x in one["sections"]][:2] == ["出どころ", "決まったこと"] and one["lines"] >= 4
+                      and tools.call("get_digest", {"day": "2026-01-01"})["lines"] == 0, "MCP get_digest: 見出しごとに1日分、無い日は空")
+        text = tools.call("search_text", {"query": "資料"})
+        failed += say("hits" in text and "excluded_work" in text and [h["text"] for h in text["digest_hits"]] == ["Aさんが来週の資料を作る"],
+                      "MCP search_text: digest_hits を別に付け、hits の形は前のまま")
+        plain = tools.call("search_text", {"query": "資料", "include_digest": False})
+        failed += say("digest_hits" not in plain, "MCP search_text: include_digest=false なら付けない")
+        meaning = tools.call("search_meaning", {"query": "定例は水曜に移す話", "k": 5})
+        failed += say(all(h.get("kind") is None for h in meaning["hits"]) and "digest_hits" in meaning
+                      and all(h["kind"] == "work-digest" for h in meaning["digest_hits"]), "MCP search_meaning: digest_hits は別の欄")
+        lifelog_mcp.INCLUDE_WORK = False
+        try:
+            hidden = (tools.call("search_digest", {"query": "資料"}), tools.call("get_digest", {"day": "2026-11-09"}),
+                      tools.call("search_text", {"query": "資料"}), tools.call("search_meaning", {"query": "定例"}))
+        finally:
+            lifelog_mcp.INCLUDE_WORK = True
+        failed += say(not hidden[0]["hits"] and hidden[1]["lines"] == 0 and "digest_hits" not in hidden[2]
+                      and "digest_hits" not in hidden[3], "MCP: --exclude-work のときは仕事のまとめを出さない")
+        names = {t["name"] for t in lifelog_mcp.TOOLS}
+        failed += say({"search_digest", "get_digest"} <= names, "MCP: 道具の一覧に search_digest・get_digest")
     return failed

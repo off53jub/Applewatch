@@ -425,7 +425,7 @@ final class WorkDigestTests: XCTestCase {
         // 決まった形でないまとめは、文を1行ずつ（見出しは空。【日付】の行と空の行は入れない）
         let raw = entry("2026-11-07", "【日付】2026-11-07\nきょうは 会議 が2つあった。\n\n午後は資料づくり。", id: "b")
         let plain = Pipeline.workDigestLines(WorkDigest.Entry(id: "b", day: raw.day, text: raw.text, source: .paste, addedAt: today))
-        XCTAssertEqual(plain.map(\.text), ["きょうは会議が2つあった。", "午後は資料づくり。"])
+        XCTAssertEqual(plain.map { $0.text }, ["きょうは会議が2つあった。", "午後は資料づくり。"])
         XCTAssertTrue(plain.allSatisfy { $0.heading.isEmpty })
     }
 

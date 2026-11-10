@@ -149,7 +149,9 @@ extension Pipeline {
         let box = suggestions
         let items = box.waiting + box.kept
         guard !items.isEmpty else { return }
-        let new = items.map { s -> TaskBook.Item in
+        // 期限の手がかり（日付・曜日・「明日」「〜まで」など）のあるものだけ入れる（2026-11-10。それまで70件のうち残したのは1件だった）。
+        // 入れなかったものも、1日のまとめのドキュメントには残っている
+        let new = items.filter { TaskBook.hasDueCue($0.text) }.map { s -> TaskBook.Item in
             let start = TaskBook.dayFormat.date(from: s.day)
             return TaskBook.Item(what: s.text, said: start.map { $0.addingTimeInterval(21 * 3600) } ?? .now, day: s.day,
                                  quote: "1日のまとめ（\(s.day)）のやること", source: .summary, state: .candidate,

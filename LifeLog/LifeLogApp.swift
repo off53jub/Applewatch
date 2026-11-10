@@ -73,6 +73,9 @@ struct LifeLogApp: App {
         // Siri・ショートカットから記録を聞く（2026-11-06）
         Recall.recent = { pipeline.recentWords() }
         Recall.lastTalk = { pipeline.lastTalk(with: $0) }
+        Recall.homework = { pipeline.todayHomework() }
+        // ショートカットの「仕事のまとめを取り込む」から渡された文で、取り込む画面を開く（2026-11-10）
+        DigestInbox.opened = { pipeline.noticeRoute = .digestImport($0) }
         // ウォレットでかざしたとき（ショートカットの「支払いを記録」）に読み直す（2026-11-09）
         CardTap.added = { pipeline.payments.reloadTaps() }
         // 職場の会話を家の PC の言語モデルで作るとき（本人がオンにしたときだけ。2026-11-06）

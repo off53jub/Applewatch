@@ -681,6 +681,29 @@ final class HomePC {
         return try JSONDecoder().decode(Reply.self, from: data).hits
     }
 
+    /// 仕事のまとめの行（PC の索引の）。2026-11-10
+    struct DigestSearchHit: Decodable {
+        let day: String
+        let heading: String?
+        let text: String
+        let score: Double?
+    }
+
+    /// 仕事のまとめの行だけを、意味の近い順に探す（2026-11-10。PC が仕事のまとめを読める版のときだけ答えが返る。
+    /// 古い PC は only_digest を知らないので、会話の行が返る。kind が "work-digest" のものだけ使う）
+    func semanticDigestSearch(_ query: String, k: Int = 20, from: String? = nil, to: String? = nil) async throws -> [DigestSearchHit] {
+        struct Body: Encodable {
+            let query: String; let k: Int; let from: String?; let to: String?; let include_work: Bool
+            let include_digest: Bool; let only_digest: Bool
+        }
+        struct Item: Decodable { let kind: String?; let day: String; let heading: String?; let text: String; let score: Double? }
+        struct Reply: Decodable { let hits: [Item] }
+        let data = try await postJSON("search", body: Body(query: query, k: k, from: from, to: to, include_work: true,
+                                                          include_digest: true, only_digest: true), timeout: 30)
+        let hits: [Item] = try JSONDecoder().decode(Reply.self, from: data).hits
+        return hits.filter { $0.kind == "work-digest" }.map { DigestSearchHit(day: $0.day, heading: $0.heading, text: $0.text, score: $0.score) }
+    }
+
     private func postJSON<T: Encodable>(_ path: String, body: T, timeout: TimeInterval) async throws -> Data {
         var req = try request(path)
         req.httpMethod = "POST"

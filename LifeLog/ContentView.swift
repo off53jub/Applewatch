@@ -20,6 +20,23 @@ struct ContentView: View {
             Tab("記録", systemImage: "books.vertical") { RecordsView() }
             Tab("人と場所", systemImage: "person.2") { PeoplePlacesView() }
         }
+        // 知らせ・ショートカットから開く画面（2026-11-10。NoticeActions.swift）
+        .sheet(item: Binding(get: { pipeline.noticeRoute }, set: { pipeline.noticeRoute = $0 })) { route in
+            NavigationStack {
+                switch route {
+                case .tasks:
+                    TaskBookView()
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) { Button("閉じる") { pipeline.noticeRoute = nil } }
+                        }
+                case .digestImport(let text):
+                    WorkDigestImportView(initialText: text)
+                }
+            }
+        }
+        .onAppear {
+            if let text = DigestInbox.take() { pipeline.noticeRoute = .digestImport(text) }
+        }
     }
 }
 
@@ -72,6 +89,9 @@ private struct TodayView: View {
                 // 朝の「昨日と今日」（2026-11-09。前の「朝の読み上げ」。MorningBrief.swift）。
                 // 毎朝の「聞いて直す」の入口はやめた（7日で1行だけだったため。「記録」からは開ける）
                 MorningBriefSection()
+
+                // 実機でまだ確かめていない新しい動き（2026-11-10。Checklist.swift）
+                ChecklistSection()
 
                 Section("いまの様子") {
                     if Provisioning.isNear(), let expiry = Provisioning.expiryText() {

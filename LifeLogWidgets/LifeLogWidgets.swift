@@ -13,6 +13,8 @@ struct LifeLogWidgets: WidgetBundle {
         MarkControl()
         LauncherWidget()
         StatusWidget()
+        // 今日までの頼まれごとと確かめ待ちの数（2026-11-10）
+        TasksWidget()
         RecordingLiveActivity()
     }
 }

@@ -593,7 +593,7 @@ def check_mcp_stdio(main, home: Path) -> int:
         names = [t["name"] for t in by_id.get(2, {}).get("result", {}).get("tools", [])]
         ok = done.returncode == 0 and parsed and len(replies) == len(messages) - 1 + 1 \
             and init.get("protocolVersion") == "2025-06-18" and "tools" in init.get("capabilities", {}) \
-            and names == ["list_conversations", "search_text", "search_meaning", "conversations_with", "get_conversation"] \
+            and names == ["list_conversations", "search_text", "search_meaning", "conversations_with", "get_conversation", "search_digest", "get_digest"] \
             and by_id.get(3, {}).get("result") == {} and by_id.get(201, {}).get("error", {}).get("code") == -32602 \
             and by_id.get(202, {}).get("error", {}).get("code") == -32601 and by_id.get(None, {}).get("error", {}).get("code") == -32700
         failed += say(ok, f"MCP の通り道: 標準出力は MCP の答えだけ（{len(replies)} 行・すべて JSON）・initialize・tools/list "

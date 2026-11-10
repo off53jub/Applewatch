@@ -11,6 +11,10 @@
 - search_meaning      意味で探す（この PC の Ollama の bge-m3。今の semantic.db を読むだけ）
 - conversations_with  人の名前で、その人と話した会話を探す
 - get_conversation    1つの会話の中身（行ごとの時刻・話し手・文）
+- search_digest       仕事のまとめ（iPhone がドライブの「仕事のまとめ.json」に書くもの）の行を、言葉で探す
+- get_digest          1日の仕事のまとめを、見出しごとに読む
+  （search_text・search_meaning も、include_digest（既定 true）なら digest_hits に仕事のまとめの行を別に付ける。
+   hits の形は変えない。仕事のまとめは職場の話なので、--exclude-work のときは出さない。ファイルは読むだけ）
 
 **職場の会話は、どの道具からも返さない。** 職場の印（iPhone が POST /records/<日> の "work" で送る）が付いた会話と、
 印が分からない会話（古い iPhone から来た日・PC に記録が無い日の、意味で探すの行）は、返す前に必ず外す。外した数だけ返す。
@@ -33,6 +37,7 @@ import time
 from pathlib import Path
 
 import gpu
+import mothership
 import records
 import semantic
 
@@ -263,6 +268,8 @@ def _range(args: dict) -> tuple[str | None, str | None]:
     return start, end
 
 
+DIGEST_PROP = {"type": "boolean", "description": "仕事のまとめの行も digest_hits に付ける（既定 true。職場の話なので --exclude-work では出さない）"}
+
 TOOLS = [
     {"name": "list_conversations",
      "description": "日付で会話の一覧を出す（1日なら day、何日かなら from と to。新しい日から）。"
@@ -278,6 +285,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string", "description": "探す言葉"},
          "from": {"type": "string"}, "to": {"type": "string"},
+         "include_digest": DIGEST_PROP,
          "limit": {"type": "integer", "description": f"出す行の数（{LIMIT_MAX} まで。既定 {LIMIT_DEFAULT}）"}}}},
     {"name": "search_meaning",
      "description": "意味で探す（言葉が同じでなくても意味の近い行。この PC の Ollama の bge-m3 を使う）。前後の行も付ける。"
@@ -285,6 +293,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string", "description": "探したいこと"},
          "from": {"type": "string"}, "to": {"type": "string"},
+         "include_digest": DIGEST_PROP,
          "k": {"type": "integer", "description": f"出す数（{K_MAX} まで。既定 {K_DEFAULT}）"}}}},
     {"name": "conversations_with",
      "description": "人の名前で、その人と話した会話を探す（名前の一部でもよい。「自分」は探せない）。新しい日から。"
@@ -298,14 +307,28 @@ TOOLS = [
                     "職場の会話と分からない会話は出さない。",
      "inputSchema": {"type": "object", "required": ["id"], "properties": {
          "id": {"type": "string", "description": "会話の id（例 2026-11-07|1762498800000）"}}}},
+    {"name": "search_digest",
+     "description": "仕事のまとめ（取り込んだ会議などの、決まったこと・自分の宿題など）の行を、言葉で探す"
+                    "（空白で区切った言葉が全部ある行。全角・半角と大文字・小文字は同じとみなす）。新しい日から。"
+                    "各行は {kind: \"work-digest\", day, heading, text}（時刻は無い）。",
+     "inputSchema": {"type": "object", "required": ["query"], "properties": {
+         "query": {"type": "string", "description": "探す言葉"},
+         "from": {"type": "string"}, "to": {"type": "string"},
+         "limit": {"type": "integer", "description": f"出す行の数（{LIMIT_MAX} まで。既定 {LIMIT_DEFAULT}）"}}}},
+    {"name": "get_digest",
+     "description": "1日の仕事のまとめを、見出し（決まったこと・自分の宿題など）ごとに読む。",
+     "inputSchema": {"type": "object", "required": ["day"], "properties": {
+         "day": {"type": "string", "description": "日（YYYY-MM-DD）"}}}},
 ]
 for _tool in TOOLS:
     _tool["annotations"] = {"readOnlyHint": True, "openWorldHint": False}
 
 
 class Tools:
-    def __init__(self, home: Path, embedder=None) -> None:
+    def __init__(self, home: Path, embedder=None, config: dict | None = None) -> None:
         self.home = Path(home)
+        self.config = config if config is not None else load_config(self.home)
+        self.digest_cache: tuple | None = None
         self.reader = Reader(self.home)
         self.index = ReadOnlyIndex(self.home / "semantic.db", embedder) if embedder is not None else None
 
@@ -314,10 +337,76 @@ class Tools:
             raise ValueError("引数は JSON のまとまりです")
         method = {"list_conversations": self.list_conversations, "search_text": self.search_text,
                   "search_meaning": self.search_meaning, "conversations_with": self.conversations_with,
-                  "get_conversation": self.get_conversation}.get(name)
+                  "get_conversation": self.get_conversation, "search_digest": self.search_digest,
+                  "get_digest": self.get_digest}.get(name)
         if method is None:
             raise LookupError(f"知らない道具です: {name}")
         return method(args)
+
+    def _digests(self) -> list[dict]:
+        """仕事のまとめの行（日の新しい順）。読むだけ。ファイルが無い・--exclude-work のときは空"""
+        if not INCLUDE_WORK:
+            return []
+        path = mothership.digest_file(self.config)
+        try:
+            stat = path.stat() if path is not None else None
+        except OSError:
+            stat = None
+        if stat is None:
+            return []
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+        if self.digest_cache is not None and self.digest_cache[0] == key:
+            return self.digest_cache[1]
+        found = mothership.read_digests(path)
+        lines = found["lines"] if found else []
+        self.digest_cache = (key, lines)
+        return lines
+
+    @staticmethod
+    def _digest_out(line: dict) -> dict:
+        return {"kind": "work-digest", "day": line["day"], "heading": line["heading"], "text": line["text"]}
+
+    def _digest_words(self, query: str, start: str | None, end: str | None, limit: int) -> tuple[list[dict], bool]:
+        terms = [records.fold(t) for t in query.split() if t.strip()]
+        hits, more = [], False
+        for line in self._digests():
+            if (start and line["day"] < start) or (end and line["day"] > end):
+                continue
+            folded = records.fold(f"{line['heading']} {line['text']}")
+            if all(term in folded for term in terms):
+                if len(hits) >= limit:
+                    more = True
+                    break
+                hits.append(self._digest_out(line))
+        return hits, more
+
+    def search_digest(self, args: dict) -> dict:
+        query = _text(args, "query", required=True)
+        start, end = _range(args)
+        limit = _count(args, "limit", LIMIT_DEFAULT, LIMIT_MAX)
+        if not INCLUDE_WORK:
+            return {"hits": [], "message": "仕事のまとめは職場の話なので、この起動（--exclude-work）では出せません"}
+        hits, more = self._digest_words(query, start, end, limit)
+        out = {"hits": hits}
+        if more:
+            out["more"] = True
+        return out
+
+    def get_digest(self, args: dict) -> dict:
+        day = _day(args, "day")
+        if day is None:
+            raise ValueError("day がありません")
+        if not INCLUDE_WORK:
+            return {"day": day, "sections": [], "lines": 0,
+                    "message": "仕事のまとめは職場の話なので、この起動（--exclude-work）では出せません"}
+        sections: list[dict] = []
+        for line in self._digests():
+            if line["day"] != day:
+                continue
+            if not sections or sections[-1]["heading"] != line["heading"]:
+                sections.append({"heading": line["heading"], "lines": []})
+            sections[-1]["lines"].append(line["text"])
+        return {"day": day, "sections": sections, "lines": sum(len(x["lines"]) for x in sections)}
 
     def _scan(self, start: str | None, end: str | None):
         """(日, 会話) を新しい日から（日の中は時刻の順）。返してよい会話と、外した数"""
@@ -372,6 +461,11 @@ class Tools:
         out = {"hits": hits, "excluded_work": excluded}
         if more:
             out["more"] = True
+        if args.get("include_digest", True) is not False and INCLUDE_WORK:
+            digest, digest_more = self._digest_words(query, start, end, limit)
+            out["digest_hits"] = digest
+            if digest_more:
+                out["digest_more"] = True
         return out
 
     def conversations_with(self, args: dict) -> dict:
@@ -464,7 +558,13 @@ class Tools:
             item["before"] = [line_out(line) for line in lines[max(0, index - CONTEXT):index]]
             item["after"] = [line_out(line) for line in lines[index + 1:index + 1 + CONTEXT]]
             hits.append(item)
-        return {"hits": hits, "excluded_work": excluded}
+        out = {"hits": hits, "excluded_work": excluded}
+        if args.get("include_digest", True) is not False and INCLUDE_WORK:
+            # 仕事のまとめの行は、会話の行と競わないよう別に探す（行ごとに kind は work-digest。時刻・前後の行は無い）
+            request.update({"k": k, "include_digest": True, "only_digest": True})
+            out["digest_hits"] = [dict(h, score=round(float(h.get("score") or 0), 4)) for h in self.index.search(request)
+                                  if h.get("kind") == "work-digest"]
+        return out
 
 
 # MARK: - MCP（JSON-RPC 2.0、1行に1つ）
@@ -585,7 +685,7 @@ def make_tools(home: Path, ollama_url: str | None = None) -> Tools:
             embedder = semantic.OllamaEmbedder(url, options=lambda: gpu.state_options(home, config))
         except ValueError as error:
             note(f"意味で探すは使いません: {error}")
-    return Tools(home, embedder)
+    return Tools(home, embedder, config)
 
 
 def main(argv: list[str] | None = None) -> int:
