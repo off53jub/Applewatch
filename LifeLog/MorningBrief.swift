@@ -33,10 +33,24 @@ enum MorningBrief {
     }
 
     /// 今日の三つの1つ
-    struct Pick: Equatable {
+    struct Pick: Equatable, Identifiable {
         var text: String
-        /// 「期限切れ」「今日まで」「急ぎ」や、母艦が書いたわけ
+        /// 「期限切れ」「今日まで」「急ぎ」や、家の PC が書いたわけ
         var why: String
+        /// 解き方の手順（家の PC が今の様子と照らして選んだときだけ。2026-11-10）
+        var how: [String] = []
+        /// だいたいの時間（分）
+        var minutes: Int? = nil
+        /// 送る文の下書き
+        var draft: String? = nil
+        /// 当たるアプリのタスク（あれば。済みにするのはこちら）
+        var taskID: String? = nil
+        /// 家の PC のやることの id（家の PC で済みにできるものだけ）
+        var homeID: String? = nil
+
+        var id: String { text }
+        /// 解き方があるか
+        var hasHowTo: Bool { !how.isEmpty || minutes != nil || draft != nil }
     }
 
     struct Input: Equatable {
@@ -88,6 +102,12 @@ enum MorningBrief {
         return s
     }
 
+    /// 長い文を limit 文字までに
+    static func short(_ text: String, limit: Int) -> String {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.count > limit ? String(t.prefix(limit - 1)) + "…" : t
+    }
+
     /// 知らせと画面に出す文（行ごと）
     static func card(_ input: Input, calendar: Calendar = .current) -> String {
         var lines: [String] = []
@@ -109,6 +129,10 @@ enum MorningBrief {
             for (i, pick) in input.three.prefix(picks).enumerated() {
                 lines.append("\(i + 1). " + pick.text + (pick.why.isEmpty ? "" : "（\(pick.why)）"))
             }
+            // 解き方があれば、最初の一歩だけ1行で（2026-11-10）
+            if let step = input.three.prefix(picks).compactMap({ $0.how.first }).first {
+                lines.append("まず: " + short(step, limit: 40))
+            }
         }
         if let first = input.events.first {
             var line = "予定: " + first.time + " " + first.title
@@ -123,11 +147,13 @@ enum MorningBrief {
         return lines.joined(separator: "\n")
     }
 
-    /// 今日の三つを選ぶ。期限を過ぎた・今日までのタスク（急ぎを先に）→ 母艦が選んだもの → 急ぎ → 今週まで
-    /// → 母艦の TODO で14日以内に足されたもの（期限の近い順・新しい順。recent）。
-    /// 休みの日は仕事のものを入れない（仕事の印の付いた母艦のものも）。同じらしいものは1つ
+    /// 今日の三つを選ぶ。期限を過ぎた・今日までのタスク（急ぎを先に）→ 家の PC が選んだもの → 急ぎ → 今週まで
+    /// → 家の PC のやることで14日以内に足されたもの（期限の近い順・新しい順。recent）。
+    /// chosen（家の PC が今の様子と照らして選んだ。2026-11-10）なら、家の PC が選んだものを先にする。
+    /// 家の PC が「アプリのタスク」としたもの（origin "app"）は、まだのタスクに当たるときだけ入れる。
+    /// 休みの日は仕事のものを入れない（仕事の印の付いた家の PC のものも）。同じらしいものは1つ
     static func pickThree(open: [TaskBook.Item], mothership: [MothershipExport.Three], mothershipWork: Set<String>,
-                          recent: [MothershipTodo] = [], dayOff: Bool, now: Date,
+                          recent: [MothershipTodo] = [], dayOff: Bool, now: Date, chosen: Bool = false,
                           calendar: Calendar = .current) -> [Pick] {
         let items = tasksToRead(open, dayOff: dayOff)
         func sorted(_ list: [TaskBook.Item]) -> [TaskBook.Item] {
@@ -137,21 +163,39 @@ enum MorningBrief {
             }
         }
         var picks: [Pick] = []
-        func add(_ text: String, _ why: String) {
-            guard picks.count < Self.picks, !picks.contains(where: { TaskBook.similar($0.text, text) }) else { return }
-            picks.append(Pick(text: text, why: why))
+        func add(_ pick: Pick) {
+            guard picks.count < Self.picks, !picks.contains(where: { TaskBook.similar($0.text, pick.text) }) else { return }
+            picks.append(pick)
+        }
+        func addTask(_ item: TaskBook.Item, _ why: String) {
+            add(Pick(text: item.what, why: why, taskID: item.id))
+        }
+        func addHome(_ three: MothershipExport.Three) {
+            var pick = Pick(text: three.text, why: three.why ?? "", how: three.how ?? [], minutes: three.minutes,
+                            draft: three.draft)
+            if three.isAppTask {
+                // アプリのタスク: 元の文で、まだのタスクを探す（無ければ、もう済んだ・休みの日の仕事なので入れない）。
+                // id は家の PC の印なので、家の PC には済みを送らない（homeID は付けない）
+                guard let task = OneTaskList.match(three.itemText ?? three.text, in: items) else { return }
+                pick.taskID = task.id
+            } else {
+                if dayOff && (mothershipWork.contains(three.id) || three.work == true) { return }
+                if three.origin == nil || three.origin == "todo" { pick.homeID = three.id }
+                pick.taskID = OneTaskList.match(three.text, in: items)?.id
+            }
+            add(pick)
         }
         let bucket = { (item: TaskBook.Item) in TaskBook.bucket(item, now: now, calendar: calendar) }
-        for item in sorted(items.filter { bucket($0) == .late }) { add(item.what, "期限切れ") }
-        for item in sorted(items.filter { bucket($0) == .today }) { add(item.what, "今日まで") }
-        for three in mothership where !(dayOff && mothershipWork.contains(three.id)) {
-            add(three.text, three.why ?? "")
-        }
-        for item in sorted(items.filter { $0.urgent == true }) { add(item.what, "急ぎ") }
-        for item in sorted(items.filter { bucket($0) == .week }) { add(item.what, "今週") }
+        if chosen { for three in mothership { addHome(three) } }
+        for item in sorted(items.filter { bucket($0) == .late }) { addTask(item, "期限切れ") }
+        for item in sorted(items.filter { bucket($0) == .today }) { addTask(item, "今日まで") }
+        if !chosen { for three in mothership { addHome(three) } }
+        for item in sorted(items.filter { $0.urgent == true }) { addTask(item, "急ぎ") }
+        for item in sorted(items.filter { bucket($0) == .week }) { addTask(item, "今週") }
         let fresh = TaskBook.dayFormat.string(from: now.addingTimeInterval(-14 * 86400))
         for todo in recent where (todo.added ?? "") >= fresh && !(dayOff && todo.work == true) {
-            add(todo.text, "母艦・" + (todo.added.map { String($0.suffix(5)).replacingOccurrences(of: "-", with: "/") } ?? "") + " に足した")
+            let added = todo.added.map { String($0.suffix(5)).replacingOccurrences(of: "-", with: "/") } ?? ""
+            add(Pick(text: todo.text, why: added + " に足した", homeID: todo.id))
         }
         return picks
     }
@@ -170,6 +214,10 @@ struct MorningBriefRecord: Codable, Equatable {
     var made: Date
     /// 前の日の1日のまとめが入っているか（まだ無いときに作ったら、まとめができたあとで作り直す）
     var hadSummary: Bool? = nil
+    /// 家の PC の1日のまとめを使ったか（2026-11-10。使っていなくて、あとから届いたら作り直す）
+    var fromHome: Bool? = nil
+    /// 使った家の PC の「今日の三つ」の作った時刻（2026-11-10。新しく選び直されたら作り直す）
+    var planAt: String? = nil
     /// 言語モデルでまとめたか（2026-11-09 からは使わない。前の記録を読むために残す）
     var usedModel: Bool? = nil
 }
@@ -227,10 +275,16 @@ extension Pipeline {
     func needsMorningBrief(for day: Date) -> Bool {
         let key = briefDayKey.string(from: day)
         guard let current = MorningBriefStore.shared.current, current.day == key else { return true }
+        // 家の PC が今日の三つを選び直したら作り直す（2026-11-10）
+        if let export = mothership.export, export.chosenFromSituation(day: key),
+           let at = export.plan?.generatedAt, at != current.planAt { return true }
+        guard let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: day) else { return false }
+        let yesterdayKey = briefDayKey.string(from: yesterday)
+        // 家の PC の1日のまとめがあとから届いたら作り直す（2026-11-10）
+        if current.fromHome != true, mothership.daySummary(yesterdayKey) != nil { return true }
         // 前の日のまとめが無いときに作ったなら、まとめができていれば作り直す
-        guard current.hadSummary != true,
-              let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: day) else { return false }
-        return daySummary(briefDayKey.string(from: yesterday)) != nil
+        guard current.hadSummary != true else { return false }
+        return daySummary(yesterdayKey) != nil
     }
 
     /// 朝の分を作って残し、知らせを頼み、時計にも送る。force なら作り直す
@@ -242,8 +296,13 @@ extension Pipeline {
         let start = Calendar.current.startOfDay(for: day)
         await mothership.refresh(homePC)
         let (input, hadSummary) = await morningBriefInput(for: start)
-        store.save(MorningBriefRecord(day: briefDayKey.string(from: start), text: MorningBrief.card(input), made: .now,
-                                      hadSummary: hadSummary))
+        let key = briefDayKey.string(from: start)
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: start) ?? start
+        let fromHome = mothership.daySummary(briefDayKey.string(from: yesterday)) != nil
+        let chosen = mothership.export?.chosenFromSituation(day: key) ?? false
+        let planAt = chosen ? mothership.export?.plan?.generatedAt : nil
+        store.save(MorningBriefRecord(day: key, text: MorningBrief.card(input), made: .now,
+                                      hadSummary: hadSummary, fromHome: fromHome, planAt: planAt))
         await scheduleMorningBriefNotice()
         pushWatchInfo(force: true)
     }
@@ -252,10 +311,18 @@ extension Pipeline {
     func todayThree(on day: Date = .now) -> [MorningBrief.Pick] {
         let items = mothership.export?.items ?? []
         let workIDs = Set(items.filter { $0.work == true }.map(\.id))
-        // 母艦の「今日の三つ」のうち、TODO にあるものだけ（決めごとの期限切れなどは、アプリで済みにできないので出さない）
         let ids = Set(items.map(\.id))
-        return MorningBrief.pickThree(open: tasks.todo, mothership: mothership.todayThree.filter { ids.contains($0.id) },
-                                      mothershipWork: workIDs, recent: mothership.open(.all), dayOff: isDayOff(day), now: day)
+        // 家の PC が今の様子と照らして選んだ日（2026-11-10）は、選んだものを全部（アプリのタスク・決めごと・新しいことも）。
+        // そうでなければ前と同じく、家の PC のやることにあるものだけ（決めごとの期限切れなどは、アプリで済みにできないので出さない）
+        let chosen = mothership.export?.chosenFromSituation(day: briefDayKey.string(from: day)) ?? false
+        let threes = chosen ? mothership.todayThree : mothership.todayThree.filter { ids.contains($0.id) }
+        var picks = MorningBrief.pickThree(open: tasks.todo, mothership: threes, mothershipWork: workIDs,
+                                           recent: mothership.open(.all), dayOff: isDayOff(day), now: day, chosen: chosen)
+        // 家の PC で済みにできるのは、家の PC のやることにあるものだけ
+        for i in picks.indices {
+            if let id = picks[i].homeID, !ids.contains(id) { picks[i].homeID = nil }
+        }
+        return picks
     }
 
     /// 材料を集める。hadSummary は前の日の1日のまとめがあったか
@@ -269,6 +336,12 @@ extension Pipeline {
         if let summary {
             input.flow = summary.flow
             input.decisions = Array(summary.decisions.prefix(2))
+        }
+        // 家の PC の1日のまとめがあれば、昨日の流れはそちらから（2026-11-10。無ければアプリのまとめのまま）
+        let home = mothership.daySummary(yesterday)
+        if let home, !home.flow.isEmpty {
+            input.flow = home.flow
+            if !home.decisions.isEmpty { input.decisions = Array(home.decisions.prefix(2)) }
         }
         input.marks = conversations(on: yesterday).flatMap(\.lines).filter { $0.marked == true }.count
         input.health = await health.dayLine(yesterdayStart)
@@ -289,7 +362,7 @@ extension Pipeline {
         if waiting > 0 { input.checks.append("確かめ待ち \(waiting) 件") }
         if pendingCount > 0 { input.checks.append("文字起こし待ち \(pendingCount) 件") }
         if let check = morningCheckLine(for: yesterdayStart) { input.checks.append(check) }
-        return (input, summary != nil)
+        return (input, summary != nil || home != nil)
     }
 
     /// 朝の「昨日と今日」の知らせを、決めた時刻（初めは7時）に頼む。もう過ぎていれば頼まない。iPad では出さない（二重にならないように）
@@ -325,6 +398,13 @@ struct MorningBriefSection: View {
             Section {
                 Text(record.text)
                     .font(.callout)
+                // 今日の三つの解き方（家の PC が手順・下書きを付けたものだけ。2026-11-10）
+                if record.day == today {
+                    let three = pipeline.todayThree()
+                    ForEach(Array(three.enumerated()), id: \.offset) { i, pick in
+                        if pick.hasHowTo { TodayPickRow(number: i + 1, pick: pick) }
+                    }
+                }
                 Button {
                     Task { await pipeline.makeMorningBrief(for: Calendar.current.startOfDay(for: .now), force: true) }
                 } label: {
@@ -365,6 +445,118 @@ struct MorningBriefSettingsRows: View {
         } set: { date in
             let c = Calendar.current.dateComponents([.hour, .minute], from: date)
             minutes = (c.hour ?? 7) * 60 + (c.minute ?? 0)
+        }
+    }
+}
+
+/// 今日の三つの1行（タスクの「やる」の上と、「今日」の「昨日と今日」）。押すと「解き方」（2026-11-10）
+struct TodayPickRow: View {
+    let number: Int
+    let pick: MorningBrief.Pick
+    @State private var showing = false
+
+    var body: some View {
+        Button { showing = true } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Text("\(number).").foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pick.text).foregroundStyle(.primary).multilineTextAlignment(.leading)
+                    if !pick.why.isEmpty {
+                        Text(pick.why).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.leading)
+                    }
+                    if let first = pick.how.first {
+                        Text("まず: " + first).font(.caption).foregroundStyle(.blue).multilineTextAlignment(.leading)
+                    }
+                }
+                Spacer(minLength: 0)
+                if pick.hasHowTo {
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .buttonStyle(.borderless)
+        .sheet(isPresented: $showing) {
+            NavigationStack { PickHowToView(pick: pick) }
+                .presentationDetents([.medium, .large])
+        }
+    }
+}
+
+/// 「解き方」: 手順・だいたいの時間・送る文の下書き（コピーできる）と、当たるタスク
+struct PickHowToView: View {
+    @Environment(Pipeline.self) private var pipeline
+    @Environment(\.dismiss) private var dismiss
+    let pick: MorningBrief.Pick
+    @State private var copied = false
+
+    var body: some View {
+        let task: TaskBook.Item? = pick.taskID.flatMap { id in pipeline.tasks.items.first { $0.id == id } }
+        let home: MothershipTodo? = pick.homeID.flatMap { id in pipeline.mothership.export?.items.first { $0.id == id } }
+        Form {
+            Section {
+                Text(pick.text).font(.headline)
+                if !pick.why.isEmpty { Text(pick.why).foregroundStyle(.secondary) }
+            } header: {
+                Text("やること")
+            }
+            if !pick.how.isEmpty {
+                Section("解き方") {
+                    ForEach(Array(pick.how.enumerated()), id: \.offset) { i, step in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text("\(i + 1).").foregroundStyle(.secondary)
+                            Text(step)
+                        }
+                    }
+                }
+            }
+            if let minutes = pick.minutes {
+                Section {
+                    LabeledContent("かかる時間", value: "だいたい \(minutes) 分")
+                }
+            }
+            if let draft = pick.draft {
+                Section {
+                    Text(draft).textSelection(.enabled)
+                    Button(copied ? "コピーしました" : "下書きをコピー", systemImage: copied ? "checkmark" : "doc.on.doc") {
+                        UIPasteboard.general.string = draft
+                        copied = true
+                    }
+                } header: {
+                    Text("送る文の下書き")
+                } footer: {
+                    Text("送る前に、中身を確かめて直してください。")
+                }
+            }
+            if let task, task.state == .open {
+                Section {
+                    Text(task.what)
+                    if let due = task.due { LabeledContent("期限", value: Pipeline.taskDueText(due)) }
+                    Button("このタスクを済みにする", systemImage: "checkmark.circle") {
+                        pipeline.tasks.set(task.id, .done)
+                        pipeline.tasksChanged()
+                        dismiss()
+                    }
+                } header: {
+                    Text("タスク")
+                }
+            } else if let home {
+                Section {
+                    Button("済みにする", systemImage: "checkmark.circle") {
+                        Task { await pipeline.mothership.markDone(home, pc: pipeline.homePC) }
+                        dismiss()
+                    }
+                }
+            }
+            if !pick.hasHowTo {
+                Section {
+                    Text("解き方はまだありません。家の PC が今の様子と照らして選んだ日に出ます。").foregroundStyle(.secondary)
+                }
+            }
+        }
+        .navigationTitle("解き方")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) { Button("閉じる") { dismiss() } }
         }
     }
 }
