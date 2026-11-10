@@ -33,14 +33,19 @@ final class WorkDigest {
         /// 【よく出た言葉】（2026-11-10。言葉だけ・1つずつ。前の版で保存したものには無いので nil）。
         /// 「言葉の登録」の候補に出すだけで、自動では登録しない
         var words: [String]? = nil
+        /// 【出どころ】（2026-11-10。どのチーム・チャネル・チャットの話か、そこにいた人。1行に1つ。
+        /// 前の版で保存したものには無いので nil）。見せるだけで、人の帳には何も足さない
+        var sources: [String]? = nil
 
         var isEmpty: Bool {
-            decided.isEmpty && homework.isEmpty && others.isEmpty && topics.isEmpty && checks.isEmpty && (words ?? []).isEmpty
+            decided.isEmpty && homework.isEmpty && others.isEmpty && topics.isEmpty && checks.isEmpty
+                && (words ?? []).isEmpty && (sources ?? []).isEmpty
         }
 
         /// 画面とドライブに並べる順（中身のある見出しだけ）
         var lists: [(title: String, items: [String])] {
             let all: [(title: String, items: [String])] = [
+                ("出どころ", sources ?? []),
                 ("決まったこと", decided), ("自分の宿題", homework), ("ほかの人の動き", others),
                 ("気になる話題", topics), ("あとで確かめること", checks), ("よく出た言葉", words ?? []),
             ]
@@ -130,12 +135,14 @@ final class WorkDigest {
 /// 形が崩れていたり、見出しが欠けていたりしても、読めたところだけ返す。
 enum WorkDigestParser {
     enum Part: String, CaseIterable {
-        case date, decided, homework, others, topics, checks, words
+        case date, decided, homework, others, topics, checks, words, sources
     }
 
     /// 見出しの言い方（長いものを先に）
     static let names: [(part: Part, aliases: [String])] = [
         (.date, ["日付", "日にち"]),
+        // 「出典」は入れない（ふつうの文の行「出典: …」を見出しと読み違えるので）
+        (.sources, ["出どころ", "出所", "抜粋元", "抜粋もと"]),
         (.decided, ["決まったこと", "決まった事", "きまったこと"]),
         (.homework, ["自分の宿題", "じぶんの宿題", "わたしの宿題", "私の宿題", "宿題"]),
         (.others, ["ほかの人の動き", "他の人の動き", "外の人の動き", "ほかの人"]),
@@ -299,6 +306,14 @@ enum WorkDigestParser {
             case .words:
                 let found: [String] = words((result.sections.words ?? []) + kept)
                 if !found.isEmpty { result.sections.words = found }
+            case .sources:
+                // 同じ行は1つだけ（重なったスクショをつなぐと、同じ行が2回出る）
+                var all: [String] = result.sections.sources ?? []
+                for item in kept {
+                    let key: String = compact(item)
+                    if !all.contains(where: { compact($0) == key }) { all.append(item) }
+                }
+                if !all.isEmpty { result.sections.sources = all }
             case .date: break
             }
             items = []

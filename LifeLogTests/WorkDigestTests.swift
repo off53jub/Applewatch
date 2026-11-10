@@ -265,6 +265,51 @@ final class WorkDigestTests: XCTestCase {
         XCTAssertFalse(WorkDigest.Sections(words: ["設備台帳"]).isEmpty)
     }
 
+    // MARK: - 出どころ（2026-11-10）
+
+    func testSourcesSection() {
+        let text = """
+        【日付】2026-11-08
+        【出どころ】
+        ・営業チーム＞一般「来週の段取り」（いた人：Aさん、Bさん、
+        Cさん）
+        ・チャット「見積もりの相談」（いた人：Aさん）
+        ・営業チーム＞一般「来週の段取り」（いた人：Aさん、Bさん、Cさん）
+        【決まったこと】
+        ・来週の打ち合わせは火曜にする
+        """
+        let parsed = WorkDigestParser.parse(text, today: today)
+        XCTAssertTrue(parsed.found)
+        XCTAssertEqual(parsed.day, "2026-11-08")
+        // 折り返した行はつなぐ・同じ行は1つだけ
+        XCTAssertEqual(parsed.sections.sources, ["営業チーム＞一般「来週の段取り」（いた人：Aさん、Bさん、Cさん）",
+                                                 "チャット「見積もりの相談」（いた人：Aさん）"])
+        // ほかの見出しはそのまま。並べる順は、出どころが先
+        XCTAssertEqual(parsed.sections.decided, ["来週の打ち合わせは火曜にする"])
+        XCTAssertEqual(parsed.sections.lists.map(\.title), ["出どころ", "決まったこと"])
+        // 見出しと同じ行に書いてあっても読む。別の言い方（出所）も読む
+        let oneLine = WorkDigestParser.parse("【出所】チャット「相談」", today: today)
+        XCTAssertEqual(oneLine.sections.sources, ["チャット「相談」"])
+    }
+
+    func testSourcesAreOptional() throws {
+        // 見出しが無ければ nil のまま（前の形と同じ）。箇条書きの中の「出どころ」は見出しにしない
+        let parsed = WorkDigestParser.parse(sample + "
+・出どころ: これは見出しではない", today: today)
+        XCTAssertNil(parsed.sections.sources)
+        XCTAssertEqual(parsed.sections.checks, ["会議室が取れているか", "出どころ: これは見出しではない"])
+        // 前の版で保存したもの（sources が無い）も読める
+        let old = #"{"decided":["a"],"homework":[],"others":[],"topics":[],"checks":[],"words":["b"]}"#
+        let back = try JSONDecoder().decode(WorkDigest.Sections.self, from: Data(old.utf8))
+        XCTAssertEqual(back.words, ["b"])
+        XCTAssertNil(back.sources)
+        // 無いときは、保存する文字にも出ない（前の形のまま）
+        let data = try JSONEncoder().encode(WorkDigest.Sections(decided: ["a"]))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("sources"))
+        // 出どころだけのまとめは「空」ではない
+        XCTAssertFalse(WorkDigest.Sections(sources: ["チャット「相談」"]).isEmpty)
+    }
+
     // MARK: - 退勤の頃の知らせ（2026-11-10）
 
     private var tokyo: Calendar {

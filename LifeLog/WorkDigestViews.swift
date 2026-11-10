@@ -92,7 +92,11 @@ struct WorkDigestRow: View {
     }
 
     private var headline: String {
-        if let first = entry.sections?.decided.first { return first }
+        if let s = entry.sections {
+            // 決まったことが無い日は、ほかの見出しの1つめ（見出しの行や出どころを、題にしない）
+            let items: [String] = s.decided + s.homework + s.others + s.topics + s.checks
+            if let first = items.first { return first }
+        }
         let lines = entry.text.components(separatedBy: .newlines)
         let body = lines.first { line in
             !line.isEmpty && WorkDigestParser.header(line)?.part != .date
@@ -165,6 +169,8 @@ struct WorkDigestImportView: View {
     var body: some View {
         let parsed = WorkDigestParser.parse(text)
         let homework: [String] = parsed.sections.homework
+        let sources: [String] = parsed.sections.sources ?? []
+        let hasText: Bool = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         Form {
             Section {
                 PhotosPicker(selection: $photoItems, maxSelectionCount: 20, selectionBehavior: .ordered, matching: .images) {
@@ -197,6 +203,21 @@ struct WorkDigestImportView: View {
                     .frame(minHeight: 260)
             } header: {
                 Text("読み取った文字（直せます）")
+            } footer: {
+                if hasText && !parsed.found {
+                    Text("決まった形の見出し（【決まったこと】など）が見つかりません。このまま入れると、文のまま残します（宿題はタスクに入りません）。")
+                }
+            }
+            if !sources.isEmpty {
+                Section {
+                    ForEach(Array(sources.enumerated()), id: \.offset) { item in
+                        Text(item.element)
+                    }
+                } header: {
+                    Text("出どころ（\(sources.count) 件）")
+                } footer: {
+                    Text("どこの話か・そこにいた人です。見せるだけで、人の帳には何も足しません。")
+                }
             }
             if !homework.isEmpty {
                 Section {
