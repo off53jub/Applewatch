@@ -1,8 +1,10 @@
 import XCTest
+import UserNotifications
 @testable import LifeLog
 
 /// タスクを「仕事」と「仕事以外」に分ける（2026-11-07）を確かめる。
 /// 切り替えの絞り込み・古い work: nil の扱い・休みの日の見分け・朝夕の知らせの文・ドライブの写しの見出し・朝の読み上げ。
+/// 見つけたときの知らせの文・開いているあいだの出し方・中身の無いものを入れない（2026-11-10）。
 @MainActor
 final class TaskWorkTests: XCTestCase {
     private let cal: Calendar = {
@@ -186,5 +188,94 @@ final class TaskWorkTests: XCTestCase {
         XCTAssertEqual(Pipeline.taskLifeLeft(saved: "2026-11-07|99", today: "2026-11-07"), 0)
         XCTAssertEqual(Pipeline.taskLifeLeft(saved: "こわれた", today: "2026-11-07"), Pipeline.taskLifePerDay)
         XCTAssertLessThanOrEqual(Pipeline.taskLifePerRun, 3)
+    }
+
+    // MARK: - 見つけたときの知らせ（2026-11-10）
+
+    func testFoundNoticeListsWhatWasFound() throws {
+        XCTAssertNil(Pipeline.foundNotice([]))
+        // 12日の昼（どの時間帯の機械で動かしても 11 日か 12 日になる）
+        let added = [item("確かめるもの", work: true, state: .candidate),
+                     item("見積書を送る", work: true, due: day(12, hour: 12), kind: .asked, from: "Aさん"),
+                     item("返事を待つ", work: true, kind: .delegated, from: "Bさん"),
+                     item("会う", work: true, kind: .promise, from: "Aさん"),
+                     item("5つめ", work: true)]
+        let n = try XCTUnwrap(Pipeline.foundNotice(added))
+        XCTAssertEqual(n.title, "頼まれごとを見つけました")
+        // はじめから帳に入れたものを先に、3件まで。相手と期限を添える
+        let lines = n.body.components(separatedBy: "\n")
+        XCTAssertEqual(lines.count, 5, n.body)
+        XCTAssertEqual(lines.first, "帳に 4 件入れました。確かめてほしいものが 1 件あります。")
+        XCTAssertTrue(lines[1].hasPrefix("・見積書を送る（Aさんから・11/1"), lines[1])
+        XCTAssertTrue(lines[1].hasSuffix(")まで）"), lines[1])
+        XCTAssertEqual(lines[2], "・返事を待つ（Bさんへ）")
+        XCTAssertEqual(lines[3], "・会う（Aさんと）")
+        XCTAssertEqual(lines[4], "ほか 2 件")
+    }
+
+    func testFoundNoticeTitlesAndCounts() throws {
+        // 仕事以外だけなら、題を変える。日付にできなかった期限は、言い方のまま添える
+        var life = item("牛乳を買う", work: false)
+        life.dueText = "今週中"
+        let n = try XCTUnwrap(Pipeline.foundNotice([life]))
+        XCTAssertEqual(n.title, "やること・約束を見つけました")
+        XCTAssertEqual(n.body, "帳に 1 件入れました。（うち仕事以外 1 件）\n・牛乳を買う（今週中）")
+        // 確かめ待ちだけ
+        let check = try XCTUnwrap(Pipeline.foundNotice([item("確かめるもの", work: true, state: .candidate, kind: .asked,
+                                                                 from: "Aさん")]))
+        XCTAssertEqual(check.title, "頼まれごとを見つけました")
+        XCTAssertEqual(check.body, "確かめてほしいものが 1 件あります。\n・確かめるもの（Aさんから）")
+        // 仕事と仕事以外が混ざっているとき
+        let mixed = try XCTUnwrap(Pipeline.foundNotice([item("資料を送る", work: nil), life]))
+        XCTAssertEqual(mixed.title, "頼まれごとを見つけました")
+        XCTAssertTrue(mixed.body.hasPrefix("帳に 2 件入れました。（うち仕事以外 1 件）\n・資料を送る\n"), mixed.body)
+    }
+
+    func testOnlyFoundNoticeShowsWhileAppIsOpen() {
+        let found = NoticePresenter.options(for: NoticePresenter.taskFoundID)
+        XCTAssertTrue(found.contains(.banner))
+        XCTAssertTrue(found.contains(.list))
+        XCTAssertTrue(found.contains(.sound))
+        // ほかの知らせは、今までどおり開いているあいだは出さない
+        XCTAssertTrue(NoticePresenter.options(for: WorkDigestReminder.noticeID).isEmpty)
+        XCTAssertTrue(NoticePresenter.options(for: "ほかの知らせ").isEmpty)
+        XCTAssertTrue(NoticePresenter.options(for: "").isEmpty)
+    }
+
+    // MARK: - 中身の無いものを入れない（2026-11-10）
+
+    func testPromptEchoIsNotATask() {
+        for echo in ["やること", "やること・頼んだこと・約束", "...", "…", " やること ",
+                     "やること・頼んだこと・約束（何を・どうする、を短く）", "やること（何を・どうする、を短く）",
+                     "相手の名前（頼んだ人・頼んだ相手・約束した相手。分からなければ空）", "期限の書き方（無ければ空）"] {
+            XCTAssertTrue(TaskBook.isPromptEcho(echo), echo)
+        }
+        // ふつうのやることは、似た言葉があっても落とさない
+        for real in ["見積書を送る", "やることを一覧にする", "約束の時間を決める", "分からなければ聞く", "期限を確かめる", ""] {
+            XCTAssertFalse(TaskBook.isPromptEcho(real), real)
+        }
+    }
+
+    func testAddSkipsPromptEchoButKeepsTyped() {
+        let book = TaskBook()
+        let before = book.items.count
+        let what = "やること（何を・どうする、を短く）" + String(UUID().uuidString.prefix(6))
+        let echo = TaskBook.Item(what: what, said: .now, source: .conversation, state: .candidate)
+        XCTAssertEqual(book.add([echo]).count, 0)
+        XCTAssertEqual(book.items.count, before)
+        // 本人が手で書いたものは、同じ文でも入れる
+        let typed = TaskBook.Item(what: what, said: .now, source: .manual, state: .open)
+        XCTAssertEqual(book.add([typed]).count, 1)
+        book.delete(typed.id)
+        XCTAssertEqual(book.items.count, before)
+    }
+
+    func testCleanDue() {
+        XCTAssertEqual(TaskBook.cleanDue(" 11/10まで "), "11/10まで")
+        XCTAssertEqual(TaskBook.cleanDue("来週の頭"), "来週の頭")
+        for empty in ["", "  ", "なし", "特になし", "期限なし", "未定", "不明", "空", "-", "null",
+                      "期限の言い方（分からなければ空）", "期限の書き方（無ければ空）"] {
+            XCTAssertNil(TaskBook.cleanDue(empty), empty)
+        }
     }
 }

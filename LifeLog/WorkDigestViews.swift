@@ -21,7 +21,7 @@ struct WorkDigestListView: View {
             Section {
                 Button("取り込む（写真・スクショ・貼り付け）", systemImage: "square.and.arrow.down") { importing = true }
             } footer: {
-                Text("職場の Claude に「この日に何があったか」を聞いた答えを、スクリーンショット・写真か、文字の貼り付けで取り込みます。文字の読み取りは iPhone の中だけで行い、AI（言語モデル）には送りません。「自分の宿題」は、タスクの「確かめ待ち」（仕事）に入ります。")
+                Text("職場の Claude に「この日に何があったか」を聞いた答えを、スクリーンショット・写真か、文字の貼り付けで取り込みます。文字の読み取りは iPhone の中だけで行い、取り込みには AI（言語モデル）を使いません。「自分の宿題」は、タスクの「やる」（仕事）に入ります。取り込んだまとめは「記録」の検索で探せて、「記録に質問する」の材料にもなります（質問のときだけ言語モデルに渡します。職場の会話と同じ設定に従います）。")
             }
             if UIDevice.current.userInterfaceIdiom == .phone {
                 Section {
@@ -168,7 +168,8 @@ struct WorkDigestImportView: View {
 
     var body: some View {
         let parsed = WorkDigestParser.parse(text)
-        let homework: [String] = parsed.sections.homework
+        // 箇条書きの前に書かれた前置きの文は、タスクにしない
+        let homework: [String] = parsed.homeworkTasks
         let sources: [String] = parsed.sections.sources ?? []
         let hasText: Bool = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         Form {
@@ -225,9 +226,9 @@ struct WorkDigestImportView: View {
                         Text(item.element)
                     }
                 } header: {
-                    Text("タスクの確かめ待ちに入れるもの（\(homework.count) 件）")
+                    Text("タスクの「やる」に入れるもの（\(homework.count) 件）")
                 } footer: {
-                    Text("「自分の宿題」の分です。同じものがもうタスクにあれば、入れません。")
+                    Text("「自分の宿題」の分です。同じものがもうタスクにあれば、入れません。箇条書きの前に書かれた前置きの文は、入れません。")
                 }
             }
         }

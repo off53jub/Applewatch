@@ -364,7 +364,8 @@ final class TaskBook {
         var added: [Item] = []
         for item in new {
             let what = item.what.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !what.isEmpty else { continue }
+            // 言語モデルが、頼んだ文の書き方をそのまま返したものは入れない（2026-11-10。本人が手で書いたものは見ない）
+            guard !what.isEmpty, item.source == .manual || !Self.isPromptEcho(what) else { continue }
             let duplicate = (items + added).contains { old in
                 let comparable = old.state == .candidate || old.state == .open || old.state == .rejected
                     || (old.day != nil && old.day == item.day)
@@ -379,6 +380,24 @@ final class TaskBook {
         items += added
         save()
         return added
+    }
+
+    /// 言語モデルに渡した「書き方」の文（「やること（何を・どうする、を短く）」など）が、そのまま返ってきたものか（2026-11-10）。
+    /// 中身の無いものなので、帳には入れない
+    nonisolated static func isPromptEcho(_ what: String) -> Bool {
+        let s: String = what.trimmingCharacters(in: .whitespacesAndNewlines)
+        let whole: Set<String> = ["やること", "やること・頼んだこと・約束", "...", "…"]
+        if whole.contains(s) { return true }
+        let parts: [String] = ["何を・どうする、を短く", "分からなければ空）", "無ければ空）", "期限があれば添える", "まだ残っていそうなもの"]
+        return parts.contains { s.contains($0) }
+    }
+
+    /// 期限の言い方を整える（2026-11-10）。空・「なし」「未定」など・頼んだ文の書き方がそのまま返ってきたものは nil
+    nonisolated static func cleanDue(_ text: String) -> String? {
+        let s: String = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let none: Set<String> = ["", "なし", "無し", "特になし", "期限なし", "未定", "不明", "空", "-", "—", "null"]
+        guard !none.contains(s), !s.contains("分からなければ空"), !s.contains("無ければ空") else { return nil }
+        return s
     }
 
     func update(_ item: Item) {
@@ -637,15 +656,39 @@ extension Pipeline {
             }
         }
         let added = tasks.add(found)
-        guard !added.isEmpty else { return }
-        let waiting = added.filter { $0.state == .candidate }.count
-        let opened = added.count - waiting
-        var body = opened > 0 ? "帳に \(opened) 件入れました。" : ""
-        if waiting > 0 { body += "確かめてほしいものが \(waiting) 件あります。" }
-        let lifeCount = added.filter { !$0.isWork }.count
+        guard let notice = Self.foundNotice(added) else { return }
+        Self.notifyTasks(title: notice.title, body: notice.body)
+    }
+
+    /// 新しく帳に入ったものの知らせの題と文（2026-11-10）。入ったものが無ければ nil。
+    /// はじめから帳に入ったものを先に、3件まで。相手と期限が分かっていれば添える（開かなくても、だれの・いつまでの話か分かるように）
+    static func foundNotice(_ added: [TaskBook.Item]) -> TaskNotice? {
+        guard !added.isEmpty else { return nil }
+        let checks: [TaskBook.Item] = added.filter { $0.state == .candidate }
+        let opened: [TaskBook.Item] = added.filter { $0.state != .candidate }
+        var body: String = opened.isEmpty ? "" : "帳に \(opened.count) 件入れました。"
+        if !checks.isEmpty { body += "確かめてほしいものが \(checks.count) 件あります。" }
+        let lifeCount: Int = added.filter { !$0.isWork }.count
         if lifeCount > 0 { body += "（うち仕事以外 \(lifeCount) 件）" }
-        body += "\n・" + added.prefix(3).map(\.what).joined(separator: "\n・")
-        Self.notifyTasks(title: lifeCount == added.count ? "やること・約束を見つけました" : "頼まれごとを見つけました", body: body)
+        for item in (opened + checks).prefix(3) {
+            var notes: [String] = []
+            if let from = item.from, !from.isEmpty {
+                switch item.kindOrDefault {
+                case .delegated: notes.append(from + "へ")
+                case .promise: notes.append(from + "と")
+                case .asked, .mine: notes.append(from + "から")
+                }
+            }
+            if let due = item.due {
+                notes.append(taskDueFormat.string(from: due) + "まで")
+            } else if let dueText = item.dueText, !dueText.isEmpty {
+                notes.append(dueText)
+            }
+            body += "\n・" + item.what + (notes.isEmpty ? "" : "（" + notes.joined(separator: "・") + "）")
+        }
+        if added.count > 3 { body += "\nほか \(added.count - 3) 件" }
+        let title: String = lifeCount == added.count ? "やること・約束を見つけました" : "頼まれごとを見つけました"
+        return TaskNotice(title: title, body: body)
     }
 
     /// 拾ったものを帳の形にする。★の前後2分で拾ったものははじめから帳に、★の近くで何も拾えなければ「★を付けたところ」を確かめ待ちに。
@@ -677,7 +720,7 @@ extension Pipeline {
                let speaker = line?.speaker, line?.speakerID != SpeakerLabeler.selfID, !speaker.hasPrefix("人物") {
                 from = speaker
             }
-            items.append(TaskBook.Item(what: f.what, from: from, dueText: f.dueText.isEmpty ? nil : f.dueText,
+            items.append(TaskBook.Item(what: f.what, from: from, dueText: TaskBook.cleanDue(f.dueText),
                                        due: TaskBook.dueDate(f.dueDay), said: said, day: day, place: c.place,
                                        quote: quote, audio: line?.audio, offset: line?.offset,
                                        source: nearMark != nil ? .mark : .conversation,
@@ -697,14 +740,18 @@ extension Pipeline {
         return items
     }
 
-    /// 議事録の宿題のうち、自分の（担当が自分か空の）ものを確かめ待ちに入れる
+    /// 議事録の宿題のうち、自分の（担当が自分か空の）ものを確かめ待ちに入れる。
+    /// 入れたら、会話から拾ったときと同じように知らせる（2026-11-10。前は黙って入れていた）
     func addMinuteTasks(_ todos: [Summarizer.Minutes.Todo], of c: ConversationLog.Conversation, day: String, title: String) {
         let mine = todos.filter { $0.who.isEmpty || $0.who.contains(SpeakerLabeler.selfName) || $0.who.contains("本人") }
         guard !mine.isEmpty else { return }
-        tasks.add(mine.map { todo in
-            TaskBook.Item(what: todo.what, dueText: todo.due.isEmpty ? nil : todo.due, said: c.start, day: day,
+        let added: [TaskBook.Item] = tasks.add(mine.map { todo in
+            TaskBook.Item(what: todo.what, dueText: TaskBook.cleanDue(todo.due), said: c.start, day: day,
                           place: c.place, quote: "議事録「\(title)」の宿題", source: .minutes, state: .candidate, work: true)
         })
+        guard let notice = Self.foundNotice(added) else { return }
+        Self.notifyTasks(title: notice.title, body: notice.body)
+        tasksChanged()
     }
 
     /// 写真の文字を読み取り（iPhone の中で）、やることを拾って確かめ待ちに入れる。結果の一文を返す。
@@ -729,7 +776,7 @@ extension Pipeline {
                                    work: work)]
         } else {
             items = found.map { f in
-                TaskBook.Item(what: f.what, from: f.from.isEmpty ? nil : f.from, dueText: f.dueText.isEmpty ? nil : f.dueText,
+                TaskBook.Item(what: f.what, from: f.from.isEmpty ? nil : f.from, dueText: TaskBook.cleanDue(f.dueText),
                               due: TaskBook.dueDate(f.dueDay), said: now,
                               quote: f.quote.isEmpty ? quote : f.quote, source: .photo, state: .candidate, work: work,
                               kind: TaskBook.Kind.parse(f.kind))
@@ -859,7 +906,7 @@ extension Pipeline {
         content.title = title
         content.body = body
         content.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "taskFound", content: content, trigger: nil))
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: NoticePresenter.taskFoundID, content: content, trigger: nil))
     }
 
     private static let taskDueFormat: DateFormatter = {
@@ -966,6 +1013,29 @@ private extension CGImagePropertyOrientation {
         case .rightMirrored: self = .rightMirrored
         @unknown default: self = .up
         }
+    }
+}
+
+// MARK: - アプリを開いているときの知らせ（2026-11-10）
+
+/// 「頼まれごとを見つけました」の知らせを、アプリを開いているときにも画面の上に出す。
+/// iOS は、これが無いと、開いているアプリの知らせを出さない（通知センターにも残らない）。
+/// 出すのはこの知らせだけ。ほかの知らせ（朝夕のまとめ・録音が止まった など）は、今までどおり開いているあいだは出さない。
+final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = NoticePresenter()
+    /// 「見つけました」の知らせの名前（同じ名前で出し直すので、古いものは置き換わる）
+    static let taskFoundID = "taskFound"
+    /// 開いているあいだも出す知らせ
+    static let shownWhileOpen: Set<String> = [taskFoundID]
+
+    /// 知らせの名前から、開いているあいだの出し方を決める
+    static func options(for identifier: String) -> UNNotificationPresentationOptions {
+        shownWhileOpen.contains(identifier) ? [.banner, .list, .sound] : []
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler(Self.options(for: notification.request.identifier))
     }
 }
 

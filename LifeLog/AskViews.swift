@@ -13,6 +13,8 @@ extension Pipeline {
     struct Answer {
         let text: String
         let sources: [Hit]
+        /// いっしょに材料にした仕事のまとめの日（新しい日から。2026-11-10）
+        var digestDays: [String] = []
     }
 
     private static let keyFormatter: DateFormatter = {
@@ -116,12 +118,21 @@ extension Pipeline {
             a.score != b.score ? a.score > b.score : (a.day, a.conversation.start) > (b.day, b.conversation.start)
         }
 
-        // 職場の会話が入るときは、設定によって端末内の言語モデルで答える（そのときは渡す量を減らす）
-        let work = scored.prefix(10).contains { isWorkTime($0.conversation.start) }
+        // 仕事のまとめも材料にする（2026-11-10、本人の決定。職場の中身なので、職場の会話と同じ設定に従う）
+        let digestEntries: [WorkDigest.Entry] = workDigests.sorted
+        let anyDay: Bool = plan.from == nil
+        let probe = Self.workDigestMaterial(digestEntries, keywords: plan.keywords, people: plan.people,
+                                            from: from, to: to, anyDay: anyDay, budget: 200)
+        // 職場の会話・仕事のまとめが入るときは、設定によって端末内の言語モデルで答える（そのときは渡す量を減らす）
+        let work = !probe.days.isEmpty || scored.prefix(10).contains { isWorkTime($0.conversation.start) }
         let local = Summarizer.$sensitive.withValue(work) { Summarizer.usesLocal(apiKey: key) }
         // 1分あたりの上限に収まるよう、渡すのは6,000文字まで（端末内なら1,800文字）
         let budget = local ? 1_800 : 6_000
-        var material = ""
+        // まとめは全体の4割まで（会話が1つも無ければ全部）。残りを会話に使う
+        let digestBudget: Int = scored.isEmpty ? budget : budget * 2 / 5
+        let digest = Self.workDigestMaterial(digestEntries, keywords: plan.keywords, people: plan.people,
+                                             from: from, to: to, anyDay: anyDay, budget: digestBudget)
+        var material = digest.text
         for item in scored where material.count < budget {
             let c = item.conversation
             let place = c.place.map { " " + $0 } ?? ""
@@ -148,8 +159,9 @@ extension Pipeline {
             return Answer(text: "その期間の記録に見つかりませんでした。", sources: [])
         }
 
+        let hasDigest: Bool = !digest.days.isEmpty
         let result = try await Summarizer.$sensitive.withValue(work) {
-            try await Summarizer.answer(question, material: material, apiKey: key)
+            try await Summarizer.answer(question, material: material, digest: hasDigest, apiKey: key)
         }
         // 根拠の「yyyy-MM-dd HH:mm」を、記録の行に結びつける
         var sources: [Hit] = []
@@ -163,7 +175,30 @@ extension Pipeline {
                 }
             }
         }
-        return Answer(text: result.text, sources: sources)
+        return Answer(text: result.text, sources: sources, digestDays: digest.days)
+    }
+}
+
+/// 仕事のまとめで見つかった1行（日付・見出し・本文）。押すと、そのまとめを開く。
+struct DigestHitRow: View {
+    @Environment(Pipeline.self) private var pipeline
+    let hit: Pipeline.DigestHit
+
+    var body: some View {
+        let entry: WorkDigest.Entry? = pipeline.workDigests.entries.first { $0.id == hit.entryID }
+        let caption: String = Pipeline.workDigestDayTitle(hit.day) + (hit.heading.isEmpty ? "" : "・" + hit.heading)
+        NavigationLink {
+            if let entry {
+                WorkDigestDetailView(entry: entry)
+            } else {
+                Text("このまとめは、もうありません。").foregroundStyle(.secondary)
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(caption).font(.caption).foregroundStyle(.secondary)
+                Text(hit.text)
+            }
+        }
     }
 }
 
@@ -261,7 +296,7 @@ struct AskView: View {
                 Button(working ? "探しています…" : "質問する") { run() }
                     .disabled(working || question.trimmingCharacters(in: .whitespaces).isEmpty)
             } footer: {
-                Text("記録から関係のありそうな会話を集めて、Groq の無料枠の言語モデルが答えます（記録に無いことは答えません）。期間を言わなければ直近60日から探します。")
+                Text("記録から関係のありそうな会話を集めて、Groq の無料枠の言語モデルが答えます（記録に無いことは答えません）。期間を言わなければ直近60日から探します。取り込んだ「仕事のまとめ」も、質問に合うところをいっしょに読みます（職場の会話と同じ設定に従います）。")
             }
             if !error.isEmpty {
                 Section { Text(error).foregroundStyle(.secondary) }
@@ -273,6 +308,25 @@ struct AskView: View {
                 if !answer.sources.isEmpty {
                     Section("もとにした記録") {
                         ForEach(answer.sources) { HitRow(hit: $0) }
+                    }
+                }
+                let digests: [WorkDigest.Entry] = pipeline.workDigests.sorted.filter { answer.digestDays.contains($0.day) }
+                if !digests.isEmpty {
+                    Section {
+                        ForEach(digests) { entry in
+                            NavigationLink {
+                                WorkDigestDetailView(entry: entry)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(Pipeline.workDigestDayTitle(entry.day)).font(.caption).foregroundStyle(.secondary)
+                                    WorkDigestRow(entry: entry)
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("いっしょに読んだ仕事のまとめ")
+                    } footer: {
+                        Text("質問に合うところを、材料として渡したまとめです（答えに使われたとは限りません）。")
                     }
                 }
             }

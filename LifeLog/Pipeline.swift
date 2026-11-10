@@ -432,6 +432,8 @@ final class Pipeline {
         }
         sync.recordsChanged = { [weak self] in self?.recordsVersion += 1 }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        // 「頼まれごとを見つけました」は、アプリを開いているときにも出す（2026-11-10。TaskBook.swift の NoticePresenter）
+        UNUserNotificationCenter.current().delegate = NoticePresenter.shared
         Power.start()
         // アプリが落ちた・固まった記録を受け取る（MetricKit）
         CrashWatch.shared.start()
