@@ -4,6 +4,12 @@ iPhone が送ってきた文字起こしの行を、この PC の中で動く Ol
 <home>/semantic.db（SQLite、float16）に置く。探すときは、問いの数の並びとの近さ（cos）の高い順に返し、
 同じ会話の前後 2 行ずつを "context" に付ける（iPhone が前後も見せて、どの行から言ったかを示せるように）。
 文も数の並びも、この PC の外には送らない（Ollama はこの PC の中の宛先だけ）。
+
+仕事のまとめ（2026-11-10）: ドライブの「仕事のまとめ.json」（mothership.read_digests で読むだけ）の行も同じ索引に置く。
+id が "digest|" で始まる行がそれ（見出しは speaker の欄、時刻は 0、会話は無し、work は true）。表は変えない。
+探すときは include_digest が true のときだけ出し（古い iPhone には今までと同じ答え）、出す行は
+{"id", "kind": "work-digest", "day", "heading", "text", "work": true, "score"}（時刻・話し手・前後の行は無し）。
+索引への置き直しは、ファイルの更新が変わったときだけ、5 分ごとの裏の仕事で（文が同じ行は作り直さない）。
 """
 
 from __future__ import annotations
@@ -33,6 +39,8 @@ CHECK_EVERY = 60.0
 K_DEFAULT = 20
 K_MAX = 200
 CONTEXT = 2              # 前後に付ける行の数
+DIGEST_PREFIX = "digest|"  # 仕事のまとめの行の id の頭
+DIGEST_EVERY = 300.0     # 仕事のまとめのファイルが変わったか見る間（秒）
 DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -127,6 +135,11 @@ def parse_search(data: bytes) -> dict:
     if not isinstance(include, bool):
         raise ValueError("include_work は true か false です")
     out["include_work"] = include
+    for key in ("include_digest", "only_digest"):  # 仕事のまとめの行（既定は出さない）
+        value = body.get(key, False)
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} は true か false です")
+        out[key] = value
     return out
 
 
@@ -243,6 +256,7 @@ class SemanticIndex:
         self.pull_failed = 0.0
         self.error: str | None = None
         self._cache: dict | None = None
+        self._digest_stamp = None
         if enabled:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.connect() as db:
@@ -365,6 +379,51 @@ class SemanticIndex:
             self._cache = None
         return len(rows)
 
+    def sync_digests(self, lines: list[dict]) -> int:
+        """仕事のまとめの行（mothership.digest_lines の形）を置き直す。無くなった行は消す。置いた数を返す。"""
+        import mothership
+
+        items = [{"id": mothership.digest_id(line["day"], line["text"]), "day": line["day"], "time": 0.0,
+                  "speaker": line.get("heading") or None, "text": line["text"][:TEXT_MAX], "work": True,
+                  "conversation": None} for line in lines]
+        count = self.index(items)
+        keep = {item["id"] for item in items}
+        with self.lock, self.connect() as db:
+            old = [r[0] for r in db.execute("SELECT id FROM items WHERE substr(id, 1, ?) = ?",
+                                            (len(DIGEST_PREFIX), DIGEST_PREFIX))]
+            for ident in old:
+                if ident not in keep:
+                    db.execute("DELETE FROM items WHERE id=?", (ident,))
+            self._cache = None
+        return count
+
+    def digest_tick(self, read: Callable[[], dict | None]) -> int | None:
+        """仕事のまとめのファイルが変わっていたら置き直す。何もしなかったら None。read は mothership.read_digests の形の答え"""
+        if not self.enabled:
+            return None
+        found = read()
+        if found is None or found["stamp"] == self._digest_stamp:
+            return None
+        if not self.available():
+            return None  # Ollama が使えるようになったら、次の回でやる
+        count = self.sync_digests(found["lines"])
+        self._digest_stamp = found["stamp"]
+        self.log(f"意味で探す: 仕事のまとめ {count} 行を置き直しました")  # 文の中身は書かない
+        return count
+
+    def start_digest_sync(self, read: Callable[[], dict | None]) -> None:
+        """仕事のまとめを、裏で DIGEST_EVERY 秒ごとに見て置き直す（Ollama の GPU の使い方は、頼むたびの options のまま）"""
+        def run() -> None:
+            time.sleep(30.0)
+            while True:
+                try:
+                    self.digest_tick(read)
+                except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
+                    self.log(f"仕事のまとめを索引にできませんでした: {type(error).__name__}")
+                time.sleep(DIGEST_EVERY)
+
+        threading.Thread(target=run, name="semantic-digest", daemon=True).start()
+
     def forget(self, ids: list[str]) -> int:
         removed = 0
         with self.lock, self.connect() as db:
@@ -387,7 +446,7 @@ class SemanticIndex:
                     "SELECT id, day, speaker, work, vec FROM items WHERE model=?", (self.model,)):
                 ids.append(ident)
                 days.append(day)
-                speakers.append((speaker or "").casefold())
+                speakers.append("" if ident.startswith(DIGEST_PREFIX) else (speaker or "").casefold())
                 works.append(bool(work))
                 blobs.append(vec)
         dim = len(blobs[0]) // 2 if blobs else 0
@@ -395,7 +454,8 @@ class SemanticIndex:
             if blobs else np.zeros((0, 0), dtype="<f2")
         keep = [i for i, b in enumerate(blobs) if len(b) == dim * 2]
         self._cache = {"ids": [ids[i] for i in keep], "days": np.array([days[i] for i in keep], dtype=object),
-                       "speakers": [speakers[i] for i in keep], "works": np.array([works[i] for i in keep], dtype=bool),
+                       "speakers": [speakers[i] for i in keep],
+                       "digests": np.array([ids[i].startswith(DIGEST_PREFIX) for i in keep], dtype=bool), "works": np.array([works[i] for i in keep], dtype=bool),
                        "matrix": matrix, "dim": dim}
         return self._cache
 
@@ -412,9 +472,13 @@ class SemanticIndex:
                 mask &= np.array([d <= request["to"] for d in cache["days"]], dtype=bool)
             if not request.get("include_work", True):
                 mask &= ~cache["works"]
+            if request.get("only_digest"):
+                mask &= cache["digests"]
+            elif not request.get("include_digest", False):
+                mask &= ~cache["digests"]
             if request.get("speaker"):
                 wanted = request["speaker"].casefold()
-                mask &= np.array([wanted in s for s in cache["speakers"]], dtype=bool)
+                mask &= np.array([wanted in s for s in cache["speakers"]], dtype=bool) & ~cache["digests"]
             rows = np.flatnonzero(mask)
             if not len(rows):
                 return []
@@ -435,13 +499,16 @@ class SemanticIndex:
                         continue
                     hit = self._row(row)
                     hit["score"] = round(score, 4)
-                    hit["context"] = self._context(db, hit)
+                    if hit.get("kind") != "work-digest":
+                        hit["context"] = self._context(db, hit)
                     hits.append(hit)
         return hits
 
     @staticmethod
     def _row(row) -> dict:
         ident, day, moment, speaker, text, work, conversation = row
+        if ident.startswith(DIGEST_PREFIX):  # 仕事のまとめの行（時刻・話し手・会話は無い）
+            return {"id": ident, "kind": "work-digest", "day": day, "heading": speaker or "", "text": text, "work": True}
         return {"id": ident, "day": day, "time": moment, "speaker": speaker, "text": text, "work": bool(work),
                 "conversation": conversation}
 

@@ -2307,6 +2307,8 @@ def start_v6(threads: int) -> None:
             App.semantic = semantic.SemanticIndex(SEMANTIC_DB, semantic.OllamaEmbedder(LLM.url, options=ollama_options),
                                                   log)
             threading.Thread(target=App.semantic.available, kwargs={"force": True}, daemon=True).start()
+            # 仕事のまとめ（ドライブの「仕事のまとめ.json」。読むだけ）も、変わったときだけ索引に置き直す（2026-11-10）
+            App.semantic.start_digest_sync(lambda: mothership.read_digests(mothership.digest_file(load_config())))
         except Exception as error:  # noqa: BLE001
             App.semantic = None
             log(f"意味で探す機能を始められませんでした: {error!r}")

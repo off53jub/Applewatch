@@ -33,11 +33,17 @@ struct WidgetState: Codable, Equatable {
     var tasksOpen: Int?
     /// 時計は録音中のはずなのに、30分より長く知らせが届いていない（iPhone だけ。2026-11-07）
     var watchQuiet: Bool?
+    /// 今日まで（期限を過ぎたものを含む）の頼まれごとの文。無ければ、期限の近いまだのもの。3件まで（iPhone だけ。2026-11-10）
+    var taskTitles: [String]?
+    /// 確かめ待ちの数（iPhone だけ。2026-11-10）
+    var tasksChecking: Int?
 
     static let suiteName = "group.com.off53jub.lifelog"
     static let key = "widgetState"
     /// iPhone のロック画面・ホーム画面の「LifeLog の様子」の種類の名前（kind）
     static let phoneKind = "com.off53jub.lifelog.status"
+    /// iPhone の「LifeLog のやること」の種類の名前（2026-11-10。「LifeLog の様子」と同じ中身を読む）
+    static let tasksKind = "com.off53jub.lifelog.tasks"
     /// 時計の文字盤の LifeLog の種類の名前。前からある「開くボタン」と同じ（変えると文字盤から消える）
     static let watchKind = "com.off53jub.lifelog.watch.launcher"
     /// ウィジェットが自分で中身を読み直すまでの長さ（アプリからの読み直しが届かなかったとき用）

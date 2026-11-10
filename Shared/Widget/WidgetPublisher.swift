@@ -53,6 +53,8 @@ final class WidgetPublisher {
         waitingUntil = nil
         lastReload = .now
         WidgetCenter.shared.reloadTimelines(ofKind: kind)
+        // 「LifeLog のやること」も同じ中身を読む（2026-11-10）
+        if kind == WidgetState.phoneKind { WidgetCenter.shared.reloadTimelines(ofKind: WidgetState.tasksKind) }
     }
 
     /// 前に読み直してもらってから、あと何秒待つか（0 なら今すぐ読み直してもらえる）

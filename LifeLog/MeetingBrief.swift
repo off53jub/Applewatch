@@ -63,13 +63,28 @@ extension Pipeline {
         for (event, names) in meetings.prefix(10) {
             var parts: [String] = []
             for name in names {
-                guard let c = last[name] else { continue }
-                var text = "\(name)：前回 \(Self.briefDate.string(from: c.start))"
-                if let title = c.title, !title.isEmpty { text += "「\(title)」" }
-                if let stats = SpeakStats.of(c), stats.selfLines > 0, let share = stats.share {
-                    text += "（あなたが話した割合 \(Int((share * 100).rounded()))%）"
+                var text = "\(name)："
+                var has = false
+                if let c = last[name] {
+                    text += "前回 \(Self.briefDate.string(from: c.start))"
+                    if let title = c.title, !title.isEmpty { text += "「\(title)」" }
+                    if let stats = SpeakStats.of(c), stats.selfLines > 0, let share = stats.share {
+                        text += "（あなたが話した割合 \(Int((share * 100).rounded()))%）"
+                    }
+                    for point in c.points.prefix(3) { text += "\n・" + point }
+                    has = true
                 }
-                for point in c.points.prefix(3) { text += "\n・" + point }
+                // その人との、残っている頼まれごとと、仕事のまとめのいちばん新しい行（2026-11-10）
+                let prep = Self.meetingPrep(name: name, tasks: tasks.open, digests: workDigests.sorted)
+                if !prep.tasks.isEmpty {
+                    text += "\n残っている頼まれごと \(prep.tasks.count) 件: " + prep.tasks.prefix(2).map(\.what).joined(separator: "・")
+                    has = true
+                }
+                if let line = prep.lines.first {
+                    text += "\n仕事のまとめ（\(Pipeline.workDigestDayTitle(line.day))）: " + line.text
+                    has = true
+                }
+                guard has else { continue }
                 parts.append(text)
             }
             guard !parts.isEmpty else { continue }

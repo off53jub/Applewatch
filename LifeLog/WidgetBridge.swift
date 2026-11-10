@@ -33,6 +33,18 @@ enum WidgetBridge {
         return (due, overdue, open)
     }
 
+    /// ウィジェットに出す頼まれごとの文（今日まで・期限を過ぎたもの。無ければ期限の近いまだのもの。急ぎを先に。3件・30字まで）。
+    /// todo は人を待っているもの以外のまだのもの（期限の近い順）
+    static func taskTitles(_ todo: [TaskBook.Item], now: Date, calendar: Calendar = .current) -> [String] {
+        let soon: [TaskBook.Item] = todo.filter { item in
+            let bucket = TaskBook.bucket(item, now: now, calendar: calendar)
+            return bucket == .late || bucket == .today
+        }
+        let picked: [TaskBook.Item] = (soon.isEmpty ? todo : soon)
+            .sorted { a, b in (a.urgent == true) != (b.urgent == true) ? a.urgent == true : TaskBook.dueOrder(a, b) }
+        return picked.prefix(3).map { WatchInfo.clip($0.what, 30) }
+    }
+
     /// 時計が録音中か（時計から一度も知らせが無ければ nil）と、録音中のはずなのに知らせが途絶えているか
     static func watchState(_ last: RecordingLedger.State?, now: Date) -> (recording: Bool?, quiet: Bool?) {
         guard let last else { return (nil, nil) }
@@ -67,6 +79,9 @@ extension Pipeline {
         state.tasksDue = counts.due
         state.tasksOverdue = counts.overdue
         state.tasksOpen = counts.open
+        // 「LifeLog のやること」（2026-11-10）
+        state.taskTitles = WidgetBridge.taskTitles(tasks.todo, now: now)
+        state.tasksChecking = tasks.candidates.count
         state.nextEvent = WidgetBridge.nextEvent(calendar.dayEvents(from: now, to: now.addingTimeInterval(12 * 3600)), now: now)
         state.lastProcessed = ledger.chunks.lazy.compactMap(\.transcribed).max()
         state.pcOK = homePC.isConfigured ? homePC.downSince == nil : nil

@@ -1,4 +1,5 @@
 import AppIntents
+import UIKit
 
 /// ショートカット App・アクションボタン・Siri から使える操作。
 struct LifeLogShortcuts: AppShortcutsProvider {
@@ -35,6 +36,75 @@ struct LifeLogShortcuts: AppShortcutsProvider {
                     phrases: ["\(.applicationName)で前回の話"],
                     shortTitle: "この人と前回何を話した？",
                     systemImageName: "person.bubble")
+        AppShortcut(intent: HomeworkIntent(),
+                    phrases: ["\(.applicationName)で今日の宿題", "\(.applicationName)の今日やること"],
+                    shortTitle: "今日の宿題",
+                    systemImageName: "checklist")
+        AppShortcut(intent: ImportDigestIntent(),
+                    phrases: ["\(.applicationName)に仕事のまとめを取り込む"],
+                    shortTitle: "仕事のまとめを取り込む",
+                    systemImageName: "doc.text")
+    }
+}
+
+/// 「今日の宿題」（2026-11-10）。期限を過ぎた・今日までの仕事の頼まれごとと、今日の仕事のまとめの宿題を答える
+struct HomeworkIntent: AppIntent {
+    static let title: LocalizedStringResource = "今日の宿題"
+    static let description: IntentDescription? = IntentDescription("LifeLog の頼まれごと帳から、今日までの仕事のものを5つまで答えます。")
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        .result(dialog: IntentDialog(stringLiteral: Recall.homework?() ?? "LifeLog の準備ができていません。一度アプリを開いてください。"))
+    }
+}
+
+/// 「仕事のまとめを取り込む」（2026-11-10）。ショートカットの共有シートから、スクショ・写真・文を渡す。
+/// 文字の読み取りは iPhone の中。アプリを開いて、取り込む画面に入れておく（中身を確かめてから「入れる」を押す）
+struct ImportDigestIntent: AppIntent {
+    static let title: LocalizedStringResource = "仕事のまとめを取り込む"
+    static let description: IntentDescription? = IntentDescription("スクショ・写真・文を LifeLog の「仕事のまとめを取り込む」画面に入れて開きます。")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "スクショ・写真")
+    var images: [IntentFile]?
+
+    @Parameter(title: "文")
+    var text: String?
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        var pieces: [String] = []
+        if let text, !text.isEmpty { pieces.append(text) }
+        for file in images ?? [] {
+            guard let image = UIImage(data: file.data) else { continue }
+            let read: String = await Pipeline.recognizeText(image)
+            if !read.isEmpty { pieces.append(read) }
+        }
+        DigestInbox.put(pieces.joined(separator: "\n"))
+        return .result()
+    }
+}
+
+/// ショートカットから渡された「仕事のまとめ」の文を、アプリが取り込む画面を開くまで預かる（2026-11-10）
+@MainActor
+enum DigestInbox {
+    /// アプリの準備ができていれば、すぐ取り込む画面を開く（Pipeline が入れる）
+    static var opened: ((String) -> Void)?
+    private static var waiting: String?
+
+    static func put(_ text: String) {
+        if let opened {
+            opened(text)
+        } else {
+            waiting = text
+        }
+    }
+
+    /// 預かっている文（取り出したら消す）
+    static func take() -> String? {
+        defer { waiting = nil }
+        return waiting
     }
 }
 

@@ -15,12 +15,17 @@
 - GET /vocab → 母艦の state/vocab_for_app.json（母艦の辞書から作った「登録の候補」。2026-11-10）を確かめて返す。
   無ければ {"available": false}。iPhone は候補として見せるだけで、本人が押した言葉だけを登録する。中身は記録（log.txt）に書かない。
 - どれも iPhone の合言葉（Bearer）が要る。時計の外の道（Funnel）からは届かない。
+- 仕事のまとめ（2026-11-10）: iPhone がドライブの「LifeLog/同期/仕事のまとめ.json」に書く、仕事のまとめを読むだけ
+  （read_digests。書かない。書くとアプリの同期が壊れる）。意味で探す（semantic.py）と MCP サーバー（lifelog_mcp.py）が使う。
+  場所は config.json の "work_digest_file"（無ければ、どのドライブ文字でも「マイドライブ/LifeLog/同期/仕事のまとめ.json」を探す）。
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import unicodedata
 import threading
 import time
 from pathlib import Path
@@ -39,6 +44,15 @@ CARD_FILE = Path("マイドライブ") / "LifeLog" / "カード利用" / "card-m
 CARD_ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
 CARD_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})")
 CARD_LIMIT = 2000
+DIGEST_FILE = Path("マイドライブ") / "LifeLog" / "同期" / "仕事のまとめ.json"
+DIGEST_MAX_BYTES = 20_000_000
+DIGEST_TEXT_MAX = 4000
+# 仕事のまとめの項目（アプリの WorkDigest.Sections の並び順と見出し）
+DIGEST_HEADINGS = (("sources", "出どころ"), ("decided", "決まったこと"), ("homework", "自分の宿題"),
+                   ("others", "ほかの人の動き"), ("topics", "気になる話題"), ("checks", "あとで確かめること"),
+                   ("words", "よく出た言葉"))
+DIGEST_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+DIGEST_HEADER_LINE = re.compile(r"\s*【[^】]*】\s*")
 VOCAB = Path("state") / "vocab_for_app.json"
 VOCAB_LIMIT = 300
 _lock = threading.Lock()
@@ -90,6 +104,85 @@ def read_card(path: Path | None) -> dict:
                       "shop": str(item.get("shop") or "").strip()[:100],
                       "card": str(item.get("card") or "").strip()[:40]})
     return {"available": True, "generated_at": str(data.get("generated_at") or ""), "items": items}
+
+
+def digest_file(config: dict) -> Path | None:
+    """仕事のまとめのファイル（config.json の "work_digest_file"。無ければドライブ文字を順に探す）"""
+    value = str(config.get("work_digest_file") or "").strip()
+    if value:
+        return Path(value)
+    for letter in "GHIJKLMNOPQRSTUVWXYZDEF":
+        path = Path(f"{letter}:\\") / DIGEST_FILE
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def digest_key(text: str) -> str:
+    """同じ行かの比べ方（空白を除く）"""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFC", text))
+
+
+def digest_id(day: str, text: str) -> str:
+    """意味で探すの行の id（日と文で決まる。見出しが変わっても同じ）"""
+    return "digest|" + day + "|" + hashlib.sha1(digest_key(text).encode("utf-8")).hexdigest()[:16]
+
+
+def digest_lines(entries) -> list[dict]:
+    """[WorkDigest.Entry] を {day, heading, text} の行に開く。まとめが無い・空のときは取り込んだ文を行に分ける
+    （見出しは空。【日付】だけの行は飛ばす）。同じ日の同じ文（空白を除いて）は1回だけ。日の新しい順、日の中は取り込んだ順。"""
+    if not isinstance(entries, list):
+        return []
+    found: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        day = entry.get("day")
+        if not isinstance(day, str) or not DIGEST_DAY.fullmatch(day):
+            continue
+        pairs: list[tuple[str, str]] = []
+        sections = entry.get("sections")
+        if isinstance(sections, dict):
+            for key, heading in DIGEST_HEADINGS:
+                values = sections.get(key)
+                if isinstance(values, list):
+                    pairs += [(heading, v) for v in values if isinstance(v, str)]
+        if not any(text.strip() for _, text in pairs):
+            raw = entry.get("text")
+            pairs = [("", line) for line in (raw.splitlines() if isinstance(raw, str) else [])
+                     if not DIGEST_HEADER_LINE.fullmatch(line)]
+        for heading, text in pairs:
+            text = text.strip()[:DIGEST_TEXT_MAX]
+            key = digest_key(text)
+            if not key or (day, key) in seen:
+                continue
+            seen.add((day, key))
+            found.append({"day": day, "heading": heading, "text": text})
+    # 日は新しい順。同じ日の中は取り込んだ順のまま（並べ直しは安定）
+    order = {d: i for i, d in enumerate(sorted({line["day"] for line in found}, reverse=True))}
+    found.sort(key=lambda line: order[line["day"]])
+    return found
+
+
+def read_digests(path: Path | None) -> dict | None:
+    """仕事のまとめを読む（読むだけ）。{"stamp": (更新のナノ秒, 大きさ), "lines": [{day, heading, text}…]}。
+    ファイルが無い・読めない・形が違うときは None（静かに「まとめ無し」）。"""
+    if path is None:
+        return None
+    try:
+        stat = path.stat()
+        if stat.st_size > DIGEST_MAX_BYTES:
+            return None
+        data = json.loads(path.read_bytes().decode("utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, list):
+        return None
+    return {"stamp": (stat.st_mtime_ns, stat.st_size), "lines": digest_lines(data)}
 
 
 def read_vocab(base: Path) -> dict:

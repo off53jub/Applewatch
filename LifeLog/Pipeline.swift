@@ -114,6 +114,8 @@ final class Pipeline {
     }
     /// 最後に印を付けた時刻（画面に出す）
     private(set) var lastMark: Date?
+    /// 知らせを押したときに開く画面（2026-11-10。NoticeActions.swift。ContentView がシートで開く）
+    var noticeRoute: NoticeRoute?
 
     /// 録音が止まったら通知で知らせる
     var stopAlertsOn = UserDefaults.standard.object(forKey: "stopAlerts") as? Bool ?? true {
@@ -434,6 +436,10 @@ final class Pipeline {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         // 「頼まれごとを見つけました」は、アプリを開いているときにも出す（2026-11-10。TaskBook.swift の NoticePresenter）
         UNUserNotificationCenter.current().delegate = NoticePresenter.shared
+        // 知らせのボタン（「入れる」「違う」「済み」など。2026-11-10。NoticeActions.swift）
+        UNUserNotificationCenter.current().setNotificationCategories(NoticeActions.categories())
+        NoticeActions.handler = { [weak self] list in self?.handleNotices(list) }
+        NoticeActions.drain()
         Power.start()
         // アプリが落ちた・固まった記録を受け取る（MetricKit）
         CrashWatch.shared.start()

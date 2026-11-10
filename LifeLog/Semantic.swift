@@ -78,6 +78,19 @@ extension Pipeline {
     }
 
     /// 意味の近い行を探す（家の PC の索引。使えなければ空）
+    /// 仕事のまとめの行を、家の PC の索引で意味の近い順に探す（2026-11-10）。返すのは「日|空白を除いた行」の組（workDigestMaterial の near）。
+    /// PC につながらない・古い PC のときは空
+    func semanticDigestKeys(_ query: String, from: String? = nil, to: String? = nil) async -> Set<String> {
+        guard homePC.shouldTry, homePC.features.contains("semantic"),
+              let found = try? await homePC.semanticDigestSearch(query, k: 20, from: from, to: to) else { return [] }
+        var keys: Set<String> = []
+        // 近い順の上から8行まで（点の大きさは索引の作り方で変わるので、しきい値にはしない）
+        for hit in found.prefix(8) {
+            keys.insert(hit.day + "|" + WorkDigestParser.compact(WorkDigestParser.sourceTags(hit.text).text))
+        }
+        return keys
+    }
+
     func semanticSearch(_ query: String, from: String? = nil, to: String? = nil, k: Int = 40) async -> [Hit] {
         guard homePC.shouldTry, homePC.features.contains("semantic"),
               let found = try? await homePC.semanticSearch(query, k: k, from: from, to: to) else { return [] }

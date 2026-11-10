@@ -304,6 +304,11 @@ PC の版の番号は 10 です。古い iPhone のアプリも、これまで�
 ・出す道具: list_conversations（日付で会話の一覧）・search_text（言葉で探す）・search_meaning（意味で探す。この PC の
   Ollama の bge-m3 を使い、semantic.db を読むだけ）・conversations_with（人の名前で、その人との会話）・
   get_conversation（1 つの会話の中身）。
+・仕事のまとめ（2026-11-10）: search_digest（仕事のまとめの行を言葉で探す）・get_digest（1 日分を見出しごとに読む）。
+  search_text・search_meaning も、答えの digest_hits に仕事のまとめの行を別に付けます（include_digest を false にすると付けません。
+  hits の形は変わりません）。ドライブの「LifeLog/同期/仕事のまとめ.json」を読むだけで、書きません（場所は config.json の
+  "work_digest_file" でも決められます）。職場の話なので --exclude-work のときは出しません。意味で探す（POST /search）は
+  "include_digest": true のときだけ、仕事のまとめの行（kind は work-digest・日と見出し・時刻なし）も返します。
 ・%LOCALAPPDATA%\LifeLogPC には何も書きません。LifeLog PC が動いていても、止まっていても使えます
   （意味で探すだけは、この PC の Ollama が動いているときだけ）。
 ・登録のしかた（Claude Code。コマンドプロンプトで1行。exe の場所は自分の置いた所に替えます）:

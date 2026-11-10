@@ -15,6 +15,16 @@ extension Pipeline {
         let sources: [Hit]
         /// いっしょに材料にした仕事のまとめの日（新しい日から。2026-11-10）
         var digestDays: [String] = []
+        /// 材料にしたまとめの行のうち、答えの文と言葉が重なるもの（答えに使われたらしい行。2026-11-10）
+        var digestUsed: [UsedDigestLine] = []
+    }
+
+    /// 答えに使われたらしい、仕事のまとめの1行
+    struct UsedDigestLine: Identifiable, Equatable {
+        let day: String
+        let heading: String
+        let text: String
+        var id: String { day + "|" + heading + "|" + text }
     }
 
     private static let keyFormatter: DateFormatter = {
@@ -121,8 +131,13 @@ extension Pipeline {
         // 仕事のまとめも材料にする（2026-11-10、本人の決定。職場の中身なので、職場の会話と同じ設定に従う）
         let digestEntries: [WorkDigest.Entry] = workDigests.sorted
         let anyDay: Bool = plan.from == nil
+        // 家の PC の索引で、意味の近いまとめの行も探す（言葉が一致しなくても入る。2026-11-10。PC が読める版のときだけ）
+        var nearDigest: Set<String> = []
+        if !digestEntries.isEmpty {
+            nearDigest = await semanticDigestKeys(question, from: plan.from, to: plan.to)
+        }
         let probe = Self.workDigestMaterial(digestEntries, keywords: plan.keywords, people: plan.people,
-                                            from: from, to: to, anyDay: anyDay, budget: 200)
+                                            from: from, to: to, anyDay: anyDay, budget: 200, near: nearDigest)
         // 職場の会話・仕事のまとめが入るときは、設定によって端末内の言語モデルで答える（そのときは渡す量を減らす）
         let work = !probe.days.isEmpty || scored.prefix(10).contains { isWorkTime($0.conversation.start) }
         let local = Summarizer.$sensitive.withValue(work) { Summarizer.usesLocal(apiKey: key) }
@@ -131,7 +146,7 @@ extension Pipeline {
         // まとめは全体の4割まで（会話が1つも無ければ全部）。残りを会話に使う
         let digestBudget: Int = scored.isEmpty ? budget : budget * 2 / 5
         let digest = Self.workDigestMaterial(digestEntries, keywords: plan.keywords, people: plan.people,
-                                             from: from, to: to, anyDay: anyDay, budget: digestBudget)
+                                             from: from, to: to, anyDay: anyDay, budget: digestBudget, near: nearDigest)
         var material = digest.text
         for item in scored where material.count < budget {
             let c = item.conversation
@@ -175,7 +190,24 @@ extension Pipeline {
                 }
             }
         }
-        return Answer(text: result.text, sources: sources, digestDays: digest.days)
+        let used: [UsedDigestLine] = Self.digestLinesUsed(answer: result.text, lines: digest.lines)
+            .map { UsedDigestLine(day: $0.day, heading: $0.heading, text: $0.text) }
+        return Answer(text: result.text, sources: sources, digestDays: digest.days, digestUsed: used)
+    }
+}
+
+/// 「記録に質問する」の答えの「役に立った」「外れ」の数（2026-11-10）。端末の中の数だけ（質問や答えの文は残さない）
+enum AskFeedback {
+    private static let goodKey = "askFeedback.good"
+    private static let badKey = "askFeedback.bad"
+
+    static func record(_ good: Bool) {
+        let key = good ? goodKey : badKey
+        UserDefaults.standard.set(UserDefaults.standard.integer(forKey: key) + 1, forKey: key)
+    }
+
+    static var counts: (good: Int, bad: Int) {
+        (UserDefaults.standard.integer(forKey: goodKey), UserDefaults.standard.integer(forKey: badKey))
     }
 }
 
@@ -187,6 +219,7 @@ struct DigestHitRow: View {
     var body: some View {
         let entry: WorkDigest.Entry? = pipeline.workDigests.entries.first { $0.id == hit.entryID }
         let caption: String = Pipeline.workDigestDayTitle(hit.day) + (hit.heading.isEmpty ? "" : "・" + hit.heading)
+            + (hit.source.isEmpty ? "" : "・" + hit.source)
         NavigationLink {
             if let entry {
                 WorkDigestDetailView(entry: entry)
@@ -287,6 +320,13 @@ struct AskView: View {
     @State private var asked = ""
     @State private var working = false
     @State private var error = ""
+    /// この答えに「役に立った」（true）・「外れ」（false）を押したか
+    @State private var voted: Bool?
+
+    private func vote(_ good: Bool) {
+        AskFeedback.record(good)
+        voted = good
+    }
 
     var body: some View {
         Form {
@@ -302,8 +342,37 @@ struct AskView: View {
                 Section { Text(error).foregroundStyle(.secondary) }
             }
             if let answer {
-                Section(asked) {
+                Section {
                     Text(answer.text).textSelection(.enabled)
+                } header: {
+                    Text(asked)
+                } footer: {
+                    // 役に立ったか（2026-11-10。数はタスクの「済み」→「入り口ごとの数」に出る）
+                    HStack(spacing: 20) {
+                        if let voted {
+                            Text(voted ? "「役に立った」にしました" : "「外れ」にしました")
+                        } else {
+                            Button("役に立った", systemImage: "hand.thumbsup") { vote(true) }
+                            Button("外れ", systemImage: "hand.thumbsdown") { vote(false) }
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .padding(.top, 4)
+                }
+                if !answer.digestUsed.isEmpty {
+                    Section {
+                        ForEach(answer.digestUsed) { line in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(Pipeline.workDigestDayTitle(line.day) + (line.heading.isEmpty ? "" : "・" + line.heading))
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Text(line.text)
+                            }
+                        }
+                    } header: {
+                        Text("答えに使われたらしい、まとめの行")
+                    } footer: {
+                        Text("答えの文と言葉がよく重なる行です。")
+                    }
                 }
                 if !answer.sources.isEmpty {
                     Section("もとにした記録") {
@@ -342,6 +411,7 @@ struct AskView: View {
             do {
                 answer = try await pipeline.ask(q)
                 asked = q
+                voted = nil
                 question = ""
             } catch {
                 self.error = "答えられませんでした: \(error.localizedDescription)"

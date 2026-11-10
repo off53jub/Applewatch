@@ -482,6 +482,8 @@ enum AudioCheck {
 enum Recall {
     static var recent: (() -> String)?
     static var lastTalk: ((String) -> String)?
+    /// 「今日の宿題」（2026-11-10。WorkInsights.swift）
+    static var homework: (() -> String)?
 }
 
 extension Pipeline {

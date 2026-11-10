@@ -129,7 +129,17 @@ struct PeopleView: View {
         List {
             // 自分の声（声を足す・まとめた人を分け直す）
             if let me = pipeline.people.first(where: \.isSelf) {
-                Section { row(me) }
+                Section {
+                    row(me)
+                    // 職場では自分の声が「自分」と見分けられていないことが多い（2026-11-10 に数えたら、職場の会話の「自分」の割合は真ん中で 0%）
+                    NavigationLink {
+                        SelfMergeView(workOnly: true)
+                    } label: {
+                        Label("職場の会話から自分の声を探す", systemImage: "building.2")
+                    }
+                } footer: {
+                    Text("職場の会話でよく話している名前の無い声を、多い順に出します。▶︎で聞いて、自分の声だったものを選ぶと、自分の声として覚え直します。")
+                }
             }
             if reviewCount > 0 {
                 Section {
@@ -395,6 +405,10 @@ struct PersonView: View {
                     }
                     if !person.isSelf {
                         PersonHistorySection(person: person)
+                        // 仕事のまとめで、この人の出てくる行（2026-11-10。WorkInsights.swift）
+                        if person.isNamed {
+                            PersonDigestSection(name: person.displayName)
+                        }
                     }
                     if !clues.talks.isEmpty {
                         VoiceTalksSection(talks: clues.talks, player: player)
@@ -974,9 +988,18 @@ struct SelfMergeView: View {
     @State private var confirming = false
     @State private var working = false
     @State private var sampleInfo: [SpeakerLabeler.Sample: Pipeline.SampleInfo] = [:]
+    /// 職場の会話でよく話している、名前の無い声だけを出す（2026-11-10）
+    var workOnly: Bool = false
+    /// 直近14日の職場の会話で、その声が話した行の数（workOnly のとき）
+    @State private var workLines: [String: Int] = [:]
 
     private var others: [SpeakerLabeler.Person] {
-        pipeline.people.filter { !$0.isSelf }.sorted { ($0.isNamed ? 1 : 0, $1.lastHeard) < ($1.isNamed ? 1 : 0, $0.lastHeard) }
+        if workOnly {
+            return pipeline.people.filter { !$0.isSelf && !$0.isNamed && (workLines[$0.id] ?? 0) > 0 }
+                .sorted { (workLines[$0.id] ?? 0) > (workLines[$1.id] ?? 0) }
+                .prefix(15).map { $0 }
+        }
+        return pipeline.people.filter { !$0.isSelf }.sorted { ($0.isNamed ? 1 : 0, $1.lastHeard) < ($1.isNamed ? 1 : 0, $0.lastHeard) }
     }
 
     var body: some View {
@@ -993,7 +1016,8 @@ struct SelfMergeView: View {
                             HStack {
                                 VStack(alignment: .leading) {
                                     Text(person.displayName)
-                                    Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))")
+                                    Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))"
+                                         + (workOnly ? "・職場で \(workLines[person.id] ?? 0) 行" : ""))
                                         .font(.caption).foregroundStyle(.secondary)
                                     if let sample = person.samples.last, let info = sampleInfo[sample] {
                                         Text("▶︎「\(info.text)」\(info.caption)")
@@ -1028,8 +1052,11 @@ struct SelfMergeView: View {
                 }
             }
         }
-        .navigationTitle("自分の声をまとめる")
-        .onAppear { sampleInfo = pipeline.sampleInfo(for: others.compactMap(\.samples.last)) }
+        .navigationTitle(workOnly ? "職場の自分の声を探す" : "自分の声をまとめる")
+        .onAppear {
+            if workOnly { workLines = pipeline.workSpeakerLines() }
+            sampleInfo = pipeline.sampleInfo(for: others.compactMap(\.samples.last))
+        }
         .onDisappear { player.stop() }
     }
 }

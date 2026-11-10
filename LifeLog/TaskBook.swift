@@ -25,6 +25,43 @@ final class TaskBook {
         case rejected
     }
 
+    /// 「違う」にした理由（2026-11-10）。数がたまれば、次にどこを直すかが分かる
+    enum RejectReason: String, CaseIterable, Identifiable {
+        /// AI・音声アシスタント・アプリ・機械に向けて言ったこと
+        case machine
+        /// もう済んでいる
+        case finished
+        /// 自分のことではない（ほかの人のやること）
+        case notMine
+        /// 話題・感想・報告だけ
+        case topic
+        case other
+        /// 確かめ待ちのまま7日たった（自動で片づけた。学びには使わない）
+        case expired
+        /// 知らせの「違う」を押した
+        case notice
+        /// 確かめ待ちを「全部違う」にした
+        case bulk
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .machine: "機械に言ったこと"
+            case .finished: "もう済んでいる"
+            case .notMine: "自分のことではない"
+            case .topic: "話題・感想・報告だけ"
+            case .other: "そのほか"
+            case .expired: "7日そのまま（自動）"
+            case .notice: "知らせから「違う」"
+            case .bulk: "まとめて「違う」"
+            }
+        }
+
+        /// 本人が選べる理由
+        static var choices: [RejectReason] { [.machine, .finished, .notMine, .topic, .other] }
+    }
+
     enum Source: String, Codable {
         case conversation, mark, minutes, manual, photo, summary
 
@@ -85,6 +122,24 @@ final class TaskBook {
         var agreed: Bool? = nil
         /// 確かめ待ちから、本人が採った・却下した（頼まれごとの候補の学びに使う。2026-11-06。前の記録には無い）
         var fromCandidate: Bool? = nil
+        /// 「違う」にした理由（RejectReason の名前。2026-11-10。前の記録には無い。知らない名前でも読めるよう、文字のまま持つ）
+        var rejectReason: String? = nil
+        /// ほかの入り口でも見つかった（「仕事のまとめ 2026-11-10」など。2026-11-10）
+        var alsoIn: String? = nil
+
+        /// 入り口の言い方。仕事のまとめの宿題は「1日のまとめ」と同じ印（summary）なので、文で見分ける
+        var originLabel: String {
+            digestDay != nil ? "仕事のまとめから（チャットで来た頼み）" : source.label
+        }
+
+        /// 仕事のまとめの宿題なら、そのまとめの日（quote の「仕事のまとめ（yyyy-MM-dd）の宿題」から読む）
+        var digestDay: String? {
+            guard source == .summary, let quote, quote.hasPrefix("仕事のまとめ（") else { return nil }
+            let rest = quote.dropFirst("仕事のまとめ（".count)
+            guard let end = rest.firstIndex(of: "）") else { return nil }
+            let day = String(rest[..<end])
+            return day.count == 10 ? day : nil
+        }
 
         /// 時刻まで入れた期限
         var dueMoment: Date? {
@@ -421,6 +476,69 @@ final class TaskBook {
         save()
     }
 
+    /// 「違う」にして、理由を残す（2026-11-10）
+    func reject(_ id: String, reason: RejectReason) {
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        // 自動で片づけたものは、本人が決めたものではないので学びに使わない
+        if items[i].state == .candidate && reason != .expired { items[i].fromCandidate = true }
+        items[i].state = .rejected
+        items[i].rejectReason = reason.rawValue
+        items[i].doneAt = nil
+        items[i].updated = .now
+        save()
+    }
+
+    /// 確かめ待ちを、まとめて「違う」にする。数を返す（2026-11-10）
+    @discardableResult
+    func rejectAll(_ ids: [String], reason: RejectReason) -> Int {
+        var n = 0
+        for id in ids {
+            guard let i = items.firstIndex(where: { $0.id == id }), items[i].state == .candidate else { continue }
+            if reason != .expired { items[i].fromCandidate = true }
+            items[i].state = .rejected
+            items[i].rejectReason = reason.rawValue
+            items[i].updated = .now
+            n += 1
+        }
+        if n > 0 { save() }
+        return n
+    }
+
+    /// 確かめ待ちのまま7日たったもの（拾った時刻・最後に触った時刻のどちらからも7日）
+    nonisolated static func expired(_ items: [Item], now: Date = .now, days: Double = 7) -> [Item] {
+        let limit = now.addingTimeInterval(-days * 86400)
+        return items.filter { $0.state == .candidate && max($0.said, $0.updated) < limit }
+    }
+
+    /// 確かめ待ちのまま7日たったものを、静かに片づける（「違う」にして、理由は「7日そのまま」。学びには使わない）
+    @discardableResult
+    func expireCandidates(now: Date = .now) -> Int {
+        rejectAll(Self.expired(items, now: now).map(\.id), reason: .expired)
+    }
+
+    /// ほかの入り口でも見つかったことを残す。確かめ待ちなら「やる」に入れる（2026-11-10）
+    func confirm(_ id: String, alsoIn: String) {
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        if items[i].state == .candidate {
+            items[i].state = .open
+            items[i].fromCandidate = true
+        }
+        items[i].alsoIn = alsoIn
+        items[i].updated = .now
+        save()
+    }
+
+    /// 期限の手がかりになる言葉があるか（日付・曜日・「明日」「来週」「〜まで」「15時」など。2026-11-10）。
+    /// 1日のまとめの「やること」は、これがあるものだけ確かめ待ちに入れる
+    nonisolated static func hasDueCue(_ text: String) -> Bool {
+        let words: [String] = ["今日", "きょう", "明日", "あした", "あす", "明後日", "あさって", "今週", "来週", "再来週", "週末",
+                               "今月", "来月", "月末", "月曜", "火曜", "水曜", "木曜", "金曜", "土曜", "日曜",
+                               "まで", "締め切り", "締切", "〆切", "期限", "午前", "午後", "朝イチ", "夕方", "今夜", "今晩"]
+        if words.contains(where: { text.contains($0) }) { return true }
+        let patterns: [String] = ["[0-9０-９]{1,2}[/／月][0-9０-９]{1,2}", "[0-9０-９]{1,2}時", "[0-9０-９]{1,2}:[0-9]{2}", "[0-9０-９]{1,2}日"]
+        return patterns.contains { text.range(of: $0, options: .regularExpression) != nil }
+    }
+
     /// 繰り返しのものの、次の回（期限は次の日付・時刻は同じ・済みや延期は消す）
     static func nextRepeat(of item: Item, now: Date = .now) -> Item? {
         guard let rule = item.repeats else { return nil }
@@ -534,6 +652,37 @@ extension Pipeline {
     private static let taskBookHashKey = "taskBookWritten"
 
     static var taskRemindOn: Bool { UserDefaults.standard.object(forKey: taskRemindKey) as? Bool ?? true }
+    /// 期限に時刻があるものを、1時間前に知らせる（2026-11-10。初めはオン）
+    static let taskDueHourKey = "taskDueHour"
+    static var taskDueHourOn: Bool { UserDefaults.standard.object(forKey: taskDueHourKey) as? Bool ?? true }
+
+    /// 期限の1時間前に知らせるもの（時刻のある・まだの・人を待っていないもの。近い順に10件まで）と、知らせる時刻
+    static func dueHourNotices(_ open: [TaskBook.Item], now: Date, limit: Int = 10) -> [(at: Date, item: TaskBook.Item)] {
+        var out: [(at: Date, item: TaskBook.Item)] = []
+        for item in open where item.state == .open && item.dueTime != nil && !item.isWaiting {
+            guard let moment = item.dueMoment else { continue }
+            let at = moment.addingTimeInterval(-3600)
+            guard at > now.addingTimeInterval(30), at < now.addingTimeInterval(7 * 86400) else { continue }
+            out.append((at, item))
+        }
+        return Array(out.sorted { $0.at < $1.at }.prefix(limit))
+    }
+
+    /// 期限の1時間前の知らせの文（「・資料を送る（Aさんから）\n15:00 まで」）
+    static func dueHourBody(_ item: TaskBook.Item) -> String {
+        var notes: [String] = []
+        if let from = item.from, !from.isEmpty {
+            switch item.kindOrDefault {
+            case .delegated: notes.append(from + "へ")
+            case .promise: notes.append(from + "と")
+            case .asked, .mine: notes.append(from + "から")
+            }
+        }
+        var body = "・" + item.what + (notes.isEmpty ? "" : "（" + notes.joined(separator: "・") + "）")
+        if let moment = item.dueMoment { body += "\n" + taskClock.string(from: moment) + " まで" }
+        return body
+    }
+
     /// 休みの日（土日・祝日・有休など）は何も知らせない（2026-11-06 に土日で始め、2026-11-07 から休みの日全部。名前はそのまま）
     static let taskWeekendOffKey = "taskWeekendOff"
     static var taskWeekendOff: Bool { UserDefaults.standard.bool(forKey: taskWeekendOffKey) }
@@ -656,8 +805,9 @@ extension Pipeline {
             }
         }
         let added = tasks.add(found)
-        guard let notice = Self.foundNotice(added) else { return }
-        Self.notifyTasks(title: notice.title, body: notice.body)
+        // 相手か期限が分かるもの・★のものがあるときだけ知らせる。無いものは黙って確かめ待ちへ（2026-11-10）
+        guard Self.worthNotice(added), let notice = Self.foundNotice(added) else { return }
+        Self.notifyTasks(title: notice.title, body: notice.body, ids: added.map(\.id))
     }
 
     /// 新しく帳に入ったものの知らせの題と文（2026-11-10）。入ったものが無ければ nil。
@@ -750,7 +900,7 @@ extension Pipeline {
                           place: c.place, quote: "議事録「\(title)」の宿題", source: .minutes, state: .candidate, work: true)
         })
         guard let notice = Self.foundNotice(added) else { return }
-        Self.notifyTasks(title: notice.title, body: notice.body)
+        Self.notifyTasks(title: notice.title, body: notice.body, ids: added.map(\.id))
         tasksChanged()
     }
 
@@ -805,6 +955,8 @@ extension Pipeline {
 
     /// 帳が変わったら呼ぶ（知らせを頼み直す）
     func tasksChanged() {
+        // 確かめ待ちのまま7日たったものは、静かに片づける（2026-11-10）
+        tasks.expireCandidates()
         Task { await scheduleTaskReminders() }
     }
 
@@ -865,6 +1017,22 @@ extension Pipeline {
         center.removePendingNotificationRequests(withIdentifiers: old)
         let open = tasks.open
         let candidates = tasks.candidates
+        // 期限に時刻があるものは、その1時間前に1件ずつ知らせる（2026-11-10）
+        if Self.taskDueHourOn {
+            for (at, item) in Self.dueHourNotices(open, now: .now) {
+                let content = UNMutableNotificationContent()
+                content.title = "もうすぐ期限です"
+                content.body = Self.dueHourBody(item)
+                content.sound = .default
+                content.categoryIdentifier = NoticeActions.dueCategory
+                content.userInfo = ["ids": [item.id]]
+                let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: at)
+                try? await center.add(UNNotificationRequest(
+                    identifier: NoticeActions.duePrefix + item.id, content: content,
+                    trigger: UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)))
+                NoticeStats.countOnce(NoticeActions.dueCategory, key: item.id + "|" + String(Int(at.timeIntervalSince1970)))
+            }
+        }
         guard Self.taskRemindOn, !open.isEmpty || !candidates.isEmpty else { return }
         let cal = Calendar.current
         let now = Date.now
@@ -901,11 +1069,23 @@ extension Pipeline {
         }
     }
 
-    private static func notifyTasks(title: String, body: String) {
+    /// 知らせるほどのものか（2026-11-10）。相手か期限が分かるもの・★で拾ったもの・議事録の宿題が1つでもあれば知らせる
+    static func worthNotice(_ added: [TaskBook.Item]) -> Bool {
+        added.contains { item in
+            item.source == .mark || item.source == .minutes || !(item.from ?? "").isEmpty
+                || item.due != nil || !(item.dueText ?? "").isEmpty
+        }
+    }
+
+    /// 「見つけました」の知らせ。ids は、ボタン（入れる・違う）で動かす頼まれごと
+    private static func notifyTasks(title: String, body: String, ids: [String]) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
+        content.categoryIdentifier = NoticeActions.foundCategory
+        content.userInfo = ["ids": ids]
+        NoticeStats.count(NoticeActions.foundCategory, "sent")
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: NoticePresenter.taskFoundID, content: content, trigger: nil))
     }
 
@@ -1028,14 +1208,32 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
     /// 開いているあいだも出す知らせ
     static let shownWhileOpen: Set<String> = [taskFoundID]
 
-    /// 知らせの名前から、開いているあいだの出し方を決める
+    /// 知らせの名前から、開いているあいだの出し方を決める（期限の1時間前の知らせも出す。2026-11-10）
     static func options(for identifier: String) -> UNNotificationPresentationOptions {
-        shownWhileOpen.contains(identifier) ? [.banner, .list, .sound] : []
+        shownWhileOpen.contains(identifier) || identifier.hasPrefix(NoticeActions.duePrefix) ? [.banner, .list, .sound] : []
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler(Self.options(for: notification.request.identifier))
+    }
+
+    /// 知らせのボタン・知らせそのものを押されたとき（2026-11-10。中身は NoticeActions.swift）
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let request = response.notification.request
+        let content = request.content
+        guard !content.categoryIdentifier.isEmpty, let action = NoticeActions.action(for: response.actionIdentifier) else {
+            completionHandler()
+            return
+        }
+        let ids: [String] = content.userInfo["ids"] as? [String] ?? []
+        let pending = NoticeActions.Pending(action: action, ids: ids, identifier: request.identifier, title: content.title,
+                                            body: content.body, category: content.categoryIdentifier)
+        Task { @MainActor in
+            NoticeActions.receive(pending)
+            completionHandler()
+        }
     }
 }
 
@@ -1070,6 +1268,12 @@ struct TaskBookView: View {
     @State private var showSettings = false
     /// 仕事のまとめを取り込む画面（2026-11-08）
     @State private var importingDigest = false
+    /// 「違う」の理由を選んでいるもの（2026-11-10）
+    @State private var rejecting: TaskBook.Item?
+    /// 「全部違う」にするもの（2026-11-10）
+    @State private var rejectingAll: [String]?
+    /// 期限に時刻があるものを1時間前に知らせる（Pipeline.taskDueHourKey と同じ名前）
+    @AppStorage("taskDueHour") private var dueHourOn = true
     /// Pipeline.taskRemindKey などと同じ名前
     @AppStorage("taskRemind") private var remindOn = true
     @AppStorage("taskMorning") private var morning = 8 * 60
@@ -1139,6 +1343,28 @@ struct TaskBookView: View {
         .onChange(of: morning) { pipeline.tasksChanged() }
         .onChange(of: evening) { pipeline.tasksChanged() }
         .onChange(of: weekendOff) { pipeline.tasksChanged() }
+        .onChange(of: dueHourOn) { pipeline.tasksChanged() }
+        .confirmationDialog("どう違いましたか", isPresented: Binding(get: { rejecting != nil }, set: { if !$0 { rejecting = nil } }),
+                            titleVisibility: .visible, presenting: rejecting) { item in
+            ForEach(TaskBook.RejectReason.choices) { reason in
+                Button(reason.label) {
+                    withAnimation { pipeline.tasks.reject(item.id, reason: reason) }
+                    rejecting = nil
+                }
+            }
+            Button("やめる", role: .cancel) { rejecting = nil }
+        } message: { _ in
+            Text("理由の数は「済み」のいちばん下の「入り口ごとの数」に出ます。")
+        }
+        .alert("確かめ待ちを全部「違う」にしますか", isPresented: Binding(get: { rejectingAll != nil }, set: { if !$0 { rejectingAll = nil } })) {
+            Button("全部違う", role: .destructive) {
+                if let ids = rejectingAll { withAnimation { _ = pipeline.tasks.rejectAll(ids, reason: .bulk) } }
+                rejectingAll = nil
+            }
+            Button("やめる", role: .cancel) { rejectingAll = nil }
+        } message: {
+            Text("\(rejectingAll?.count ?? 0) 件を「違う」にします。同じものはもう出しません。")
+        }
         .sheet(item: $editing) { item in
             NavigationStack {
                 TaskEditView(item: item) { saved in
@@ -1173,6 +1399,7 @@ struct TaskBookView: View {
                             DatePicker("夕方", selection: timeBinding($evening), displayedComponents: .hourAndMinute)
                             Toggle("休みの日は何も知らせない", isOn: $weekendOff)
                         }
+                        Toggle("期限に時刻があるものは1時間前に知らせる", isOn: $dueHourOn)
                         Toggle("タブの数字は期限切れだけ", isOn: $badgeLateOnly)
                         Toggle("★の無い仕事以外の会話からも拾う", isOn: $lifeAuto)
                     } footer: {
@@ -1259,15 +1486,23 @@ struct TaskBookView: View {
                             copy.state = .open
                             editing = copy
                         }
-                        Button("違う", systemImage: "xmark", role: .destructive) { change(item.id, .rejected) }
+                        // 違う理由を選ぶ（2026-11-10。数がたまれば、次にどこを直すかが分かる）
+                        Button("違う", systemImage: "xmark", role: .destructive) { rejecting = item }
                     }
                     .buttonStyle(.borderless)
                     .font(.subheadline)
                 }
             } header: {
-                Text("確かめてほしい（\(book.candidates.count) 件）")
+                HStack {
+                    Text("確かめてほしい（\(book.candidates.count) 件）")
+                    Spacer()
+                    if book.candidates.count >= 2 {
+                        Button("全部違う", role: .destructive) { rejectingAll = book.candidates.map(\.id) }
+                            .font(.caption)
+                    }
+                }
             } footer: {
-                Text("会話・議事録・写真・1日のまとめから拾ったものです。合っていれば「入れる」、違えば「違う」（同じものはもう出しません）。")
+                Text("会話・議事録・写真・1日のまとめから拾ったものです。合っていれば「入れる」、違えば「違う」（同じものはもう出しません）。7日そのままのものは、自動で片づけます。")
             }
         }
         let groups = TaskBook.grouped(book.todo)
@@ -1368,6 +1603,14 @@ struct TaskBookView: View {
                 Text("済み（30日以内・\(book.done.count) 件）")
             } footer: {
                 Text("✓を押すと、まだに戻します。")
+            }
+        }
+        // 入り口ごとの「残した・捨てた」と、知らせの数（2026-11-10）
+        Section {
+            NavigationLink {
+                TaskScoreView()
+            } label: {
+                Label("入り口ごとの数", systemImage: "chart.bar")
             }
         }
     }
@@ -1494,9 +1737,13 @@ struct TaskRow: View {
                     case .mine, .promise: Text(from + "と")
                     }
                 }
-                Text(Self.said.string(from: item.said) + "・" + item.source.label)
+                Text(Self.said.string(from: item.said) + "・" + item.originLabel)
             }
             .font(.caption).foregroundStyle(.secondary)
+            // ほかの入り口でも見つかった（会話で拾ったものが、仕事のまとめにもあった など。2026-11-10）
+            if let also = item.alsoIn, !also.isEmpty {
+                Label(also + "にもありました", systemImage: "checkmark.seal").font(.caption).foregroundStyle(.teal)
+            }
             if let quote = item.quote, !quote.isEmpty {
                 Text("「\(quote)」").font(.caption).foregroundStyle(.secondary).lineLimit(3)
             }
@@ -1523,7 +1770,16 @@ struct TaskRow: View {
                     }
                     .buttonStyle(.borderless)
                 }
-                if let day = item.day {
+                if let day = item.digestDay {
+                    // 仕事のまとめの宿題は、元のまとめを開く（2026-11-10）
+                    NavigationLink("仕事のまとめを開く") {
+                        if let entry = pipeline.workDigests.sorted.first(where: { $0.day == day }) {
+                            WorkDigestDetailView(entry: entry)
+                        } else {
+                            Text("このまとめは、もうありません。").foregroundStyle(.secondary)
+                        }
+                    }
+                } else if let day = item.day {
                     NavigationLink("記録を開く") { DayView(day: day) }
                 }
             }
