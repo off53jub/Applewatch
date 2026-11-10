@@ -430,7 +430,14 @@ private struct RecordsView: View {
                             }
                         }
                     }
-                    if hits.isEmpty && tasks.isEmpty {
+                    // 仕事のまとめも探す（2026-11-10。行を探すだけで、言語モデルは使わない）
+                    let digests: [Pipeline.DigestHit] = Pipeline.searchWorkDigests(query, in: pipeline.workDigests.sorted, limit: 10)
+                    if !digests.isEmpty {
+                        Section("仕事のまとめ") {
+                            ForEach(digests) { DigestHitRow(hit: $0) }
+                        }
+                    }
+                    if hits.isEmpty && tasks.isEmpty && digests.isEmpty {
                         ContentUnavailableView.search(text: query)
                     } else {
                         ForEach(hits) { HitRow(hit: $0) }

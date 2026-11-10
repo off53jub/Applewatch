@@ -6,8 +6,10 @@ import UserNotifications
 /// 仕事のまとめ（2026-11-08）。職場の Claude に「この日に何があったか」を聞いた答えを、
 /// スクリーンショット・写真（iPhone の中で文字を読み取る）か、文字の貼り付けで取り込んで、日ごとに残す。
 /// 中身は `work-digests.json` に端末ごとに持つ（同期はしない。新しいファイルなので、前からの保存形式は変えていない）。
-/// 「自分の宿題」は、頼まれごと帳の「確かめ待ち」（仕事）に入れる。iPhone はドライブの「仕事のまとめ」と同期フォルダの「仕事のまとめ.json」にも写す。
-/// 職場の中身なので、言語モデル（クラウドでも端末内でも）には一切渡さない。
+/// 「自分の宿題」は、頼まれごと帳の「やる」（仕事）に入れる。iPhone はドライブの「仕事のまとめ」と同期フォルダの「仕事のまとめ.json」にも写す。
+/// 取り込み（文字の読み取り・見出しの分け方・宿題の取り出し）には言語モデルを使わない。
+/// 2026-11-10 から、本人の決定で「記録に質問する」の材料には渡す（職場の中身なので、職場の会話と同じ設定に従う。
+/// 前は「言語モデルには一切渡さない」決まりだった）。「記録」の検索でも探せる（こちらは言語モデルを使わない）。
 @MainActor
 @Observable
 final class WorkDigest {
@@ -33,14 +35,19 @@ final class WorkDigest {
         /// 【よく出た言葉】（2026-11-10。言葉だけ・1つずつ。前の版で保存したものには無いので nil）。
         /// 「言葉の登録」の候補に出すだけで、自動では登録しない
         var words: [String]? = nil
+        /// 【出どころ】（2026-11-10。どのチーム・チャネル・チャットの話か、そこにいた人。1行に1つ。
+        /// 前の版で保存したものには無いので nil）。見せるだけで、人の帳には何も足さない
+        var sources: [String]? = nil
 
         var isEmpty: Bool {
-            decided.isEmpty && homework.isEmpty && others.isEmpty && topics.isEmpty && checks.isEmpty && (words ?? []).isEmpty
+            decided.isEmpty && homework.isEmpty && others.isEmpty && topics.isEmpty && checks.isEmpty
+                && (words ?? []).isEmpty && (sources ?? []).isEmpty
         }
 
         /// 画面とドライブに並べる順（中身のある見出しだけ）
         var lists: [(title: String, items: [String])] {
             let all: [(title: String, items: [String])] = [
+                ("出どころ", sources ?? []),
                 ("決まったこと", decided), ("自分の宿題", homework), ("ほかの人の動き", others),
                 ("気になる話題", topics), ("あとで確かめること", checks), ("よく出た言葉", words ?? []),
             ]
@@ -130,12 +137,14 @@ final class WorkDigest {
 /// 形が崩れていたり、見出しが欠けていたりしても、読めたところだけ返す。
 enum WorkDigestParser {
     enum Part: String, CaseIterable {
-        case date, decided, homework, others, topics, checks, words
+        case date, decided, homework, others, topics, checks, words, sources
     }
 
     /// 見出しの言い方（長いものを先に）
     static let names: [(part: Part, aliases: [String])] = [
         (.date, ["日付", "日にち"]),
+        // 「出典」は入れない（ふつうの文の行「出典: …」を見出しと読み違えるので）
+        (.sources, ["出どころ", "出所", "抜粋元", "抜粋もと"]),
         (.decided, ["決まったこと", "決まった事", "きまったこと"]),
         (.homework, ["自分の宿題", "じぶんの宿題", "わたしの宿題", "私の宿題", "宿題"]),
         (.others, ["ほかの人の動き", "他の人の動き", "外の人の動き", "ほかの人"]),
@@ -162,6 +171,13 @@ enum WorkDigestParser {
         var sections = WorkDigest.Sections()
         /// 見出しが1つでも見つかったか
         var found = false
+        /// 【自分の宿題】の箇条書きの前に書かれていた前置きの文（2026-11-10。まとめには残すが、タスクにはしない。保存しない）
+        var homeworkLead: [String] = []
+
+        /// タスクにする宿題（前置きの文を除いたもの）
+        var homeworkTasks: [String] {
+            sections.homework.filter { !homeworkLead.contains($0) }
+        }
     }
 
     /// 自分の宿題1件を分けたもの
@@ -299,6 +315,14 @@ enum WorkDigestParser {
             case .words:
                 let found: [String] = words((result.sections.words ?? []) + kept)
                 if !found.isEmpty { result.sections.words = found }
+            case .sources:
+                // 同じ行は1つだけ（重なったスクショをつなぐと、同じ行が2回出る）
+                var all: [String] = result.sections.sources ?? []
+                for item in kept {
+                    let key: String = compact(item)
+                    if !all.contains(where: { compact($0) == key }) { all.append(item) }
+                }
+                if !all.isEmpty { result.sections.sources = all }
             case .date: break
             }
             items = []
@@ -331,6 +355,14 @@ enum WorkDigestParser {
                 continue
             }
             if let body = bulletBody(line) {
+                // 初めの印より前に書かれた文（前置き）は、1つにまとめる。宿題の前置きは、タスクにしない目印を付ける
+                if !bulleted, !items.isEmpty, part != .words, part != .sources {
+                    let lead: String = items.dropFirst().reduce(items[0]) { join($0, $1) }
+                    if isLead(lead) {
+                        items = [lead]
+                        if part == .homework { result.homeworkLead.append(tidy(lead)) }
+                    }
+                }
                 items.append(body)
                 bulleted = true
             } else if bulleted, part != .words, let last = items.last {
@@ -374,6 +406,16 @@ enum WorkDigestParser {
             }
         }
         return out
+    }
+
+    /// 箇条書きの前に書かれた、前置きの文か（2026-11-10）。文になっている（「。」がある）か、「：」で終わるもの。
+    /// 頼んだ人・期限の付いた宿題（「…（Aさんから／11/10まで）」）は前置きにしない
+    static func isLead(_ text: String) -> Bool {
+        let s: String = tidy(text)
+        guard let last = s.last else { return false }
+        guard s.contains("。") || last == "：" || last == ":" else { return false }
+        let parts: Homework = homework(s)
+        return parts.from == nil && parts.dueText == nil
     }
 
     /// 折り返された行をつなぐ（英数字どうしなら空白を入れる）
@@ -492,8 +534,8 @@ enum WorkDigestParser {
 extension Pipeline {
     private static let workDigestHashKey = "workDigestWritten"
 
-    /// 仕事のまとめを1つ取り込む。「自分の宿題」は頼まれごと帳の確かめ待ち（仕事）に入れる。結果の一文を返す。
-    /// 言語モデルは使わない（職場の中身なので、どこにも送らない）。
+    /// 仕事のまとめを1つ取り込む。「自分の宿題」は頼まれごと帳の「やる」（仕事）に入れる。結果の一文を返す。
+    /// 取り込みには言語モデルを使わない。箇条書きの前に書かれた前置きの文は、タスクにしない（2026-11-10）
     @discardableResult
     func importWorkDigest(day: String, text: String, source: WorkDigest.Source, now: Date = .now) -> String {
         let cleaned = WorkDigestParser.clean(text)
@@ -503,17 +545,20 @@ extension Pipeline {
         guard workDigests.add(day: day, text: cleaned, sections: sections, source: source, now: now) != nil else {
             return "同じ日に、同じまとめがもう入っています。"
         }
-        let items = Self.workDigestTasks(sections?.homework ?? [], day: day, now: now)
+        let homework: [String] = parsed.found ? parsed.homeworkTasks : []
+        let skipped: Int = (sections?.homework ?? []).count - homework.count
+        let items = Self.workDigestTasks(homework, day: day, now: now)
         let added = tasks.add(items)
         if !added.isEmpty { tasksChanged() }
         Task { await writeWorkDigests() }
         scheduleWorkDigestReminder(now: now)  // 今日のまとめを入れたら、退勤の頃の知らせは出さない
         var note = "\(Self.workDigestDayTitle(day)) の仕事のまとめを入れました。"
         if !added.isEmpty {
-            note += "自分の宿題 \(added.count) 件を、タスクの確かめ待ちに入れました。"
+            note += "自分の宿題 \(added.count) 件を、タスクの「やる」に入れました。"
         } else if !items.isEmpty {
             note += "自分の宿題は、もうタスクにあるものでした。"
         }
+        if skipped > 0 { note += "宿題の前に書かれた前置きの文は、タスクにしていません。" }
         return note
     }
 
@@ -592,6 +637,96 @@ extension Pipeline {
             }
         }
         return p
+    }
+}
+
+// MARK: - 探す・質問の材料にする（2026-11-10）
+
+extension Pipeline {
+    /// 仕事のまとめで見つかった1行
+    struct DigestHit: Identifiable, Equatable {
+        let entryID: String
+        let index: Int
+        let day: String
+        /// 見出し（決まった形でないまとめは空）
+        let heading: String
+        let text: String
+        var id: String { entryID + "|" + String(index) }
+    }
+
+    /// まとめを、見出しつきの行にする。決まった形でないまとめは、取り込んだ文を1行ずつ（見出しは空。【日付】の行は入れない）
+    static func workDigestLines(_ entry: WorkDigest.Entry) -> [(heading: String, text: String)] {
+        var out: [(heading: String, text: String)] = []
+        if let sections = entry.sections, !sections.isEmpty {
+            for list in sections.lists {
+                for item in list.items { out.append((list.title, item)) }
+            }
+            return out
+        }
+        for raw in entry.text.components(separatedBy: .newlines) {
+            let line: String = WorkDigestParser.tidy(raw)
+            guard !line.isEmpty, WorkDigestParser.header(line)?.part != .date else { continue }
+            out.append(("", line))
+        }
+        return out
+    }
+
+    /// 仕事のまとめを言葉で探す（渡した順＝新しい日から）。空白で区切った言葉は、すべてを含む行。見出しの言葉でも見つかる。
+    /// 同じ日の同じ行（取り込み直したもの）は1つだけ。言語モデルは使わない
+    static func searchWorkDigests(_ query: String, in entries: [WorkDigest.Entry], limit: Int = 50) -> [DigestHit] {
+        let terms: [String] = query.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard !terms.isEmpty else { return [] }
+        var out: [DigestHit] = []
+        var seen: Set<String> = []
+        for entry in entries {
+            for (n, line) in workDigestLines(entry).enumerated() {
+                let hay: String = line.heading + " " + line.text
+                guard terms.allSatisfy({ hay.localizedCaseInsensitiveContains($0) }) else { continue }
+                guard seen.insert(entry.day + "|" + WorkDigestParser.compact(line.text)).inserted else { continue }
+                out.append(DigestHit(entryID: entry.id, index: n, day: entry.day, heading: line.heading, text: line.text))
+                if out.count >= limit { return out }
+            }
+        }
+        return out
+    }
+
+    /// 「記録に質問する」に渡す、仕事のまとめの抜き出し（渡した順＝新しい日から）。
+    /// 手がかり（探す言葉・人）があれば、それを含む行だけ。「仕事のまとめ」と見出しの言葉も見るので、「仕事」「宿題」と聞けばその行が当たる。
+    /// 期間を言わなかった質問（anyDay）なら、前の日のまとめからも探す。
+    /// 手がかりが無いときは、期間を言った質問だけ、その期間のまとめをまるごと（期間も手がかりも無い質問には入れない）。
+    /// days は、材料に入れたまとめの日（新しい日から・重なりなし）
+    static func workDigestMaterial(_ entries: [WorkDigest.Entry], keywords: [String], people: [String],
+                                   from: String, to: String, anyDay: Bool, budget: Int) -> (text: String, days: [String]) {
+        let cues: [String] = (keywords + people).filter { !$0.isEmpty }
+        var text = ""
+        var days: [String] = []
+        var seen: Set<String> = []
+        for entry in entries {
+            // 残りが少ないときは、見出しだけの切れはしを入れない
+            guard budget - text.count >= 40 else { break }
+            let inRange: Bool = entry.day >= from && entry.day <= to
+            let wanted: Bool = cues.isEmpty ? (!anyDay && inRange) : (anyDay || inRange)
+            guard wanted else { continue }
+            var block = ""
+            var heading: String? = nil
+            for line in workDigestLines(entry) {
+                if !cues.isEmpty {
+                    let hay: String = "仕事のまとめ " + line.heading + " " + line.text
+                    guard cues.contains(where: { hay.localizedCaseInsensitiveContains($0) }) else { continue }
+                }
+                guard seen.insert(entry.day + "|" + WorkDigestParser.compact(line.text)).inserted else { continue }
+                if heading != line.heading {
+                    heading = line.heading
+                    if !line.heading.isEmpty { block += "【" + line.heading + "】\n" }
+                }
+                block += "・" + line.text + "\n"
+            }
+            guard !block.isEmpty else { continue }
+            let piece: String = "[" + entry.day + " 仕事のまとめ]\n" + block + "\n"
+            text += String(piece.prefix(budget - text.count))
+            if !days.contains(entry.day) { days.append(entry.day) }
+        }
+        return (text, days)
     }
 }
 

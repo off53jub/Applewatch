@@ -21,7 +21,7 @@ struct WorkDigestListView: View {
             Section {
                 Button("取り込む（写真・スクショ・貼り付け）", systemImage: "square.and.arrow.down") { importing = true }
             } footer: {
-                Text("職場の Claude に「この日に何があったか」を聞いた答えを、スクリーンショット・写真か、文字の貼り付けで取り込みます。文字の読み取りは iPhone の中だけで行い、AI（言語モデル）には送りません。「自分の宿題」は、タスクの「確かめ待ち」（仕事）に入ります。")
+                Text("職場の Claude に「この日に何があったか」を聞いた答えを、スクリーンショット・写真か、文字の貼り付けで取り込みます。文字の読み取りは iPhone の中だけで行い、取り込みには AI（言語モデル）を使いません。「自分の宿題」は、タスクの「やる」（仕事）に入ります。取り込んだまとめは「記録」の検索で探せて、「記録に質問する」の材料にもなります（質問のときだけ言語モデルに渡します。職場の会話と同じ設定に従います）。")
             }
             if UIDevice.current.userInterfaceIdiom == .phone {
                 Section {
@@ -92,7 +92,11 @@ struct WorkDigestRow: View {
     }
 
     private var headline: String {
-        if let first = entry.sections?.decided.first { return first }
+        if let s = entry.sections {
+            // 決まったことが無い日は、ほかの見出しの1つめ（見出しの行や出どころを、題にしない）
+            let items: [String] = s.decided + s.homework + s.others + s.topics + s.checks
+            if let first = items.first { return first }
+        }
         let lines = entry.text.components(separatedBy: .newlines)
         let body = lines.first { line in
             !line.isEmpty && WorkDigestParser.header(line)?.part != .date
@@ -164,7 +168,10 @@ struct WorkDigestImportView: View {
 
     var body: some View {
         let parsed = WorkDigestParser.parse(text)
-        let homework: [String] = parsed.sections.homework
+        // 箇条書きの前に書かれた前置きの文は、タスクにしない
+        let homework: [String] = parsed.homeworkTasks
+        let sources: [String] = parsed.sections.sources ?? []
+        let hasText: Bool = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         Form {
             Section {
                 PhotosPicker(selection: $photoItems, maxSelectionCount: 20, selectionBehavior: .ordered, matching: .images) {
@@ -197,6 +204,21 @@ struct WorkDigestImportView: View {
                     .frame(minHeight: 260)
             } header: {
                 Text("読み取った文字（直せます）")
+            } footer: {
+                if hasText && !parsed.found {
+                    Text("決まった形の見出し（【決まったこと】など）が見つかりません。このまま入れると、文のまま残します（宿題はタスクに入りません）。")
+                }
+            }
+            if !sources.isEmpty {
+                Section {
+                    ForEach(Array(sources.enumerated()), id: \.offset) { item in
+                        Text(item.element)
+                    }
+                } header: {
+                    Text("出どころ（\(sources.count) 件）")
+                } footer: {
+                    Text("どこの話か・そこにいた人です。見せるだけで、人の帳には何も足しません。")
+                }
             }
             if !homework.isEmpty {
                 Section {
@@ -204,9 +226,9 @@ struct WorkDigestImportView: View {
                         Text(item.element)
                     }
                 } header: {
-                    Text("タスクの確かめ待ちに入れるもの（\(homework.count) 件）")
+                    Text("タスクの「やる」に入れるもの（\(homework.count) 件）")
                 } footer: {
-                    Text("「自分の宿題」の分です。同じものがもうタスクにあれば、入れません。")
+                    Text("「自分の宿題」の分です。同じものがもうタスクにあれば、入れません。箇条書きの前に書かれた前置きの文は、入れません。")
                 }
             }
         }
