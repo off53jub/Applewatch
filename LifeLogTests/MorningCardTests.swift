@@ -89,7 +89,7 @@ final class MorningCardTests: XCTestCase {
         let three = MorningBrief.pickThree(open: [], mothership: [], mothershipWork: [], recent: recent,
                                            dayOff: false, now: now, calendar: tokyo)
         XCTAssertEqual(three.map(\.text), ["下期目標を直す", "宿を取る"])
-        XCTAssertEqual(three.first?.why, "母艦・11/06 に足した")
+        XCTAssertEqual(three.first?.why, "11/06 に足した")
         let off = MorningBrief.pickThree(open: [], mothership: [], mothershipWork: [], recent: recent,
                                          dayOff: true, now: now, calendar: tokyo)
         XCTAssertEqual(off.map(\.text), ["宿を取る"])

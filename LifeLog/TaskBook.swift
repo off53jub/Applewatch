@@ -958,6 +958,8 @@ extension Pipeline {
         // 確かめ待ちのまま7日たったものは、静かに片づける（2026-11-10）
         tasks.expireCandidates()
         Task { await scheduleTaskReminders() }
+        // 済みにしたタスクと同じ家の PC のやることも、済みにする（2026-11-10。1つの一覧にしたので）
+        Task { await mothership.followAppDone(tasks.items, pc: homePC) }
     }
 
     /// 朝夕の知らせの題と文
@@ -1433,9 +1435,14 @@ struct TaskBookView: View {
         }
     }
 
+    /// 家の PC のやることのうち、アプリのタスクと重ならないもの（その方の分）
+    private func homeExtra(_ s: TaskBook.Scope) -> [MothershipTodo] {
+        pipeline.mothership.extra(s, tasks: pipeline.tasks.items)
+    }
+
     private func title(_ p: Page, _ book: TaskBook.Lists) -> String {
         switch p {
-        case .todo: let n = book.todo.count + book.candidates.count; return n > 0 ? "やる \(n)" : "やる"
+        case .todo: let n = book.todo.count + book.candidates.count + homeExtra(scope).count; return n > 0 ? "やる \(n)" : "やる"
         case .waiting: return book.waiting.isEmpty ? "待ち" : "待ち \(book.waiting.count)"
         case .people, .done: return p.rawValue
         }
@@ -1443,7 +1450,7 @@ struct TaskBookView: View {
 
     /// 「仕事 5」「仕事以外 2」「全部 7」（まだのもの・確かめ待ちの数）
     private func scopeTitle(_ s: TaskBook.Scope, _ book: TaskBook) -> String {
-        let n = book.lists(s).count
+        let n = book.lists(s).count + homeExtra(s).count
         return n > 0 ? "\(s.label) \(n)" : s.label
     }
 
@@ -1460,19 +1467,18 @@ struct TaskBookView: View {
 
     @ViewBuilder
     private func todoPage(_ book: TaskBook.Lists) -> some View {
-        // 今日の三つ（期限を過ぎた・今日までのもの、母艦が選んだもの。朝の「昨日と今日」と同じ選び方。2026-11-09）
+        // 今日の三つ（期限を過ぎた・今日までのもの、家の PC が選んだもの。朝の「昨日と今日」と同じ選び方。2026-11-09）。
+        // 押すと「解き方」（手順・だいたいの時間・送る文の下書き。2026-11-10）
         let three = pipeline.todayThree()
         if !three.isEmpty {
-            Section("今日の三つ") {
+            Section {
                 ForEach(Array(three.enumerated()), id: \.offset) { i, pick in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("\(i + 1).").foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(pick.text)
-                            if !pick.why.isEmpty { Text(pick.why).font(.caption).foregroundStyle(.secondary) }
-                        }
-                    }
+                    TodayPickRow(number: i + 1, pick: pick)
                 }
+            } header: {
+                Text("今日の三つ")
+            } footer: {
+                if three.contains(where: \.hasHowTo) { Text("押すと、解き方が出ます。") }
             }
         }
         if !book.candidates.isEmpty {
@@ -1505,20 +1511,29 @@ struct TaskBookView: View {
                 Text("会話・議事録・写真・1日のまとめから拾ったものです。合っていれば「入れる」、違えば「違う」（同じものはもう出しません）。7日そのままのものは、自動で片づけます。")
             }
         }
-        let groups = TaskBook.grouped(book.todo)
-        if groups.isEmpty {
+        // アプリのタスクと、家の PC が拾ったやることを、1つの一覧に混ぜる（2026-11-10。同じものらしければアプリのタスクだけ）
+        let apps = Dictionary(uniqueKeysWithValues: TaskBook.grouped(book.todo).map { ($0.bucket, $0.items) })
+        let homes = Dictionary(grouping: homeExtra(scope)) { OneTaskList.bucket($0, now: .now) }
+        let buckets = TaskBook.Bucket.allCases.filter { apps[$0] != nil || homes[$0] != nil }
+        if buckets.isEmpty {
             Section { Text("今やることはありません").foregroundStyle(.secondary) }
         }
-        ForEach(groups, id: \.bucket) { group in
+        ForEach(buckets, id: \.self) { bucket in
+            let mine = apps[bucket] ?? []
+            let others = MothershipBook.sorted(homes[bucket] ?? [])
+            // 期限の無いものは、家の PC の分を新しいものから8件まで（続きは一覧で）
+            let shown = bucket == .someday ? Array(others.prefix(8)) : others
             Section {
-                ForEach(group.items) { openRow($0) }
+                ForEach(mine) { openRow($0) }
+                ForEach(shown) { MothershipRow(item: $0) }
+                if shown.count < others.count {
+                    NavigationLink("ほかに \(others.count - shown.count) 件") { MothershipListView(scope: scope) }
+                }
             } header: {
-                Text("\(group.bucket.title)（\(group.items.count)）")
-                    .foregroundStyle(group.bucket == .late ? Color.red : Color.secondary)
+                Text("\(bucket.title)（\(mine.count + others.count)）")
+                    .foregroundStyle(bucket == .late ? Color.red : Color.secondary)
             }
         }
-        // 母艦（家の PC）のやること（2026-11-09。Mothership.swift）。「こんなのあったけど、どう？」は確かめ待ちにまとめた
-        MothershipSection(scope: scope)
         // 職場の Claude の答えを取り込んだ「仕事のまとめ」（2026-11-08。仕事以外だけを見ているときは出さない）
         if scope != .life {
             Section {
@@ -1536,7 +1551,9 @@ struct TaskBookView: View {
         Section {
             EmptyView()
         } footer: {
-            Text("○で済み。右へ払うと「明日に」「来週に」、左へ払うと「済み」「待ち」。急ぎ（!）は同じ並びの中で上に出ます。")
+            let home = pipeline.mothership.export == nil ? ""
+                : "\n家の PC が会話・LINE・メモから拾ったものも、同じ一覧に入っています（押すとくわしく。左へ払うと「済み」「違う」）。"
+            Text("○で済み。右へ払うと「明日に」「来週に」、左へ払うと「済み」「待ち」。急ぎ（!）は同じ並びの中で上に出ます。" + home)
         }
     }
 

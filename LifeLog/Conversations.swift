@@ -1172,13 +1172,16 @@ final class ConversationLog {
     }
 
     /// 1日のまとめを作り直し、ドキュメントの先頭のまとめ（あとから書き足した分も）を置き換える。
+    /// 家の PC のまとめを載せた日は、ドキュメントは置き換えず、中身（週のまとめに使う）だけ作り直す（2026-11-10）
     private func redoDailySummary(_ day: String, key: String) async -> Bool {
         guard let made = await dailySummary(load(day), day: day, key: key) else { return false }
-        do {
-            _ = try await docs.deleteDaySummary(day: day)
-            try await docs.insert(heading: "1日のまとめ", body: made.body, at: 1, style: "HEADING_1", day: day)
-        } catch {
-            return false
+        if !HomeSummaryLog.isWritten(day) {
+            do {
+                _ = try await docs.deleteDaySummary(day: day)
+                try await docs.insert(heading: "1日のまとめ", body: made.body, at: 1, style: "HEADING_1", day: day)
+            } catch {
+                return false
+            }
         }
         var log = load(day)
         log.summary = made.summary
@@ -1450,11 +1453,13 @@ final class ConversationLog {
             }
             guard let made = await dailySummary(log, day: day, key: key) else { continue }
             let summary = made.summary, body = made.body
-            // ドキュメントにまとめがある日は、二重に書かない（見出しが増えた日だけ、書き足した分として入れる）
-            var exists = false
-            if again { exists = (try? await docs.hasParagraph("1日のまとめ", day: day)) ?? true }
+            // ドキュメントにまとめがある日は、二重に書かない（見出しが増えた日だけ、書き足した分として入れる）。
+            // 家の PC のまとめを載せた日は、ドキュメントには書かず、中身（週のまとめに使う）だけ残す（2026-11-10）
+            let home = HomeSummaryLog.isWritten(day)
+            var exists = home
+            if again && !home { exists = (try? await docs.hasParagraph("1日のまとめ", day: day)) ?? true }
             do {
-                if !exists || log.summaryStale == true {
+                if !home && (!exists || log.summaryStale == true) {
                     try await docs.insert(heading: exists ? "1日のまとめ（あとから書き足した分）" : "1日のまとめ",
                                           body: body, at: 1, style: "HEADING_1", day: day)
                 }
@@ -1465,6 +1470,18 @@ final class ConversationLog {
             } catch {
                 continue
             }
+        }
+    }
+
+    /// 家の PC が作った1日のまとめで、その日のドキュメントの先頭の「1日のまとめ」（あとから書き足した分も）を置き換える（2026-11-10）。
+    /// 言語モデルは使わない。書けたら true
+    func writeHomeSummary(day: String, body: String) async -> Bool {
+        do {
+            _ = try await docs.deleteDaySummary(day: day)
+            try await docs.insert(heading: "1日のまとめ", body: body, at: 1, style: "HEADING_1", day: day)
+            return true
+        } catch {
+            return false
         }
     }
 

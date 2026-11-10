@@ -1651,6 +1651,8 @@ final class Pipeline {
             // 聞き間違いらしい言葉を探し、直し終わった日の見出しとまとめを作り直す
             await findMisheard()
             await resummarize()
+            // 家の PC の1日のまとめがあれば、アプリのまとめの代わりにドキュメントの先頭に載せる（2026-11-10。Mothership.swift）
+            await writeHomeDaySummaries()
             await conversations.writeDailySummaries(today: dayFormatter.string(from: .now))
             await conversations.writePeopleNotes()
             await conversations.writeWeeklySummary(today: dayFormatter.string(from: .now))
@@ -1885,6 +1887,18 @@ final class Pipeline {
 
     /// その日の1日のまとめ（まだ無ければ nil）
     func daySummary(_ day: String) -> Summarizer.Day? { conversations.summary(on: day) }
+
+    /// 家の PC の1日のまとめを、その日のドキュメントの先頭の「1日のまとめ」と置き換える（iPhone だけが呼ぶ。1日に1回）
+    func writeHomeDaySummaries() async {
+        guard summariesOn, email != nil, let summaries = mothership.export?.daySummaries, !summaries.isEmpty,
+              let written = HomeSummaryLog.load() else { return }
+        let today = TaskBook.dayFormat.string(from: .now)
+        for summary in HomeSummaryLog.toWrite(summaries, written: written, today: today) {
+            let ok = await conversations.writeHomeSummary(day: summary.day, body: summary.docBody)
+            guard ok else { return }
+            HomeSummaryLog.mark(summary.day, generatedAt: summary.generatedAt)
+        }
+    }
 
     /// 本人が質問に答えた会話の見出しと要点を、あとで作り直す（答えを手がかりに）
     func markResummarize(start: Date, day: String) { conversations.markResummarize(start: start, day: day) }

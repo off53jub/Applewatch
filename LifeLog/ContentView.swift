@@ -8,7 +8,10 @@ struct ContentView: View {
     /// 今日までのもの・過ぎたもの（待っているものは除く）
     private var lateTasks: Int {
         let end = Calendar.current.startOfDay(for: .now).addingTimeInterval(86400)
-        return pipeline.tasks.todo.filter { ($0.due ?? .distantFuture) < end }.count
+        // 家の PC のやることも、アプリのタスクと重ならないものだけ1回数える（2026-11-10。1つの一覧にした）
+        let home = pipeline.mothership.extra(.all, tasks: pipeline.tasks.items)
+            .filter { (MothershipExport.dueDate($0.due) ?? .distantFuture) < end }.count
+        return pipeline.tasks.todo.filter { ($0.due ?? .distantFuture) < end }.count + home
     }
 
     var body: some View {
@@ -784,7 +787,7 @@ private struct SettingsView: View {
                 } header: {
                     Text("会話のまとめ")
                 } footer: {
-                    Text("話が3分途切れるごとに、ドキュメントに「時刻・場所・相手・内容」の見出しと要点を付け、日が変わると前の日の先頭に「1日のまとめ」を入れます（Groq の無料枠か、iPhone の中の言語モデル）。")
+                    Text("話が3分途切れるごとに、ドキュメントに「時刻・場所・相手・内容」の見出しと要点を付け、日が変わると前の日の先頭に「1日のまとめ」を入れます（Groq の無料枠か、iPhone の中の言語モデル）。家の PC が作った1日のまとめ（会話・LINE・メモをまとめたもの）が届いた日は、そちらを先頭に載せます（1日に1回・iPhone だけ。アプリのまとめは週と月のまとめに使います）。")
                 }
 
                 Section {
