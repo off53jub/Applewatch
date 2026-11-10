@@ -14,7 +14,8 @@ import Security
 ///   無ければ家の中の住所（192.168.… など・/jobs。PC の合言葉）。合言葉は iPhone から受け取って、時計の Keychain に置く（ログには出さない）。
 /// - 低電力モード・電池が20%より少ないとき（充電中を除く）は送らない。届かなかったら10分は試さない。
 ///   外の道で合言葉が違うと言われたら、新しい合言葉が届くまで外の道は使わない。「しばらく受け付けない」なら15分待つ。
-/// - モバイル通信（セルラーモデルの時計）では送らない。
+/// - モバイル通信でも送る（2026-11-10 本人の決定「外でも送る」。前は送らない決まりで、iPhone がモバイル通信の外では
+///   何時間も1つも送れなかった＝と見ている。外にいるあいだは1時間に15MBほど iPhone のデータを使う）。
 /// - 送れたとき・区切ったときに、時計に残っていてまだ PC に送っていない古い区切り（24時間より新しいもの）を、
 ///   古い順に3つまで、1つずつ追いかけて送る（区切ったときに送れなかった分を取り戻す）。
 final class WatchPC: @unchecked Sendable {
@@ -45,7 +46,10 @@ final class WatchPC: @unchecked Sendable {
 
     init() {
         let config = URLSessionConfiguration.ephemeral
-        config.allowsCellularAccess = false
+        // モバイル通信でも送る（2026-11-10。iPhone の Bluetooth を通るときも、iPhone がモバイル通信ならそちらを使う）
+        config.allowsCellularAccess = true
+        config.allowsExpensiveNetworkAccess = true
+        config.allowsConstrainedNetworkAccess = true
         config.waitsForConnectivity = false
         // 家の外では iPhone の Bluetooth を通って送るので遅い（1つ 0.5〜1.2MB）。途切れたら30秒、全部で5分まで待つ
         config.timeoutIntervalForRequest = 30
