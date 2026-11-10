@@ -241,6 +241,19 @@ final class ConversationLog {
         return parts
     }
 
+    /// 届いた行が、続いている会話（openStart に始まった）より前の時間のものか。
+    /// 会話の始まりより、会話の切れ目の長さ（gap）を超えて前に終わっていれば、別の会話とみなす
+    /// （時計にたまっていた音声が、あとから届いたときなど。2026-11-10）。
+    static func isLate(_ lines: [Line], openStart: Date, gap: TimeInterval) -> Bool {
+        guard let last = lines.map(\.time).max() else { return false }
+        return openStart.timeIntervalSince(last) > gap
+    }
+
+    /// 行を足したあとの、会話の終わりの時刻。後ろへだけ動かす（前の時間の行を足しても、前には戻さない）。
+    static func extendedEnd(_ end: Date, adding lines: [Line]) -> Date {
+        max(end, lines.map(\.time).max() ?? end)
+    }
+
     /// 見出しが無く、長さの上限より長い、閉じた会話（前の記録。分け直して見出しを付ける）
     static func needsLongSplit(_ c: Conversation) -> Bool {
         c.closed && c.title == nil && c.media == nil && c.lines.count >= 2
@@ -320,7 +333,11 @@ final class ConversationLog {
     /// 長く続いた会話は、届いた行の途中でも区切る（長い会話の区切り。2026-11-09）。
     func append(_ lines: [Line], text: String, day: String) async throws {
         guard let first = lines.first else { return }
-        await closeOpenConversations(before: first.time, day: day)
+        // 続いている会話より前の時間の行が遅れて届いたら（時計にたまっていた音声など）、続いている会話を先に閉じて、
+        // 別の会話として書く。そのまま足すと、会話の終わりが始まりより前になっていた（時刻の逆転。2026-11-10）
+        let late = load(day).conversations.last(where: { !$0.closed })
+            .map { Self.isLate(lines, openStart: $0.start, gap: Self.gap) } ?? false
+        await closeOpenConversations(before: first.time, day: day, force: late)
         let openStart = load(day).conversations.last(where: { !$0.closed })?.start
         let parts = Self.segments(lines, openStart: openStart)
         guard parts.count > 1 else {
@@ -350,7 +367,8 @@ final class ConversationLog {
         log = load(day)
         guard let i = log.conversations.lastIndex(where: { !$0.closed }) else { return }
         log.conversations[i].lines += lines
-        log.conversations[i].end = lines.last?.time ?? first.time
+        // 終わりは後ろへだけ動かす（前の時間の行が混ざっていても、前には戻さない。2026-11-10）
+        log.conversations[i].end = Self.extendedEnd(log.conversations[i].end, adding: lines)
         save(log, day: day)
     }
 
@@ -368,14 +386,15 @@ final class ConversationLog {
         return justClosed
     }
 
-    private func closeOpenConversations(before time: Date, day: String?) async {
+    /// force: 同じ日の続いている会話を、間が空いていなくても閉じる（前の時間の行が遅れて届いたとき）
+    private func closeOpenConversations(before time: Date, day: String?, force: Bool = false) async {
         for openDay in days() {
             let log = load(openDay)
             // 続いている会話（この端末のもの）。ほかの端末の会話が後ろに並んでいることもある
             guard let i = log.conversations.lastIndex(where: { !$0.closed }) else { continue }
             let conversation = log.conversations[i]
             let sameDay = day == nil || day == openDay
-            guard !sameDay || time.timeIntervalSince(conversation.end) > Self.gap
+            guard force || !sameDay || time.timeIntervalSince(conversation.end) > Self.gap
                     || Self.endsLongTalk(start: conversation.start, last: conversation.lines.last,
                                          lastTime: conversation.end, next: time) else { continue }
             let work = isWork(conversation.start)
@@ -427,6 +446,10 @@ final class ConversationLog {
                 result.points = summary.points
                 result.media = summary.media
                 result.program = summary.program
+                Tally.add("title.made")
+            } else {
+                // 作れなかった数も数える（無料枠切れなどで続けて作れない日が、成績表で分かるように。2026-11-10）
+                Tally.add("title.failed")
             }
         }
         if let media = result.media {
@@ -491,7 +514,11 @@ final class ConversationLog {
                 guard let summary = try? await Summarizer.$sensitive.withValue(isWork(c.start), operation: {
                     try await Summarizer.conversation(transcript, timeRange: range, selfShare: Self.selfShare(c),
                                                       event: event?.detail, apiKey: key)
-                }) else { return }
+                }) else {
+                    Tally.add("title.fillFailed")
+                    return
+                }
+                Tally.add("title.filled")
                 await applyTitle(summary, to: c, day: day)
             }
         }

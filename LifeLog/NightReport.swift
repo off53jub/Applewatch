@@ -114,6 +114,10 @@ enum Tally {
             rows.append(("言語モデルの書いたものの根拠", "確かめた \(n("ground.checked"))・根拠が見つからず外した要点 \(n("ground.dropped"))"
                 + "・要確認にした項目 \(n("ground.flagged"))", nil))
         }
+        if n("title.made") + n("title.failed") + n("title.filled") + n("title.fillFailed") > 0 {
+            rows.append(("会話の見出し", "作れた \(n("title.made"))・作れなかった \(n("title.failed"))"
+                + "・あとから付けた \(n("title.filled"))（付けようとして作れなかった回数 \(n("title.fillFailed"))）", nil))
+        }
         if n("talk.joined") + n("talk.split") > 0 {
             rows.append(("会話の区切りの手直し", "つないだ \(n("talk.joined"))・分けた \(n("talk.split"))", nil))
         }
