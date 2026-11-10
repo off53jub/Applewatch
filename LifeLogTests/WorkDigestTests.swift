@@ -294,8 +294,7 @@ final class WorkDigestTests: XCTestCase {
 
     func testSourcesAreOptional() throws {
         // 見出しが無ければ nil のまま（前の形と同じ）。箇条書きの中の「出どころ」は見出しにしない
-        let parsed = WorkDigestParser.parse(sample + "
-・出どころ: これは見出しではない", today: today)
+        let parsed = WorkDigestParser.parse(sample + "\n・出どころ: これは見出しではない", today: today)
         XCTAssertNil(parsed.sections.sources)
         XCTAssertEqual(parsed.sections.checks, ["会議室が取れているか", "出どころ: これは見出しではない"])
         // 前の版で保存したもの（sources が無い）も読める
