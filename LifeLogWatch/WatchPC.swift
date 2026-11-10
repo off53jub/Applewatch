@@ -94,6 +94,38 @@ final class WatchPC: @unchecked Sendable {
     /// 外の道で合言葉が違うと言われたか
     static var publicRefused: Bool { UserDefaults.standard.bool(forKey: refusedKey) }
 
+    // MARK: - 送らない・届かなかった理由（2026-11-10）
+    // 11/10 は外の道が 16 時すぎから何時間も1つも送れず、電池・低電力モード・通信のどれなのか分からなかった。
+    // 「いま送らない理由」と「最後に届かなかった理由」を時刻つきで残し、iPhone に知らせる（自己点検の行に出る）
+
+    /// いま直接送らない理由（低電力モード・電池・失敗のあとの待ち）。送れるときは無い
+    static let skipKey = "pcSkip"
+    /// 最後に直接送って届かなかった時刻と理由
+    static let failKey = "pcFail"
+
+    static var skipNote: String? { UserDefaults.standard.string(forKey: skipKey) }
+    static var failNote: String? { UserDefaults.standard.string(forKey: failKey) }
+
+    private static let noteFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "M/d HH:mm"
+        return f
+    }()
+
+    /// 「11/10 17:05 理由」の形で残す。nil なら消す。
+    /// again が false なら、理由が前と同じときは書き直さない（時刻は「その理由になった時刻」のまま。区切るたびに書かないため）
+    static func remember(_ key: String, _ text: String?, again: Bool = false) {
+        let defaults = UserDefaults.standard
+        let old = defaults.string(forKey: key)
+        guard let text else {
+            if old != nil { defaults.removeObject(forKey: key) }
+            return
+        }
+        if !again, let old, old.hasSuffix(" " + text) { return }
+        defaults.set(noteFormatter.string(from: .now) + " " + text, forKey: key)
+    }
+
     /// 外の道の宛先と時計用の合言葉があるか
     static var hasPublicRoute: Bool {
         WatchDelivery.publicBaseURL(UserDefaults.standard.string(forKey: WatchDelivery.publicURLKey) ?? "") != nil
@@ -161,10 +193,15 @@ final class WatchPC: @unchecked Sendable {
             publicURL: defaults.string(forKey: WatchDelivery.publicURLKey), hasPublicKey: publicKey != nil,
             publicUsable: !busy && !Self.publicRefused,
             homeAddress: defaults.string(forKey: WatchDelivery.addressKey), hasHomeKey: homeKey != nil) else { return false }
+        // 送らない理由を残す（iPhone の自己点検に出す。2026-11-10）
+        let skip = lock.withLock {
+            WatchDelivery.directSkipReason(lowPower: lowPower, battery: battery, charging: charging,
+                                           lastFailure: lastFailure, now: now)
+        }
+        Self.remember(Self.skipKey, skip)
+        guard skip == nil else { return false }
         let allowed = lock.withLock { () -> Bool in
-            guard WatchDelivery.directAllowed(lowPower: lowPower, battery: battery, charging: charging,
-                                              lastFailure: lastFailure, now: now),
-                  !sending.contains(fileName), !rejected.contains(fileName) else { return false }
+            guard !sending.contains(fileName), !rejected.contains(fileName) else { return false }
             if catchUp {
                 guard catchingUp == nil else { return false }
                 catchingUp = fileName
@@ -205,6 +242,11 @@ final class WatchPC: @unchecked Sendable {
         request.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
         let task = session.uploadTask(with: request, from: body) { [weak self] _, response, error in
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            // 届かなかった理由を残す（2026-11-10）
+            let code = error.map { ($0 as? URLError)?.code.rawValue ?? -1 }
+            if let text = WatchDelivery.directFailText(status: status, urlErrorCode: code, isPublic: isPublic) {
+                Self.remember(Self.failKey, text, again: true)
+            }
             self?.finished(fileName, isPublic: isPublic, status: status, networkError: error != nil)
         }
         task.resume()

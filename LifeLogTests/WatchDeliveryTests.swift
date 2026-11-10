@@ -217,4 +217,22 @@ final class WatchDeliveryTests: XCTestCase {
         XCTAssertTrue(text.contains("受け渡し ふつう 2.3 分"), text)
         XCTAssertTrue(text.contains("（3 個）"), text)
     }
+
+    /// 直接送らない理由・届かなかった理由の文（2026-11-10）
+    func testDirectSkipAndFailText() {
+        let t = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertNil(WatchDelivery.directSkipReason(lowPower: false, battery: 0.8, charging: false, lastFailure: nil, now: t))
+        XCTAssertEqual(WatchDelivery.directSkipReason(lowPower: true, battery: 0.8, charging: false, lastFailure: nil, now: t), "低電力モード")
+        XCTAssertEqual(WatchDelivery.directSkipReason(lowPower: false, battery: 0.15, charging: false, lastFailure: nil, now: t), "電池 15%")
+        XCTAssertNil(WatchDelivery.directSkipReason(lowPower: false, battery: 0.15, charging: true, lastFailure: nil, now: t))
+        XCTAssertEqual(WatchDelivery.directSkipReason(lowPower: false, battery: 0.8, charging: false,
+                                                      lastFailure: t.addingTimeInterval(-60), now: t), "届かなかったので10分待ち")
+        XCTAssertNil(WatchDelivery.directSkipReason(lowPower: false, battery: 0.8, charging: false,
+                                                    lastFailure: t.addingTimeInterval(-700), now: t))
+        XCTAssertNil(WatchDelivery.directFailText(status: 200, urlErrorCode: nil, isPublic: true))
+        XCTAssertEqual(WatchDelivery.directFailText(status: 0, urlErrorCode: -1001, isPublic: true), "外の道: 時間切れ (-1001)")
+        XCTAssertEqual(WatchDelivery.directFailText(status: 0, urlErrorCode: -9999, isPublic: false), "家の中: 通信の失敗 (-9999)")
+        XCTAssertEqual(WatchDelivery.directFailText(status: 503, urlErrorCode: nil, isPublic: true), "外の道: PC の答え 503")
+        XCTAssertEqual(WatchDelivery.directFailText(status: 0, urlErrorCode: nil, isPublic: true), "外の道: 返事が無い")
+    }
 }

@@ -327,6 +327,9 @@ extension Pipeline {
             text += "・時計の合言葉が違うと言われた（PC の設定を開き直すと、新しい合言葉を送ります）"
             ok = false
         }
+        // 時計がいま直接送らない理由・最後に届かなかった理由（時刻つき。新しい時計のアプリだけ。2026-11-10）
+        if let skip = watch["pcSkip"] as? String, !skip.isEmpty { text += "・いま送らない理由: \(skip)〜" }
+        if let fail = watch["pcFail"] as? String, !fail.isEmpty { text += "・最後に届かなかった: \(fail)" }
         return (text, ok, route.checkedAt)
     }
 

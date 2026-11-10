@@ -184,6 +184,9 @@ final class WatchSender: NSObject, WCSessionDelegate {
         // 直接送るがオンになっているか（iPhone が食い違いを見つけたら送り直す。2026-11-08）
         out["pcDirect"] = UserDefaults.standard.object(forKey: WatchDelivery.directKey) as? Bool ?? false
         out["pcPublicSent"] = WatchPC.publicSentCount()
+        // いま直接送らない理由・最後に届かなかった理由（時刻つき。2026-11-10）
+        if let skip = WatchPC.skipNote { out["pcSkip"] = skip }
+        if let fail = WatchPC.failNote { out["pcFail"] = fail }
         if WatchPC.publicRefused { out["pcPublicRefused"] = true }
         return out
     }

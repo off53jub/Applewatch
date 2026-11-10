@@ -156,10 +156,28 @@ enum WatchDelivery {
 
     /// いま時計から直接送ってよいか（電池を守る決まり）
     static func directAllowed(lowPower: Bool, battery: Double?, charging: Bool, lastFailure: Date?, now: Date) -> Bool {
-        guard !lowPower else { return false }
-        if let battery, battery < directMinBattery, !charging { return false }
-        if let lastFailure, now.timeIntervalSince(lastFailure) < directRetryAfter { return false }
-        return true
+        directSkipReason(lowPower: lowPower, battery: battery, charging: charging, lastFailure: lastFailure, now: now) == nil
+    }
+
+    /// 直接送らない理由（送ってよければ nil）。iPhone の自己点検に出す（2026-11-10。外の道が何時間も使われなかった日に、理由が分からなかった）
+    static func directSkipReason(lowPower: Bool, battery: Double?, charging: Bool, lastFailure: Date?, now: Date) -> String? {
+        if lowPower { return "低電力モード" }
+        if let battery, battery < directMinBattery, !charging { return "電池 \(Int((battery * 100).rounded()))%" }
+        if let lastFailure, now.timeIntervalSince(lastFailure) < directRetryAfter { return "届かなかったので10分待ち" }
+        return nil
+    }
+
+    /// 直接送れなかった理由の短い文（iPhone の自己点検に出す。2026-11-10）。
+    /// urlErrorCode は URLError の番号（-1001 時間切れ・-1009 つながっていない など）。届いたなら nil
+    static func directFailText(status: Int, urlErrorCode: Int?, isPublic: Bool) -> String? {
+        let route = isPublic ? "外の道" : "家の中"
+        if let code = urlErrorCode {
+            let names = [-1001: "時間切れ", -1009: "ネットにつながっていない", -1003: "宛先が見つからない",
+                         -1004: "つなげなかった", -1005: "途中で切れた", -1200: "暗号の確かめに失敗", -1020: "通信が許されていない"]
+            return "\(route): \(names[code] ?? "通信の失敗") (\(code))"
+        }
+        if status == 200 { return nil }
+        return status == 0 ? "\(route): 返事が無い" : "\(route): PC の答え \(status)"
     }
 
     // MARK: - 家の外からの道（Tailscale の Funnel。2026-11-07）
