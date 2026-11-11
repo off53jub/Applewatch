@@ -313,6 +313,19 @@ final class HomePC {
         return data
     }
 
+    /// POST /pay/taps・/pay/paypay（かざした記録と PayPay の明細を母艦へ。2026-11-11）
+    func postPay(_ path: String, body: Data, type: String) async throws {
+        guard features.contains("pay") else { throw Failure.notConfigured }
+        let session = makeSession(timeout: 20)
+        defer { session.finishTasksAndInvalidate() }
+        var request = try request(path)
+        request.httpMethod = "POST"
+        request.setValue(type, forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        let (data, response) = try await session.data(for: request)
+        try Self.check(response, data: data)
+    }
+
     /// POST /todo/done（母艦が15分ごとに TODO.md に「アプリで済み」として反映する）
     /// kind: "done"（済み）・"wrong"（タスクではない）・"notyet"（「済みかも」にまだ）。done 以外は "todokind" を持つ PC だけ（2026-11-09）
     func mothershipDone(id: String, text: String, kind: String = "done") async throws {

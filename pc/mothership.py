@@ -18,6 +18,10 @@
 - 仕事のまとめ（2026-11-10）: iPhone がドライブの「LifeLog/同期/仕事のまとめ.json」に書く、仕事のまとめを読むだけ
   （read_digests。書かない。書くとアプリの同期が壊れる）。意味で探す（semantic.py）と MCP サーバー（lifelog_mcp.py）が使う。
   場所は config.json の "work_digest_file"（無ければ、どのドライブ文字でも「マイドライブ/LifeLog/同期/仕事のまとめ.json」を探す）。
+- POST /pay/taps {"items": [...]}（2026-11-11。features の "pay"）→ ウォレットでかざした記録の全部を
+  母艦の inbox/card-taps/card-taps.json に置き換えで書く（iPhone の card-taps.jsonl が正。PC 側は写し）。
+- POST /pay/paypay（PayPay の明細 CSV そのまま。2026-11-11）→ 母艦の inbox/paypay/app-<中身の16進8文字>.csv。
+  同じ中身のファイルがすでにあれば書かない。どちらも中身は記録（log.txt）に書かない（件数だけ）。
 """
 
 from __future__ import annotations
@@ -33,8 +37,12 @@ from typing import Callable
 from urllib.parse import urlparse
 
 GETS = ("/todo", "/card", "/vocab")
-POSTS = ("/todo/done",)
+POSTS = ("/todo/done", "/pay/taps", "/pay/paypay")
 BODY_LIMIT = 16 * 1024
+# 支払いの記録を母艦へ（2026-11-11）
+TAPS_FILE = Path("inbox") / "card-taps" / "card-taps.json"
+PAYPAY_DIR = Path("inbox") / "paypay"
+PAY_LIMITS = {"/pay/taps": 1024 * 1024, "/pay/paypay": 8 * 1024 * 1024}
 DEFAULT_HOME = Path(r"D:\Lifelog")
 EXPORT = Path("state") / "todo_for_app.json"
 DONE_DIR = Path("inbox") / "app-todo-done"
@@ -291,7 +299,86 @@ def http_get(handler, config: dict) -> None:
     handler.send_json(200, read_export(home(config)))
 
 
+def body_limit(path: str) -> int:
+    return PAY_LIMITS.get(path, BODY_LIMIT)
+
+
+def parse_taps(data: bytes) -> list[dict]:
+    """かざした記録を確かめる。おかしな行は落とす。形が違えば ValueError"""
+    try:
+        body = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError("かざした記録を読めません") from None
+    if not isinstance(body, dict) or not isinstance(body.get("items"), list):
+        raise ValueError("かざした記録の形が違います")
+    items = []
+    for item in body["items"][:20000]:
+        if not isinstance(item, dict):
+            continue
+        tid, when, amount = str(item.get("id") or ""), str(item.get("time") or ""), item.get("amount")
+        if not re.fullmatch(r"[0-9A-Za-z_-]{1,80}", tid) or not CARD_TIME.fullmatch(when):
+            continue
+        if not isinstance(amount, int) or isinstance(amount, bool) or not 0 <= amount < 10**9:
+            continue
+        items.append({"id": tid, "time": when, "amount": amount,
+                      "shop": str(item.get("shop") or "").strip()[:100],
+                      "card": str(item.get("card") or "").strip()[:40]})
+    return items
+
+
+def write_taps(base: Path, items: list[dict], now: float | None = None) -> Path:
+    path = base / TAPS_FILE
+    body = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now if now is not None else time.time())),
+            "items": items}
+    with _lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(body, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(path)
+    return path
+
+
+def write_paypay(base: Path, data: bytes) -> Path | None:
+    """明細 CSV を置く。同じ中身がすでにあれば None"""
+    if b"," not in data[:4096]:
+        raise ValueError("CSV ではありません")
+    folder = base / PAYPAY_DIR
+    digest = hashlib.sha256(data).hexdigest()
+    with _lock:
+        folder.mkdir(parents=True, exist_ok=True)
+        for old in folder.glob("*.csv"):
+            try:
+                if old.stat().st_size == len(data) and hashlib.sha256(old.read_bytes()).hexdigest() == digest:
+                    return None
+            except OSError:
+                continue
+        path = folder / f"app-{digest[:8]}.csv"
+        path.write_bytes(data)
+    return path
+
+
+def http_post_pay(handler, config: dict, path: str, data: bytes, log: Callable[[str], None]) -> None:
+    try:
+        if path == "/pay/taps":
+            items = parse_taps(data)
+            write_taps(home(config), items)
+            log(f"{handler.client_address[0]} からかざした記録を母艦へ: {len(items)} 件")
+            handler.send_json(200, {"ok": True, "count": len(items)})
+        else:
+            put = write_paypay(home(config), data)
+            log(f"{handler.client_address[0]} から PayPay の明細を母艦へ: " + (put.name if put else "同じものがあるので置かない"))
+            handler.send_json(200, {"ok": True, "new": put is not None})
+    except ValueError as error:
+        handler.send_json(400, {"error": str(error)})
+    except OSError as error:
+        log(f"支払いの記録を母艦に置けませんでした: {error!r}")
+        handler.send_json(503, {"error": "母艦に置けませんでした"})
+
+
 def http_post(handler, config: dict, data: bytes, log: Callable[[str], None]) -> None:
+    if urlparse(handler.path).path in PAY_LIMITS:
+        http_post_pay(handler, config, urlparse(handler.path).path, data, log)
+        return
     try:
         item = parse_done(data)
     except ValueError as error:

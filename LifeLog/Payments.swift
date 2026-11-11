@@ -60,13 +60,24 @@ enum PaymentMerge {
     /// 3つを1つに（古い順）。同じ支払いは1件にする:
     /// - 利用速報メールの払った先が「PayPay」で、同じ金額の PayPay の明細が近くにあれば、明細のほうを残す（PayPay にカードを使った分）
     /// - かざした記録は、近くの同じ金額の利用速報メールと1件にする（時刻はかざした方・名前は分かる方）
+    /// この秒数のうちに続いた同じかざした記録は1件とみなす
+    static let tapRepeat: TimeInterval = 90
+
     static func combine(paypay: [Payment], mail: [Payment], taps: [Payment]) -> [Payment] {
         var mails = mail.filter { m in
             !(isPayPay(m.shop) && paypay.contains { $0.amount == m.amount && abs($0.time.timeIntervalSince(m.time)) <= payPayWindow })
         }
         var used = Set<Int>()
         var loose: [Payment] = []
+        // 同じ店名・金額のかざした記録が90秒以内に続いたら1件に（11/10〜11 に同じ分の記録が2〜6件並んでいた。
+        // オートメーションは1つ。ファイルはそのまま、画面と集計でだけまとめる）
+        var once: [Payment] = []
         for t in taps.sorted(by: { $0.time < $1.time }) {
+            if let last = once.last(where: { $0.shop == t.shop && $0.amount == t.amount }),
+               t.time.timeIntervalSince(last.time) <= tapRepeat { continue }
+            once.append(t)
+        }
+        for t in once {
             let near = mails.indices.filter { i in
                 !used.contains(i) && abs(mails[i].time.timeIntervalSince(t.time)) <= window
                     && (t.amount == 0 || t.amount == mails[i].amount)
@@ -310,8 +321,40 @@ final class PaymentBook {
         mail = (try? decoder.decode([Payment].self, from: data)) ?? []
     }
 
+    // MARK: - 母艦へ写す（2026-11-11）
+    // かざした記録は端末の中にしか無く、PayPay の明細も母艦の inbox/paypay に届いていなかった（9/3 が最後）。
+    // 家の PC に「pay」があれば、かざした記録が変わったときに全部を、明細は読み込んだ CSV をそのまま送る。
+
+    /// 読み込んだが、まだ家の PC に送れていない明細
+    private static let pendingCSV = URL.applicationSupportDirectory.appendingPathComponent("paypay-pending.csv")
+    private static let tapsSentKey = "cardTapsSentHash"
+    @ObservationIgnored private var uploading = false
+
+    func uploadToPC(_ pc: HomePC) async {
+        guard !uploading, pc.features.contains("pay") else { return }
+        uploading = true
+        defer { uploading = false }
+        if let csv = try? Data(contentsOf: Self.pendingCSV) {
+            if (try? await pc.postPay("pay/paypay", body: csv, type: "text/csv")) != nil {
+                try? FileManager.default.removeItem(at: Self.pendingCSV)
+            }
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = .current
+        let items: [[String: Any]] = taps.map { t in
+            ["id": t.id, "time": formatter.string(from: t.time), "amount": t.amount, "shop": t.shop, "card": t.card ?? ""]
+        }
+        guard !items.isEmpty, let body = try? JSONSerialization.data(withJSONObject: ["items": items], options: .sortedKeys) else { return }
+        let hash = "\(taps.count)-\(taps.last?.id ?? "")"  // 足すだけのファイルなので、数と最後の id で変わったか分かる
+        guard UserDefaults.standard.string(forKey: Self.tapsSentKey) != hash else { return }
+        if (try? await pc.postPay("pay/taps", body: body, type: "application/json")) != nil {
+            UserDefaults.standard.set(hash, forKey: Self.tapsSentKey)
+        }
+    }
+
     /// 家の PC から、カードの利用速報メールの支払いを読み直す（30分に1回まで）
     func refreshMail(_ pc: HomePC, force: Bool = false) async {
+        await uploadToPC(pc)
         guard mailLoaded, !fetching, pc.features.contains("card") else { return }
         if !force, let mailFetchedAt, Date.now.timeIntervalSince(mailFetchedAt) < Self.mailEvery { return }
         fetching = true
@@ -360,6 +403,7 @@ final class PaymentBook {
         guard let parsed = PayPayCSV.parse(data) else { return nil }
         let added = Self.merged(payments, parsed)
         let count = added.count - payments.count
+        try? data.write(to: Self.pendingCSV, options: .atomic)  // 母艦へは次に家の PC とつながったとき
         payments = added
         save()
         rebuild()
