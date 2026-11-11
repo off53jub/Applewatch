@@ -554,6 +554,70 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(filter.keep(items, fromWatch: true, active: false, asleep: false), [true, true, true])
     }
 
+    /// 会議: 自分が話したあと何分も黙って聞いていても、話が続いているあいだは名前の無い参加者の声を残す（2026-11-11）
+    func testOfficeFilterKeepsMeetingWhileSelfListens() {
+        let filter = OfficeFilter()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let me = OfficeFilter.Item(time: t0, text: "お願いします", personID: SpeakerLabeler.selfID, isNamed: true, level: -10)
+        XCTAssertEqual(filter.keep([me], fromWatch: false, active: true, asleep: false), [true])
+        // 1分ごとの区切りで、20分後まで別の人が話し続ける（間は30秒。会話の切れ目より短い。4分後からは前後3分の外）
+        for minute in 1...20 {
+            let voice = OfficeFilter.Item(time: t0.addingTimeInterval(Double(minute) * 60), text: "進み具合です",
+                                          personID: "77", isNamed: false, level: -26)
+            let gapFill = OfficeFilter.Item(time: t0.addingTimeInterval(Double(minute) * 60 - 30), text: "はい",
+                                            personID: "78", isNamed: false, level: -27)
+            XCTAssertEqual(filter.keep([gapFill, voice], fromWatch: false, active: true, asleep: false), [true, true],
+                           "\(minute) 分後")
+        }
+    }
+
+    /// 自分の声が聞き分けられなくても、名前を付けた人が話している話なら、名前の無い参加者の声を残す
+    func testOfficeFilterNamedVoiceStartsTalk() {
+        let filter = OfficeFilter()
+        let t0 = Date(timeIntervalSince1970: 1_800_050_000)
+        let items = [
+            OfficeFilter.Item(time: t0, text: "では始めます", personID: "23", isNamed: true, level: -20),
+            OfficeFilter.Item(time: t0.addingTimeInterval(80), text: "報告します", personID: "84", isNamed: false, level: -22),
+        ]
+        XCTAssertEqual(filter.keep(items, fromWatch: false, active: true, asleep: false), [true, true])
+    }
+
+    /// 話が途切れたあとの名前の無い声は、今までどおり周りの雑談として外す
+    func testOfficeFilterDropsChatterAfterTalkEnds() {
+        let filter = OfficeFilter()
+        let t0 = Date(timeIntervalSince1970: 1_800_100_000)
+        let me = OfficeFilter.Item(time: t0, text: "了解です", personID: SpeakerLabeler.selfID, isNamed: true, level: -10)
+        _ = filter.keep([me], fromWatch: false, active: true, asleep: false)
+        // 15分なにも聞こえず（会話の切れ目の上限10分より長い）、そのあと遠くの席の話
+        let chatter = OfficeFilter.Item(time: t0.addingTimeInterval(15 * 60), text: "お昼どうする",
+                                        personID: "79", isNamed: false, level: -12)
+        XCTAssertEqual(filter.keep([chatter], fromWatch: false, active: true, asleep: false), [false])
+    }
+
+    /// 自分が加わった話の最中は、14dB より小さい声も残すが、ずっと小さい声（24dB より下）は外す
+    func testOfficeFilterJoinedTalkLoudness() {
+        let filter = OfficeFilter()
+        let t0 = Date(timeIntervalSince1970: 1_800_200_000)
+        let items = [
+            OfficeFilter.Item(time: t0, text: "そうですね", personID: SpeakerLabeler.selfID, isNamed: true, level: -10),
+            OfficeFilter.Item(time: t0.addingTimeInterval(20), text: "机の向こうの声", personID: "80", isNamed: false, level: -28),
+            OfficeFilter.Item(time: t0.addingTimeInterval(40), text: "ずっと遠くの声", personID: "81", isNamed: false, level: -45),
+        ]
+        XCTAssertEqual(filter.keep(items, fromWatch: false, active: true, asleep: false), [true, true, false])
+    }
+
+    /// あとから届いた前の時間の区切りは、その区切りの中だけで見て、続いている話を切らない
+    func testJoinedTalkIgnoresLateChunk() {
+        let filter = OfficeFilter()
+        let t0 = Date(timeIntervalSince1970: 1_800_300_000)
+        let me = OfficeFilter.Item(time: t0, text: "はい", personID: SpeakerLabeler.selfID, isNamed: true, level: -10)
+        XCTAssertEqual(filter.joinedTalk([me], fromWatch: true, gap: 180), [true])
+        let old = OfficeFilter.Item(time: t0.addingTimeInterval(-3600), text: "前の話", personID: "82", isNamed: false, level: -20)
+        XCTAssertEqual(filter.joinedTalk([old], fromWatch: true, gap: 180), [false])
+        let next = OfficeFilter.Item(time: t0.addingTimeInterval(60), text: "続きです", personID: "83", isNamed: false, level: -20)
+        XCTAssertEqual(filter.joinedTalk([next], fromWatch: true, gap: 180), [true])
+    }
+
     /// 「職場にいるときだけ」は、職場と分かっているときだけ使う（時刻の推定では使わない）
     func testOfficeFilterNeedsSureWork() {
         let filter = OfficeFilter()
