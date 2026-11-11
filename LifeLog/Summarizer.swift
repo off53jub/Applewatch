@@ -811,16 +811,36 @@ enum Summarizer {
             do {
                 return try await LocalModel.json(system: system, prompt: prompt)
             } catch {
-                guard apiKey != LocalModel.keyless, !sensitive || LocalModel.mode != .work, LocalModel.mode != .always else { throw error }
-                return try await groq(model: model, apiKey: apiKey, maxWait: maxWait, prompt: prompt)
+                guard apiKey != LocalModel.keyless, !sensitive || LocalModel.mode != .work, LocalModel.mode != .always else {
+                    if let result = await viaPC(prompt) { return result }
+                    throw error
+                }
+                do {
+                    return try await groq(model: model, apiKey: apiKey, maxWait: maxWait, prompt: prompt)
+                } catch {
+                    if let result = await viaPC(prompt) { return result }
+                    throw error
+                }
             }
         }
         do {
             return try await groq(model: model, apiKey: apiKey, maxWait: maxWait, prompt: prompt)
         } catch {
-            guard LocalModel.isOn else { throw error }
-            return try await LocalModel.json(system: system, prompt: prompt)
+            if LocalModel.isOn, let result = try? await LocalModel.json(system: system, prompt: prompt) { return result }
+            if let result = await viaPC(prompt) { return result }
+            throw error
         }
+    }
+
+    /// Groq でも端末内でも作れなかったときの最後の手: 家の PC の言語モデル（無料・家の中）で作る。
+    /// 見出しの無い会話が 2026-11-09 から続いていた（仮説: Groq の無料枠切れ）ので足した（2026-11-12）。
+    /// 端末内だけで作る設定のときと、職場の会話で「職場の会話は家の PC で」がオフのときは使わない。
+    private static func viaPC(_ prompt: String) async -> [String: Any]? {
+        guard !forceLocal, !sensitive || pcLLMForWork, let pc = pcLLM,
+              let text = try? await pc(system, prompt),
+              let result = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] else { return nil }
+        Tally.add("llm.pcFallback")
+        return result
     }
 
     /// Groq の言語モデルに JSON で答えさせる。混んでいる（429）ときは指示どおり待って3回まで試す。

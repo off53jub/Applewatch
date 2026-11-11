@@ -110,13 +110,19 @@ enum Tally {
         if n("split.lines") > 0 {
             rows.append(("話者の替わり目で分けた行", "\(n("split.lines")) 行（PC の言葉ごとの時刻から）", nil))
         }
+        if n("speakers.mixed") + n("speakers.crowdShort") > 0 {
+            // 大勢の場で、何人もの声が1人分にまとめられたまとまり（2026-11-12。新しい人物Nにしなかった数）
+            rows.append(("混ざった声", "人物Nにしなかったまとまり \(n("speakers.mixed"))（うち覚えている人にできた区間 \(n("speakers.mixedPartsKnown"))）"
+                + "・大勢の場の短い声 \(n("speakers.crowdShort"))", nil))
+        }
         if n("ground.checked") > 0 {
             rows.append(("言語モデルの書いたものの根拠", "確かめた \(n("ground.checked"))・根拠が見つからず外した要点 \(n("ground.dropped"))"
                 + "・要確認にした項目 \(n("ground.flagged"))", nil))
         }
         if n("title.made") + n("title.failed") + n("title.filled") + n("title.fillFailed") > 0 {
             rows.append(("会話の見出し", "作れた \(n("title.made"))・作れなかった \(n("title.failed"))"
-                + "・あとから付けた \(n("title.filled"))（付けようとして作れなかった回数 \(n("title.fillFailed"))）", nil))
+                + "・あとから付けた \(n("title.filled"))（付けようとして作れなかった回数 \(n("title.fillFailed"))）"
+                + (n("llm.pcFallback") > 0 ? "・Groq が使えず家の PC の言語モデルで作った \(n("llm.pcFallback"))" : ""), nil))
         }
         if n("talk.joined") + n("talk.split") > 0 {
             rows.append(("会話の区切りの手直し", "つないだ \(n("talk.joined"))・分けた \(n("talk.split"))", nil))

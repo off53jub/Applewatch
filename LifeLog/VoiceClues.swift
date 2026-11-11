@@ -331,6 +331,47 @@ extension Pipeline {
         return ids
     }
 
+    // MARK: - 大勢の場だけで聞いた声（2026-11-12）
+
+    private static var crowdCache: (at: Date, ids: Set<String>) = (.distantPast, [])
+    /// 何人の声がある会話を「大勢の会話」とみなすか
+    nonisolated static let crowdVoices = 5
+    /// 行のこれだけが大勢の会話なら「大勢の場だけで聞いた声」
+    nonisolated static let crowdShare = 0.8
+
+    /// 大勢の場（飲み会・大きな会議）だけで聞いた名前の無い声（直近14日の記録から。1分は覚えておく）。
+    /// その声の行（3行以上）の8割以上が、5人以上の声がある会話のもの。何人もの声が1人のまとまりにされた「混ざった声」のことが多いので、
+    /// 「名前を付けてほしい声」と「人物Nを整理」には数えず、別に出す（名前待ちが増えすぎていた。2026-11-11 は30秒以上話した名前の無い声22人のうち19人がこれ）。
+    func crowdLike() -> Set<String> {
+        if Date.now.timeIntervalSince(Self.crowdCache.at) < 60 { return Self.crowdCache.ids }
+        let convs = recordedDays().prefix(14).flatMap { conversations(on: $0) }
+        let unnamed = Set(people.filter { !$0.isNamed && $0.hidden != true }.map(\.id))
+        let ids = Self.crowdIDs(convs.map { $0.lines.compactMap(\.speakerID) }).intersection(unnamed)
+        Self.crowdCache = (.now, ids)
+        return ids
+    }
+
+    /// 会話ごとの話し手の番号の並びから、大勢の会話だけで聞いた番号を出す（自分は除く）
+    nonisolated static func crowdIDs(_ conversations: [[String]]) -> Set<String> {
+        var total: [String: Int] = [:], crowded: [String: Int] = [:]
+        for ids in conversations {
+            let many = Set(ids).count >= crowdVoices
+            for id in ids where id != SpeakerLabeler.selfID {
+                total[id, default: 0] += 1
+                if many { crowded[id, default: 0] += 1 }
+            }
+        }
+        return Set(total.filter { id, n in n >= 3 && Double(crowded[id] ?? 0) / Double(n) >= crowdShare }.map(\.key))
+    }
+
+    /// 大勢の場だけで聞いた声をまとめて忘れる（名前の無い声だけ。本人が押したときだけ。記録の行はそのまま）。忘れた数を返す。
+    func forgetCrowdLike() async -> Int {
+        let ids = crowdLike()
+        for id in ids { await removePerson(id) }
+        Self.crowdCache = (.distantPast, [])
+        return ids.count
+    }
+
     /// 家の場所の名前か（「自宅」「家」「実家」を含む。「ホーム」は駅やホームセンターと紛れるので見ない）
     nonisolated static func isHome(_ place: String?) -> Bool {
         guard let place else { return false }
