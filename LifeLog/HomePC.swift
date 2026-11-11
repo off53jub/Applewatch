@@ -313,6 +313,16 @@ final class HomePC {
         return data
     }
 
+    /// GET /good（いいこと帳。母艦の state/good_for_app.json。2026-11-12。GoodThings.swift）
+    func goodThings() async throws -> Data {
+        guard features.contains("good") else { throw Failure.notConfigured }
+        let session = makeSession(timeout: 10)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: try request("good"))
+        try Self.check(response, data: data)
+        return data
+    }
+
     /// POST /pay/taps・/pay/paypay（かざした記録と PayPay の明細を母艦へ。2026-11-11）
     func postPay(_ path: String, body: Data, type: String) async throws {
         guard features.contains("pay") else { throw Failure.notConfigured }

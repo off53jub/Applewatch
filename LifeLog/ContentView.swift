@@ -139,6 +139,7 @@ private struct TodayView: View {
                 }
 
                 taskBook()
+                goodThings()
 
                 // 答え合わせの入口・名前を付ける候補の声・AI からの質問・見直すものは、上の確認箱にまとめた（2026-11-09）
 
@@ -241,6 +242,25 @@ private struct TodayView: View {
                 }
             } footer: {
                 Text("場面を聞いて「だれが・何を・どこで」が合っているかを答えると、聞き取りの数字が週ごとにたまります。")
+            }
+        }
+    }
+
+    /// いいこと帳の入口（2026-11-12）。家の PC が「good」を持つか、前に読んだ写しがあるときだけ出す。
+    @ViewBuilder
+    private func goodThings() -> some View {
+        let book = pipeline.good
+        if pipeline.homePC.features.contains("good") || book.data != nil {
+            Section {
+                NavigationLink {
+                    GoodThingsView()
+                } label: {
+                    LabeledContent {
+                        if let w = book.thisWeek { Text("今週 お礼 \(w.thanks)・ほめ言葉 \(w.praise)") }
+                    } label: {
+                        Label("いいこと帳", systemImage: "hand.thumbsup")
+                    }
+                }
             }
         }
     }

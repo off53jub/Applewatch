@@ -524,6 +524,38 @@ def check_vocab() -> int:
         path.write_text(json.dumps(many, ensure_ascii=False), encoding="utf-8")
         failed += say(len(mothership.read_vocab(base)["items"]) == mothership.VOCAB_LIMIT, "言葉の候補: 多すぎるときは上限まで")
     failed += say("/vocab" in mothership.GETS, "言葉の候補: GET /vocab")
+    # いいこと帳（2026-11-12）
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        failed += say(mothership.read_good(base).get("available") is False, "いいこと帳: 無ければ available false")
+        (base / "state").mkdir()
+        data = {"generated_at": "2026-11-12T01:00:00+0900",
+                "weeks": [{"start": "2026-11-09", "thanks": 2, "praise": True, "done": 1, "own": 30, "laughs": None}, {"start": "x"}],
+                "days": [{"day": "2026-11-10", "words": [{"time": "17:17", "kind": "お礼", "who": "Aさん", "text": "ありがとう"},
+                                                         {"time": "bad", "kind": "お礼"}],
+                          "done": [{"time": "09:00", "what": "資料を送る"}], "laughs": ["19:58", 3]}, {"day": 5}]}
+        (base / mothership.GOOD).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        got = mothership.read_good(base)
+        failed += say(got.get("available") is True and len(got["weeks"]) == 1 and got["weeks"][0]["praise"] == 0
+                      and got["weeks"][0]["laughs"] is None, "いいこと帳: 週の数を確かめる")
+        failed += say(len(got["days"]) == 1 and len(got["days"][0]["words"]) == 1 and got["days"][0]["laughs"] == ["19:58"],
+                      "いいこと帳: おかしな行は落として返す")
+    failed += say("/good" in mothership.GETS, "いいこと帳: GET /good")
+    # 支払いの記録を母艦へ（2026-11-11）
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        items = mothership.parse_taps(json.dumps({"items": [
+            {"id": "tap-AB", "time": "2026-11-11T07:20:00+09:00", "amount": 0, "shop": "", "card": "PASMO"},
+            {"id": "bad id", "time": "x", "amount": 1}]}).encode())
+        failed += say(len(items) == 1, "支払い: おかしなかざした記録は落とす")
+        mothership.write_taps(base, items)
+        failed += say(json.loads((base / mothership.TAPS_FILE).read_text(encoding="utf-8"))["items"][0]["card"] == "PASMO",
+                      "支払い: かざした記録を母艦に置く")
+        csv = "a,b\n1,2\n".encode()
+        failed += say(mothership.write_paypay(base, csv) is not None and mothership.write_paypay(base, csv) is None,
+                      "支払い: 同じ明細は2回置かない")
+    failed += say("/pay/taps" in mothership.POSTS and mothership.body_limit("/pay/paypay") > mothership.BODY_LIMIT,
+                  "支払い: POST /pay/taps・/pay/paypay")
     return failed
 
 
