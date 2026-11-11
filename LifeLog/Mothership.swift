@@ -16,11 +16,49 @@ struct MothershipTodo: Codable, Identifiable, Equatable, Sendable {
     var due: String? = nil
     /// 母艦の毎朝のまとめが「もう済んだかも」とした理由（2026-11-09。無ければ nil）
     var maybeDone: String? = nil
-    /// 返事・結果を待っている相手の名前（2026-11-12。無ければ nil。会う前のおさらいに使う）
+    /// 返事・結果を待っている人の名前（2026-11-12。母艦が付けることがある。無ければ nil）
     var waitingFor: String? = nil
+    /// その人が待っている日数（2026-11-12。無ければ nil）
+    var waitingDays: Int? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, text, project, work, added, due, maybeDone = "maybe_done", waitingFor = "waiting_for"
+        case id, text, project, work, added, due, maybeDone = "maybe_done"
+        case waitingFor = "waiting_for", waitingDays = "waiting_days"
+    }
+
+    /// 待たれている日数がこれ以上なら、一覧の上に出して目立たせる
+    static let longWait = 3
+
+    /// 3日以上待たれているか
+    var isWaitedLong: Bool { (waitingDays ?? 0) >= Self.longWait }
+
+    /// 「◯◯さんが 3日待っています」（待たれていなければ nil。名前が無いときは「3日待っている人がいます」）
+    var waitingLine: String? {
+        guard let days = waitingDays, days > 0 else { return nil }
+        let name = (waitingFor ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.isEmpty { return "\(days)日待っている人がいます" }
+        let polite = ["さん", "様", "先生", "くん", "君", "ちゃん"].contains { name.hasSuffix($0) }
+        return "\(name)\(polite ? "" : "さん")が \(days)日待っています"
+    }
+}
+
+// 新しい項目（待たれている人・日数）は、形が違っても（数が文字になっている など）その項目だけ捨てて読み、全体を読めなくしない
+extension MothershipTodo {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        text = try c.decode(String.self, forKey: .text)
+        project = try? c.decodeIfPresent(String.self, forKey: .project)
+        work = try? c.decodeIfPresent(Bool.self, forKey: .work)
+        added = try? c.decodeIfPresent(String.self, forKey: .added)
+        due = try? c.decodeIfPresent(String.self, forKey: .due)
+        maybeDone = try? c.decodeIfPresent(String.self, forKey: .maybeDone)
+        waitingFor = try? c.decodeIfPresent(String.self, forKey: .waitingFor)
+        if let n = try? c.decodeIfPresent(Int.self, forKey: .waitingDays) {
+            waitingDays = n
+        } else if let d = try? c.decodeIfPresent(Double.self, forKey: .waitingDays) {
+            waitingDays = Int(d.rounded())
+        }
     }
 }
 
@@ -436,9 +474,11 @@ final class MothershipBook {
         (export?.todayThree ?? []).filter { done[$0.id] == nil }
     }
 
-    /// 期限のあるものを先に（近い順）、そのあとは足された日が新しい順
+    /// 3日以上待たれているものを先に（待たれた日数が多い順）、そのあと期限のあるものを先に（近い順）、そのあとは足された日が新しい順
     nonisolated static func sorted(_ items: [MothershipTodo]) -> [MothershipTodo] {
         items.sorted { a, b in
+            if a.isWaitedLong != b.isWaitedLong { return a.isWaitedLong }
+            if a.isWaitedLong, let x = a.waitingDays, let y = b.waitingDays, x != y { return x > y }
             switch (MothershipExport.dueDate(a.due), MothershipExport.dueDate(b.due)) {
             case let (x?, y?) where x != y: return x < y
             case (.some, nil): return true
@@ -561,6 +601,12 @@ struct MothershipRow: View {
                     Text(item.text).foregroundStyle(.primary).multilineTextAlignment(.leading)
                 }
                 .buttonStyle(.borderless)
+                // 待っている人がいる（2026-11-12。3日以上は太く）
+                if let waiting = item.waitingLine {
+                    Label(waiting, systemImage: "hourglass")
+                        .font(.caption.weight(item.isWaitedLong ? .bold : .regular))
+                        .foregroundStyle(item.isWaitedLong ? Color.red : Color.orange)
+                }
                 HStack(spacing: 6) {
                     if let due = MothershipExport.dueDate(item.due) {
                         let text = Pipeline.taskDueText(due)
