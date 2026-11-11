@@ -321,8 +321,40 @@ final class PaymentBook {
         mail = (try? decoder.decode([Payment].self, from: data)) ?? []
     }
 
+    // MARK: - 母艦へ写す（2026-11-11）
+    // かざした記録は端末の中にしか無く、PayPay の明細も母艦の inbox/paypay に届いていなかった（9/3 が最後）。
+    // 家の PC に「pay」があれば、かざした記録が変わったときに全部を、明細は読み込んだ CSV をそのまま送る。
+
+    /// 読み込んだが、まだ家の PC に送れていない明細
+    private static let pendingCSV = URL.applicationSupportDirectory.appendingPathComponent("paypay-pending.csv")
+    private static let tapsSentKey = "cardTapsSentHash"
+    @ObservationIgnored private var uploading = false
+
+    func uploadToPC(_ pc: HomePC) async {
+        guard !uploading, pc.features.contains("pay") else { return }
+        uploading = true
+        defer { uploading = false }
+        if let csv = try? Data(contentsOf: Self.pendingCSV) {
+            if (try? await pc.postPay("pay/paypay", body: csv, type: "text/csv")) != nil {
+                try? FileManager.default.removeItem(at: Self.pendingCSV)
+            }
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = .current
+        let items: [[String: Any]] = taps.map { t in
+            ["id": t.id, "time": formatter.string(from: t.time), "amount": t.amount, "shop": t.shop, "card": t.card ?? ""]
+        }
+        guard !items.isEmpty, let body = try? JSONSerialization.data(withJSONObject: ["items": items], options: .sortedKeys) else { return }
+        let hash = "\(taps.count)-\(taps.last?.id ?? "")"  // 足すだけのファイルなので、数と最後の id で変わったか分かる
+        guard UserDefaults.standard.string(forKey: Self.tapsSentKey) != hash else { return }
+        if (try? await pc.postPay("pay/taps", body: body, type: "application/json")) != nil {
+            UserDefaults.standard.set(hash, forKey: Self.tapsSentKey)
+        }
+    }
+
     /// 家の PC から、カードの利用速報メールの支払いを読み直す（30分に1回まで）
     func refreshMail(_ pc: HomePC, force: Bool = false) async {
+        await uploadToPC(pc)
         guard mailLoaded, !fetching, pc.features.contains("card") else { return }
         if !force, let mailFetchedAt, Date.now.timeIntervalSince(mailFetchedAt) < Self.mailEvery { return }
         fetching = true
@@ -371,6 +403,7 @@ final class PaymentBook {
         guard let parsed = PayPayCSV.parse(data) else { return nil }
         let added = Self.merged(payments, parsed)
         let count = added.count - payments.count
+        try? data.write(to: Self.pendingCSV, options: .atomic)  // 母艦へは次に家の PC とつながったとき
         payments = added
         save()
         rebuild()

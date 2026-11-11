@@ -2066,6 +2066,8 @@ def features(engines: list | None = None) -> list[str]:
     found.append("card")
     # GET /vocab（母艦の辞書から作った「登録の候補」。2026-11-10）
     found.append("vocab")
+    # POST /pay/taps・/pay/paypay（かざした記録と PayPay の明細を母艦へ。2026-11-11）
+    found.append("pay")
     # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）
     if "vad" in _extras:
         found.append("silero")
@@ -2728,7 +2730,7 @@ class Handler(BaseHTTPRequestHandler):
             ops.http_diag(self, length)
             return
         small = url.path == "/llm" or url.path in semantic.POSTS or url.path in mothership.POSTS
-        limit = LLM_BODY_LIMIT if url.path == "/llm" else mothership.BODY_LIMIT if url.path in mothership.POSTS \
+        limit = LLM_BODY_LIMIT if url.path == "/llm" else mothership.body_limit(url.path) if url.path in mothership.POSTS \
             else semantic.BODY_LIMIT if small else DRAIN_LIMIT
         if length <= 0 or length > limit:
             self.discard_body()
