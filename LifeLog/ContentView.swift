@@ -140,6 +140,7 @@ private struct TodayView: View {
 
                 taskBook()
                 goodThings()
+                PCFeatureNotice()
 
                 // 答え合わせの入口・名前を付ける候補の声・AI からの質問・見直すものは、上の確認箱にまとめた（2026-11-09）
 

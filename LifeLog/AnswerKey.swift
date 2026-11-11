@@ -434,6 +434,7 @@ struct AnswerKeyView: View {
             }
         }
         .navigationTitle("答え合わせ")
+        .countsOpen("answerKey")
         .onAppear {
             week = pipeline.answerKeyThisWeek()
             // その週の場面を端末に切り出しておく（次からネットが無くても聞ける）

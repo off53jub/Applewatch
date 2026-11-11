@@ -125,6 +125,7 @@ struct GoodThingsView: View {
             }
         }
         .navigationTitle("いいこと帳")
+        .countsOpen("goodThings")
         .refreshable { await book.refresh(pipeline.homePC, force: true) }
         .task { await book.refresh(pipeline.homePC) }
     }

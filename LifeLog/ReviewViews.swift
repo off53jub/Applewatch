@@ -137,6 +137,7 @@ struct VoiceReviewView: View {
             }
         }
         .navigationTitle("声の見直し")
+        .countsOpen("voiceReview")
         .onAppear {
             items = pipeline.voiceReview().filter { only == nil || $0.person.id == only }
         }

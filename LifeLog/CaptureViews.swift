@@ -81,6 +81,7 @@ struct RecordingMapView: View {
             }
         }
         .navigationTitle("録音の抜け")
+        .countsOpen("recordingMap")
     }
 
     private func legend(_ color: Color, _ text: String) -> some View {
@@ -291,6 +292,7 @@ struct ConfirmBoxView: View {
             }
         }
         .navigationTitle("確認箱")
+        .countsOpen("confirmBox")
         .onAppear { reviewCount = pipeline.voiceReview().count }
     }
 }

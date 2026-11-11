@@ -122,6 +122,7 @@ struct VocabularyView: View {
             }
         }
         .navigationTitle("言葉の登録")
+        .countsOpen("vocabulary")
         .onAppear(perform: loadCandidates)
         .task { await pipeline.wordCandidates.refresh(pipeline.homePC) }  // 母艦の辞書からの候補（6時間に1回まで）
     }

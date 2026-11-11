@@ -105,5 +105,6 @@ struct UnmatchedPaymentsView: View {
             }
         }
         .navigationTitle("払ったお店")
+        .countsOpen("unmatchedPayments")
     }
 }
