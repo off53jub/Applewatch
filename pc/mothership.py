@@ -18,6 +18,8 @@
 - 仕事のまとめ（2026-11-10）: iPhone がドライブの「LifeLog/同期/仕事のまとめ.json」に書く、仕事のまとめを読むだけ
   （read_digests。書かない。書くとアプリの同期が壊れる）。意味で探す（semantic.py）と MCP サーバー（lifelog_mcp.py）が使う。
   場所は config.json の "work_digest_file"（無ければ、どのドライブ文字でも「マイドライブ/LifeLog/同期/仕事のまとめ.json」を探す）。
+- GET /good → 母艦の state/good_for_app.json（いいこと帳。記録にあったお礼・ほめ言葉・済ませた頼まれごと・
+  ウケたかもの場面。2026-11-12）を確かめて返す。無ければ {"available": false}。中身は記録（log.txt）に書かない。
 - POST /pay/taps {"items": [...]}（2026-11-11。features の "pay"）→ ウォレットでかざした記録の全部を
   母艦の inbox/card-taps/card-taps.json に置き換えで書く（iPhone の card-taps.jsonl が正。PC 側は写し）。
 - POST /pay/paypay（PayPay の明細 CSV そのまま。2026-11-11）→ 母艦の inbox/paypay/app-<中身の16進8文字>.csv。
@@ -36,7 +38,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
-GETS = ("/todo", "/card", "/vocab")
+GETS = ("/todo", "/card", "/vocab", "/good")
 POSTS = ("/todo/done", "/pay/taps", "/pay/paypay")
 BODY_LIMIT = 16 * 1024
 # 支払いの記録を母艦へ（2026-11-11）
@@ -63,6 +65,10 @@ DIGEST_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 DIGEST_HEADER_LINE = re.compile(r"\s*【[^】]*】\s*")
 VOCAB = Path("state") / "vocab_for_app.json"
 VOCAB_LIMIT = 300
+# いいこと帳（2026-11-12。母艦の scripts/Build-GoodThings.py が作る）
+GOOD = Path("state") / "good_for_app.json"
+GOOD_DAYS = 31
+GOOD_ITEMS = 200
 _lock = threading.Lock()
 
 
@@ -223,6 +229,45 @@ def read_vocab(base: Path) -> dict:
     return {"available": True, "generated_at": str(data.get("generated_at") or ""), "items": items}
 
 
+def _text(value, n: int) -> str:
+    return " ".join(str(value or "").split())[:n] if isinstance(value, (str, int)) and not isinstance(value, bool) else ""
+
+
+def _count(value) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def read_good(base: Path) -> dict:
+    """母艦の good_for_app.json（いいこと帳）を確かめて返す。おかしな行は落とす。無い・読めないときは {"available": false}"""
+    try:
+        data = json.loads((base / GOOD).read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return {"available": False, "reason": "母艦のいいこと帳がまだありません"}
+    except (OSError, ValueError) as error:
+        return {"available": False, "reason": f"母艦のいいこと帳を読めませんでした: {type(error).__name__}"}
+    if not isinstance(data, dict) or not isinstance(data.get("weeks"), list) or not isinstance(data.get("days"), list):
+        return {"available": False, "reason": "母艦のいいこと帳の形が違います"}
+    clock = re.compile(r"\d{2}:\d{2}")
+    weeks = []
+    for w in data["weeks"][:8]:
+        if not isinstance(w, dict) or not DIGEST_DAY.fullmatch(str(w.get("start") or "")):
+            continue
+        weeks.append({"start": w["start"], **{k: _count(w.get(k)) or 0 for k in ("thanks", "praise", "done", "own")},
+                      "laughs": _count(w.get("laughs"))})
+    days = []
+    for d in data["days"][:GOOD_DAYS]:
+        if not isinstance(d, dict) or not DIGEST_DAY.fullmatch(str(d.get("day") or "")):
+            continue
+        words = [{"time": x["time"], "kind": "お礼" if x.get("kind") == "お礼" else "ほめ言葉",
+                  "who": _text(x.get("who"), 40), "text": _text(x.get("text"), 120), "place": _text(x.get("place"), 40)}
+                 for x in d.get("words") or [] if isinstance(x, dict) and clock.fullmatch(str(x.get("time") or ""))]
+        done = [{"time": x["time"], "what": _text(x.get("what"), 80)}
+                for x in d.get("done") or [] if isinstance(x, dict) and clock.fullmatch(str(x.get("time") or ""))]
+        laughs = [x for x in d.get("laughs") or [] if isinstance(x, str) and clock.fullmatch(x)]
+        days.append({"day": d["day"], "words": words[:GOOD_ITEMS], "done": done[:GOOD_ITEMS], "laughs": laughs[:GOOD_ITEMS]})
+    return {"available": True, "generated_at": _text(data.get("generated_at"), 30), "weeks": weeks, "days": days}
+
+
 def read_export(base: Path) -> dict:
     """母艦の todo_for_app.json。無い・読めないときは {"available": false}"""
     path = base / EXPORT
@@ -295,6 +340,9 @@ def http_get(handler, config: dict) -> None:
         return
     if path == "/vocab":
         handler.send_json(200, read_vocab(home(config)))
+        return
+    if path == "/good":
+        handler.send_json(200, read_good(home(config)))
         return
     handler.send_json(200, read_export(home(config)))
 

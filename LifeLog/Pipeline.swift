@@ -198,6 +198,8 @@ final class Pipeline {
     let shopVisits = ShopVisitBook()
     /// PayPay の明細（行ったお店の答え合わせ。Payments.swift）
     let payments = PaymentBook()
+    /// いいこと帳（2026-11-12。GoodThings.swift）
+    let good = GoodBook()
     /// 仕事のまとめ（職場の Claude の答えを写真・貼り付けで取り込む。2026-11-08。WorkDigest.swift）
     let workDigests = WorkDigest()
     /// 言葉の登録の候補（母艦の辞書から。押した言葉だけ登録する。2026-11-10。WordCandidates.swift）
@@ -1474,7 +1476,8 @@ final class Pipeline {
         Task { await mothership.refresh(homePC) }  // 母艦のやること（10分に1回まで。2026-11-09。Mothership.swift）
         payments.reloadTaps()  // ウォレットでかざした記録（2026-11-09。Payments.swift）
         scheduleWorkDigestReminder()  // 退勤の頃の「今日のまとめを取り込みましたか」（2026-11-10。WorkDigest.swift）
-        Task { await payments.refreshMail(homePC) }  // カードの利用速報（30分に1回まで）
+        Task { await payments.refreshMail(homePC) }
+        Task { await good.refresh(homePC) }  // いいこと帳（30分に1回まで）  // カードの利用速報（30分に1回まで）
         pcLinkOnActive()  // 家の PC に様子を送り、記録と直しをやり取りする（2026-11-07。PCDiag.swift）
         shopVisits.retryRecent()  // 会話がまだ文字になっていなかった立ち寄りを推測し直す（2026-11-08。ShopVisits.swift）
         startDraftPolling()  // 送ってまだの区切りの下書き（仮）を15秒ごとに見に行く（版 8。2026-11-07。Drafts.swift）
