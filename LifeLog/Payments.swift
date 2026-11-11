@@ -60,13 +60,24 @@ enum PaymentMerge {
     /// 3つを1つに（古い順）。同じ支払いは1件にする:
     /// - 利用速報メールの払った先が「PayPay」で、同じ金額の PayPay の明細が近くにあれば、明細のほうを残す（PayPay にカードを使った分）
     /// - かざした記録は、近くの同じ金額の利用速報メールと1件にする（時刻はかざした方・名前は分かる方）
+    /// この秒数のうちに続いた同じかざした記録は1件とみなす
+    static let tapRepeat: TimeInterval = 90
+
     static func combine(paypay: [Payment], mail: [Payment], taps: [Payment]) -> [Payment] {
         var mails = mail.filter { m in
             !(isPayPay(m.shop) && paypay.contains { $0.amount == m.amount && abs($0.time.timeIntervalSince(m.time)) <= payPayWindow })
         }
         var used = Set<Int>()
         var loose: [Payment] = []
+        // 同じ店名・金額のかざした記録が90秒以内に続いたら1件に（11/10〜11 に同じ分の記録が2〜6件並んでいた。
+        // オートメーションは1つ。ファイルはそのまま、画面と集計でだけまとめる）
+        var once: [Payment] = []
         for t in taps.sorted(by: { $0.time < $1.time }) {
+            if let last = once.last(where: { $0.shop == t.shop && $0.amount == t.amount }),
+               t.time.timeIntervalSince(last.time) <= tapRepeat { continue }
+            once.append(t)
+        }
+        for t in once {
             let near = mails.indices.filter { i in
                 !used.contains(i) && abs(mails[i].time.timeIntervalSince(t.time)) <= window
                     && (t.amount == 0 || t.amount == mails[i].amount)
