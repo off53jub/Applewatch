@@ -321,7 +321,7 @@ private struct TodayView: View {
     /// あとで見直すもの（今日の人物N・名前を付けてほしい声・声の見直し・聞き間違い）。無ければ出さない。
     @ViewBuilder
     private func todo(today: String, talks: [ConversationLog.Conversation]) -> some View {
-        let tv = pipeline.broadcastLike()
+        let tv = pipeline.broadcastLike().union(pipeline.crowdLike())
         let todayIDs = Set(talks.flatMap(\.lines).compactMap(\.speakerID))
         let unnamed = pipeline.people.filter { !$0.isNamed && !$0.isSelf && $0.hidden != true && !tv.contains($0.id) }
         let todayCount = unnamed.filter { todayIDs.contains($0.id) }.count
@@ -554,7 +554,8 @@ private struct PeoplePlacesView: View {
                             PeopleView()
                         } label: {
                             let others = pipeline.people.filter { !$0.isSelf }
-                            let waiting = others.filter { !$0.isNamed && $0.seconds >= 30 }.count
+                            let skip = pipeline.broadcastLike().union(pipeline.crowdLike())
+                            let waiting = others.filter { !$0.isNamed && $0.seconds >= 30 && !skip.contains($0.id) }.count
                             LabeledContent("話した相手",
                                            value: waiting > 0 ? "\(others.count) 人（名前待ち \(waiting)）" : "\(others.count) 人")
                         }

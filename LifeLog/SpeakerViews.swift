@@ -114,6 +114,9 @@ struct PeopleView: View {
     /// テレビ・動画らしい名前の無い声（名前を付けてほしい声には出さない）
     @State private var broadcast: Set<String> = []
     @State private var confirmForget = false
+    /// 大勢の場（飲み会・大きな会議）だけで聞いた名前の無い声（混ざった声が多いので、名前を付けてほしい声には出さない。2026-11-12）
+    @State private var crowd: Set<String> = []
+    @State private var confirmForgetCrowd = false
 
     /// 名前を付けてほしい声の、はじめに出す数
     private static let waitingShown = 10
@@ -122,7 +125,8 @@ struct PeopleView: View {
 
     /// 名前の無い声のうち、よく話した声（よく話した順。テレビ・動画らしい声は除く）
     private var waiting: [SpeakerLabeler.Person] {
-        others.filter { !$0.isNamed && $0.seconds >= 30 && !broadcast.contains($0.id) }.sorted { $0.seconds > $1.seconds }
+        others.filter { !$0.isNamed && $0.seconds >= 30 && !broadcast.contains($0.id) && !crowd.contains($0.id) }
+            .sorted { $0.seconds > $1.seconds }
     }
 
     var body: some View {
@@ -176,6 +180,17 @@ struct PeopleView: View {
                     Button("テレビ・動画らしい声をまとめて忘れる", role: .destructive) { confirmForget = true }
                 } footer: {
                     Text("名前の無い声のうち、行の7割以上（家で聞いた声は半分以上）が、テレビ・動画の会話や行・背景がテレビや音楽・前後3分に自分が話していない、のどれかの声です。「名前を付けてほしい声」と「人物Nを整理」には出しません。中に知っている人がいれば、押して名前を付けてください。忘れても記録の行はそのままです。")
+                }
+            }
+            let many = others.filter { crowd.contains($0.id) && !broadcast.contains($0.id) }.sorted { $0.seconds > $1.seconds }
+            if !many.isEmpty {
+                Section {
+                    DisclosureGroup("大勢の場だけで聞いた声（\(many.count) 人）") {
+                        ForEach(many) { person in row(person) }
+                    }
+                    Button("大勢の場だけで聞いた声をまとめて忘れる", role: .destructive) { confirmForgetCrowd = true }
+                } footer: {
+                    Text("名前の無い声のうち、行の8割以上が5人以上の声がある会話（飲み会・大きな会議など）のものです。何人もの声が1人分にまとめられた「混ざった声」のことが多いので、「名前を付けてほしい声」と「人物Nを整理」には出しません。知っている人がいれば、押して名前を付けてください。忘れても記録の行はそのままです。")
                 }
             }
             ForEach([SpeakerLabeler.Context.work, .other], id: \.self) { context in
@@ -248,6 +263,18 @@ struct PeopleView: View {
             sampleInfo = pipeline.sampleInfo(for: pipeline.people.compactMap(\.samples.last))
             reviewCount = pipeline.voiceReview().count
             broadcast = pipeline.broadcastLike()
+            crowd = pipeline.crowdLike()
+        }
+        .confirmationDialog("大勢の場だけで聞いた声を \(crowd.count) 人まとめて忘れますか？", isPresented: $confirmForgetCrowd,
+                            titleVisibility: .visible) {
+            Button("忘れる", role: .destructive) {
+                Task {
+                    _ = await pipeline.forgetCrowdLike()
+                    crowd = pipeline.crowdLike()
+                }
+            }
+        } message: {
+            Text("名前の無い声だけです。記録とドキュメントの行はそのまま残ります。")
         }
         .confirmationDialog("テレビ・動画らしい声を \(broadcast.count) 人まとめて忘れますか？", isPresented: $confirmForget,
                             titleVisibility: .visible) {
@@ -1094,7 +1121,8 @@ struct UnnamedVoicesView: View {
     private var unnamed: [Item] {
         let lines = pipeline.conversations(on: day).flatMap(\.lines)
         let tv = pipeline.broadcastLike()
-        return pipeline.people.filter { !$0.isNamed && !tv.contains($0.id) }.compactMap { person in
+        let crowd = pipeline.crowdLike()
+        return pipeline.people.filter { !$0.isNamed && !tv.contains($0.id) && !crowd.contains($0.id) }.compactMap { person in
             let mine = lines.filter { $0.speakerID == person.id }
             return mine.isEmpty ? nil : Item(person: person, lines: mine)
         }

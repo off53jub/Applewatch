@@ -110,6 +110,11 @@ enum Tally {
         if n("split.lines") > 0 {
             rows.append(("話者の替わり目で分けた行", "\(n("split.lines")) 行（PC の言葉ごとの時刻から）", nil))
         }
+        if n("speakers.mixed") + n("speakers.crowdShort") > 0 {
+            // 大勢の場で、何人もの声が1人分にまとめられたまとまり（2026-11-12。新しい人物Nにしなかった数）
+            rows.append(("混ざった声", "人物Nにしなかったまとまり \(n("speakers.mixed"))（うち覚えている人にできた区間 \(n("speakers.mixedPartsKnown"))）"
+                + "・大勢の場の短い声 \(n("speakers.crowdShort"))", nil))
+        }
         if n("ground.checked") > 0 {
             rows.append(("言語モデルの書いたものの根拠", "確かめた \(n("ground.checked"))・根拠が見つからず外した要点 \(n("ground.dropped"))"
                 + "・要確認にした項目 \(n("ground.flagged"))", nil))

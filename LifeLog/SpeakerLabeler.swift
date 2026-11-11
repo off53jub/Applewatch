@@ -284,6 +284,43 @@ actor SpeakerLabeler {
             }
         }
 
+        // 大勢の場（飲み会・大きな会議）では、何人もの声が1つのまとまりにされることがある（2026-11-12）。
+        // オフライン方式は、区間の声の特徴をまとまりの平均の写しで返すので、混ざっていても見えない。
+        // そこで、新しい人物Nにしそうなまとまりだけ、区間ごとに声の特徴を取り直して確かめる。
+        let voices = clusters.values.filter { $0.seconds >= 1 }.count
+        let crowded = voices >= Self.crowdClusters
+        var partLabels: [Int: String] = [:]
+        var mixed: Set<String> = []
+        var audio: [Float]?
+        if voices >= Self.checkClusters {
+            for (key, c) in clusters where assigned[key] == nil && c.seconds >= 3 {
+                let parts = Self.partsToCheck(result.segments.enumerated().compactMap { index, s in
+                    s.speakerId == key ? (index: index, start: Double(s.startTimeSeconds), end: Double(s.endTimeSeconds)) : nil
+                })
+                guard parts.count >= 2 else { continue }
+                if audio == nil { audio = try? AudioConverter().resampleAudioFile(url) }
+                guard let audio else { break }
+                var measured: [(index: Int, seconds: Double, embedding: [Float])] = []
+                for part in parts {
+                    let from = max(0, Int(part.start * 16_000))
+                    let to = min(audio.count, Int(part.end * 16_000))
+                    guard to - from >= 16_000, let e = try? await voice(in: Array(audio[from..<to])) else { continue }
+                    measured.append((index: part.index, seconds: part.end - part.start, embedding: e))
+                }
+                guard Self.isMixed(center: c.embedding, parts: measured.map { (seconds: $0.seconds, embedding: $0.embedding) }, limit: accept) else { continue }
+                mixed.insert(key)
+                // 混ざったまとまりの中で、覚えている人にはっきり近い区間だけ、その人にする（覚え足しはしない）
+                for part in measured {
+                    let scored = store.people.map { ($0.id, distance(part.embedding, to: $0)) }.sorted { $0.1 < $1.1 }
+                    guard let best = scored.first, best.1 <= strict else { continue }
+                    let second = scored.count > 1 ? scored[1].1 : 1
+                    if second - best.1 >= 0.04 { partLabels[part.index] = best.0 }
+                }
+            }
+        }
+        if !mixed.isEmpty { Tally.add("speakers.mixed", mixed.count) }
+        if !partLabels.isEmpty { Tally.add("speakers.mixedPartsKnown", partLabels.count) }
+
         var labels: [String: String] = [:]
         let file = url.lastPathComponent
         for (key, c) in clusters {
@@ -299,6 +336,13 @@ actor SpeakerLabeler {
                     remember(sample, for: i)
                 }
                 labels[key] = match.person
+            } else if mixed.contains(key) {
+                // 何人もの声が混ざったまとまりは、新しい人物Nにしない（名前待ちが増えるだけで、誰とも決められない）
+                continue
+            } else if crowded && c.seconds < Self.crowdNewSeconds {
+                // 大勢の場の短い知らない声は、新しい人物Nにしない（混ざった声や通りすがりの声が多い）
+                Tally.add("speakers.crowdShort")
+                continue
             } else if c.seconds >= 3 {
                 // 知らない声。新しい人として覚え、その場の人とする
                 let id = allocateID()
@@ -315,11 +359,46 @@ actor SpeakerLabeler {
         forget { !$0.isNamed && $0.pinnedCount == 0 && $0.lastHeard < old && $0.hidden != true }
         save()
 
-        return result.segments.compactMap { s in
-            guard let id = labels[s.speakerId], let p = person(id) else { return nil }
+        return result.segments.enumerated().compactMap { index, s in
+            guard let id = partLabels[index] ?? labels[s.speakerId], let p = person(id) else { return nil }
             return Segment(start: TimeInterval(s.startTimeSeconds), end: TimeInterval(s.endTimeSeconds),
                            personID: id, name: p.displayName)
         }
+    }
+
+    // MARK: - 混ざった声（2026-11-12。飲み会の席で、何人もの声が1人の発言にされ、名前待ちが増えていた）
+
+    /// 1つの区切りにこれだけの声のまとまりがあれば、新しい人物Nにしそうなまとまりの混ざりを確かめる
+    static let checkClusters = 3
+    /// 1つの区切りにこれだけの声のまとまりがあれば「大勢の場」
+    static let crowdClusters = 4
+    /// 大勢の場で、知らない声を新しい人物Nにするのは、これだけ話していたときだけ（ふだんは3秒）
+    static let crowdNewSeconds: Double = 8
+    /// 取り直す区間の数と長さ
+    static let partsPerCluster = 6
+    static let partMinSeconds: Double = 1.5
+    static let partMaxSeconds: Double = 6
+    /// まとまりの中心から離れた区間の長さが、これだけの割合なら「混ざっている」
+    static let mixedShare = 0.3
+
+    /// 声の特徴を取り直す区間（長い順に partsPerCluster まで。partMinSeconds より短い区間は使わず、partMaxSeconds で切る）
+    nonisolated static func partsToCheck(_ segments: [(index: Int, start: Double, end: Double)])
+        -> [(index: Int, start: Double, end: Double)] {
+        segments.filter { $0.end - $0.start >= partMinSeconds }
+            .sorted { $0.end - $0.start > $1.end - $1.start }
+            .prefix(partsPerCluster)
+            .map { (index: $0.index, start: $0.start, end: min($0.end, $0.start + partMaxSeconds)) }
+    }
+
+    /// まとまりが何人もの声の混ざりか。区間ごとに取り直した声の特徴のうち、まとまりの中心から limit より離れた区間の長さが
+    /// mixedShare 以上なら混ざっている。測れた区間が2つ未満なら分からない（false）。
+    nonisolated static func isMixed(center: [Float], parts: [(seconds: Double, embedding: [Float])], limit: Float) -> Bool {
+        let measured = parts.filter { $0.embedding.count == center.count && !center.isEmpty }
+        guard measured.count >= 2 else { return false }
+        let total = measured.reduce(0) { $0 + $1.seconds }
+        let far = measured.filter { 1 - zip($0.embedding, center).reduce(0) { $0 + $1.0 * $1.1 } > limit }
+            .reduce(0) { $0 + $1.seconds }
+        return total > 0 && far / total >= mixedShare
     }
 
     // MARK: - 迷った声の扱い（2026-11-05。自分の声がほかの人の声として覚えられていた）
