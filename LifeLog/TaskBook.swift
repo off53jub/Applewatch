@@ -1274,6 +1274,8 @@ struct TaskBookView: View {
     @State private var rejecting: TaskBook.Item?
     /// 「全部違う」にするもの（2026-11-10）
     @State private var rejectingAll: [String]?
+    /// 頼まれごとを済みにしたあとの返事の下書き（2026-11-12。TaskReply.swift）
+    @State private var replyDraft: TaskReply.Draft?
     /// 期限に時刻があるものを1時間前に知らせる（Pipeline.taskDueHourKey と同じ名前）
     @AppStorage("taskDueHour") private var dueHourOn = true
     /// Pipeline.taskRemindKey などと同じ名前
@@ -1385,6 +1387,10 @@ struct TaskBookView: View {
                     editing = nil
                 }
             }
+        }
+        .sheet(item: $replyDraft) { draft in
+            NavigationStack { TaskReplySheet(draft: draft) }
+                .presentationDetents([.medium])
         }
         .sheet(isPresented: $importingDigest) {
             NavigationStack {
@@ -1524,8 +1530,10 @@ struct TaskBookView: View {
             // 期限の無いものは、家の PC の分を新しいものから8件まで（続きは一覧で）
             let shown = bucket == .someday ? Array(others.prefix(8)) : others
             Section {
+                // 3日以上待たれているものは、その区切りのいちばん上に（2026-11-12）
+                ForEach(shown.filter { $0.isWaitedLong }) { MothershipRow(item: $0) }
                 ForEach(mine) { openRow($0) }
-                ForEach(shown) { MothershipRow(item: $0) }
+                ForEach(shown.filter { !$0.isWaitedLong }) { MothershipRow(item: $0) }
                 if shown.count < others.count {
                     NavigationLink("ほかに \(others.count - shown.count) 件") { MothershipListView(scope: scope) }
                 }
@@ -1678,7 +1686,12 @@ struct TaskBookView: View {
     }
 
     private func change(_ id: String, _ state: TaskBook.State) {
+        // 頼まれごとをいま済みにしたときだけ、返事の下書きを出す（まだ済みでなかったもの。2026-11-12）
+        let before = pipeline.tasks.items.first { $0.id == id }
         withAnimation { pipeline.tasks.set(id, state) }
+        if state == .done, let before, before.state != .done, let draft = TaskReply.draft(for: before) {
+            replyDraft = draft
+        }
     }
 
     private func read(_ image: UIImage) async {

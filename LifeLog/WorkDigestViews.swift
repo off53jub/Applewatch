@@ -196,6 +196,8 @@ struct WorkDigestImportView: View {
 
     @State private var text = ""
     @State private var copied: String?
+    /// 「頼み方をコピー」を押したあとの一文（2026-11-12）
+    @State private var promptCopied: String?
     @State private var date = Date.now
     @State private var dateFromText = false
     @State private var photoItems: [PhotosPickerItem] = []
@@ -213,6 +215,18 @@ struct WorkDigestImportView: View {
         // 何日分かをまとめて貼ったとき（【日付】が2つ以上）は、日ごとに分けて入れる（2026-11-10）
         let days: [(day: String, text: String)] = WorkDigestParser.splitDays(text)
         Form {
+            // 職場の Claude に貼る頼み方を、取り込む画面からもコピーできる（2026-11-12。下の日付の日の分）
+            Section {
+                Button("職場の Claude への頼み方をコピー", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = WorkDigestPrompt.full(day: TaskBook.dayFormat.string(from: date))
+                    promptCopied = "コピーしました。職場の Claude に貼ってください。"
+                }
+                if let promptCopied { Text(promptCopied).font(.footnote).foregroundStyle(.secondary) }
+            } header: {
+                Text("まず、職場の Claude に聞く")
+            } footer: {
+                Text("そのまま貼れる頼み方です。日付は、下の「日付」の日になります。")
+            }
             Section {
                 PhotosPicker(selection: $photoItems, maxSelectionCount: 20, selectionBehavior: .ordered, matching: .images) {
                     Label("写真・スクショを選ぶ（何枚でも）", systemImage: "photo.on.rectangle")
