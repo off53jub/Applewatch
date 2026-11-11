@@ -1212,7 +1212,8 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
 
     /// 知らせの名前から、開いているあいだの出し方を決める（期限の1時間前の知らせも出す。2026-11-10）
     static func options(for identifier: String) -> UNNotificationPresentationOptions {
-        shownWhileOpen.contains(identifier) || identifier.hasPrefix(NoticeActions.duePrefix) ? [.banner, .list, .sound] : []
+        shownWhileOpen.contains(identifier) || identifier.hasPrefix(NoticeActions.duePrefix)
+            || identifier.hasPrefix(AppFeeds.noticePrefix) ? [.banner, .list, .sound] : []
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,

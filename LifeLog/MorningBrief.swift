@@ -67,6 +67,8 @@ enum MorningBrief {
         var events: [EventLine] = []
         /// 気をつけること（1つずつ短い文）
         var checks: [String] = []
+        /// 1行ずつそのまま出す知らせ（PLAUD の文字起こしがまだの日・PLAUD との合い方。2026-11-12）
+        var notes: [String] = []
     }
 
     /// 「11/8(日)」（calendar の時間帯で）
@@ -143,6 +145,7 @@ enum MorningBrief {
             lines.append(line)
         }
         if !input.checks.isEmpty { lines.append(input.checks.joined(separator: "・")) }
+        lines += input.notes
         if lines.isEmpty { lines.append(dayLabel(input.date, calendar: calendar) + "。昨日の記録と今日のやることはまだありません。") }
         return lines.joined(separator: "\n")
     }
@@ -362,6 +365,8 @@ extension Pipeline {
         if waiting > 0 { input.checks.append("確かめ待ち \(waiting) 件") }
         if pendingCount > 0 { input.checks.append("文字起こし待ち \(pendingCount) 件") }
         if let check = morningCheckLine(for: yesterdayStart) { input.checks.append(check) }
+        // PLAUD の文字起こしがまだの日と、いちばん新しい合い方（家の PC から読んだ写し。2026-11-12。AppFeeds.swift）
+        input.notes = AppFeeds.briefLines(appFeeds.plaudGap)
         return (input, summary != nil || home != nil)
     }
 
