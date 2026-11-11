@@ -38,7 +38,9 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
-GETS = ("/todo", "/card", "/vocab", "/good")
+import appfeeds  # 自分の声の候補・新しさ・PLAUD との差（2026-11-12）
+
+GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS)
 POSTS = ("/todo/done", "/pay/taps", "/pay/paypay")
 BODY_LIMIT = 16 * 1024
 # 支払いの記録を母艦へ（2026-11-11）
@@ -343,6 +345,9 @@ def http_get(handler, config: dict) -> None:
         return
     if path == "/good":
         handler.send_json(200, read_good(home(config)))
+        return
+    if path in appfeeds.READERS:
+        handler.send_json(200, appfeeds.READERS[path](home(config)))
         return
     handler.send_json(200, read_export(home(config)))
 

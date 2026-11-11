@@ -326,8 +326,22 @@ private struct TodayView: View {
         let unnamed = pipeline.people.filter { !$0.isNamed && !$0.isSelf && $0.hidden != true && !tv.contains($0.id) }
         let todayCount = unnamed.filter { todayIDs.contains($0.id) }.count
         let waiting = pipeline.speakerLabelsOn ? unnamed.filter { $0.seconds >= 30 }.count : 0
-        if todayCount > 0 || waiting > 0 || reviewCount > 0 || pipeline.misheardCount > 0 {
+        // 職場の自分の声の確認・止まっているかも（2026-11-12。AppFeeds.swift）。家の PC が対応しているときだけ
+        let feeds = pipeline.appFeeds
+        let selfCand = pipeline.homePC.features.contains("selfcand") ? feeds.visibleCandidates.count : 0
+        let stale = pipeline.homePC.features.contains("fresh") ? feeds.staleItems : []
+        if todayCount > 0 || waiting > 0 || reviewCount > 0 || pipeline.misheardCount > 0 || selfCand > 0 || !stale.isEmpty {
             Section {
+                if selfCand > 0 {
+                    NavigationLink {
+                        SelfCandidatesView()
+                    } label: {
+                        Label("職場の自分の声の確認（\(selfCand) 件）", systemImage: "person.wave.2")
+                    }
+                }
+                ForEach(stale) { item in
+                    Label(AppFeeds.freshLine(item), systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                }
                 if todayCount > 0 {
                     NavigationLink {
                         UnnamedVoicesView(day: today)

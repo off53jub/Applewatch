@@ -51,6 +51,8 @@ struct IntegrationsView: View {
     @Environment(Pipeline.self) private var pipeline
     /// Pipeline.meetingBriefKey と同じ名前
     @AppStorage("meetingBrief") private var meetingBrief = true
+    /// Pipeline.meetingBriefLeadKey と同じ名前（予定の何分前に知らせるか。2026-11-12）
+    @AppStorage("meetingBriefLeadMinutes") private var briefLead = 30
 
     var body: some View {
         @Bindable var calendar = pipeline.calendar
@@ -70,6 +72,12 @@ struct IntegrationsView: View {
                     NavigationLink("使うカレンダー・職場のカレンダー") { CalendarsView() }
                     Toggle("会う前のおさらいを通知する", isOn: $meetingBrief)
                         .onChange(of: meetingBrief) { Task { await pipeline.scheduleMeetingBriefs(force: true) } }
+                    if meetingBrief {
+                        Picker("何分前に知らせる", selection: $briefLead) {
+                            ForEach(Pipeline.meetingBriefLeadChoices, id: \.self) { Text("\($0) 分前").tag($0) }
+                        }
+                        .onChange(of: briefLead) { Task { await pipeline.scheduleMeetingBriefs(force: true) } }
+                    }
                 }
             } header: {
                 Text("カレンダー")
@@ -77,7 +85,7 @@ struct IntegrationsView: View {
                 Text("""
                     Google カレンダーは、iPhone の「設定」→「アプリ」→「カレンダー」→「カレンダーアカウント」→「アカウントを追加」→「Google」で、ふだんの Google アカウントを足して「カレンダー」をオンにすると読めるようになります（LifeLog の側で Google の設定を足す必要はありません）。
                     予定は、記録の「過ごし方」の区切りと名前（12:00〜16:00 ダンス、など）、会話の見出しの〔予定名〕、要約の参考に使います。予定名・場所・参加者の名前は、聞き取りと誤変換直しのヒントにもなります（そのときは Groq に送られます）。職場のカレンダーを選ぶと、その予定の時間は職場とみなします。
-                    「会う前のおさらい」は、予定の10分前に、その予定で会う名前を付けた人（参加者の名前か、予定名に入っている名前）と、前回話した会話の見出しと要点を通知します。前に話した会話が無い人は出しません。通知はロック画面にも出ます。
+                    「会う前のおさらい」は、予定の30分前（上で変えられます）に、その予定で会う名前を付けた人（参加者の名前か、予定名に入っている名前）と、前回話した会話、最近の話題、残っている頼まれごと・約束・返事待ちを通知します。前に話した会話もやることも無い人は出しません。通知はロック画面にも出ます。
                     """)
             }
 

@@ -323,6 +323,16 @@ final class HomePC {
         return data
     }
 
+    /// GET /self-candidates・/freshness・/plaud-gap（2026-11-12。AppFeeds.swift）。feature は "selfcand"・"fresh"・"plaudgap"
+    func appFeed(_ path: String, feature: String) async throws -> Data {
+        guard features.contains(feature) else { throw Failure.notConfigured }
+        let session = makeSession(timeout: 10)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: try request(path))
+        try Self.check(response, data: data)
+        return data
+    }
+
     /// POST /pay/taps・/pay/paypay（かざした記録と PayPay の明細を母艦へ。2026-11-11）
     func postPay(_ path: String, body: Data, type: String) async throws {
         guard features.contains("pay") else { throw Failure.notConfigured }

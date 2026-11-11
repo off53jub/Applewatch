@@ -16,9 +16,11 @@ struct MothershipTodo: Codable, Identifiable, Equatable, Sendable {
     var due: String? = nil
     /// 母艦の毎朝のまとめが「もう済んだかも」とした理由（2026-11-09。無ければ nil）
     var maybeDone: String? = nil
+    /// 返事・結果を待っている相手の名前（2026-11-12。無ければ nil。会う前のおさらいに使う）
+    var waitingFor: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, text, project, work, added, due, maybeDone = "maybe_done"
+        case id, text, project, work, added, due, maybeDone = "maybe_done", waitingFor = "waiting_for"
     }
 }
 
