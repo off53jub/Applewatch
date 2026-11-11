@@ -24,6 +24,9 @@
   母艦の inbox/card-taps/card-taps.json に置き換えで書く（iPhone の card-taps.jsonl が正。PC 側は写し）。
 - POST /pay/paypay（PayPay の明細 CSV そのまま。2026-11-11）→ 母艦の inbox/paypay/app-<中身の16進8文字>.csv。
   同じ中身のファイルがすでにあれば書かない。どちらも中身は記録（log.txt）に書かない（件数だけ）。
+- POST /good/feedback {"items": [...]}（2026-11-12。features の "goodfb"）→ いいこと帳で本人が付けた
+  「違う」「当たり」「外れ」の全部を、母艦の inbox/good-feedback/feedback.json に置き換えで書く（iPhone の good-feedback.json が正）。
+  1件は {"id","day","time","kind":"word"|"laugh","verdict":"wrong"|"right"}。2000 件まで。中身は記録に書かない（件数だけ）。
 """
 
 from __future__ import annotations
@@ -39,12 +42,15 @@ from typing import Callable
 from urllib.parse import urlparse
 
 GETS = ("/todo", "/card", "/vocab", "/good")
-POSTS = ("/todo/done", "/pay/taps", "/pay/paypay")
+POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback")
 BODY_LIMIT = 16 * 1024
 # 支払いの記録を母艦へ（2026-11-11）
 TAPS_FILE = Path("inbox") / "card-taps" / "card-taps.json"
 PAYPAY_DIR = Path("inbox") / "paypay"
-PAY_LIMITS = {"/pay/taps": 1024 * 1024, "/pay/paypay": 8 * 1024 * 1024}
+# いいこと帳への本人の「当たり」「違う」（2026-11-12。features の "goodfb"）。2000 件で 1MB に収まる
+GOOD_FEEDBACK_FILE = Path("inbox") / "good-feedback" / "feedback.json"
+GOOD_FEEDBACK_MAX = 2000
+PAY_LIMITS = {"/pay/taps": 1024 * 1024, "/pay/paypay": 8 * 1024 * 1024, "/good/feedback": 1024 * 1024}
 DEFAULT_HOME = Path(r"D:\Lifelog")
 EXPORT = Path("state") / "todo_for_app.json"
 DONE_DIR = Path("inbox") / "app-todo-done"
@@ -69,6 +75,9 @@ VOCAB_LIMIT = 300
 GOOD = Path("state") / "good_for_app.json"
 GOOD_DAYS = 31
 GOOD_ITEMS = 200
+GOOD_MONTH_KEYS = ("thanks", "praise", "done", "consulted", "own")
+GOOD_FIRST_KINDS = ("初めて話した人", "初めての場所")
+GOOD_TONIGHT_KINDS = ("お礼", "ほめ言葉", "済ませた", "頼られた")
 _lock = threading.Lock()
 
 
@@ -253,7 +262,7 @@ def read_good(base: Path) -> dict:
         if not isinstance(w, dict) or not DIGEST_DAY.fullmatch(str(w.get("start") or "")):
             continue
         weeks.append({"start": w["start"], **{k: _count(w.get(k)) or 0 for k in ("thanks", "praise", "done", "own")},
-                      "laughs": _count(w.get("laughs"))})
+                      "laughs": _count(w.get("laughs")), "consulted": _count(w.get("consulted"))})
     days = []
     for d in data["days"][:GOOD_DAYS]:
         if not isinstance(d, dict) or not DIGEST_DAY.fullmatch(str(d.get("day") or "")):
@@ -264,8 +273,61 @@ def read_good(base: Path) -> dict:
         done = [{"time": x["time"], "what": _text(x.get("what"), 80)}
                 for x in d.get("done") or [] if isinstance(x, dict) and clock.fullmatch(str(x.get("time") or ""))]
         laughs = [x for x in d.get("laughs") or [] if isinstance(x, str) and clock.fullmatch(x)]
-        days.append({"day": d["day"], "words": words[:GOOD_ITEMS], "done": done[:GOOD_ITEMS], "laughs": laughs[:GOOD_ITEMS]})
-    return {"available": True, "generated_at": _text(data.get("generated_at"), 30), "weeks": weeks, "days": days}
+        laughs_ok = [x for x in d.get("laughs_ok") or [] if isinstance(x, str) and clock.fullmatch(x)]
+        days.append({"day": d["day"], "words": words[:GOOD_ITEMS], "done": done[:GOOD_ITEMS], "laughs": laughs[:GOOD_ITEMS],
+                     "laughs_ok": laughs_ok[:GOOD_ITEMS]})
+    result = {"available": True, "generated_at": _text(data.get("generated_at"), 30), "weeks": weeks, "days": days}
+    # 先月との比べ・初めて・今夜の3つ（2026-11-12。どれも無くてよい）
+    month = data.get("month")
+    if isinstance(month, dict):
+        result["month"] = {name: {k: _count(month[name].get(k)) for k in GOOD_MONTH_KEYS}
+                           for name in ("this", "last") if isinstance(month.get(name), dict)}
+    firsts = [{"day": x["day"], "kind": x["kind"], "text": _text(x.get("text"), 80)}
+              for x in data.get("firsts") or []
+              if isinstance(x, dict) and DIGEST_DAY.fullmatch(str(x.get("day") or "")) and x.get("kind") in GOOD_FIRST_KINDS]
+    if firsts:
+        result["firsts"] = firsts[:20]
+    tonight = [{"kind": x["kind"], "text": _text(x.get("text"), 120), "time": x["time"]}
+               for x in data.get("tonight") or []
+               if isinstance(x, dict) and x.get("kind") in GOOD_TONIGHT_KINDS and clock.fullmatch(str(x.get("time") or ""))]
+    if tonight:
+        result["tonight"] = tonight[:3]
+    return result
+
+
+def parse_good_feedback(data: bytes) -> list[dict]:
+    """いいこと帳への「違う」「当たり」を確かめる。おかしな行は落とす。形が違えば ValueError"""
+    try:
+        body = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError("いいこと帳の直しを読めません") from None
+    if not isinstance(body, dict) or not isinstance(body.get("items"), list):
+        raise ValueError("いいこと帳の直しの形が違います")
+    items = []
+    for item in body["items"][:GOOD_FEEDBACK_MAX]:
+        if not isinstance(item, dict):
+            continue
+        fid, day, when = item.get("id"), item.get("day"), item.get("time")
+        if not (isinstance(fid, str) and isinstance(day, str) and isinstance(when, str)):
+            continue
+        if not 1 <= len(fid) <= 200 or not DIGEST_DAY.fullmatch(day) or not re.fullmatch(r"\d{2}:\d{2}", when):
+            continue
+        if item.get("kind") not in ("word", "laugh") or item.get("verdict") not in ("wrong", "right"):
+            continue
+        items.append({"id": fid, "day": day, "time": when, "kind": item["kind"], "verdict": item["verdict"]})
+    return items
+
+
+def write_good_feedback(base: Path, items: list[dict], now: float | None = None) -> Path:
+    path = base / GOOD_FEEDBACK_FILE
+    body = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now if now is not None else time.time())),
+            "items": items}
+    with _lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(body, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(path)
+    return path
 
 
 def read_export(base: Path) -> dict:
@@ -407,7 +469,12 @@ def write_paypay(base: Path, data: bytes) -> Path | None:
 
 def http_post_pay(handler, config: dict, path: str, data: bytes, log: Callable[[str], None]) -> None:
     try:
-        if path == "/pay/taps":
+        if path == "/good/feedback":
+            items = parse_good_feedback(data)
+            write_good_feedback(home(config), items)
+            log(f"{handler.client_address[0]} からいいこと帳の直しを母艦へ: {len(items)} 件")
+            handler.send_json(200, {"ok": True, "count": len(items)})
+        elif path == "/pay/taps":
             items = parse_taps(data)
             write_taps(home(config), items)
             log(f"{handler.client_address[0]} からかざした記録を母艦へ: {len(items)} 件")

@@ -82,6 +82,10 @@ extension Pipeline {
         // 「LifeLog のやること」（2026-11-10）
         state.taskTitles = WidgetBridge.taskTitles(tasks.todo, now: now)
         state.tasksChecking = tasks.candidates.count
+        // 「LifeLog のいいこと帳」（2026-11-12。GoodMore.swift）
+        let goodWeek = GoodWidgetCounts.thisWeek(good.data?.weeks, now: now)
+        state.goodThanks = goodWeek?.thanks
+        state.goodPraise = goodWeek?.praise
         state.nextEvent = WidgetBridge.nextEvent(calendar.dayEvents(from: now, to: now.addingTimeInterval(12 * 3600)), now: now)
         state.lastProcessed = ledger.chunks.lazy.compactMap(\.transcribed).max()
         state.pcOK = homePC.isConfigured ? homePC.downSince == nil : nil

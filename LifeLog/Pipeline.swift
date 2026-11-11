@@ -1477,7 +1477,10 @@ final class Pipeline {
         payments.reloadTaps()  // ウォレットでかざした記録（2026-11-09。Payments.swift）
         scheduleWorkDigestReminder()  // 退勤の頃の「今日のまとめを取り込みましたか」（2026-11-10。WorkDigest.swift）
         Task { await payments.refreshMail(homePC) }
-        Task { await good.refresh(homePC) }  // いいこと帳（30分に1回まで）  // カードの利用速報（30分に1回まで）
+        Task {
+            await good.refresh(homePC)  // いいこと帳（30分に1回まで）
+            updateWidgets()  // ウィジェットの今週の数（2026-11-12）
+        }  // カードの利用速報（30分に1回まで）
         pcLinkOnActive()  // 家の PC に様子を送り、記録と直しをやり取りする（2026-11-07。PCDiag.swift）
         shopVisits.retryRecent()  // 会話がまだ文字になっていなかった立ち寄りを推測し直す（2026-11-08。ShopVisits.swift）
         startDraftPolling()  // 送ってまだの区切りの下書き（仮）を15秒ごとに見に行く（版 8。2026-11-07。Drafts.swift）

@@ -37,6 +37,9 @@ struct WidgetState: Codable, Equatable {
     var taskTitles: [String]?
     /// 確かめ待ちの数（iPhone だけ。2026-11-10）
     var tasksChecking: Int?
+    /// 今週のお礼・ほめ言葉の数（iPhone だけ。いいこと帳のウィジェット用。2026-11-12）
+    var goodThanks: Int?
+    var goodPraise: Int?
 
     static let suiteName = "group.com.off53jub.lifelog"
     static let key = "widgetState"
@@ -44,6 +47,8 @@ struct WidgetState: Codable, Equatable {
     static let phoneKind = "com.off53jub.lifelog.status"
     /// iPhone の「LifeLog のやること」の種類の名前（2026-11-10。「LifeLog の様子」と同じ中身を読む）
     static let tasksKind = "com.off53jub.lifelog.tasks"
+    /// iPhone の「LifeLog のいいこと帳」の種類の名前（2026-11-12。同じ中身を読む）
+    static let goodKind = "com.off53jub.lifelog.good"
     /// 時計の文字盤の LifeLog の種類の名前。前からある「開くボタン」と同じ（変えると文字盤から消える）
     static let watchKind = "com.off53jub.lifelog.watch.launcher"
     /// ウィジェットが自分で中身を読み直すまでの長さ（アプリからの読み直しが届かなかったとき用）
@@ -120,6 +125,8 @@ struct WidgetState: Codable, Equatable {
         state.lastProcessed = now.addingTimeInterval(-5 * 60)
         state.pcOK = true
         state.watchUnsent = 0
+        state.goodThanks = 3
+        state.goodPraise = 2
         return state
     }
 }

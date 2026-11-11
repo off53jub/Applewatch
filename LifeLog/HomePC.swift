@@ -323,6 +323,19 @@ final class HomePC {
         return data
     }
 
+    /// POST /good/feedback（いいこと帳の「違う」「当たり」「外れ」の全部を母艦へ。features の "goodfb"。2026-11-12。GoodMore.swift）
+    func postGoodFeedback(_ body: Data) async throws {
+        guard features.contains("goodfb") else { throw Failure.notConfigured }
+        let session = makeSession(timeout: 20)
+        defer { session.finishTasksAndInvalidate() }
+        var request = try request("good/feedback")
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        let (data, response) = try await session.data(for: request)
+        try Self.check(response, data: data)
+    }
+
     /// POST /pay/taps・/pay/paypay（かざした記録と PayPay の明細を母艦へ。2026-11-11）
     func postPay(_ path: String, body: Data, type: String) async throws {
         guard features.contains("pay") else { throw Failure.notConfigured }

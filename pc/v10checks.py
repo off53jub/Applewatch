@@ -541,6 +541,49 @@ def check_vocab() -> int:
         failed += say(len(got["days"]) == 1 and len(got["days"][0]["words"]) == 1 and got["days"][0]["laughs"] == ["19:58"],
                       "いいこと帳: おかしな行は落として返す")
     failed += say("/good" in mothership.GETS, "いいこと帳: GET /good")
+    # いいこと帳の足し（先月・初めて・今夜・頼られた・ウケた確認。2026-11-12）
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        (base / "state").mkdir()
+        data = {"weeks": [{"start": "2026-11-09", "thanks": 1, "consulted": 4}],
+                "days": [{"day": "2026-11-12", "words": [], "done": [], "laughs": ["10:00"], "laughs_ok": ["10:00", "x", 5]}],
+                "month": {"this": {"thanks": 3, "consulted": True, "own": 9}, "last": "bad"},
+                "firsts": [{"day": "2026-11-11", "kind": "初めての場所", "text": "公園"}, {"day": "2026-11-11", "kind": "ほか"}] + [
+                    {"day": "2026-11-10", "kind": "初めて話した人", "text": f"人{n}"} for n in range(30)],
+                "tonight": [{"kind": "お礼", "text": "ありがとう", "time": "17:17"}, {"kind": "変", "text": "x", "time": "17:18"}] + [
+                    {"kind": "頼られた", "text": f"件{n}", "time": "18:00"} for n in range(5)]}
+        (base / mothership.GOOD).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        got = mothership.read_good(base)
+        failed += say(got["weeks"][0]["consulted"] == 4 and got["days"][0]["laughs_ok"] == ["10:00"],
+                      "いいこと帳: 頼られた回数とウケた確認を通す")
+        failed += say(got["month"]["this"]["thanks"] == 3 and got["month"]["this"]["consulted"] is None and "last" not in got["month"],
+                      "いいこと帳: 先月との比べは型を確かめる")
+        failed += say(len(got["firsts"]) == 20 and len(got["tonight"]) == 3 and got["tonight"][0]["text"] == "ありがとう",
+                      "いいこと帳: 初めては20件・今夜は3件まで")
+        (base / mothership.GOOD).write_text(json.dumps({"weeks": [], "days": []}), encoding="utf-8")
+        failed += say(not {"month", "firsts", "tonight"} & set(mothership.read_good(base)), "いいこと帳: 足しが無くても読める")
+    # いいこと帳の直しを母艦へ（2026-11-12）
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        ok = {"id": "2026-11-12|17:17|word|ありがとう", "day": "2026-11-12", "time": "17:17", "kind": "word", "verdict": "wrong"}
+        body = json.dumps({"items": [ok, {**ok, "day": "11/12"}, {**ok, "time": "7:17"}, {**ok, "kind": "x"}, {**ok, "verdict": "x"},
+                                     {**ok, "id": "あ" * 201}, {**ok, "id": ""}, "bad"]}, ensure_ascii=False).encode()
+        items = mothership.parse_good_feedback(body)
+        failed += say(items == [ok], "いいこと帳の直し: おかしな行は落とす")
+        many = json.dumps({"items": [{**ok, "id": f"i{n}"} for n in range(mothership.GOOD_FEEDBACK_MAX + 10)]}).encode()
+        failed += say(len(mothership.parse_good_feedback(many)) == mothership.GOOD_FEEDBACK_MAX
+                      and len(many) < mothership.body_limit("/good/feedback"), "いいこと帳の直し: 2000 件まで・上限に収まる")
+        try:
+            mothership.parse_good_feedback(b"[]")
+            failed += say(False, "いいこと帳の直し: 形が違えば断る")
+        except ValueError:
+            failed += say(True, "いいこと帳の直し: 形が違えば断る")
+        mothership.write_good_feedback(base, items)
+        mothership.write_good_feedback(base, [])
+        saved = json.loads((base / mothership.GOOD_FEEDBACK_FILE).read_text(encoding="utf-8"))
+        failed += say(saved["items"] == [] and not list((base / mothership.GOOD_FEEDBACK_FILE).parent.glob("*.tmp")),
+                      "いいこと帳の直し: 母艦に置き換えで書く")
+    failed += say("/good/feedback" in mothership.POSTS, "いいこと帳の直し: POST /good/feedback")
     # 支払いの記録を母艦へ（2026-11-11）
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)

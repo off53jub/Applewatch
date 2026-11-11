@@ -15,6 +15,8 @@ struct LifeLogWidgets: WidgetBundle {
         StatusWidget()
         // 今日までの頼まれごとと確かめ待ちの数（2026-11-10）
         TasksWidget()
+        // 今週のお礼とほめ言葉の数（2026-11-12）
+        GoodWidget()
         RecordingLiveActivity()
     }
 }
