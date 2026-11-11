@@ -95,7 +95,14 @@ struct UnmatchedPaymentsView: View {
                     ForEach(groups[day] ?? []) { p in
                         HStack {
                             Text(Self.clock.string(from: p.time)).font(.caption).foregroundStyle(.secondary)
-                            Text(p.hasShop ? p.shop : "（店名なし）")
+                            if p.hasShop {
+                                Text(p.shop)
+                            } else if let guess = PaymentMatch.placeGuessLabel(for: p, visits: pipeline.shopVisits.visits) {
+                                // 店名の無いかざした記録に、そのころいた場所からの推測を添える（表示だけ。記録には書かない。2026-11-12）
+                                Text(guess).foregroundStyle(.secondary)
+                            } else {
+                                Text("（店名なし）")
+                            }
                             Text(p.via).font(.caption2).foregroundStyle(.secondary)
                             Spacer()
                             Text(p.amount > 0 ? "\(p.amount.formatted())円" : "").font(.caption).foregroundStyle(.secondary)
