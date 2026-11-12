@@ -126,6 +126,15 @@ enum Tally {
                 + "・あとから付けた \(n("title.filled"))（付けようとして作れなかった回数 \(n("title.fillFailed"))）"
                 + (n("llm.pcFallback") > 0 ? "・Groq が使えず家の PC の言語モデルで作った \(n("llm.pcFallback"))" : ""), nil))
         }
+        if n("claude.ok") + n("claude.failed") + n("claude.capped") > 0 {
+            // 家の PC を通して Claude に頼んだ言語モデルの仕事（2026-11-13。Claude.swift）。頼めなかった分は今までの順で作った
+            let ok = n("claude.ok"), failed = n("claude.failed"), capped = n("claude.capped")
+            let total = ok + failed + capped
+            let good: Bool? = total >= 20 ? (Double(ok) / Double(total) >= 0.8) : nil
+            let value: String = "作れた \(ok)" + pct(ok, total) + "（うち職場 \(n("claude.work"))）・頼めずほかで作った \(failed)"
+                + (capped > 0 ? "・今月の上限で見送った \(capped)" : "")
+            rows.append(("Claude（家の PC 経由）", value, good))
+        }
         if n("talk.joined") + n("talk.split") > 0 {
             rows.append(("会話の区切りの手直し", "つないだ \(n("talk.joined"))・分けた \(n("talk.split"))", nil))
         }

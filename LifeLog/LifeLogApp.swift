@@ -80,6 +80,8 @@ struct LifeLogApp: App {
         CardTap.added = { pipeline.payments.reloadTaps() }
         // 職場の会話を家の PC の言語モデルで作るとき（本人がオンにしたときだけ。2026-11-06）
         Summarizer.pcLLM = { system, prompt in try await pipeline.homePC.llm(system: system, prompt: prompt) }
+        // 言語モデルの仕事を、家の PC を通して Claude に先に頼む（2026-11-13。Claude.swift。鍵は PC の中だけ）
+        Summarizer.claudeLLM = { call in try await pipeline.homePC.claude(call).text }
         // 家の PC からの見えない通知で起きたときの動き（2026-11-07。Push.swift）
         PushWake.pipeline = pipeline
         _pipeline = State(initialValue: pipeline)

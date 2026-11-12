@@ -146,6 +146,8 @@ final class HomePC {
         UserDefaults.standard.set(features.contains("draft"), forKey: Self.draftKey)
         // 時計から直接届いた区切りを、PC から先に記録に入れられるか（版 10。PCFirst.swift）
         UserDefaults.standard.set(features.contains(PCFirst.feature), forKey: PCFirst.featureKey)
+        // Claude に頼めるか（鍵があり、今月の上限より下。2026-11-13。Claude.swift。言語モデルの呼び出しはどのスレッドからも読む）
+        UserDefaults.standard.set(features.contains(ClaudeRoute.feature), forKey: ClaudeRoute.featureKey)
         speakerModel = hello.speaker_model
         return "\(hello.model)（\(hello.provider == "cuda" ? "GPU" : "CPU")）"
     }
@@ -244,6 +246,54 @@ final class HomePC {
         let (data, response) = try await session.data(for: request)
         try Self.check(response, data: data)
         return try JSONDecoder().decode(Reply.self, from: data).text
+    }
+
+    // MARK: - Claude（家の PC 経由。2026-11-13。Claude.swift）
+
+    /// POST /claude。Claude の鍵は家の PC の中だけにある。頼めなかったときは ClaudeFailure
+    /// （上限 402・鍵が無い 503・断られた 422・職場の会話は送らない設定 403・PC が切れている）。
+    /// クラウドに送ったものの一覧には、送り先と何のためかだけを残す（中身は残さない）
+    func claude(system: String?, prompt: String, json: Bool, maxTokens: Int, tier: ClaudeTier,
+                purpose: String, work: Bool, timeout: TimeInterval = 120) async throws -> ClaudeReply {
+        guard shouldTry, features.contains(ClaudeRoute.feature) || ClaudeRoute.offered,
+              var request = try? self.request("claude") else { throw ClaudeFailure.notReady }
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = [
+            "prompt": prompt, "json": json, "max_tokens": min(8192, max(1, maxTokens)),
+            "tier": tier.rawValue, "purpose": String(purpose.prefix(40)), "work": work,
+        ]
+        if let system { body["system"] = system }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        CloudLog.add(service: ClaudeRoute.service, what: "言語モデル（\(ClaudeJob.label(purpose))・\(tier.rawValue)）",
+                     work: work, size: prompt.count)
+        let session = makeSession(timeout: timeout)
+        defer { session.finishTasksAndInvalidate() }
+        let result: (Data, URLResponse)
+        do {
+            result = try await session.data(for: request)
+        } catch {
+            throw ClaudeFailure.server(status: 0, reason: error.localizedDescription)
+        }
+        let (data, response) = result
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if let failure = ClaudeFailure.from(status: status, data: data) { throw failure }
+        guard let reply = try? JSONDecoder().decode(ClaudeReply.self, from: data) else { throw ClaudeFailure.unreadable }
+        return reply
+    }
+
+    func claude(_ call: ClaudeCall) async throws -> ClaudeReply {
+        try await claude(system: call.system, prompt: call.prompt, json: call.json, maxTokens: call.maxTokens,
+                         tier: call.tier, purpose: call.purpose, work: call.work, timeout: call.timeout)
+    }
+
+    /// GET /claude/usage（今月使った額・上限・何のためにいくら。設定の画面に出す）
+    func claudeUsage() async throws -> ClaudeUsage {
+        let session = makeSession(timeout: 10)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: try request("claude/usage"))
+        try Self.check(response, data: data)
+        return try JSONDecoder().decode(ClaudeUsage.self, from: data)
     }
 
     /// PC の話者モデルの名前（版 5 から。変わったら、名前のある人の声を測り直す）

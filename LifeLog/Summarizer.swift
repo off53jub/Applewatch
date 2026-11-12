@@ -78,8 +78,28 @@ enum Summarizer {
     /// セカンドオピニオンとして、iPhone の中の言語モデルで作らせる（2026-11-06。MultiModel）
     @TaskLocal static var forceLocal = false
 
-    /// この呼び出しを、はじめから端末内の言語モデルで作るか
+    // MARK: - Claude（家の PC 経由。2026-11-13。Claude.swift）
+
+    /// 家の PC を通して Claude に頼む（答えの文字列を返す）。Pipeline が入れる
+    nonisolated(unsafe) static var claudeLLM: (@Sendable (ClaudeCall) async throws -> String)?
+
+    /// この呼び出しを、先に Claude に頼むか（「Claude を使う」・PC が "claude" を知らせた・職場の会話は「職場の会話も Claude で」）
+    static var claudeFirst: Bool {
+        let paused = ClaudeRoute.paused()
+        return claudeLLM != nil && ClaudeRoute.shouldTry(
+            useClaude: ClaudeRoute.useClaude, forWork: ClaudeRoute.forWork, offered: ClaudeRoute.offered,
+            sensitive: sensitive, bench: strictCloud || modelOverride != nil, forceLocal: forceLocal,
+            localAlways: LocalModel.isOn && LocalModel.mode == .always, paused: paused.all, workPaused: paused.work)
+    }
+
+    /// この呼び出しを、はじめから端末内の言語モデルで作るか（先に Claude に頼むときは false。
+    /// 渡す量を決めるのと、iPhone の中のモデルでセカンドオピニオンを取るかに使う）
     static func usesLocal(apiKey: String) -> Bool {
+        localFirst(apiKey: apiKey) && (forceLocal || !claudeFirst)
+    }
+
+    /// Claude に頼めなかったときの、今までの順で、はじめに端末内の言語モデルで作るか
+    private static func localFirst(apiKey: String) -> Bool {
         if forceLocal { return LocalModel.isUsable }
         guard LocalModel.isOn else { return false }
         switch LocalModel.mode {
@@ -104,7 +124,7 @@ enum Summarizer {
             // 長い会話は、区切りごとに要点メモにしてからまとめる
             var notes: [String] = []
             for piece in pieces(of: transcript, length: limit) {
-                let json = try await chat(model: noteModel, apiKey: apiKey, prompt: """
+                let json = try await chat(model: noteModel, apiKey: apiKey, job: .notes, prompt: """
                     次は会話の文字起こしの一部です（[自分] は記録している本人）。
                     要点を5つ以内の短い箇条書きにして、JSON {"notes": ["...", ...]} で返してください。
 
@@ -120,7 +140,7 @@ enum Summarizer {
         let work = sensitive
         let shareLine = work ? "" : "[自分] の発言は全体の \(Int(selfShare * 100))% です。\n"
         let quietCue = work ? "" : "本人がほとんど話さない、"
-        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+        let json = try await chat(model: mainModel, apiKey: apiKey, job: .headline, prompt: """
             次は \(timeRange) の録音の文字起こしです。[自分] は記録している本人、[人物N] や名前は話し相手です。
             \(shareLine)\
             \(event.map { "この時間のカレンダーの予定: \($0)（会話の中身と合うときだけ見出しの参考にしてください）\n" } ?? "")\
@@ -160,7 +180,7 @@ enum Summarizer {
 
     static func day(_ conversations: String, apiKey: String) async throws -> Day {
         // 見本の文は入れず、決まりだけを言葉で伝える（2026-11-09）
-        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+        let json = try await chat(model: mainModel, apiKey: apiKey, job: .day, prompt: """
             次は、ある人（本人）の1日の会話の見出しと要点の一覧です（時刻・場所・相手・見出し）。1日のまとめを次の JSON で返してください。
             なければ空の配列にしてください。一覧に無いことは書かないでください。
             "flow" は1日の流れです。時刻順に、時刻の範囲・場所・していたこと・一緒にいた人が分かる1行ずつにしてください。
@@ -207,6 +227,7 @@ enum Summarizer {
     /// 返すのは塊ごとの（最初の番号, 最後の番号, 見出し）で、0〜count-1 の番号を隙間なく分けたもの。
     static func activityBlocks(_ list: String, count: Int, events: String, previous: String?,
                                apiKey: String) async throws -> [(from: Int, to: Int, title: String)] {
+        let job = ClaudeJob.blocks
         let prompt = """
             次は、ある人（本人）の1日の録音を、会話ごとに時刻順に並べた一覧です（番号. 時刻｜場所｜相手｜〔カレンダーの予定〕｜見出し）。
             この人が「何をしていたか」で、1日をいくつかの時間の塊に分けてください。
@@ -225,10 +246,10 @@ enum Summarizer {
             """
         let json: [String: Any]
         do {
-            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 60, job: job, prompt: prompt)
         } catch CloudTranscriber.Failure.limited {
             // 大きいモデルの枠が無ければ小さいモデルで
-            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 60, job: job, prompt: prompt)
         }
         func number(_ value: Any?) -> Int? {
             (value as? Int) ?? (value as? NSNumber)?.intValue ?? (value as? String).flatMap { Int($0) }
@@ -251,6 +272,7 @@ enum Summarizer {
     /// 会話の中で、同じ名前や言葉が行によって違う字で書かれているところを見つけ、そろえる書き方を返す。
     /// 返すのは（直す前の書き方, そろえた書き方）の組。読みが合うかは呼ぶ側で確かめる。
     static func unify(_ text: String, title: String?, hints: [String], apiKey: String) async throws -> [(wrong: String, right: String)] {
+        let job = ClaudeJob.unify
         let prompt = """
             次は、ある会話の文字起こしです\(title.map { "（話題: \($0)）" } ?? "")。音声認識なので、同じ人の名前や同じ言葉が、行によって違う字で書かれていることがあります。
             会話の中で同じものを指しているのに書き方がばらばらな、人の名前・固有名詞・専門用語を見つけ、どの書き方にそろえるかを決めてください。
@@ -265,9 +287,9 @@ enum Summarizer {
             """
         let json: [String: Any]
         do {
-            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 60, job: job, prompt: prompt)
         } catch CloudTranscriber.Failure.limited {
-            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 60, job: job, prompt: prompt)
         }
         let pairs = ((json["pairs"] as? [[String: Any]]) ?? []).compactMap { pair -> (wrong: String, right: String)? in
             guard let wrong = (pair["wrong"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -285,6 +307,7 @@ enum Summarizer {
     /// 選べるのは judge の行だけ。返すのは 行番号 → 種類（broadcastKinds のどれか）。
     static func broadcast(_ lines: [String], judge: Set<Int>, setting: String?, apiKey: String) async throws -> [Int: String] {
         guard !judge.isEmpty else { return [:] }
+        let job = ClaudeJob.broadcast
         let numbered = lines.enumerated().map { "\($0.offset): \($0.element)" }.joined(separator: "\n")
         let prompt = """
             次は、本人が1日中身に着けているマイクで録った音声の文字起こしです。行の頭の数字は行番号、[自分] は本人、\
@@ -305,9 +328,9 @@ enum Summarizer {
             """
         let json: [String: Any]
         do {
-            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 60, job: job, prompt: prompt)
         } catch CloudTranscriber.Failure.limited {
-            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 60, job: job, prompt: prompt)
         }
         var result: [Int: String] = [:]
         for item in (json["lines"] as? [[String: Any]]) ?? [] {
@@ -322,6 +345,7 @@ enum Summarizer {
     /// 過ごし方の塊ごとに、その中でしたことを短い箇条書きにする。塊の数が合わなければ失敗。
     static func activityDetails(_ blocks: [(header: String, body: String)], apiKey: String) async throws -> [[String]] {
         guard !blocks.isEmpty else { return [] }
+        let job = ClaudeJob.details
         let budget = max(300, 6_000 / blocks.count)
         let material = blocks.map { $0.header + "\n" + String($0.body.prefix(budget)) }.joined(separator: "\n\n")
         let prompt = """
@@ -335,9 +359,9 @@ enum Summarizer {
             """
         let json: [String: Any]
         do {
-            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 60, job: job, prompt: prompt)
         } catch CloudTranscriber.Failure.limited {
-            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 60, prompt: prompt)
+            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 60, job: job, prompt: prompt)
         }
         guard let raw = json["blocks"] as? [[String: Any]], raw.count == blocks.count else {
             throw CloudTranscriber.Failure.temporary("したことをまとめられませんでした")
@@ -357,7 +381,7 @@ enum Summarizer {
     }
 
     static func week(_ days: String, apiKey: String) async throws -> Week {
-        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+        let json = try await chat(model: mainModel, apiKey: apiKey, job: .week, prompt: """
             次は、ある人の1週間の記録です（日ごとの流れ・決まったこと・やること・会話の見出し）。1週間のまとめを次の JSON で返してください。
             なければ空の配列にしてください。
             {"flow": ["10/27(月)　会社で企画会議、夜は友人と食事", ...日ごとに1行],
@@ -399,7 +423,7 @@ enum Summarizer {
         if transcript.count > limit {
             var notes: [String] = []
             for piece in pieces(of: transcript, length: limit) {
-                let json = try await chat(model: noteModel, apiKey: apiKey, prompt: """
+                let json = try await chat(model: noteModel, apiKey: apiKey, job: .minutesNotes, prompt: """
                     次は会議の文字起こしの一部です（[自分] は記録している本人、角かっこは話した人）。
                     議題・発言・決まったこと・宿題（誰が・何を・いつまでに）を落とさず、話した人が分かるものは［名前］を頭に付けた短い箇条書きにして、
                     JSON {"notes": ["...", ...]} で返してください（10個以内）。
@@ -410,7 +434,7 @@ enum Summarizer {
             }
             material = "（長い会議のため、区切りごとの要点メモ）\n" + notes.map { "・" + $0 }.joined(separator: "\n")
         }
-        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+        let json = try await chat(model: mainModel, apiKey: apiKey, job: .minutes, prompt: """
             次は \(timeRange) の会議の文字起こしです。[自分] は記録している本人、角かっこは話した人です。
             \(event.map { "予定: \($0)\n" } ?? "")\(attendees.isEmpty ? "" : "出席していた人: " + attendees.joined(separator: "、") + "\n")\
             話し言葉は書き言葉に直し、文字起こしの誤変換は文脈から補ってかまいません。記録に無いことは書かないでください。
@@ -456,7 +480,7 @@ enum Summarizer {
     static func tasks(_ transcript: String, day: String, apiKey: String) async throws -> [FoundTask] {
         var found: [FoundTask] = []
         for piece in pieces(of: transcript, length: pieceLimit(apiKey)) {
-            let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+            let json = try await chat(model: mainModel, apiKey: apiKey, job: .tasks, prompt: """
                 次は \(day) の会話の文字起こしです。行の頭は時刻、角かっこは話した人で、[自分] は記録している本人です。
                 本人に関わる、まだ済んでいない次のことだけを拾ってください。
                 asked: 本人がほかの人から頼まれた・指示された・「やります」と引き受けたこと
@@ -487,7 +511,7 @@ enum Summarizer {
 
     /// 写真から読み取った文字（メモ・ホワイトボード・紙の指示など）から、やることを拾う。
     static func tasks(fromText text: String, today: String, apiKey: String) async throws -> [FoundTask] {
-        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+        let json = try await chat(model: mainModel, apiKey: apiKey, job: .photoTasks, prompt: """
             次は、本人が撮った写真（メモ・ホワイトボード・紙の資料など）から読み取った文字です（今日は \(today)）。
             読み取りの間違いは文脈から補ってかまいませんが、書いていないことは足さないでください。
             その中の、やること・頼まれたこと・期限のあることを拾い、次の JSON で返してください。無ければ空の配列にしてください。
@@ -517,7 +541,7 @@ enum Summarizer {
 
     /// 話し方の数字から、ひとことの振り返り（良かったところ・気をつけるとよいところ・次に試すこと）を作る。会話の中身は渡さない。
     static func speaking(_ numbers: String, apiKey: String) async throws -> [String] {
-        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+        let json = try await chat(model: mainModel, apiKey: apiKey, job: .speaking, prompt: """
             次は、ある人の会話での話し方を、記録から数えた数字です（話す割合・1分あたりの文字数・千字あたりの口ぐせ・会話1つあたりの質問）。
             数字だけを根拠に、本人への短い振り返りを3つ返してください。1つ目は良かったところ、2つ目は気をつけるとよいところ、3つ目は次の会話で試すこと。
             それぞれ40文字くらい。数字に無いことは書かないでください。決めつけず、相手や場面による違いがあればそれに触れてください。
@@ -539,7 +563,7 @@ enum Summarizer {
 
     /// 自動の文字起こしで、聞き間違いと思われる言葉を探す。記録は変えない（見つけたものを持ち主に見せるだけ）。
     static func misheard(_ transcript: String, hints: [String], apiKey: String) async throws -> [Misheard] {
-        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+        let json = try await chat(model: mainModel, apiKey: apiKey, job: .misheard, prompt: """
             次は、自動の文字起こしで書いた会話です。各行の頭は時刻（HH:MM:SS）、角かっこは話した人です。
             音を聞き間違えて書いたと思われる言葉を探して、次の JSON で返してください。
             ・探すのは、同じ音や似た音の別の言葉になっているもの、前後と意味がつながらない言葉、人の名前・地名・会社名・専門用語の書き間違い。
@@ -567,7 +591,7 @@ enum Summarizer {
     }
 
     static func month(_ days: String, apiKey: String) async throws -> Month {
-        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+        let json = try await chat(model: mainModel, apiKey: apiKey, job: .month, prompt: """
             次は、ある人の1か月の記録です（日ごとの流れ・決まったこと・やること・会った人）。1か月のまとめを次の JSON で返してください。
             なければ空の配列にしてください。記録に無いことは書かないでください。
             {"flow": ["週ごとに1行、その週の主なできごと"],
@@ -590,7 +614,7 @@ enum Summarizer {
     }
 
     static func plan(_ question: String, today: String, people: [String], apiKey: String) async throws -> Plan {
-        let json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 30, prompt: """
+        let json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 30, job: .askPlan, prompt: """
             今日は \(today) です。次の質問に答えるために、会話の記録を探します。
             記録に出てくる人: \(people.isEmpty ? "（未登録）" : people.joined(separator: "、"))
             探す手がかりを次の JSON で返してください。日付は yyyy-MM-dd。期間が分からなければ null。
@@ -623,10 +647,10 @@ enum Summarizer {
             """
         let json: [String: Any]
         do {
-            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 30, prompt: prompt)
+            json = try await chat(model: mainModel, apiKey: apiKey, maxWait: 30, job: .answer, prompt: prompt)
         } catch CloudTranscriber.Failure.limited {
             // 大きいモデルの枠が無ければ小さいモデルで答える
-            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 30, prompt: prompt)
+            json = try await chat(model: noteModel, apiKey: apiKey, maxWait: 30, job: .answer, prompt: prompt)
         }
         return ((json["answer"] as? String) ?? "", (json["sources"] as? [String]) ?? [])
     }
@@ -648,7 +672,7 @@ enum Summarizer {
             両方の正しい部分を合わせてもかまいませんが、どちらにも無い言葉は足さないでください。"others" は返さないでください。
 
             """
-        let json = try await chat(model: modelOverride ?? correctionModel, apiKey: apiKey, maxWait: 20, prompt: """
+        let json = try await chat(model: modelOverride ?? correctionModel, apiKey: apiKey, maxWait: 20, job: .correct, prompt: """
             次の JSON の "lines" は、日本語の会話を音声認識で書き起こした文の配列です（\(lines.count) 個）。
             同音異義語の誤変換（例: 機会→機械）、固有名詞の書き間違い、明らかな聞き間違いだけを、前後の文脈から直してください。
             言い回しや話し言葉はそのまま残し、要約・言い換え・行の結合や分割はしないでください。
@@ -705,7 +729,7 @@ enum Summarizer {
     /// 1日の記録から、本人に聞くと記録が正しくなりそうなことを count 個まで作る。asked はもう聞いた質問。
     static func questions(_ material: String, day: String, asked: [String], count: Int, apiKey: String) async throws -> [AskDraft] {
         let askedText = asked.isEmpty ? "" : "もう聞いたこと（同じことは聞かない）:\n" + asked.suffix(40).map { "・" + $0 }.joined(separator: "\n") + "\n"
-        let json = try await chat(model: mainModel, apiKey: apiKey, prompt: """
+        let json = try await chat(model: mainModel, apiKey: apiKey, job: .questions, prompt: """
             次は \(day) の、ある人の記録です。[自分] は記録している本人で、会話ごとに時刻・場所・相手・見出し・要点と、文字起こしの頭があります。
             音声認識と AI が作ったものなので、聞き間違えた言葉・人の名前の取り違え・何の集まりかの取り違え・決まっていないことを決まったことにしている、などの間違いや、中身が分からないあいまいなところがあります。
             記録を正しくするために、本人が答えると記録が書き換わる質問だけを \(count) 個まで作ってください。
@@ -799,15 +823,18 @@ enum Summarizer {
     /// JSON で答えさせる。端末内で作るときは端末内の言語モデル、それ以外は Groq。
     /// Groq が使えなかったとき（混んでいる・無料枠を超えた・通信できない）は、端末内の言語モデルが使えればそちらで作る。
     /// 端末内で作れなかったとき（読めない答え・断られた）は、外に出してよい中身なら Groq で作る。
-    private static func chat(model: String, apiKey: String, maxWait: Double = 90, prompt: String) async throws -> [String: Any] {
+    /// 先に Claude（家の PC 経由。2026-11-13）に頼み、頼めなかったときだけ下の今までの順で作る。job は何のためか・重さ。
+    private static func chat(model: String, apiKey: String, maxWait: Double = 90, job: ClaudeJob,
+                             prompt: String) async throws -> [String: Any] {
         if strictCloud { return try await groq(model: model, apiKey: apiKey, maxWait: maxWait, prompt: prompt) }
+        if let result = await viaClaude(job, maxWait: maxWait, prompt: prompt) { return result }
         // 職場の会話は、本人がオンにしていれば家の PC の言語モデルで作る（外のサービスには送らない。2026-11-06）
         if sensitive, !forceLocal, pcLLMForWork, let pc = pcLLM,
            let text = try? await pc(system, prompt),
            let result = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] {
             return result
         }
-        if usesLocal(apiKey: apiKey) {
+        if localFirst(apiKey: apiKey) {
             do {
                 return try await LocalModel.json(system: system, prompt: prompt)
             } catch {
@@ -829,6 +856,27 @@ enum Summarizer {
             if LocalModel.isOn, let result = try? await LocalModel.json(system: system, prompt: prompt) { return result }
             if let result = await viaPC(prompt) { return result }
             throw error
+        }
+    }
+
+    /// Claude に頼む（同じ指示・同じ文。職場の会話でテレビ・動画の手がかりを外した文もそのまま渡す）。
+    /// 頼めなかったら nil（数を数え、わけによってはしばらく頼まない）
+    private static func viaClaude(_ job: ClaudeJob, maxWait: Double, prompt: String) async -> [String: Any]? {
+        guard claudeFirst, let claude = claudeLLM else { return nil }
+        let work = sensitive
+        do {
+            let text = try await claude(ClaudeCall(system: system, prompt: prompt, json: true, maxTokens: 8192,
+                                                   tier: job.tier, purpose: job.purpose, work: work,
+                                                   timeout: ClaudeRoute.timeout(maxWait: maxWait)))
+            guard let result = LocalModel.parse(text) else { throw ClaudeFailure.unreadable }
+            Tally.add("claude.ok")
+            if work { Tally.add("claude.work") }
+            return result
+        } catch {
+            let failure = (error as? ClaudeFailure) ?? .server(status: 0, reason: error.localizedDescription)
+            ClaudeRoute.note(failure)
+            if let key = failure.tallyKey { Tally.add(key) }
+            return nil
         }
     }
 
