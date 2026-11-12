@@ -116,6 +116,8 @@ final class Pipeline {
     private(set) var lastMark: Date?
     /// 知らせを押したときに開く画面（2026-11-10。NoticeActions.swift。ContentView がシートで開く）
     var noticeRoute: NoticeRoute?
+    /// いま開いている下のタブ（2026-11-12。知らせ・ウィジェット・ほかの画面から切り替える）
+    var tab: AppTab = .today
 
     /// 録音が止まったら通知で知らせる
     var stopAlertsOn = UserDefaults.standard.object(forKey: "stopAlerts") as? Bool ?? true {
@@ -1179,7 +1181,7 @@ final class Pipeline {
         guard id != SpeakerLabeler.selfID else { return SelfClaim(note: "自分の行です。") }
         let banks = await speakers.voiceBanks(for: id)
         guard banks.me.count >= 3 else {
-            return SelfClaim(note: "自分の声の見本が少なすぎます。「人と場所」→「自分の声」で、20秒の読み上げを何度か録ってください。")
+            return SelfClaim(note: "自分の声の見本が少なすぎます。「直す」→「自分の声」で、20秒の読み上げを何度か録ってください。")
         }
         let candidates = splitCandidates(for: id, limit: limit)
         guard !candidates.isEmpty else { return SelfClaim(note: "声を取れる行がありません（2秒以上話した行が要ります）。") }

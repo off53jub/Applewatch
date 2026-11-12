@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 「行ったお店」の中の PayPay の明細（2026-11-08）。読み込み・答え合わせ・立ち寄りの無い支払い
+/// 「記録」→「お金」の中の PayPay の明細（2026-11-08。2026-11-12 までは「行ったお店」の中）。読み込み・答え合わせ・立ち寄りの無い支払い
 struct PaymentSection: View {
     @Environment(Pipeline.self) private var pipeline
     @State private var picking = false

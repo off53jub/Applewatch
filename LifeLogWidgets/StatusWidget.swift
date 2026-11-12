@@ -11,6 +11,8 @@ struct StatusWidget: Widget {
         StaticConfiguration(kind: WidgetState.phoneKind, provider: StatusProvider()) { entry in
             StatusView(entry: entry)
                 .containerBackground(.fill.tertiary, for: .widget)
+                // 押すと「今日」タブを開く（2026-11-12）
+                .widgetURL(URL(string: "lifelog://today"))
         }
         .configurationDisplayName("LifeLog の様子")
         .description("録音しているか、今日までの頼まれごと、次の予定、家の PC を出します。押すと LifeLog を開きます。")

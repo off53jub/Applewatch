@@ -2,39 +2,6 @@ import AVFoundation
 import Observation
 import SwiftUI
 
-/// 記録のある日の一覧。
-struct HistoryView: View {
-    @Environment(Pipeline.self) private var pipeline
-    @State private var days: [String] = []
-
-    var body: some View {
-        List {
-            Section {
-                NavigationLink {
-                    MisheardView()
-                } label: {
-                    LabeledContent("聞き間違いかも", value: "\(pipeline.misheardCount) 個")
-                }
-            }
-            Section {
-                ForEach(days, id: \.self) { day in
-                    NavigationLink(day) { DayView(day: day) }
-                }
-            }
-        }
-        .overlay {
-            if days.isEmpty {
-                ContentUnavailableView("まだありません", systemImage: "text.bubble",
-                                       description: Text("文字起こしが終わると、ここに日ごとに出てきます。"))
-            }
-        }
-        .navigationTitle("これまでの記録")
-        .onAppear { days = pipeline.recordedDays() }
-        // ほかの端末から記録が届いたら出し直す
-        .onChange(of: pipeline.recordsVersion) { days = pipeline.recordedDays() }
-    }
-}
-
 /// 1日の記録。「過ごし方」（何時から何時まで何をしていたか）と「会話ごと」を切り替えて見る。
 struct DayView: View {
     let day: String

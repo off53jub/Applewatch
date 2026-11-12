@@ -2,12 +2,17 @@ import XCTest
 
 /// 全部の画面を開いて写真を撮る（2026-11-06）。
 /// CI のシミュレーターで、見本の記録（作り物）を入れたアプリを起動し、下のタブと設定の一覧の行を1つずつ開く。
+/// 2026-11-12 のタブの組み替えから、「記録」の上の切り替え（日ごと・人・場所・お金）と、歯車の中の「点検」「設定」もそれぞれ開く。
 /// 開いたとたんに落ちたら失敗にする。写真は結果に残し、CI が一覧の画像にまとめる。
 /// 危ない操作（録音・消す・送る・書く など）の行は押さない。行ごとに起動し直すので、前の操作の影響を受けない。
 final class ScreenTour: XCTestCase {
     private var shot = 0
 
-    private static let tabs = ["今日", "タスク", "ライブ", "記録", "人と場所"]
+    private static let tabs = ["今日", "タスク", "直す", "記録", "ふり返り"]
+    /// 「記録」の上の切り替え（いちばん左の「日ごと」はタブを開いたときに撮る）
+    private static let recordPages = ["日ごと", "人", "場所", "お金"]
+    /// 歯車の中の切り替え
+    private static let settingsParts = ["点検", "設定"]
     /// 押さない行（中身を変える・外に送る・権限を求める操作）
     private static let avoid = ["録音", "印を付ける", "消す", "削除", "ログイン", "ログアウト", "書く", "送る", "戻す",
                                 "まとめ直", "始める", "止める", "控えから", "取り込", "入れ直", "リセット", "初期化", "全部",
@@ -68,6 +73,16 @@ final class ScreenTour: XCTestCase {
         return true
     }
 
+    /// 上の切り替え（segmented）を押す。前に開いたものを覚えているので、毎回押す
+    @discardableResult
+    private func openSegment(_ app: XCUIApplication, _ name: String) -> Bool {
+        let b = app.segmentedControls.buttons[name]
+        guard b.waitForExistence(timeout: 5) else { return false }
+        b.tap()
+        sleep(1)
+        return true
+    }
+
     /// いま見えている一覧の行の見出し（スイッチ・入力欄の行と、危ない操作の行は除く）
     private func visibleRows(_ app: XCUIApplication) -> [String] {
         var out: [String] = []
@@ -86,17 +101,20 @@ final class ScreenTour: XCTestCase {
     private struct Target {
         let tab: String
         let settings: Bool
+        /// 上の切り替え（無ければ nil）
+        let segment: String?
         let swipes: Int
         let row: String
     }
 
-    private func collect(_ app: XCUIApplication, tab: String, settings: Bool, pages: Int, limit: Int) -> [Target] {
+    private func collect(_ app: XCUIApplication, tab: String, settings: Bool, segment: String? = nil,
+                         pages: Int, limit: Int) -> [Target] {
         var seen: [String] = []
         var out: [Target] = []
         for page in 0..<pages {
             for row in visibleRows(app) where !seen.contains(row) {
                 seen.append(row)
-                out.append(Target(tab: tab, settings: settings, swipes: page, row: row))
+                out.append(Target(tab: tab, settings: settings, segment: segment, swipes: page, row: row))
             }
             if out.count >= limit { break }
             app.swipeUp()
@@ -112,14 +130,30 @@ final class ScreenTour: XCTestCase {
         for tab in Self.tabs {
             openTab(app, tab)
             guard alive(app, after: tab) else { app = launch(); continue }
+            if tab == "記録" {
+                // 上の切り替えを1つずつ
+                for page in Self.recordPages {
+                    guard openSegment(app, page) else { continue }
+                    guard alive(app, after: tab + " - " + page) else { app = launch(); break }
+                    snap(app, tab + " - " + page)
+                    targets += collect(app, tab: tab, settings: false, segment: page, pages: 2, limit: page == "日ごと" ? 8 : 6)
+                    app.swipeDown()
+                    sleep(1)
+                }
+                continue
+            }
             snap(app, tab)
             targets += collect(app, tab: tab, settings: false, pages: 2, limit: 10)
         }
-        // 2. 設定（「今日」の右上の歯車）
-        openTab(app, "今日")
-        if openSettings(app), alive(app, after: "設定") {
-            snap(app, "設定")
-            targets += collect(app, tab: "今日", settings: true, pages: 8, limit: 40)
+        // 2. 歯車（「今日」の右上）の中の「点検」と「設定」
+        for part in Self.settingsParts {
+            app.terminate()
+            app = launch()
+            openTab(app, "今日")
+            guard openSettings(app), alive(app, after: "設定") else { continue }
+            openSegment(app, part)
+            snap(app, "歯車 - " + part)
+            targets += collect(app, tab: "今日", settings: true, segment: part, pages: part == "点検" ? 2 : 8, limit: part == "点検" ? 12 : 40)
         }
         // 3. 行を1つずつ開く（毎回起動し直す）
         for t in targets {
@@ -127,6 +161,7 @@ final class ScreenTour: XCTestCase {
             app = launch()
             openTab(app, t.tab)
             if t.settings, !openSettings(app) { continue }
+            if let segment = t.segment, !openSegment(app, segment) { continue }
             for _ in 0..<t.swipes {
                 app.swipeUp()
                 sleep(1)
@@ -137,7 +172,8 @@ final class ScreenTour: XCTestCase {
             cell.tap()
             sleep(2)
             dismissAlerts()
-            let name = (t.settings ? "設定 › " : t.tab + " › ") + t.row
+            let place = t.settings ? "歯車" : t.tab
+            let name = place + (t.segment.map { " - " + $0 } ?? "") + " › " + t.row
             guard alive(app, after: name) else { continue }
             snap(app, name)
         }
