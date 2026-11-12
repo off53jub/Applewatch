@@ -367,6 +367,10 @@ extension Pipeline {
         if let check = morningCheckLine(for: yesterdayStart) { input.checks.append(check) }
         // PLAUD の文字起こしがまだの日と、いちばん新しい合い方（家の PC から読んだ写し。2026-11-12。AppFeeds.swift）
         input.notes = AppFeeds.briefLines(appFeeds.plaudGap)
+        // 職場の自分の声を10件確かめる（「精10」。2026-11-13。家の PC が候補を出しているときだけ）
+        if homePC.features.contains("selfcand"), let ten = AppFeeds.tenBriefLine(visible: appFeeds.visibleCandidates.count) {
+            input.notes.append(ten)
+        }
         return (input, summary != nil || home != nil)
     }
 

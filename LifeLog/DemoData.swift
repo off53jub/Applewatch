@@ -83,6 +83,8 @@ enum DemoData {
         if let data = try? encoder.encode([t1, t2, t3]) {
             try? data.write(to: base.appendingPathComponent("tasks.json"), options: .atomic)
         }
+        installHomeFeeds(base: base, now: now, day: f.string(from: now),
+                         yesterday: f.string(from: now.addingTimeInterval(-86400)), talk: talk1, talkEnd: b)
         // 効き目の数の見本
         Tally.add("fix.proposed", 6)
         Tally.add("fix.kept", 4)
@@ -90,6 +92,61 @@ enum DemoData {
         Tally.add("second.ran", 3)
         Tally.add("task.agreed", 1)
         Tally.add("task.alone", 1)
+    }
+
+    /// 家の PC から読んだことにする写し（提案・PLAUD で埋めた所・話し手の疑い・職場の自分の声の候補。2026-11-13）。
+    /// 名前・お店・言葉はすべて作り物。ファイルの名前は HomeFeedsBook・AppFeedsBook と同じ
+    private static func installHomeFeeds(base: URL, now: Date, day: String, yesterday: String,
+                                         talk: ConversationLog.Conversation, talkEnd: Date) {
+        let iso = ISO8601DateFormatter()
+        let encoder = JSONEncoder()
+        func write<T: Encodable>(_ value: T, _ name: String) {
+            if let data = try? encoder.encode(value) { try? data.write(to: base.appendingPathComponent(name), options: .atomic) }
+        }
+        let a = talk.start
+        let proposals = ProposalFeed(generated_at: iso.string(from: now), items: [
+            Proposal(id: "demo-p1", kind: "followup", title: "見本の資料の返事を確かめる",
+                     body: "朝の打ち合わせで「お昼までに送ります」と言われた資料が、まだ届いていないかもしれません。",
+                     evidence: [Proposal.Evidence(text: "はい、お昼までに送ります。", when: iso.string(from: a.addingTimeInterval(8)), source: "conversation")],
+                     action: Proposal.Action(type: "task", text: "見本の資料が届いたか確かめる"),
+                     created: iso.string(from: now.addingTimeInterval(-600))),
+            Proposal(id: "demo-p2", kind: "place", title: "この時間のお店は「見本の餃子屋」かも",
+                     body: "LINE で決めていたお店と、会話の中身から、行ったお店はこちらかもしれません。",
+                     evidence: [Proposal.Evidence(text: "見本の餃子屋に7時で", when: iso.string(from: a.addingTimeInterval(-86400)), source: "line")],
+                     action: Proposal.Action(type: "place", text: "見本の餃子屋", day: day, conversation_start: iso.string(from: a)),
+                     created: iso.string(from: now.addingTimeInterval(-1200))),
+            Proposal(id: "demo-p3", kind: "vocab", title: "「見本商事」を言葉の登録に",
+                     body: "この1週間に何度も出てきましたが、まだ登録していない言葉です。",
+                     evidence: [Proposal.Evidence(text: "7日で5回", source: "stats")],
+                     action: Proposal.Action(type: "vocab", text: "見本商事", reading: "みほんしょうじ"),
+                     created: iso.string(from: now.addingTimeInterval(-1800))),
+        ])
+        write(proposals, "app-feed-proposals.json")
+        let gapStart = talk.end.addingTimeInterval(300)
+        func span(_ start: Date, _ texts: [String]) -> PlaudFillDay.Span {
+            let lines = texts.enumerated().map { i, t in
+                PlaudFillDay.Line(time: iso.string(from: start.addingTimeInterval(Double(i) * 12)), speaker: i % 2 == 0 ? "話者1" : "話者2", text: t)
+            }
+            return PlaudFillDay.Span(start: iso.string(from: start), end: iso.string(from: start.addingTimeInterval(600)), lines: lines)
+        }
+        let fill = PlaudFillFeed(generated_at: iso.string(from: now), days: [
+            PlaudFillDay(day: day, ranges: [span(gapStart, ["これは PLAUD の文字の見本です。", "アプリの記録が無い時間の分です。",
+                                                             "読むだけで、記録には入りません。", "四つ目の行の見本です。"])]),
+            PlaudFillDay(day: yesterday, ranges: [span(now.addingTimeInterval(-86400 - 3600), ["きのうの PLAUD だけの見本です。"])]),
+        ])
+        write(fill, "app-feed-plaudfill.json")
+        let doubts = SpeakerDoubtFeed(generated_at: iso.string(from: now), items: [
+            SpeakerDoubt(day: day, conversation_start: iso.string(from: a), line_time: iso.string(from: a.addingTimeInterval(8)),
+                         text_head: "はい、お昼までに送ります。", current: "見本 花子", suggest: "self", why: "plaud-turn", score: 0.8),
+            SpeakerDoubt(day: day, conversation_start: iso.string(from: talkEnd), line_time: iso.string(from: talkEnd),
+                         text_head: "今どこですか。", current: "自分", suggest: "other", why: "text", score: 0.5),
+        ])
+        write(doubts, "app-feed-spkdoubt.json")
+        let candidates = (1...12).map { i in
+            SelfCandidate(id: "demo-c\(i)", day: day, audio: "demo.m4a", start: Double(i * 20), end: Double(i * 20 + 6),
+                          text: "職場の見本の発言 \(i)", score: 1 - Double(i) / 20, why: i % 3 == 0 ? "plaud-most-talk" : "plaud-match")
+        }
+        write(SelfCandidateFeed(available: true, generated_at: iso.string(from: now), items: candidates), "app-feed-selfcand.json")
     }
 }
 #endif

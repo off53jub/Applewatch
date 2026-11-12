@@ -59,6 +59,8 @@ struct ActivitiesView: View {
 
     var body: some View {
         List {
+            // PLAUD で埋めた所（アプリの記録が無い時間。読むだけ。2026-11-13。HomeFeeds.swift）
+            PlaudFillSection(day: day)
             if building {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -99,7 +101,7 @@ struct ActivitiesView: View {
             }
         }
         .overlay {
-            if activities.isEmpty && newer.isEmpty && !building {
+            if activities.isEmpty && newer.isEmpty && !building && pipeline.homeFeeds.fill(for: day) == nil {
                 ContentUnavailableView("記録がありません", systemImage: "calendar.day.timeline.left")
             }
         }
@@ -208,6 +210,8 @@ struct ConversationsView: View {
 
     var body: some View {
         List {
+            // PLAUD で埋めた所（1日を見るときだけ。読むだけで、会話には入れない。2026-11-13。HomeFeeds.swift）
+            if range == nil { PlaudFillSection(day: day) }
             // 間が短く、場所と相手が同じ会話は1つのまとまりで見せる
             ForEach(Array(ConversationLog.grouped(conversations).enumerated()).reversed(), id: \.offset) { g, group in
                 Section {
@@ -275,7 +279,7 @@ struct ConversationsView: View {
             }
         }
         .overlay {
-            if conversations.isEmpty {
+            if conversations.isEmpty && (range != nil || pipeline.homeFeeds.fill(for: day) == nil) {
                 ContentUnavailableView("記録がありません", systemImage: "text.bubble")
             }
         }

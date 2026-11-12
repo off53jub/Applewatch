@@ -179,4 +179,100 @@ final class ScreenTour: XCTestCase {
         }
         XCTAssertGreaterThan(shot, 5, "写真が少なすぎる（画面を開けていない）")
     }
+
+    // MARK: - 家の PC の写しの画面（2026-11-13）
+
+    /// label に text を含むボタン（無ければ文字）。List の行は、中の文をつないだ名前のボタンになる
+    private func element(_ app: XCUIApplication, containing text: String) -> XCUIElement {
+        let p = NSPredicate(format: "label CONTAINS %@", text)
+        let button = app.buttons.matching(p).firstMatch
+        if button.exists { return button }
+        return app.staticTexts.matching(p).firstMatch
+    }
+
+    /// 下にめくりながら探して押す。見つからなければ、その画面を「見つからない」として撮る（落ちたときだけ失敗）
+    @discardableResult
+    private func tapFinding(_ app: XCUIApplication, _ text: String, swipes: Int = 6, place: String) -> Bool {
+        for i in 0...swipes {
+            let e = element(app, containing: text)
+            if e.exists && e.isHittable {
+                e.tap()
+                sleep(2)
+                dismissAlerts()
+                return alive(app, after: place + " › " + text)
+            }
+            if i < swipes {
+                app.swipeUp()
+                sleep(1)
+            }
+        }
+        snap(app, place + " - 見つからない: " + text)
+        return false
+    }
+
+    /// 見本の写し（DemoData.installHomeFeeds）で、提案・話し手の疑い・今日の10件・PLAUD で埋めた所を開いて撮る。
+    /// 押すのは開く行だけ（「受ける」「自分の声にする」などは押さない）
+    func testTourHomeFeeds() {
+        // 1. 今日の提案のカードと、「提案」の画面
+        var app = launch()
+        openTab(app, "今日")
+        if tapFinding(app, "提案をすべて見る", place: "今日") {
+            snap(app, "今日 › 提案")
+            app.swipeUp()
+            sleep(1)
+            snap(app, "今日 › 提案（下）")
+        }
+        app.terminate()
+        app = launch()
+        openTab(app, "今日")
+        for _ in 0..<2 {
+            app.swipeUp()
+            sleep(1)
+        }
+        snap(app, "今日 - 提案のカード")
+
+        // 2. 直す: 職場の自分の声を10件
+        app.terminate()
+        app = launch()
+        openTab(app, "直す")
+        snap(app, "直す - 話し手の疑い・今日の10件")
+        if tapFinding(app, "職場の自分の声を10件確かめる", place: "直す") {
+            snap(app, "直す › 職場の自分の声（今日の10件）")
+        }
+
+        // 3. 直す: 話し手の疑い（全部と、1つ）
+        app.terminate()
+        app = launch()
+        openTab(app, "直す")
+        if tapFinding(app, "話し手の疑いをすべて見る", place: "直す") {
+            snap(app, "直す › 話し手の疑い")
+            if tapFinding(app, "お昼までに送ります", swipes: 2, place: "直す › 話し手の疑い") {
+                snap(app, "直す › 話し手の疑い › 1つ")
+            }
+        }
+
+        // 4. 記録 → 日ごと → 今日 → PLAUD で埋めた所
+        app.terminate()
+        app = launch()
+        openTab(app, "記録")
+        openSegment(app, "日ごと")
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        if tapFinding(app, f.string(from: Date()), swipes: 2, place: "記録 - 日ごと") {
+            if tapFinding(app, "PLAUD で埋めた所", swipes: 2, place: "記録 › 今日") {
+                snap(app, "記録 › 今日 › PLAUD で埋めた所")
+            }
+        }
+
+        // 5. 記録 → 日ごと → PLAUD だけの日
+        app.terminate()
+        app = launch()
+        openTab(app, "記録")
+        openSegment(app, "日ごと")
+        if tapFinding(app, f.string(from: Date().addingTimeInterval(-86400)), swipes: 3, place: "記録 - 日ごと") {
+            tapFinding(app, "PLAUD で埋めた所", swipes: 1, place: "記録 › PLAUD だけの日")
+            snap(app, "記録 › PLAUD だけの日")
+        }
+    }
 }
