@@ -44,7 +44,8 @@ from urllib.parse import urlparse
 import appfeeds  # 自分の声の候補・新しさ・PLAUD との差（2026-11-12）
 
 GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS)
-POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback")
+# POST /proposals/answer（母艦からの提案への答え。2026-11-13。中身は appfeeds.py）
+POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback", *appfeeds.POSTS)
 BODY_LIMIT = 16 * 1024
 # 支払いの記録を母艦へ（2026-11-11）
 TAPS_FILE = Path("inbox") / "card-taps" / "card-taps.json"
@@ -496,6 +497,9 @@ def http_post_pay(handler, config: dict, path: str, data: bytes, log: Callable[[
 
 
 def http_post(handler, config: dict, data: bytes, log: Callable[[str], None]) -> None:
+    if urlparse(handler.path).path in appfeeds.POSTS:
+        appfeeds.POSTS[urlparse(handler.path).path](handler, home(config), data, log)
+        return
     if urlparse(handler.path).path in PAY_LIMITS:
         http_post_pay(handler, config, urlparse(handler.path).path, data, log)
         return

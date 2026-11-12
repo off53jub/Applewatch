@@ -720,8 +720,13 @@ def parse_params(query: dict) -> dict:
 
     hints = [w.strip() for w in (query.get("hints") or [""])[0].split("\n") if w.strip()][:80]
     weights = (query.get("weights") or [None])[0]
-    return {"hints": hints, "noisy": bool(flag("noisy")), "enhance": flag("enhance"),
-            "weights": weights[:2000] if weights else None}
+    params = {"hints": hints, "noisy": bool(flag("noisy")), "enhance": flag("enhance"),
+              "weights": weights[:2000] if weights else None}
+    # 2026-11-13: 省ける work=0|1（職場の会話か。無ければ分からない＝Claude の審判は「職場かもしれない」として扱う）
+    work = flag("work")
+    if work is not None:
+        params["work"] = work
+    return params
 
 
 def http_post(handler, queue: JobQueue | None, query_text: str, length: int, origin: str | None = None) -> str | None:
