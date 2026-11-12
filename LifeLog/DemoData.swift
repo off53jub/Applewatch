@@ -142,9 +142,13 @@ enum DemoData {
                          text_head: "今どこですか。", current: "自分", suggest: "other", why: "text", score: 0.5),
         ])
         write(doubts, "app-feed-spkdoubt.json")
-        let candidates = (1...12).map { i in
-            SelfCandidate(id: "demo-c\(i)", day: day, audio: "demo.m4a", start: Double(i * 20), end: Double(i * 20 + 6),
-                          text: "職場の見本の発言 \(i)", score: 1 - Double(i) / 20, why: i % 3 == 0 ? "plaud-most-talk" : "plaud-match")
+        var candidates: [SelfCandidate] = []
+        for i in 1...12 {
+            let start: Double = Double(i * 20)
+            let score: Double = 1.0 - Double(i) / 20.0
+            let why: String = i % 3 == 0 ? "plaud-most-talk" : "plaud-match"
+            candidates.append(SelfCandidate(id: "demo-c\(i)", day: day, audio: "demo.m4a", start: start, end: start + 6,
+                                            text: "職場の見本の発言 \(i)", score: score, why: why))
         }
         write(SelfCandidateFeed(available: true, generated_at: iso.string(from: now), items: candidates), "app-feed-selfcand.json")
     }
