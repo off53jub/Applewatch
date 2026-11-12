@@ -2070,6 +2070,8 @@ def features(engines: list | None = None) -> list[str]:
     found.append("pay")
     # GET /good（いいこと帳。母艦の state/good_for_app.json。2026-11-12）
     found.append("good")
+    # POST /good/feedback（いいこと帳の「違う」「当たり」「外れ」を母艦へ。2026-11-12）
+    found.append("goodfb")
     # GET /self-candidates・/freshness・/plaud-gap（自分の声の候補・自動取得の新しさ・PLAUD との差。2026-11-12）
     found.extend(["selfcand", "fresh", "plaudgap"])
     # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）
