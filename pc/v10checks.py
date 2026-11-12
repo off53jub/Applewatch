@@ -541,6 +541,42 @@ def check_vocab() -> int:
         failed += say(len(got["days"]) == 1 and len(got["days"][0]["words"]) == 1 and got["days"][0]["laughs"] == ["19:58"],
                       "いいこと帳: おかしな行は落として返す")
     failed += say("/good" in mothership.GETS, "いいこと帳: GET /good")
+    # 自分の声の候補・新しさ・PLAUD との差（2026-11-12）
+    import appfeeds
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        failed += say(all(r(base).get("available") is False for r in appfeeds.READERS.values()), "アプリ向けの写し3つ: 無ければ available false")
+        (base / "state").mkdir()
+        cands = {"version": 1, "generated_at": "2026-11-12T01:00:00+09:00", "items": [
+            {"id": "c1", "day": "2026-11-10", "audio": "chunk_1.m4a", "start": 3, "end": 9.5, "text": "お願いします", "score": 0.4, "why": "plaud-match"},
+            {"id": "c2", "day": "2026-11-10", "audio": "chunk_2.m4a", "start": 0, "end": 5, "text": "x" * 200, "score": 0.9, "why": "plaud-most-talk"},
+            {"id": "c1", "day": "2026-11-10", "audio": "chunk_1.m4a", "start": 3, "end": 9, "score": 0.5, "why": "plaud-match"},
+            {"id": "c3", "day": "2026-11-10", "audio": "../etc/passwd", "start": 0, "end": 5, "score": 0.5, "why": "plaud-match"},
+            {"id": "c4", "day": "2026-11-10", "audio": "a.m4a", "start": 5, "end": 2, "score": 0.5, "why": "plaud-match"},
+            {"id": "c5", "day": "2026-11-10", "audio": "a.m4a", "start": 0, "end": 2, "score": 2, "why": "plaud-match"},
+            {"id": "c6", "day": "2026-11-10", "audio": "a.m4a", "start": 0, "end": 2, "score": 0.5, "why": "other"}, "x"]}
+        (base / appfeeds.SELF_CANDIDATES).write_text(json.dumps(cands, ensure_ascii=False), encoding="utf-8")
+        got = appfeeds.read_self_candidates(base)
+        failed += say([i["id"] for i in got["items"]] == ["c2", "c1"] and len(got["items"][0]["text"]) == 60,
+                      "自分の声の候補: 点の高い順・おかしな行と重なりは落とす・文は60字まで")
+        fresh = {"version": 1, "items": [
+            {"key": "line", "label": "LINE取得", "last_ok": "2026-11-04T07:00:00+09:00", "limit_hours": 26, "stale": True, "note": "止まっている"},
+            {"key": "bad key!", "label": "x", "limit_hours": 1, "stale": False}, {"key": "p", "last_ok": "昨日", "limit_hours": 1, "stale": "yes"},
+            {"key": "plaud", "label": "PLAUD", "last_ok": None, "limit_hours": 48, "stale": False}]}
+        (base / appfeeds.FRESHNESS).write_text(json.dumps(fresh, ensure_ascii=False), encoding="utf-8")
+        got = appfeeds.read_freshness(base)
+        failed += say([i["key"] for i in got["items"]] == ["line", "plaud"] and got["items"][1]["last_ok"] is None
+                      and got["items"][0]["stale"] is True, "新しさ: おかしな行は落とす・last_ok は null も通す")
+        gap = {"version": 1, "days": [{"day": "2026-11-09", "source": "plaud", "app_chars": 100, "plaud_chars": 400, "ratio": 0.25,
+                                       "gaps": [{"from": "09:00", "to": "09:30"}, {"from": "x", "to": "y"}], "misheard": ["あ", 3], "score": 40},
+                                      {"day": "bad"}], "missing_official": ["2026-11-08", "x", 5]}
+        (base / appfeeds.PLAUD_GAP).write_text(json.dumps(gap, ensure_ascii=False), encoding="utf-8")
+        got = appfeeds.read_plaud_gap(base)
+        failed += say(len(got["days"]) == 1 and len(got["days"][0]["gaps"]) == 1 and got["missing_official"] == ["2026-11-08"]
+                      and got["days"][0]["score"] == 40, "PLAUD との差: おかしな日・隙間は落とす")
+        (base / appfeeds.FRESHNESS).write_text("[1]", encoding="utf-8")
+        failed += say(appfeeds.read_freshness(base).get("available") is False, "新しさ: 形が違えば available false")
+    failed += say(all(k in mothership.GETS for k in appfeeds.READERS), "自分の声の候補・新しさ・PLAUD との差: GETS に入っている")
     # 支払いの記録を母艦へ（2026-11-11）
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
