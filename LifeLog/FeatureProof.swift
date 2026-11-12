@@ -61,6 +61,7 @@ enum FeatureProof {
         Feature(name: "仕事の成績表", pr: 39, keys: ["work.lines"]),
         Feature(name: "登録した言葉の先回り", pr: 39, keys: ["reach.heard"]),
         Feature(name: "登録した書き方で直す", pr: 39, keys: ["wordfix.work", "wordfix.other"]),
+        Feature(name: "Claude（家の PC 経由）", pr: 53, keys: ["claude.ok"], pc: "claude"),
         // 以下は数える名前がまだ無いので、画面を開いたかで見る・または測れない
         Feature(name: "行ったお店", pr: 29, keys: ["screen.shopVisits"]),
         Feature(name: "PayPay の明細・かざした記録の送信", pr: 45, keys: ["screen.unmatchedPayments"], pc: "pay"),

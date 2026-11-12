@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import UserNotifications
 
-/// クラウドに送ったものの一覧（2026-11-06）。Groq・OpenAI に送った音声（文字起こし）と文（言語モデル）を、
+/// クラウドに送ったものの一覧（2026-11-06）。Groq・OpenAI・Claude（家の PC 経由。2026-11-13）に送った音声（文字起こし）と文（言語モデル）を、
 /// 時刻・送り先・何のためか・職場の会話か・大きさで残す（中身は残さない）。新しいファイル cloud-log.json（90日分）。
 /// 毎月1日に、前の月の件数を知らせる（費用と上限の見張り）。
 enum CloudLog {
@@ -138,7 +138,7 @@ struct CloudLogView: View {
                 if cost > 0 { LabeledContent("OpenAI の費用の目安", value: String(format: "%.2f ドル", cost)) }
                 if let quota { LabeledContent("ドライブの使っている量", value: quota) }
             } footer: {
-                Text("送った時刻・送り先・何のためかだけを残します（中身は残しません。90日分）。職場の会話を外に送らないようにするには、「言語モデル」の設定で「職場の会話は端末内で」を選んでください。")
+                Text("送った時刻・送り先・何のためかだけを残します（中身は残しません。90日分）。「Claude（家の PC 経由）」は、家の PC を通して Claude に頼んだものです（鍵は PC の中だけ）。「職場の会話も Claude で」がオン（初め）のあいだは、職場の会話も Claude に送ります。職場の会話を外に送らないようにするには、その設定をオフにして、「言語モデル」の設定で「職場の会話は端末内で」を選んでください。")
             }
             Section("送ったもの") {
                 if inMonth.isEmpty { Text("ありません").foregroundStyle(.secondary) }
