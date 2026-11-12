@@ -85,9 +85,19 @@ def load_wav(path: Path):
 
 
 def split(rows: list[dict], seed: int) -> tuple[list[dict], list[dict]]:
-    """1 割を試験用に取り分ける（毎回同じ分け方になるよう、ハッシュの順に並べてから混ぜる）"""
+    """1 割を試験用に取り分ける（毎回同じ分け方になるよう、ハッシュの順に並べてから混ぜる）。
+    2026-11-13: 自動の材料（"source" の "origin" が "pc-auto"。正しい文はモデルが書いたもの）は試験には使わず、
+    学ぶほうにだけ入れる（人が直した材料が 30 個より少ないときは、前と同じ分け方）"""
     rows = sorted(rows, key=lambda r: r.get("hash") or r["audio"])
     random.Random(seed).shuffle(rows)
+    def is_auto(r: dict) -> bool:
+        return isinstance(r.get("source"), dict) and r["source"].get("origin") == "pc-auto"
+
+    auto = [r for r in rows if is_auto(r)]
+    human = [r for r in rows if not is_auto(r)]
+    if auto and len(human) >= 30:
+        count = max(1, round(len(human) * HOLDOUT))
+        return human[count:] + auto, human[:count]
     count = max(1, round(len(rows) * HOLDOUT))
     return rows[count:], rows[:count]
 

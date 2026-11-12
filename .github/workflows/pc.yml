@@ -119,6 +119,14 @@ jobs:
           python pc/lifelog_pc.py --check-v10 > v10.txt 2>&1 || { cat v10.txt; grep '^NG' v10.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v10.txt | sed 's/^/::notice::--check-v10 の OK の数: /'
 
+      # 2026-11-13: Claude（鍵を出さない・帳簿と値段・上限・POST /claude と GET /claude/usage・母艦の提案などの写し・
+      #   割れた行の審判・自動の材料）を、一時フォルダと作り物の Claude で確かめる（本物の鍵もネットも使わない。
+      #   本物の anthropic の部品は、この PC の中の作り物の API に向けて送る形だけを見る）
+      - name: Claude の取り次ぎを確かめる
+        run: |
+          python pc/lifelog_pc.py --check-v11 > v11.txt 2>&1 || { cat v11.txt; grep '^NG' v11.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v11.txt | sed 's/^/::notice::--check-v11 の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py
@@ -165,6 +173,8 @@ jobs:
       # 版 7（records）の部品（records・recordsui・v7checks_records）も同じ。
       # 版 7（ops）の部品（ops・diag・apns・ascfeedback・trainer・gpu・v7checks_ops）と、見えない通知の HTTP/2（httpx2 と h2）・
       # 鍵（cryptography）も名前で入れる。版 8 の確かめ（v8checks）・版 9 の確かめ（v9checks）と MCP サーバー（lifelog_mcp）・版 10 の時計の外の道（watchroute・v10checks）も同じ。train-requirements.txt は学び直しの部品の一覧（exe の隣に置く）
+      # 2026-11-13: Claude（claude・v11checks）と anthropic の部品（中の httpx2・httpcore2 と、つなぐときに読む opentelemetry と
+      #   その入口の一覧）も入れる。
       # BUILD.txt は作った回の番号（exe が自分の版を知り、新しい版と比べるのに使う）
       - name: exe にする
         run: |
@@ -181,6 +191,9 @@ jobs:
             --hidden-import watchroute --hidden-import v10checks --hidden-import mothership --hidden-import appfeeds \
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \
+            --hidden-import claude --hidden-import v11checks \
+            --collect-all anthropic --collect-submodules httpx2 --collect-submodules httpcore2 \
+            --collect-submodules opentelemetry --copy-metadata opentelemetry-api \
             --hidden-import cryptography.hazmat.primitives.asymmetric.ec \
             --hidden-import cryptography.hazmat.primitives.serialization \
             --exclude-module torch --exclude-module transformers --exclude-module qwen_asr pc/lifelog_pc.py
@@ -218,6 +231,11 @@ jobs:
         run: |
           dist/LifeLogPC/LifeLogPC.exe --check-v10 > v10-exe.txt 2>&1 || { cat v10-exe.txt; grep '^NG' v10-exe.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v10-exe.txt | sed 's/^/::notice::exe の --check-v10 の OK の数: /'
+      # Claude の部品（claude・v11checks・anthropic）が exe に入っているか。本物の anthropic の部品も exe の中で動かす
+      - name: exe で Claude の取り次ぎを確かめる
+        run: |
+          dist/LifeLogPC/LifeLogPC.exe --check-v11 > v11-exe.txt 2>&1 || { cat v11-exe.txt; grep '^NG' v11-exe.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v11-exe.txt | sed 's/^/::notice::exe の --check-v11 の OK の数: /'
 
       - name: exe で試す
         run: |

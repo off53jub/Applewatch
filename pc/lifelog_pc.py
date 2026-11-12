@@ -88,6 +88,16 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
   （Tailscale Funnel から届く。合言葉は HOME/watch-token.txt の時計の合言葉。10 分に 10 回違えば 10 分断る）
 - GET /watch-route（ふだんの合言葉）→ {"url", "token", "funnel", "port"}。GET /jobs?origin=watch は時計から預かった仕事だけ
     LifeLogPC.exe --check-v10  版 10 を、一時フォルダと作り物のモデルで確かめる
+
+2026-11-13 に足したもの（VERSION は 10 のまま。中身は claude.py・appfeeds.py。features に "claude"・"proposals"・
+"plaudfill"・"spkdoubt"）:
+- POST /claude {"system"?, "prompt", "json", "max_tokens", "tier": "light"|"standard"|"deep", "purpose", "work"}
+  → {"text", "model", "usd", "month_usd", "cap_usd"}。402 今月の上限・503 鍵が無い・422 断られた・403 職場を送らない設定
+- GET /claude/usage → 今月の値段（鍵は返さない）。鍵は %LOCALAPPDATA%\\LifeLogPC\\claude-key.txt か ANTHROPIC_API_KEY
+- GET /proposals・POST /proposals/answer・GET /plaud-fill・GET /speaker-doubts（母艦の写し）
+- 後で受け取る文字起こしの食い違いの大きい行は、Claude に候補の番号を選んでもらう（精6。文は書かせない）
+- そろった行を、あなた向けのモデルの材料に自動で足す（精7・仮。config.json の "auto_samples": true のときだけ）
+    LifeLogPC.exe --check-v11  これを、一時フォルダと作り物の Claude で確かめる（本物の鍵もネットも使わない）
 """
 
 from __future__ import annotations
@@ -128,6 +138,8 @@ import records
 import recordsui
 # 版 10: 時計の外の道（Tailscale Funnel から届く、預けるだけの別の受け口）
 import watchroute
+# 2026-11-13: Claude（Anthropic の API）。鍵はこの PC にだけ置く（中身は claude.py）
+import claude
 
 VERSION = 10
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
@@ -2074,6 +2086,12 @@ def features(engines: list | None = None) -> list[str]:
     found.append("goodfb")
     # GET /self-candidates・/freshness・/plaud-gap（自分の声の候補・自動取得の新しさ・PLAUD との差。2026-11-12）
     found.extend(["selfcand", "fresh", "plaudgap"])
+    # GET /proposals・POST /proposals/answer・GET /plaud-fill・GET /speaker-doubts（母艦からの提案・PLAUD の文の補い・
+    # 話し手の疑い。2026-11-13）
+    found.extend(["proposals", "plaudfill", "spkdoubt"])
+    # POST /claude・GET /claude/usage（鍵があり、今月の上限に届いていないときだけ。2026-11-13）
+    if claude.available():
+        found.append("claude")
     # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）
     if "vad" in _extras:
         found.append("silero")
@@ -2221,10 +2239,104 @@ def run_job(path: Path, params: dict, name: str, draft=None) -> tuple[dict, dict
         enhance = bool(params.get("noisy"))
     # 同じ仕事を文字にしている最中に2回止まった（jobqueue が cpu_only を付ける）。GPU のモデルを使わない
     cpu_only = bool(params.get("cpu_only"))
-    return transcribe_reply(Handler.engine, audio, segments, list(params.get("hints") or []), None,
-                            parse_weights(params.get("weights")), bool(enhance), False,
-                            f"後で受け取る文字起こし {name}: " + ("（CPU のモデルだけ）" if cpu_only else ""), "job", started,
-                            on_draft=draft, cpu_only=cpu_only)
+    reply, numbers = transcribe_reply(Handler.engine, audio, segments, list(params.get("hints") or []), None,
+                                      parse_weights(params.get("weights")), bool(enhance), False,
+                                      f"後で受け取る文字起こし {name}: " + ("（CPU のモデルだけ）" if cpu_only else ""), "job",
+                                      started, on_draft=draft, cpu_only=cpu_only)
+    lines = reply.get("lines") or []
+    # 2026-11-13（精6）: 食い違いの大きい行は、Claude に候補の番号を選んでもらう（使えなければ多数決の文のまま）
+    judged = judge_job(lines, list(params.get("hints") or []), params.get("work"), name)
+    if judged and judged["asked"]:
+        reply["judge"] = {k: judged[k] for k in ("split", "asked", "changed")}  # 数だけ
+    # 2026-11-13（精7・仮）: モデルが全部そろって同じことを書いた行を、あなた向けのモデルの材料に足す（既定は使わない）
+    auto_samples(audio, lines, name)
+    return reply, numbers
+
+
+def judge_job(lines: list[dict], hints: list[str], work, name: str) -> dict | None:
+    """精6: 割れた行を Claude に審判してもらう。数だけを記録に書き、答えに "judge" の数を付ける。失敗しても続ける"""
+    try:
+        result = claude.judge(lines, hints, work if isinstance(work, bool) else None, log)
+    except Exception as error:  # noqa: BLE001 — 審判が使えなくても、多数決の答えは返す
+        log(f"  Claude の審判: 使えませんでした（{type(error).__name__}）")
+        return None
+    if result["split"]:
+        log(f"  Claude の審判（{name}）: 食い違いの大きい行 {result['split']} のうち {result['asked']} 行を見て、"
+            f"{result['changed']} 行を替えました（{result['calls']} 回・${result['usd']:.4f}）"
+            + (f"。見なかった理由: {result['skipped']}" if result["skipped"] else ""))
+    return result
+
+
+# 精7（仮。2026-11-13）: 手をかけずに作る、あなた向けのモデルの材料。config.json の "auto_samples": true のときだけ
+AUTO_AGREE = 0.95        # 仮: どのモデルの組も、読みの近さがこれ以上（言いよどみ・数字の書き方の違いは数えない）
+AUTO_ENGINES = 3         # 仮: 何か書いたモデル（雑音を除いた票は同じモデルとして数える）がこれ以上、1つも黙っていない
+AUTO_MIN_SECONDS = 2.0   # 仮: これより短い行は使わない
+AUTO_MIN_CHARS = 4
+AUTO_DAILY = 30          # 仮: 1日に足す数の上限
+AUTO_TOTAL = 1500        # 仮: 自動の材料の全部の上限（手で直した材料の場所を残すため。SAMPLE_LIMIT は 5000）
+AUTO_ORIGIN = "pc-auto"
+
+
+def is_auto_sample(row: dict) -> bool:
+    return isinstance(row.get("source"), dict) and row["source"].get("origin") == AUTO_ORIGIN
+
+
+def agreeing_line(line: dict) -> float | None:
+    """精7: モデルが全部そろって同じことを書いた行なら、いちばん遠い組の近さ。そうでなければ None"""
+    votes = line.get("votes")
+    if not isinstance(votes, dict) or line.get("extra") or line.get("judge"):
+        return None
+    texts = {k: str(v or "").strip() for k, v in votes.items()}
+    if any(not t for t in texts.values()):
+        return None  # 黙っていたモデルがある
+    if len({k.removesuffix("_e") for k in texts}) < AUTO_ENGINES:
+        return None
+    names = list(texts)
+    worst = 1.0
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            worst = min(worst, similarity(texts[a], texts[b]))
+            if worst < AUTO_AGREE:
+                return None
+    return worst
+
+
+def auto_samples(audio: np.ndarray, lines: list[dict], name: str, config: dict | None = None) -> int:
+    """精7（仮）: そろった行の声と文を材料に足す（"source": {"origin": "pc-auto", "auto": true, …} で、あとで外せる）。
+    足した数を返す。config.json の "auto_samples" が true のときだけ。失敗しても続ける"""
+    config = load_config() if config is None else config
+    if config.get("auto_samples") is not True:
+        return 0
+    try:
+        rows = read_samples(PERSONAL_DATA)
+        day = time.strftime("%Y-%m-%d")
+        autos = [r for r in rows if is_auto_sample(r)]
+        room = min(AUTO_DAILY - sum(1 for r in autos if str(r.get("added") or "").startswith(day)),
+                   AUTO_TOTAL - len(autos))
+        added = 0
+        for line in lines:
+            if added >= room:
+                break
+            start, end = float(line.get("start") or 0), float(line.get("end") or 0)
+            text = str(line.get("text") or "").strip()
+            if end - start < AUTO_MIN_SECONDS or end - start > SAMPLE_MAX or len(_bare(text)) < AUTO_MIN_CHARS:
+                continue
+            worst = agreeing_line(line)
+            if worst is None:
+                continue
+            source = {"origin": AUTO_ORIGIN, "auto": True, "job": name[:80], "offset": round(start, 2),
+                      "agree": round(worst, 3), "engines": len(line["votes"])}
+            try:
+                _, put = save_sample(PERSONAL_DATA, audio, start, end, text, source)
+            except ValueError:
+                continue
+            added += put
+        if added:
+            log(f"  自動の材料（仮）: {added} 個足しました（{name}。今日の上限 {AUTO_DAILY}・全部の上限 {AUTO_TOTAL}）")
+        return added
+    except Exception as error:  # noqa: BLE001 — 材料を足せなくても、文字起こしの答えは返す
+        log(f"  自動の材料を足せませんでした: {type(error).__name__}")
+        return 0
 
 
 def dash_info() -> dict:
@@ -2649,11 +2761,14 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/dash/ops/"):  # 版 7（ops）: TestFlight の報告の詳しい画面・鍵を入れる画面
             ops.dash_get(self, url)
             return
-        if path not in ("/hello", "/train-status", "/jobs", "/index/status", "/watch-route") \
+        if path not in ("/hello", "/train-status", "/jobs", "/index/status", "/watch-route", "/claude/usage") \
                 and path not in mothership.GETS and not path.startswith("/jobs/"):
             self.send_json(404, {"error": "not found"})
             return
         if not self.authorized():
+            return
+        if path == "/claude/usage":  # 2026-11-13: 今月の Claude の値段（鍵は返さない）
+            claude.http_usage(self)
             return
         if path in mothership.GETS:  # 母艦のやること・カードの利用速報（2026-11-09。中身は mothership.py）
             mothership.http_get(self, load_config())
@@ -2716,7 +2831,7 @@ class Handler(BaseHTTPRequestHandler):
         if url.path.startswith("/dash/ops/"):  # 版 7（ops）: 見守りの画面のボタン（鍵を入れる・テスト通知など）
             ops.dash_post(self, url)
             return
-        if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample", "/llm", "/jobs") \
+        if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample", "/llm", "/jobs", "/claude") \
                 and url.path not in semantic.POSTS and url.path not in ops.POSTS \
                 and url.path not in mothership.POSTS:  # 版 7（ops）: /diag・母艦のやることの済み
             self.discard_body()
@@ -2735,8 +2850,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path in ops.POSTS:  # 版 7（ops）: POST /diag（実機の様子。2MB まで）
             ops.http_diag(self, length)
             return
-        small = url.path == "/llm" or url.path in semantic.POSTS or url.path in mothership.POSTS
-        limit = LLM_BODY_LIMIT if url.path == "/llm" else mothership.body_limit(url.path) if url.path in mothership.POSTS \
+        small = url.path in ("/llm", "/claude") or url.path in semantic.POSTS or url.path in mothership.POSTS
+        limit = LLM_BODY_LIMIT if url.path == "/llm" else claude.BODY_LIMIT if url.path == "/claude" \
+            else mothership.body_limit(url.path) if url.path in mothership.POSTS \
             else semantic.BODY_LIMIT if small else DRAIN_LIMIT
         if length <= 0 or length > limit:
             self.discard_body()
@@ -2752,6 +2868,8 @@ class Handler(BaseHTTPRequestHandler):
             semantic.http_post(self, App.semantic, url.path, data, log)
         elif url.path == "/llm":
             self.llm(data)
+        elif url.path == "/claude":  # 2026-11-13: Claude に取り次ぐ（文の中身は記録に書かない）
+            claude.http_post(self, data, log)
         elif url.path == "/transcribe":
             self.transcribe(data, url.query)
         elif url.path == "/train-sample":
@@ -3734,6 +3852,10 @@ def main() -> None:
                              f"（既定 {watchroute.WATCH_PORT}。0 で使わない）")
     parser.add_argument("--check-v10", action="store_true",
                         help="版 10（時計の外の道）を、一時フォルダと作り物のモデルで確かめる")
+    # 2026-11-13: Claude（Anthropic の API）
+    parser.add_argument("--check-v11", action="store_true",
+                        help="Claude の取り次ぎ・帳簿と上限・母艦の提案などの写し・割れた行の審判・自動の材料を、"
+                             "一時フォルダと作り物の Claude で確かめる（本物の鍵もネットも使わない）")
     parser.add_argument("--mcp", action="store_true",
                         help="この PC の Claude Code から記録を読む MCP サーバー（stdio）として動く。読むだけで、"
                              "職場の会話は返さない（ほかに --home・--ollama-url を付けられる。くわしくは README.txt）")
@@ -3746,7 +3868,7 @@ def main() -> None:
         set_startup(args.startup)
         return
     if args.check_vote or args.check_v7_ops or args.check_v7_records or args.check_v8 or args.check_v9 \
-            or args.check_v10 or args.check_crash or args.check_gpu:
+            or args.check_v10 or args.check_v11 or args.check_crash or args.check_gpu:
         # 版 8: 確かめるときは、本物の HOME（log.txt・データ）に書かない
         isolate_home()
     if args.check_crash:  # 2026-11-07 の落ち方の直し
@@ -3776,6 +3898,10 @@ def main() -> None:
         import v10checks
 
         sys.exit(1 if v10checks.run(sys.modules[__name__]) else 0)
+    if args.check_v11:  # 2026-11-13: Claude
+        import v11checks
+
+        sys.exit(1 if v11checks.run(sys.modules[__name__]) else 0)
     if args.check_extras:
         check_extras(args.check_extras, max(1, args.threads // 2))
         return

@@ -793,6 +793,10 @@ Whisper は日本語と決めて渡すと、小さな雑音・寝息・外国語
 - PC 用の実行ファイルは CI（`.github/workflows/pc.yml`）が Windows で作り、成果物 `LifeLogPC` に置く。CI では多数決の決まりを確かめ（`--check-vote`）、3つのモデルを CPU で動かして試す。使い方は `pc/README.txt`。
 - 外からは Tailscale の名前（〜.ts.net）で届く。モバイル通信で送るかは設定で選べる。
 - 順番は 家の PC → iPhone 内の Haas-ja → クラウドの高精度 → 端末内。PC に届かなかったら2分間は試さない。
+- **Claude**（2026-11-13。`pc/claude.py`）: 鍵は家の PC にだけ置く（`%LOCALAPPDATA%\LifeLogPC\claude-key.txt` に1行、か環境変数 `ANTHROPIC_API_KEY`。アプリ・リポジトリには置かない）。POST /claude（tier は light＝haiku・standard＝sonnet・deep＝opus）と GET /claude/usage（今月の値段）。features の "claude" は鍵があり、今月の上限（既定 100 ドル。`claude-config.json` の `monthly_usd`）の前のときだけ。使った額は母艦と同じ帳簿 `claude-usage.jsonl` に数だけ書く（会話の文は書かない）。職場の会話も送る（2026-11-13 の本人の決定。`"work": false` で止められる）。
+  - **割れた行の審判**（精6）: 後で受け取る文字起こしの食い違いの大きい行（確からしさ 0.5 未満）だけ、Claude（haiku）が候補の番号を選ぶ。新しい文は書かせない。番号がおかしければ多数決のまま。替えた行は `judge.before` に前の文を残す（候補にも残る）。1日 400 回まで。
+  - **自動の材料**（精7・仮・既定は使わない）: 全部のモデルがそろった 2 秒以上の行を、あなた向けのモデルの材料に `pc-auto` の印つきで足す（config.json の `"auto_samples": true` のときだけ。1日 30 個・全部で 1500 個まで。学び直しの試験には使わない）。
+  - **母艦の写し**: GET /proposals（母艦からの提案）・POST /proposals/answer（答えを母艦の `inbox/proposal_answers.jsonl` へ）・GET /plaud-fill（アプリに行の無い時間の PLAUD の文。見せるだけ）・GET /speaker-doubts（話し手が違うかもしれない行。名前は自動で替えない）。features は "proposals"・"plaudfill"・"spkdoubt"。確かめは `--check-v11`。
 
 ## 人物Nの整理と、自分の声をまとめる
 

@@ -384,6 +384,53 @@ LifeLog PC は、この PC の中で動く Ollama（http://127.0.0.1:11434）に
 使わないときは  LifeLogPC.exe --no-llm。
 GPU が使えないと CPU で動くので、答えが返るまで数十秒〜数分かかることがあります。
 
+■ Claude（Anthropic の API。2026-11-13。鍵はこの PC にだけ置きます）
+アプリと母艦が、家の PC を通して Claude に頼めるようにしました（中身は claude.py）。鍵が無ければ、今までどおり動きます。
+1. 鍵の置き方（どちらか1つ）:
+   ・%LOCALAPPDATA%\LifeLogPC\claude-key.txt に、鍵を1行だけ書いて保存します（メモ帳でよい。最初の空でない1行を使います）。
+   ・または、環境変数 ANTHROPIC_API_KEY に入れます（こちらがあれば、こちらを先に使います）。
+   鍵は記録（log.txt）・答え・エラー・/hello・見守りの画面のどこにも出しません。リポジトリ・アプリ・チャットにも書かないでください。
+   置いたら LifeLog PC を起動し直さなくても、次に頼んだときから使います。
+2. 上限（1か月に約 100 ドル）:
+   ・使った額は %LOCALAPPDATA%\LifeLogPC\claude-usage.jsonl に、1回ごとに1行ずつ書きます（会話の文は書きません。数と値段だけ）。
+     母艦（D:\Lifelog の scripts）も同じファイルに書くので、合わせて数えます。
+   ・頼む前に今月の合計を見て、上限に届いていたら頼みません（アプリには「今月の上限に達しました」と返ります）。
+     1回分だけ少し越えることはあります。月が替わると、また使えます。
+   ・上限を変えるときは、%LOCALAPPDATA%\LifeLogPC\claude-config.json を作って、次のように書きます（無ければ 100 ドル）:
+       {"monthly_usd": 100, "work": true, "judge": true, "judge_daily": 400}
+     monthly_usd が上限（ドル）。起動し直さなくても、次に頼んだときから効きます。
+3. 送るもの:
+   ・アプリや母艦が頼んだ文（会話の文・題・人の名前を含みます）を、そのまま Claude（外のクラウド）に送ります。
+   ・職場の会話も送ります（2026-11-13 の本人の決定「職場もみせてよい」）。やめるときは claude-config.json の "work" を false に
+     します（職場の印のある頼み・職場か分からない頼みは 403 で断ります）。アプリの「職場の会話は端末内で」の設定はそのままです。
+4. 受け口（どれも iPhone の合言葉が要ります。時計の外の道からは届きません）:
+   ・POST /claude {"system", "prompt", "json", "max_tokens", "tier", "purpose", "work"}
+     → {"text", "model", "usd", "month_usd", "cap_usd"}
+     tier は light（claude-haiku-5-5）・standard（claude-sonnet-5-5）・deep（claude-opus-5-5）。max_tokens は 8192 まで（既定 1024）。
+     上限 → 402・鍵が無い → 503・断られた → 422・職場を送らない設定 → 403。work を省くと「職場かもしれない」として扱います。
+   ・GET /claude/usage → {"available", "month", "month_usd", "cap_usd", "calls", "by_purpose", "by_who"}（鍵は返しません）
+   ・/hello の features に、鍵があって今月の上限の前なら "claude" が付きます。
+5. 割れた行の審判（精6）:
+   後で受け取る文字起こしで、モデルの書いた文が大きく食い違った行（記録の「食い違いの大きい行」）だけを、Claude（haiku）に
+   見てもらい、候補の中から番号で1つ選んでもらいます。Claude は新しい文を書きません。答えの番号がおかしければ、
+   多数決の文のままです。替えた行には "judge"（前の文 "before"）を付け、前の文は候補にも残します（答え合わせで比べられます）。
+   1日に頼む回数は 400 回まで（"judge_daily"）。やめるときは "judge": false。記録には数だけを書きます
+   （「Claude の審判: 食い違いの大きい行 N のうち M 行を見て、K 行を替えました」）。
+   iPhone が /jobs に work=0|1 を付けると、職場かどうかが分かります（付けなければ「分からない」）。
+6. 自動の材料（精7・仮。いまは使いません）:
+   全部のモデル（3つ以上、どれも黙っていない）がほぼ同じ文を書いた 2 秒以上の行を、あなた向けのモデルの材料に足します。
+   config.json（claude-config.json ではなく、いつもの config.json）に "auto_samples": true を足したときだけです。
+   しきい値は仮です: どのモデルの組も近さ 0.95 以上・1日 30 個まで・自動の材料は全部で 1500 個まで。
+   材料には "source": {"origin": "pc-auto", "auto": true} の印を付けるので、あとで外せます。
+   学び直しの試験（誤りの割合を測る分）には、自動の材料は使いません（正しい文が人の確かめたものではないため）。
+7. 母艦からの写し（中身は appfeeds.py。無ければ {"available": false}）:
+   ・GET /proposals … 母艦の state\proposals_for_app.json（母艦からの提案。期限の過ぎたものは返しません）
+   ・POST /proposals/answer {"id", "answer": "accept"|"later"|"never"} … 母艦の inbox\proposal_answers.jsonl に1行足します
+   ・GET /plaud-fill … 母艦の state\plaud_fill_for_app.json（アプリに行の無い時間の PLAUD の文。見せるだけで、記録には混ぜません）
+   ・GET /speaker-doubts … 母艦の state\speaker_doubts_for_app.json（話し手が違うかもしれない行。名前は自動で替えません）
+   features は "proposals"・"plaudfill"・"spkdoubt"。文の中身は log.txt に書きません。
+・確かめるとき:  LifeLogPC.exe --check-v11（一時のフォルダと作り物の Claude で。本物の鍵もネットも使いません）
+
 ■ あなた向けのモデルを作る（NVIDIA の GPU と、300 個以上の材料が要ります）
 iPhone で直した文が 300 個以上たまったら、あなたの声と言い回しに合わせて Whisper（kotoba-whisper v2.0）を学び直せます。
 NVIDIA の GPU が要ります（メモリ 8GB 以上がおすすめ。CPU だけの PC では学び直しません）。
@@ -411,6 +458,7 @@ iPhone から届いた記録・PC で直した分・残した音声: %LOCALAPPDA
 あなた向けのモデルの材料とモデル: %LOCALAPPDATA%\LifeLogPC\personal（data に声と文、model に作ったモデル）
 版 7: 実機の様子 diag（summary.md も）・TestFlight の報告 feedback・通知の鍵と様子 apns・App Store Connect のキー asc・
       学び直しの部品 train（どれも %LOCALAPPDATA%\LifeLogPC の下）
+2026-11-13: Claude の鍵 claude-key.txt・設定 claude-config.json・使った額の帳簿 claude-usage.jsonl（どれも %LOCALAPPDATA%\LifeLogPC）
 合言葉を変えたいときは、そこにある config.json を消して起動し直します（iPhone 側も入れ直してください）。
 
 ■ モデル
