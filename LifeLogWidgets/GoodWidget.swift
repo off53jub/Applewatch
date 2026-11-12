@@ -3,15 +3,17 @@ import WidgetKit
 
 /// ロック画面・ホーム画面に置く「LifeLog のいいこと帳」（2026-11-12）。今週のお礼とほめ言葉の数だけを出す。
 /// 中身は「LifeLog の様子」と同じ WidgetState（アプリが App Group に書く。いいこと帳を読み直したときに更新）。
-/// 読めないとき（App Group が使えない入れ方など）は「—」。押すと LifeLog を開く。
+/// 読めないとき（App Group が使えない入れ方など）は「—」。押すといいこと帳を開く。
 struct GoodWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: WidgetState.goodKind, provider: StatusProvider()) { entry in
             GoodView(entry: entry)
                 .containerBackground(.fill.tertiary, for: .widget)
+                // 押すといいこと帳を開く（2026-11-12。LifeLog の NoticeRoute.route(url:)）
+                .widgetURL(URL(string: "lifelog://good"))
         }
         .configurationDisplayName("LifeLog のいいこと帳")
-        .description("今週のお礼とほめ言葉の数を出します。押すと LifeLog を開きます。")
+        .description("今週のお礼とほめ言葉の数を出します。押すといいこと帳を開きます。")
         .supportedFamilies([.accessoryRectangular, .accessoryInline, .systemSmall])
     }
 }

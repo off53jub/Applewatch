@@ -4,7 +4,7 @@ import UserNotifications
 /// 知らせのボタンと、押したときの動き（2026-11-10）。
 /// 「頼まれごとを見つけました」には「入れる」「違う」「2時間後にもう一度」、
 /// 「期限の1時間前」には「済み」「1時間後にもう一度」「明日に」を付ける（アプリを開かずに片づける）。
-/// 知らせそのものを押したときは、その知らせに合う画面を開く（頼まれごと帳・仕事のまとめの取り込み）。
+/// 知らせそのものを押したときは、その知らせに合う画面を開く（頼まれごと帳・仕事のまとめの取り込み。2026-11-12 からほかの知らせも）。
 /// 押されたものは、いったん UserDefaults にためてから Pipeline に渡す（アプリの準備ができる前に押されても落とさない）。
 enum NoticeActions {
     /// 「頼まれごとを見つけました」
@@ -143,18 +143,75 @@ enum NoticeStats {
     }
 }
 
-/// 知らせを押したときに開く画面（2026-11-10）
+/// 下のタブ（2026-11-12。前は 今日・タスク・ライブ・記録・人と場所）
+enum AppTab: String, Hashable, CaseIterable {
+    case today, tasks, fix, records, lookBack
+}
+
+/// 知らせ・ウィジェットから開く画面のうち、シートで開くもの（2026-11-12）
+enum NoticeScreen: String, Equatable {
+    case questions, goodThings, money, cloudLog, reviewNudge, diagnostics, homePC
+}
+
+/// 知らせを押したときに開く画面（2026-11-10。2026-11-12 からタスク以外の知らせも、その画面を開く）
 enum NoticeRoute: Identifiable, Equatable {
-    /// 頼まれごと帳
-    case tasks
+    /// 下のタブを切り替える（シートは開かない）
+    case tab(AppTab)
     /// 仕事のまとめを取り込む画面（文があれば、はじめから入れておく）
     case digestImport(String)
+    /// その知らせに合う画面をシートで開く
+    case screen(NoticeScreen)
+    /// 知らせの文をそのまま読み直す（会う前の1枚。消えても読み返せるように）
+    case note(title: String, body: String)
 
     var id: String {
         switch self {
-        case .tasks: "tasks"
+        case .tab(let t): "tab-" + t.rawValue
         case .digestImport: "digestImport"
+        case .screen(let s): "screen-" + s.rawValue
+        case .note(let title, _): "note-" + title
         }
+    }
+
+    /// 知らせの名前（identifier）から、押したときに開く画面を決める。分からないものは nil（アプリを開くだけ）。
+    /// 名前は各ファイルで知らせを頼むときのもの（AskBook・GoodMore・Payments・CloudLog・CaptureSafety・Pipeline・Provisioning など）
+    static func route(identifier id: String, title: String, body: String) -> NoticeRoute? {
+        if id.hasPrefix("tasks-") || id == NoticePresenter.taskFoundID { return .tab(.tasks) }
+        if id.hasPrefix("brief-") { return .note(title: title, body: body) }
+        if id.hasPrefix(AppFeeds.noticePrefix) || id.hasPrefix("signExpiry-") { return .tab(.today) }
+        switch id {
+        case MorningBrief.noticeID, "watch-silent", "phone-stopped", "watch-battery", "stall",
+             "watch-open-after-update", "watch-not-recording":
+            return .tab(.today)
+        case "askQuestions": return .screen(.questions)
+        case "good-tonight": return .screen(.goodThings)
+        case "payments-monthly": return .screen(.money)
+        case "cloud-monthly": return .screen(.cloudLog)
+        case "review-nudge": return .screen(.reviewNudge)
+        case "morning-check": return .screen(.diagnostics)
+        case "home-pc": return .screen(.homePC)
+        case "work-digest-reminder": return .digestImport("")
+        default: return nil
+        }
+    }
+
+    /// ウィジェットの lifelog:// の住所から（lifelog://tasks など）
+    static func route(url: URL) -> NoticeRoute? {
+        guard url.scheme == "lifelog" else { return nil }
+        switch url.host() ?? "" {
+        case "tasks": return .tab(.tasks)
+        case "fix": return .tab(.fix)
+        case "records": return .tab(.records)
+        case "lookback": return .tab(.lookBack)
+        case "good": return .screen(.goodThings)
+        default: return .tab(.today)
+        }
+    }
+
+    /// 知らせを数えるときの種類（カテゴリの無い知らせは、名前の頭で数える）
+    static func kind(of id: String) -> String {
+        for prefix in ["tasks-", "brief-", "signExpiry-", AppFeeds.noticePrefix] where id.hasPrefix(prefix) { return prefix }
+        return id
     }
 }
 
@@ -163,10 +220,16 @@ extension Pipeline {
     func handleNotices(_ list: [NoticeActions.Pending]) {
         var changed = false
         for p in list {
-            NoticeStats.count(p.category, p.action.rawValue)
+            NoticeStats.count(p.category.isEmpty ? NoticeRoute.kind(of: p.identifier) : p.category, p.action.rawValue)
             switch p.action {
             case .open:
-                noticeRoute = p.category == NoticeActions.digestCategory ? .digestImport("") : .tasks
+                if p.category == NoticeActions.digestCategory {
+                    openRoute(.digestImport(""))
+                } else if p.category.isEmpty {
+                    if let route = NoticeRoute.route(identifier: p.identifier, title: p.title, body: p.body) { openRoute(route) }
+                } else {
+                    openRoute(.tab(.tasks))
+                }
             case .keep:
                 for id in p.ids where tasks.items.first(where: { $0.id == id })?.state == .candidate {
                     tasks.set(id, .open)
@@ -196,6 +259,16 @@ extension Pipeline {
             }
         }
         if changed { tasksChanged() }
+    }
+
+    /// 知らせ・ウィジェットから画面を開く（タブはタブを切り替え、ほかはシートで開く）
+    func openRoute(_ route: NoticeRoute) {
+        if case .tab(let t) = route {
+            noticeRoute = nil
+            tab = t
+        } else {
+            noticeRoute = route
+        }
     }
 
     /// 同じ知らせを、少したってから出し直す

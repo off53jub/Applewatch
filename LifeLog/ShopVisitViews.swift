@@ -2,7 +2,7 @@ import CoreLocation
 import SwiftUI
 import UIKit
 
-/// 行ったお店（2026-11-08）。立ち寄りを日ごとに出し、推測（たぶん）を本人が決める。下に設定。
+/// 行ったお店（2026-11-08）。立ち寄りを日ごとに出し、推測（たぶん）を本人が決める。下に設定。「記録」→「場所」から開く。
 struct ShopVisitsView: View {
     @Environment(Pipeline.self) private var pipeline
 
@@ -44,7 +44,7 @@ struct ShopVisitsView: View {
                     }
                 }
             }
-            PaymentSection()
+            // 支払い（PayPay の明細・カード・ウォレット）は「記録」→「お金」に移した（2026-11-12。MoneyViews.swift）
             ShopVisitSettings()
         }
         .navigationTitle("行ったお店")

@@ -94,7 +94,14 @@ struct LifeLogApp: App {
                     .environment(pipeline)
                     // 開くときに Face ID（設定でオンにしたときだけ。録音と裏の処理は止めない）
                     .modifier(AppLock())
-                    .onOpenURL { GIDSignIn.sharedInstance.handle($0) }
+                    // lifelog:// はウィジェットから（2026-11-12。NoticeActions.swift の NoticeRoute.route(url:)）。ほかは Google のログイン
+                    .onOpenURL { url in
+                        if let route = NoticeRoute.route(url: url) {
+                            pipeline.openRoute(route)
+                        } else {
+                            GIDSignIn.sharedInstance.handle(url)
+                        }
+                    }
                     .task {
                         guard !Self.demo else { return }
                         if let action = LifeLogActions.pending {

@@ -3,25 +3,78 @@ import SwiftUI
 /// 時計の画面。上下にめくる7枚（2026-11-07）:
 /// 録音 / 頼まれごと / 次の予定 / さっきの会話 / 聞く / 昨日と今日 / 様子。
 /// 録音の画面は前と同じ。ほかの画面の中身は iPhone から届く（iPhone が離れていても、前に届いた分を出す）。
+/// 2026-11-12 から、録音より下の6枚は、この時計でよく見るものから並べる（WatchPages。回数がたまるまでは上の順のまま）。
 struct WatchContentView: View {
     @Environment(WatchRecorder.self) private var recorder
     @Environment(\.scenePhase) private var scenePhase
+    /// 並びは開いたときに決め、見ている間は動かさない
+    @State private var pages: [WatchPages.Page] = WatchPages.order(WatchPages.counts())
+    @State private var current: WatchPages.Page = .record
 
     var body: some View {
-        TabView {
-            RecordPage()
-            TasksPage()
-            NextEventPage()
-            LastTalkPage()
-            AskPage()
-            MorningPage()
-            StatusPage()
+        TabView(selection: $current) {
+            ForEach(pages, id: \.self) { page in
+                pageView(page).tag(page)
+            }
         }
         .tabViewStyle(.verticalPage)
+        // 2秒以上見ていたら1回と数える（めくって通り過ぎただけのものは数えない）
+        .task(id: current) {
+            try? await Task.sleep(for: .seconds(2))
+            if !Task.isCancelled { WatchPages.add(current) }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { recorder.refreshStatus() }
         }
         .onAppear { recorder.refreshStatus() }
+    }
+
+    @ViewBuilder
+    private func pageView(_ page: WatchPages.Page) -> some View {
+        switch page {
+        case .record: RecordPage()
+        case .tasks: TasksPage()
+        case .next: NextEventPage()
+        case .last: LastTalkPage()
+        case .ask: AskPage()
+        case .morning: MorningPage()
+        case .status: StatusPage()
+        }
+    }
+}
+
+/// めくる画面の並び（2026-11-12）。録音はいつもいちばん上。ほかは、この時計で見た回数の多い順（同じなら前からの順）。
+/// 回数は時計の中だけに数える。合わせて30回見るまでは、前からの順のまま（少ない回数で並びが揺れないように）。
+enum WatchPages {
+    enum Page: String, CaseIterable, Hashable {
+        case record, tasks, next, last, ask, morning, status
+    }
+
+    static let key = "watchPageViews"
+    /// これだけ見るまでは並べ替えない
+    static let minimumViews = 30
+
+    static func counts() -> [String: Int] {
+        UserDefaults.standard.dictionary(forKey: key) as? [String: Int] ?? [:]
+    }
+
+    static func add(_ page: Page) {
+        var all = counts()
+        all[page.rawValue, default: 0] += 1
+        UserDefaults.standard.set(all, forKey: key)
+    }
+
+    /// 並び。録音がいちばん上で、残りは回数の多い順
+    static func order(_ counts: [String: Int]) -> [Page] {
+        let rest = Array(Page.allCases.dropFirst())
+        let total = rest.reduce(0) { $0 + (counts[$1.rawValue] ?? 0) }
+        guard total >= minimumViews else { return Page.allCases }
+        let sorted = rest.enumerated().sorted { a, b in
+            let ca = counts[a.element.rawValue] ?? 0
+            let cb = counts[b.element.rawValue] ?? 0
+            return ca != cb ? ca > cb : a.offset < b.offset
+        }.map(\.element)
+        return [.record] + sorted
     }
 }
 

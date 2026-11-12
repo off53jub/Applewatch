@@ -240,63 +240,6 @@ struct CarDevicesView: View {
     }
 }
 
-/// 確認箱（2026-11-06）: 確かめ待ちを1つの画面に、大事な順に並べる。1日5分で終わるよう、上から片付ける
-struct ConfirmBoxView: View {
-    @Environment(Pipeline.self) private var pipeline
-    @State private var reviewCount = 0
-
-    private static let dayFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
-
-    var body: some View {
-        let day = Self.dayFormatter.string(from: .now)
-        let week = AnswerKey.weekKey(.now)
-        let samples = pipeline.answerKey.samples(of: week)
-        let answers = samples.isEmpty ? AnswerKey.perWeek : samples.filter { !$0.isAnswered }.count
-        List {
-            Section {
-                Text("1日に上から5つまでで十分です（5分ほど）。残りは明日に回して大丈夫です。終わったものは消えます。")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            if !pipeline.tasks.candidates.isEmpty {
-                Section("1. タスクの候補（\(pipeline.tasks.candidates.count)）") {
-                    NavigationLink("頼まれごと帳で入れる・捨てる") { TaskBookView() }
-                }
-            }
-            if !pipeline.asks.open.isEmpty {
-                Section("2. AI からの質問（\(pipeline.asks.open.count)）") {
-                    NavigationLink("答える") { QuestionsView() }
-                }
-            }
-            NewVoicesSection()
-            if reviewCount > 0 {
-                Section("4. 見直したい声（\(reviewCount)）") {
-                    NavigationLink("声を聞いて直す") { VoiceReviewView() }
-                    NavigationLink("今日の人物Nを整理") { UnnamedVoicesView(day: day) }
-                }
-            }
-            SplitWordsSection()
-            if pipeline.misheardCount > 0 {
-                Section("5. 聞き間違いかも（\(pipeline.misheardCount)）") {
-                    NavigationLink("直す・そのまま") { MisheardView() }
-                }
-            }
-            if answers > 0 {
-                Section("6. 今週の答え合わせ（あと \(answers) 問）") {
-                    NavigationLink("答える（5分ほど）") { AnswerKeyView() }
-                }
-            }
-        }
-        .navigationTitle("確認箱")
-        .countsOpen("confirmBox")
-        .onAppear { reviewCount = pipeline.voiceReview().count }
-    }
-}
-
 /// 多数決でモデルが何度も割れた言葉（2026-11-06）。どちらかを登録すると、次から4つのモデル全部のヒントになる
 struct SplitWordsSection: View {
     @Environment(Pipeline.self) private var pipeline

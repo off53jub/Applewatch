@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 高精度（クラウド）文字起こしのサービス・API キー・月の上限を決める画面。聞き取ってほしい言葉は「人と場所」タブで登録する。
+/// 高精度（クラウド）文字起こしのサービス・API キー・月の上限を決める画面。聞き取ってほしい言葉は「直す」タブの「いつでも」で登録する。
 struct TranscriptionSettingsView: View {
     @Bindable var settings: TranscriptionSettings
     @State private var keyInput = ""

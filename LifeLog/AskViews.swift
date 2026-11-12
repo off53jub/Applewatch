@@ -262,57 +262,6 @@ struct HitRow: View {
     }
 }
 
-struct SearchView: View {
-    @Environment(Pipeline.self) private var pipeline
-    @State private var query = ""
-    @State private var hits: [Pipeline.Hit] = []
-    @State private var searched = false
-    /// 意味で探す（家の PC の索引。2026-11-07）
-    @AppStorage("searchByMeaning") private var byMeaning = false
-    @State private var searching = false
-
-    var body: some View {
-        List {
-            if pipeline.homePC.features.contains("semantic") {
-                Toggle("意味で探す（家の PC）", isOn: $byMeaning)
-                    .onChange(of: byMeaning) { if query.count >= 2 { run() } }
-            }
-            if searching { ProgressView() }
-            ForEach(hits) { HitRow(hit: $0) }
-        }
-            .overlay {
-                if searched && hits.isEmpty {
-                    ContentUnavailableView.search(text: query)
-                } else if !searched {
-                    ContentUnavailableView("言葉や名前で探す", systemImage: "magnifyingglass",
-                                           description: Text("空白で区切ると、すべてを含む行を探します。行を押すと、その日の記録が開き、そこから音声も聞けます。"))
-                }
-            }
-            .searchable(text: $query, prompt: "言葉・名前")
-            .onSubmit(of: .search) { run() }
-            .onChange(of: query) { if query.count >= 2 && !byMeaning { run() } else if query.count < 2 { hits = []; searched = false } }
-            .navigationTitle("記録を探す")
-    }
-
-    private func run() {
-        guard byMeaning, pipeline.homePC.features.contains("semantic") else {
-            hits = pipeline.search(query)
-            searched = true
-            return
-        }
-        // 意味で探すときは、打ち終わって検索を押したときと、切り替えたときだけ（PC に毎回聞かない）
-        let asked = query
-        searching = true
-        Task {
-            let found = await pipeline.semanticSearch(asked)
-            guard asked == query else { return }
-            hits = found
-            searched = true
-            searching = false
-        }
-    }
-}
-
 struct AskView: View {
     @Environment(Pipeline.self) private var pipeline
     @State private var question = ""

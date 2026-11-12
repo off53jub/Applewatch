@@ -1226,7 +1226,9 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let request = response.notification.request
         let content = request.content
-        guard !content.categoryIdentifier.isEmpty, let action = NoticeActions.action(for: response.actionIdentifier) else {
+        // カテゴリの無い知らせも、知らせそのものを押したときは画面を開く（2026-11-12。NoticeRoute.route）
+        guard let action = NoticeActions.action(for: response.actionIdentifier),
+              !content.categoryIdentifier.isEmpty || action == .open else {
             completionHandler()
             return
         }
@@ -1242,14 +1244,17 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
 
 // MARK: - 画面
 
-/// タスクタブ。下のタブから開く（自分の NavigationStack を持つ）。
+/// タスクタブ。下のタブから開く（自分の NavigationStack を持つ）。タスクの画面はここだけにした（2026-11-12。ほかの画面からはこのタブに移る）
 struct TasksTab: View {
     var body: some View {
-        NavigationStack { TaskBookView() }
+        NavigationStack {
+            TaskBookView()
+                .settingsGear()
+        }
     }
 }
 
-/// やることの画面。上で「仕事｜仕事以外｜全部」、その下で「やる」「待ち」「人」「済み」を切り替える。右上の＋で書き足す・写真から読み取る。
+/// やることの画面。上で「やる」「待ち」「人」「済み」を切り替え、左上で「仕事｜仕事以外｜全部」を選ぶ（2026-11-12。前は切り替えが2段）。右上の＋で書き足す・写真から読み取る。
 /// 頼まれごと・自分でやること・人に頼んだこと・約束を、1か所で追いかける。
 struct TaskBookView: View {
     enum Page: String, CaseIterable, Identifiable {
@@ -1293,10 +1298,6 @@ struct TaskBookView: View {
         let lists = book.lists(scope)
         List {
             Section {
-                Picker("仕事か", selection: $scope) {
-                    ForEach(TaskBook.Scope.allCases) { s in Text(scopeTitle(s, book)).tag(s) }
-                }
-                .pickerStyle(.segmented)
                 Picker("見る", selection: $page) {
                     ForEach(Page.allCases) { p in Text(title(p, lists)).tag(p) }
                 }
@@ -1318,11 +1319,20 @@ struct TaskBookView: View {
             case .done: donePage(lists)
             }
         }
-        .navigationTitle("タスク")
+        .navigationTitle(scope == .all ? "タスク" : "タスク（\(scope.label)）")
         .countsOpen("taskBook")
         .toolbar {
+            // 仕事｜仕事以外｜全部 と、知らせの設定（2026-11-12。前は上の2段めの切り替えと、ベルのボタン）
             ToolbarItem(placement: .topBarLeading) {
-                Button("知らせの設定", systemImage: "bell") { showSettings = true }
+                Menu {
+                    Picker("仕事か", selection: $scope) {
+                        ForEach(TaskBook.Scope.allCases) { s in Text(scopeTitle(s, book)).tag(s) }
+                    }
+                    Divider()
+                    Button("知らせの設定", systemImage: "bell") { showSettings = true }
+                } label: {
+                    Label(scope.label, systemImage: scope == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -1475,6 +1485,20 @@ struct TaskBookView: View {
 
     @ViewBuilder
     private func todoPage(_ book: TaskBook.Lists) -> some View {
+        // 職場の Claude の答えを取り込んだ「仕事のまとめ」（2026-11-08。仕事以外だけを見ているときは出さない。2026-11-12 から「やる」のいちばん上）
+        if scope != .life {
+            Section {
+                NavigationLink {
+                    WorkDigestListView()
+                } label: {
+                    LabeledContent {
+                        Text(pipeline.workDigests.entries.isEmpty ? "写真・貼り付けから" : "\(pipeline.workDigests.entries.count) 件")
+                    } label: {
+                        Label("仕事のまとめ", systemImage: "doc.text")
+                    }
+                }
+            }
+        }
         // 今日の三つ（期限を過ぎた・今日までのもの、家の PC が選んだもの。朝の「昨日と今日」と同じ選び方。2026-11-09）。
         // 押すと「解き方」（手順・だいたいの時間・送る文の下書き。2026-11-10）
         let three = pipeline.todayThree()
@@ -1542,20 +1566,6 @@ struct TaskBookView: View {
             } header: {
                 Text("\(bucket.title)（\(mine.count + others.count)）")
                     .foregroundStyle(bucket == .late ? Color.red : Color.secondary)
-            }
-        }
-        // 職場の Claude の答えを取り込んだ「仕事のまとめ」（2026-11-08。仕事以外だけを見ているときは出さない）
-        if scope != .life {
-            Section {
-                NavigationLink {
-                    WorkDigestListView()
-                } label: {
-                    LabeledContent {
-                        Text(pipeline.workDigests.entries.isEmpty ? "写真・貼り付けから" : "\(pipeline.workDigests.entries.count) 件")
-                    } label: {
-                        Label("仕事のまとめ", systemImage: "doc.text")
-                    }
-                }
             }
         }
         Section {

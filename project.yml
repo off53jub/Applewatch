@@ -103,7 +103,7 @@ targets:
               NSExceptionAllowsInsecureHTTPLoads: true
         GIDClientID: $(GOOGLE_CLIENT_ID)
         CFBundleURLTypes:
-          - CFBundleURLSchemes: [$(GOOGLE_REVERSED_CLIENT_ID)]
+          - CFBundleURLSchemes: [$(GOOGLE_REVERSED_CLIENT_ID), lifelog]
   LifeLogWatch:
     type: application
     platform: watchOS

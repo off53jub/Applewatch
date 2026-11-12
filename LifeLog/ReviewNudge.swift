@@ -759,35 +759,6 @@ extension Pipeline {
 
 // MARK: - 画面
 
-/// 「今日」の上のほうに出す入口（まだ答えていない行があるときだけ）
-struct ReviewNudgeEntry: View {
-    @Environment(Pipeline.self) private var pipeline
-
-    var body: some View {
-        let items = pipeline.reviewNudge.items(for: ReviewNudge.dayKey(.now))
-        let left = items.filter { !$0.isAnswered }.count
-        if left > 0 {
-            Section {
-                NavigationLink {
-                    ReviewNudgeView()
-                } label: {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Label(ReviewNudge.entryTitle(total: items.count, left: left), systemImage: "ear")
-                        Text(caption).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-    }
-
-    private var caption: String {
-        if let material = PersonalMaterial.latest() {
-            return "学び直しの材料 \(material.count) / \(material.need) 個（家の PC）。聞いて直すと増えます。"
-        }
-        return "自信の低い行を聞いて、直すか「合っている」を押すと、あなた向けの Whisper の材料になります。"
-    }
-}
-
 /// 今日の聞いて直す。1行ずつ ▶ で聞いて「直す・合っている・飛ばす」で答える
 struct ReviewNudgeView: View {
     @Environment(Pipeline.self) private var pipeline
