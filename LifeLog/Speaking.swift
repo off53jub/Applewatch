@@ -187,6 +187,7 @@ struct SpeakingView: View {
             }
         }
         .navigationTitle("話し方の振り返り")
+        .countsOpen("speaking")
         .onAppear { report = pipeline.speakingReport() }
     }
 

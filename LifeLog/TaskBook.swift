@@ -1319,6 +1319,7 @@ struct TaskBookView: View {
             }
         }
         .navigationTitle("タスク")
+        .countsOpen("taskBook")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button("知らせの設定", systemImage: "bell") { showSettings = true }

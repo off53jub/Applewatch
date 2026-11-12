@@ -1822,9 +1822,21 @@ final class Pipeline {
             try await docs.overwrite(paragraphs, name: name)
             diagnostics.lastWritten = .now
             await writeAppStatus()
+            await writeTallyFile()
             return "ドライブの「\(name)」に書きました。"
         } catch {
             return "書けませんでした: \(error.localizedDescription)"
+        }
+    }
+
+    /// 数えた回数（日ごと）と、機能が実機で動いた日を、機械が読める形で「診断」の隣（同期フォルダ）に置く（FeatureProof.swift）。
+    /// 数と日付だけで、会話の中身・人の名前は入れない。
+    private func writeTallyFile() async {
+        guard let data = FeatureProof.exportJSON() else { return }
+        let key = "tallyFileID"
+        let name = UIDevice.current.userInterfaceIdiom == .pad ? "tally（iPad）.json" : "tally.json"
+        if let id = try? await docs.uploadSync(data, name: name, id: UserDefaults.standard.string(forKey: key)) {
+            UserDefaults.standard.set(id, forKey: key)
         }
     }
 

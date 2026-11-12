@@ -542,6 +542,7 @@ struct QuestionsView: View {
             }
         }
         .navigationTitle("AI からの質問")
+        .countsOpen("questions")
         .onDisappear { player.stop() }
         .onChange(of: book.version) { pipeline.asksChanged() }
     }

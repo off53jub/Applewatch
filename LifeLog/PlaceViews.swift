@@ -53,6 +53,7 @@ struct PlacesView: View {
             }
         }
         .navigationTitle("場所")
+        .countsOpen("places")
         .alert("今いる場所の名前", isPresented: $adding) {
             TextField("自宅、会社など", text: $newName)
             Button("登録") {

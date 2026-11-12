@@ -33,6 +33,8 @@ enum Tally {
         all = all.filter { $0.key >= oldest }
         cache = all
         if let data = try? JSONEncoder().encode(all) { try? data.write(to: url, options: .atomic) }
+        // 動いた証拠の数なら、初めての日を35日で消えない帳に残す（FeatureProof.swift）
+        FeatureProof.noticed(name, at: date)
     }
 
     /// 直近の何日か（今日を含む）の合計

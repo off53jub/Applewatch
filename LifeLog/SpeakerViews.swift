@@ -240,6 +240,7 @@ struct PeopleView: View {
             }
         }
         .navigationTitle("話した相手")
+        .countsOpen("people")
         .toolbar {
             NavigationLink {
                 SelfMergeView()
@@ -1169,6 +1170,7 @@ struct UnnamedVoicesView: View {
             }
         }
         .navigationTitle("人物Nを整理")
+        .countsOpen("unnamedVoices")
         .task(id: list.map(\.id)) {
             clues = await pipeline.voiceClues(for: Set(list.map(\.id)), talkLimit: 0)
         }

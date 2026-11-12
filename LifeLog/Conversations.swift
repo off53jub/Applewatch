@@ -1760,6 +1760,8 @@ final class ConversationLog {
     /// 覚えるのはファイルの大きさで cacheLimit まで。超えたら、長く使っていない日から忘れる。
     private var cache: [String: (modified: Date, bytes: Int, used: Int, log: Day)] = [:]
     private var cacheUse = 0
+    /// 終わりを直した日（読み直しのたびに数えないため）
+    private var endFixedDays = Set<String>()
     private static let cacheLimit = 48 * 1024 * 1024
 
     /// ファイルから読んだ回数と、かかった時間（診断に出す。覚えていた分は数えない）
@@ -1775,10 +1777,14 @@ final class ConversationLog {
         }
         let started = Date()
         guard let data = try? Data(contentsOf: url),
-              let log = try? JSONDecoder().decode(Day.self, from: data) else {
+              let decoded = try? JSONDecoder().decode(Day.self, from: data) else {
             cache[day] = nil
             return Day()
         }
+        // 終わりが始まりより前の古い会話は、終わりだけ直す（読んだものを直すだけで、次に書くときに残る。ConversationRepair.swift）
+        let repaired = Self.repairedEnds(decoded)
+        let log = repaired.log
+        if repaired.fixed > 0, endFixedDays.insert(day).inserted { Tally.add("talk.endFixed", repaired.fixed) }
         loadStats.files += 1
         loadStats.bytes += data.count
         loadStats.seconds += Date().timeIntervalSince(started)

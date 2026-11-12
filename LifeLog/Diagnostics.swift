@@ -321,6 +321,11 @@ extension Pipeline {
         // PLAUD との差（家の PC が母艦から読んだ写し。2026-11-12。AppFeeds.swift）
         for row in AppFeeds.gapRows(appFeeds.plaudGap) { add("PLAUD との比べ（成績表）", row.label, row.value, row.ok) }
 
+        // 実機で動いたか・家の PC が古くて使えない働き・画面を開いた回数（2026-11-12。FeatureProof.swift）
+        for row in FeatureProof.diagnosticRows(pcVersion: homePC.version, pcFeatures: homePC.features, pcConfigured: homePC.isConfigured) {
+            add(row.section, row.label, row.value, row.ok)
+        }
+
         // 最近のエラー
         for problem in diagnostics.problems.suffix(15).reversed() {
             add("最近のエラー", Self.diagTime.string(from: problem.time), problem.text, false)
@@ -391,6 +396,7 @@ struct DiagnosticsView: View {
             }
         }
         .navigationTitle("自己点検")
+        .countsOpen("diagnostics")
         .task {
             items = await pipeline.diagnosticItems()
             // 学び直しの材料の数を家の PC に聞き直して、出し直す（家の PC を使っていて、少し聞いていないときだけ。2026-11-07）

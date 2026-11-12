@@ -260,6 +260,7 @@ struct MisheardView: View {
             }
         }
         .navigationTitle("聞き間違いかも")
+        .countsOpen("misheard")
         .onAppear { counts = pipeline.resummarizeCounts() }
         .onDisappear { player.stop() }
         .alert("別の書き方に直す", isPresented: Binding(get: { other != nil }, set: { if !$0 { other = nil } })) {

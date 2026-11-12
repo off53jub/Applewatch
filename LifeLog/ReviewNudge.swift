@@ -828,6 +828,7 @@ struct ReviewNudgeView: View {
             materialSection()
         }
         .navigationTitle("今日の聞いて直す")
+        .countsOpen("reviewNudge")
         .task {
             pipeline.prepareReviewNudge()
             pipeline.settleReviewNudge()

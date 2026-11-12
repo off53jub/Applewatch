@@ -48,6 +48,7 @@ struct ShopVisitsView: View {
             ShopVisitSettings()
         }
         .navigationTitle("行ったお店")
+        .countsOpen("shopVisits")
         .onAppear { book.refreshCounts() }
     }
 

@@ -87,6 +87,7 @@ struct WorkDigestListView: View {
             }
         }
         .navigationTitle("仕事のまとめ")
+        .countsOpen("workDigest")
         .sheet(isPresented: $importing) {
             NavigationStack {
                 WorkDigestImportView { note = $0 }

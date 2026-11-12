@@ -401,6 +401,7 @@ struct AskView: View {
             }
         }
         .navigationTitle("記録に質問する")
+        .countsOpen("ask")
     }
 
     private func run() {
