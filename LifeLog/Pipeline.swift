@@ -206,6 +206,8 @@ final class Pipeline {
     let appFeeds = AppFeedsBook()
     /// 提案・PLAUD で埋めた所・話し手の疑い（2026-11-13。HomeFeeds.swift）
     let homeFeeds = HomeFeedsBook()
+    /// 週のふり返り・会う前の一枚・朝のまとめの比べ・精度の通信簿と、使われ方・夜の10秒の送り（2026-11-13。MothershipFeeds.swift）
+    let mothershipFeeds = MothershipFeedsBook()
     /// 仕事のまとめ（職場の Claude の答えを写真・貼り付けで取り込む。2026-11-08。WorkDigest.swift）
     let workDigests = WorkDigest()
     /// 言葉の登録の候補（母艦の辞書から。押した言葉だけ登録する。2026-11-10。WordCandidates.swift）
@@ -1485,6 +1487,7 @@ final class Pipeline {
         Task { await payments.refreshMail(homePC) }
         Task { await appFeeds.refresh(homePC) }  // 自分の声の候補・新しさ・PLAUD との差（30分に1回まで。2026-11-12）
         Task { await homeFeeds.refresh(homePC) }  // 提案・PLAUD で埋めた所・話し手の疑い（30分に1回まで。2026-11-13）
+        Task { await refreshMothershipFeeds() }  // 週のふり返り・会う前の一枚など（30分に1回まで）とためた答えの送り（2026-11-13）
         Task {
             await good.refresh(homePC)  // いいこと帳（30分に1回まで）
             updateWidgets()  // ウィジェットの今週の数（2026-11-12）
