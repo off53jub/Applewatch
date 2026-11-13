@@ -396,38 +396,41 @@ extension Pipeline {
 
 // MARK: - 画面
 
-/// 「今日」の「昨日と今日」（今日か明日の分があるときだけ）
+/// 「今日」の「昨日と今日」（今日か明日の分があるときだけ）。2026-11-13 から畳んでおき（今日の三つは「今日」のいちばん上に出す）、
+/// 開いたら、その日に1回だけ「読んだ」を母艦に返す（施策 1。MothershipFeeds.swift）
 struct MorningBriefSection: View {
     @Environment(Pipeline.self) private var pipeline
+    @State private var open = false
 
     var body: some View {
         let store = MorningBriefStore.shared
         let today = briefDayKey.string(from: .now)
         if let record = store.current, record.day >= today {
             Section {
-                Text(record.text)
-                    .font(.callout)
-                // 今日の三つの解き方（家の PC が手順・下書きを付けたものだけ。2026-11-10）
-                if record.day == today {
-                    let three = pipeline.todayThree()
-                    ForEach(Array(three.enumerated()), id: \.offset) { i, pick in
-                        if pick.hasHowTo { TodayPickRow(number: i + 1, pick: pick) }
+                DisclosureGroup(isExpanded: $open) {
+                    Text(record.text)
+                        .font(.callout)
+                    Button {
+                        Task { await pipeline.makeMorningBrief(for: Calendar.current.startOfDay(for: .now), force: true) }
+                    } label: {
+                        if store.making {
+                            ProgressView()
+                        } else {
+                            Label("今日の分を作り直す", systemImage: "arrow.clockwise")
+                        }
                     }
-                }
-                Button {
-                    Task { await pipeline.makeMorningBrief(for: Calendar.current.startOfDay(for: .now), force: true) }
+                    .disabled(store.making)
+                    Text(record.made.formatted(date: .abbreviated, time: .shortened) + " に作りました")
+                        .font(.caption).foregroundStyle(.secondary)
                 } label: {
-                    if store.making {
-                        ProgressView()
-                    } else {
-                        Label("今日の分を作り直す", systemImage: "arrow.clockwise")
+                    Label(record.day == today ? "昨日と今日" : "昨日と今日（明日の分）", systemImage: "sun.horizon")
+                }
+                .onChange(of: open) {
+                    if open && record.day == today {
+                        pipeline.mothershipFeeds.noteBriefRead(day: record.day)
+                        Task { await pipeline.mothershipFeeds.sendOutbox(pipeline.homePC) }
                     }
                 }
-                .disabled(store.making)
-            } header: {
-                Text(record.day == today ? "昨日と今日" : "昨日と今日（明日の分）")
-            } footer: {
-                Text(record.made.formatted(date: .abbreviated, time: .shortened) + " に作りました")
             }
         }
     }

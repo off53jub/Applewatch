@@ -11,6 +11,8 @@ struct LookBackTab: View {
         let hasWork = !pipeline.workDigests.entries.isEmpty
         NavigationStack {
             List {
+                // 今週のふり返り・見立ての台帳・使われ方の数（2026-11-13。施策 2・3・1。MothershipFeeds.swift。写しがあるときだけ）
+                WeeklyLookBackSection()
                 Section {
                     if hasGood {
                         NavigationLink {
@@ -36,6 +38,13 @@ struct LookBackTab: View {
                     }
                 } header: {
                     Text("自分")
+                }
+
+                // 同じ日の朝のまとめを2つの作り手で比べる（2026-11-13。施策 5。両方そろった日があるときだけ）
+                if !pipeline.mothershipFeeds.compare.isEmpty {
+                    Section("朝のまとめ") {
+                        BriefCompareLink()
+                    }
                 }
 
                 Section {

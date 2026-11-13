@@ -1510,9 +1510,8 @@ struct TaskBookView: View {
         let three = pipeline.todayThree()
         if !three.isEmpty {
             Section {
-                ForEach(Array(three.enumerated()), id: \.offset) { i, pick in
-                    TodayPickRow(number: i + 1, pick: pick)
-                }
+                // 「今日」のいちばん上と同じ行（「やった」「やらない」つき。2026-11-13。MothershipFeeds.swift）
+                TodayThreeRows(picks: three)
             } header: {
                 Text("今日の三つ")
             } footer: {

@@ -275,4 +275,68 @@ final class ScreenTour: XCTestCase {
             snap(app, "記録 › PLAUD だけの日")
         }
     }
+
+    // MARK: - 2026-11-13 の施策の画面
+
+    /// 見本の写し（DemoData.installMothershipFeeds）で、今日の上の段・下の録音の1行・今日の記録・ふり返りの週のふり返り・
+    /// 見立ての台帳・朝のまとめ 比べる・点検の精度の通信簿・あまり開かれていない画面・くわしい設定・アプリを開いた記録の使い方を撮る。
+    /// 押すのは開く行だけ（「やった」「役に立った」「こっちがいい」「残す」などは押さない）
+    func testTourMothershipFeeds() {
+        // 1. 今日: 今日の三つ・次の予定の前に・夜の10秒（上から）と、畳んだ「今日の記録」
+        var app = launch()
+        openTab(app, "今日")
+        snap(app, "今日 - 上の段と下の録音の1行")
+        app.swipeUp()
+        sleep(1)
+        snap(app, "今日 - 夜の10秒・気をつけること")
+        if tapFinding(app, "今日の記録", swipes: 4, place: "今日") {
+            snap(app, "今日 - 今日の記録を開いた")
+        }
+        // 2. ふり返り: 今週のふり返り → 見立ての台帳、朝のまとめ 比べる
+        app.terminate()
+        app = launch()
+        openTab(app, "ふり返り")
+        snap(app, "ふり返り - 今週のふり返り")
+        if tapFinding(app, "見立ての台帳", swipes: 3, place: "ふり返り") {
+            snap(app, "ふり返り › 見立ての台帳")
+        }
+        app.terminate()
+        app = launch()
+        openTab(app, "ふり返り")
+        if tapFinding(app, "朝のまとめ 比べる", swipes: 5, place: "ふり返り") {
+            snap(app, "ふり返り › 朝のまとめ 比べる")
+            app.swipeUp()
+            sleep(1)
+            snap(app, "ふり返り › 朝のまとめ 比べる（下）")
+        }
+        // 3. 歯車 → 点検: 精度の通信簿・あまり開かれていない画面
+        for row in ["精度の通信簿", "あまり開かれていない画面"] {
+            app.terminate()
+            app = launch()
+            openTab(app, "今日")
+            guard openSettings(app) else { continue }
+            openSegment(app, "点検")
+            if tapFinding(app, row, swipes: 4, place: "歯車 - 点検") {
+                snap(app, "歯車 › 点検 › " + row)
+            }
+        }
+        // 4. 歯車 → 設定: ふだん と くわしい設定（下へめくりながら撮る）・アプリを開いた記録の使い方
+        app.terminate()
+        app = launch()
+        openTab(app, "今日")
+        if openSettings(app) {
+            openSegment(app, "設定")
+            snap(app, "歯車 - 設定（ふだん）")
+            if tapFinding(app, "くわしい設定", swipes: 2, place: "歯車 - 設定") {
+                for i in 0..<6 {
+                    snap(app, "歯車 › くわしい設定 \(i + 1)")
+                    app.swipeUp()
+                    sleep(1)
+                }
+                if tapFinding(app, "アプリを開いた記録の使い方", swipes: 3, place: "歯車 › くわしい設定") {
+                    snap(app, "歯車 › くわしい設定 › アプリを開いた記録の使い方")
+                }
+            }
+        }
+    }
 }
