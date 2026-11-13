@@ -48,6 +48,38 @@ struct SpeakStats {
         return ["ですか", "ますか", "でしょうか", "かな", "かね", "の？", "だっけ", "ません？"].contains { t.hasSuffix($0) }
     }
 
+    /// 話し方の点（0〜100。2026-11-13。施策 20）。いまある数だけから決まった式で作る:
+    /// 話す割合が4割に近いほど（重み 0.4）・口ぐせが少ないほど（千字に30で0。重み 0.3）・質問が多いほど（会話1つに2で満点。重み 0.3）。
+    /// 測れない数（短すぎる・会話が無い）は外し、残りの重みで割り直す。どれも測れなければ nil
+    static func score(_ s: SpeakStats) -> Double? {
+        guard s.conversations > 0 else { return nil }
+        var total: Double = 0
+        var weights: Double = 0
+        if let share = s.share {
+            total += 0.4 * (1 - min(1, abs(share - 0.4) / 0.4))
+            weights += 0.4
+        }
+        if let filler = s.fillerRate {
+            total += 0.3 * max(0, 1 - filler / 30)
+            weights += 0.3
+        }
+        if let q = s.questionRate {
+            total += 0.3 * min(1, q / 2)
+            weights += 0.3
+        }
+        guard weights > 0 else { return nil }
+        return 100 * total / weights
+    }
+
+    /// 「先月より +5」「先月より −3」「先月と同じ」。先月の点が無ければ nil
+    static func scoreChange(now: Double?, before: Double?) -> String? {
+        guard let now, let before else { return nil }
+        let diff = Int(now.rounded()) - Int(before.rounded())
+        if diff > 0 { return "先月より +\(diff)" }
+        if diff < 0 { return "先月より −\(-diff)" }
+        return "先月と同じ"
+    }
+
     /// 1つの会話の数（テレビ・動画の会話は数えない）
     static func of(_ c: ConversationLog.Conversation) -> SpeakStats? {
         guard c.media == nil else { return nil }
@@ -77,10 +109,13 @@ extension Pipeline {
         var other = SpeakStats()
         var people: [(name: String, stats: SpeakStats)] = []
         var weeks: [(label: String, stats: SpeakStats)] = []
+        /// 直近30日と、その前の30日（話し方の点を比べる。2026-11-13）
+        var month = SpeakStats()
+        var lastMonth = SpeakStats()
     }
 
-    /// 直近 days 日の会話から数える。recent は直近7日、before はその前。
-    func speakingReport(days: Int = 56) -> SpeakingReport {
+    /// 直近 days 日の会話から数える。recent は直近7日、before はその前。month は直近30日、lastMonth はその前の30日
+    func speakingReport(days: Int = 62) -> SpeakingReport {
         var report = SpeakingReport()
         let now = Date.now
         var byPerson: [String: SpeakStats] = [:]
@@ -90,6 +125,12 @@ extension Pipeline {
             for c in conversations(on: day) where c.closed {
                 guard let s = SpeakStats.of(c), s.selfLines > 0 else { continue }
                 if now.timeIntervalSince(c.start) < 7 * 86400 { report.recent = report.recent + s } else { report.before = report.before + s }
+                let age: TimeInterval = now.timeIntervalSince(c.start)
+                if age < 30 * 86400 {
+                    report.month = report.month + s
+                } else if age < 60 * 86400 {
+                    report.lastMonth = report.lastMonth + s
+                }
                 if isWorkTime(c.start) { report.work = report.work + s } else { report.other = report.other + s }
                 for name in c.people where !name.hasPrefix("人物") {
                     byPerson[name] = (byPerson[name] ?? SpeakStats()) + s
@@ -144,6 +185,7 @@ struct SpeakingView: View {
 
     var body: some View {
         List {
+            SpeakingScoreSection(now: SpeakStats.score(report.month), before: SpeakStats.score(report.lastMonth))
             Section {
                 row("直近7日", report.recent)
                 row("その前（7週）", report.before)
@@ -195,6 +237,33 @@ struct SpeakingView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
             Text(s.conversations > 0 ? Self.summary(s) : "まだありません").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// 話し方の点（直近30日）と、その前の30日との違い（2026-11-13。施策 20）
+private struct SpeakingScoreSection: View {
+    let now: Double?
+    let before: Double?
+
+    private var scoreText: String {
+        guard let now else { return "—" }
+        return "\(Int(now.rounded()))"
+    }
+
+    var body: some View {
+        Section {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(scoreText)
+                    .font(.system(size: 44, weight: .bold).monospacedDigit())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("話し方の点（直近30日）").font(.subheadline)
+                    Text(SpeakStats.scoreChange(now: now, before: before) ?? "先月の分はまだありません")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        } footer: {
+            Text("100点満点。話す割合が4割に近い（4）・口ぐせが少ない（3）・質問が多い（3）の重みで、下の数から作ります。")
         }
     }
 }
