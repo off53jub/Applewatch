@@ -28,6 +28,8 @@ final class MisheardBox {
         let found: Date
         var state: State = .open
         var settled: Date? = nil
+        /// 家の PC の夜の読み直し（NightReview.swift）から来た候補の id（2026-11-13。省ける。無ければアプリが見つけたもの）
+        var night: String? = nil
     }
 
     private struct Saved: Codable {
@@ -60,22 +62,31 @@ final class MisheardBox {
     }
 
     /// 見つけた言葉を足す。同じ言葉がまだ一覧にあれば、行を足す。
-    func add(wrong: String, guess: String, reason: String, ref: Ref) {
+    /// night は夜の読み直しの候補の id（新しく足すときだけ残す。「合っている」にした言葉は足さない）
+    func add(wrong: String, guess: String, reason: String, ref: Ref, night: String? = nil) {
         if let i = saved.suspects.firstIndex(where: { $0.state == .open && $0.wrong == wrong }) {
             if !saved.suspects[i].refs.contains(ref) { saved.suspects[i].refs.append(ref) }
             if saved.suspects[i].guess.isEmpty { saved.suspects[i].guess = guess }
         } else {
-            saved.suspects.append(Suspect(wrong: wrong, guess: guess, reason: reason, refs: [ref], found: .now))
+            if night != nil && saved.kept.contains(wrong) { return }
+            var suspect = Suspect(wrong: wrong, guess: guess, reason: reason, refs: [ref], found: .now)
+            suspect.night = night
+            saved.suspects.append(suspect)
         }
         save()
     }
 
     func settle(_ id: UUID, as state: State) {
         guard let i = saved.suspects.firstIndex(where: { $0.id == id }) else { return }
+        let wasOpen = saved.suspects[i].state == .open
         saved.suspects[i].state = state
         saved.suspects[i].settled = .now
         if state == .kept, !saved.kept.contains(saved.suspects[i].wrong) { saved.kept.append(saved.suspects[i].wrong) }
         save()
+        // 夜の読み直しの候補: 直した＝残した（kept）・「合っている」＝捨てた（dropped）
+        if wasOpen, let night = saved.suspects[i].night, state != .open {
+            NightReviewRules.note(id: night, day: saved.suspects[i].refs.first?.day ?? FixFeedback.today(), kept: state == .fixed)
+        }
     }
 
     /// 片付けて30日たったものと、30日より前に調べた会話の印を捨てる

@@ -274,6 +274,21 @@ final class ScreenTour: XCTestCase {
             tapFinding(app, "PLAUD で埋めた所", swipes: 1, place: "記録 › PLAUD だけの日")
             snap(app, "記録 › PLAUD だけの日")
         }
+
+        // 6. 直す: 同じ人かも・まとめて OK・夜の読み直しの聞き間違い（2026-11-13。見本は DemoData.installAccuracy。
+        //    「同じ人」「まとめて OK」などのボタンは押さない。見出しの文を探して、その場所を撮るだけ）
+        app.terminate()
+        app = launch()
+        openTab(app, "直す")
+        let found = element(app, containing: "同じ人かも")
+        for _ in 0..<6 where !(found.exists && found.isHittable) {
+            app.swipeUp()
+            sleep(1)
+        }
+        snap(app, "直す - 同じ人かも")
+        if tapFinding(app, "直す・そのまま", swipes: 3, place: "直す") {
+            snap(app, "直す › 聞き間違いかも（夜の読み直しから）")
+        }
     }
 
     // MARK: - 2026-11-13 の施策の画面

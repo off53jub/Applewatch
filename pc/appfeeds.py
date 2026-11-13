@@ -12,6 +12,9 @@
 - GET /plaud-fill（"plaudfill"）← state/plaud_fill_for_app.json  アプリに行の無い時間の PLAUD の文（見せるだけ）。
 - GET /speaker-doubts（"spkdoubt"）← state/speaker_doubts_for_app.json  話し手が違うかもしれない行（疑いだけ。
   名前は自動で替えない）。
+2026-11-13（施策 9）: 家の PC の夜の読み直し（nightreview.py）の疑いを why "night" で混ぜる。
+2026-11-13（施策 14）: 自分の声の候補・話し手の疑いの各行の省ける "sure"（true のときだけ）・"sure_why"（60 字まで）を通す
+（母艦が「本人が見ればほぼ必ず OK する」と印を付けたもの。アプリは「まとめて OK」にする。押すまでは何も変えない）。
 2026-11-13 の施策（番号は D:\\Lifelog\\docs\\system-proposal-2026-11-13.md。母艦の scripts が state を作る）:
 - GET /weekly（"weekly"）← state/weekly_for_app.json  週のふり返り（2）と見立ての台帳（3）と、出したものの使われ方の数（1）。
 - GET /prep（"prep"）← state/prep_for_app.json  これから 36 時間の予定の「会う前の一枚」（4）。
@@ -70,7 +73,8 @@ FILL_RANGES = 60
 FILL_LINES = 200
 DOUBT_LIMIT = 200
 DOUBT_SUGGEST = ("self", "other")
-DOUBT_WHY = ("plaud-turn", "text")
+DOUBT_WHY = ("plaud-turn", "text", "night")
+SURE_WHY = 60
 _answers_lock = threading.Lock()
 
 CAND_LIMIT = 100
@@ -100,6 +104,13 @@ def _num(value, low: float, high: float) -> float | None:
 
 def _count(value) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def sure(x: dict) -> dict:
+    """施策 14 の省ける印。sure が true のときだけ {"sure": True, "sure_why": …}（無い・true でなければ {}）"""
+    if not isinstance(x, dict) or x.get("sure") is not True:
+        return {}
+    return {"sure": True, "sure_why": _text(x.get("sure_why"), SURE_WHY)}
 
 
 def _iso(value) -> str | None:
@@ -136,7 +147,7 @@ def read_self_candidates(base: Path) -> dict:
             continue
         seen.add(item_id)
         items.append({"id": item_id, "day": x["day"], "audio": audio, "start": start, "end": end,
-                      "text": _text(x.get("text"), 60), "score": score, "why": x["why"]})
+                      "text": _text(x.get("text"), 60), "score": score, "why": x["why"], **sure(x)})
     items.sort(key=lambda i: -i["score"])
     return {"available": True, "generated_at": _text(data.get("generated_at"), 40), "items": items[:CAND_LIMIT]}
 
@@ -335,12 +346,25 @@ def read_plaud_fill(base: Path) -> dict:
 # MARK: - 話し手が違うかもしれない行（2026-11-13。疑いだけ。名前は自動で替えない）
 
 
+def _night_doubts() -> list:
+    """家の PC の夜の読み直しの話し手の疑い（施策 9。読めなければ空）"""
+    try:
+        import claude
+        import nightreview
+
+        return nightreview.doubt_items(claude.home())
+    except Exception:  # noqa: BLE001 — 夜の読み直しが読めなくても、母艦の疑いは返す
+        return []
+
+
 def read_speaker_doubts(base: Path) -> dict:
     data, failure = _load(base, SPEAKER_DOUBTS, "話し手の疑い")
-    if failure or data is None or not isinstance(data.get("items"), list):
+    night = _night_doubts()
+    if (failure or data is None or not isinstance(data.get("items"), list)) and not night:
         return failure or {"available": False, "reason": "母艦の話し手の疑いの形が違います"}
+    listed = data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), list) else []
     items = []
-    for x in data["items"][:DOUBT_LIMIT * 2]:
+    for x in listed[:DOUBT_LIMIT * 2] + night[:DOUBT_LIMIT]:
         if not isinstance(x, dict):
             continue
         start, when, score = _iso(x.get("conversation_start")), _iso(x.get("line_time")), _num(x.get("score"), 0, 1)
@@ -350,8 +374,13 @@ def read_speaker_doubts(base: Path) -> dict:
             continue
         items.append({"day": x["day"], "conversation_start": start, "line_time": when,
                       "text_head": _text(x.get("text_head"), 40), "current": current, "suggest": x["suggest"],
-                      "why": x["why"], "score": score})
-    return {"available": True, "generated_at": _text(data.get("generated_at"), 40), "items": items[:DOUBT_LIMIT]}
+                      "why": x["why"], "score": score, **sure(x)})
+    generated = _text(data.get("generated_at"), 40) if isinstance(data, dict) else ""
+    # 母艦の疑いを先に（上限は母艦の分で埋まらないよう、夜の読み直しの分を少し残す）
+    mother = [i for i in items if i["why"] != "night"]
+    night_items = [i for i in items if i["why"] == "night"]
+    keep = mother[:DOUBT_LIMIT - min(len(night_items), DOUBT_LIMIT // 4)]
+    return {"available": True, "generated_at": generated, "items": (keep + night_items)[:DOUBT_LIMIT]}
 
 
 # MARK: - 2026-11-13 の施策（週のふり返り・会う前の一枚・朝のまとめの比べ・精度の通信簿・開かれていない画面）

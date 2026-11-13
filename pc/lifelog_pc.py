@@ -150,6 +150,7 @@ import claude
 # 2026-11-13（施策 13・15）: 会話の直後の約束・記録に質問するを母艦まで
 import askmother
 import promises
+import quality  # 2026-11-13（施策 9・10・11）: 品質の記録・夜の流れ・同じ人かも・夜の読み直し（中身は quality.py ほか）
 
 VERSION = 10
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
@@ -2135,6 +2136,7 @@ def features(engines: list | None = None) -> list[str]:
         found += ["records", "edits"]
     # 版 7（ops）: diag（POST /diag）・push（見えない通知を送れるとき）・autotrain（自動の学び直しができるとき）
     found.extend(ops.features())
+    found.extend(quality.features())  # "sameperson"・"nightreview"（2026-11-13。quality.py）
     # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
     if watchroute.running():
         found.append("watchroute")
@@ -2434,6 +2436,9 @@ def start_v6(threads: int) -> None:
     except Exception as error:  # noqa: BLE001
         App.jobs = None
         log(f"後で受け取る文字起こしを始められませんでした: {error!r}")
+    # 2026-11-13（施策 9・10・11）: 夜の流れ（品質の記録・同じ人かも・夜の読み直し。quality.py）
+    quality.start(HOME, App.records, App.jobs, lambda: mothership.home(load_config()),
+                  lambda p, r: extra_model("speaker", 1).embed(load_audio(p.read_bytes()), r), log)
     if App.use_semantic:
         try:
             # bge-m3 も、GPU の文字起こしのモデルが載っているあいだは CPU だけで（options に num_gpu 0）
@@ -2773,6 +2778,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/dash/ops/"):  # 版 7（ops）: TestFlight の報告の詳しい画面・鍵を入れる画面
             ops.dash_get(self, url)
+            return
+        if path in quality.GETS:  # 2026-11-13: GET /same-person・/night-review（中身は quality.py）
+            if self.authorized():
+                quality.http_get(self, url)
             return
         if path not in ("/hello", "/train-status", "/jobs", "/index/status", "/watch-route", "/claude/usage") \
                 and path not in mothership.GETS and path not in promises.GETS and not path.startswith("/jobs/"):
