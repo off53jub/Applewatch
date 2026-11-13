@@ -175,6 +175,7 @@ private struct TodayView: View {
                 TodayAnswerCard()
                 // (b) 次の予定の前に（3時間以内に始まる予定があるときだけ）
                 PrepCardSection()
+                PromisesSection()  // 会話のあとの約束（2026-11-13。Promises.swift。無いときは何も出さない）
                 // (c) 夜の10秒（20時から翌朝まで、まだ答えていない日だけ）
                 NightMoodSection()
                 // (d) 困ったことがあるときだけ
@@ -1019,6 +1020,7 @@ private struct DetailedSettingsView: View {
                 // Claude（家の PC 経由。2026-11-13。Claude.swift）
                 // スイッチの2つは「ふだん」にある。ここは今月使った額など
                 ClaudeSettingsSection(showSwitches: false)
+                PromiseSettingsLink()  // 「会話のあとに約束を知らせる」（2026-11-13。Promises.swift）
 
                 Section {
                     Toggle("音声をドライブにも保存", isOn: Binding(

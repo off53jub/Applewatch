@@ -87,6 +87,7 @@ enum DemoData {
         }
         installHomeFeeds(base: base, now: now, day: f.string(from: now),
                          yesterday: f.string(from: now.addingTimeInterval(-86400)), talk: talk1, talkEnd: b)
+        installPromises(base: base, now: now, day: f.string(from: now), talkStart: a)  // 会話のあとの約束（Promises.swift）
         installAccuracy(base: base, now: now, day: f.string(from: now), talk: talk1, noisyLine: noisy)
         installMothershipFeeds(base: base, now: now, day: f.string(from: now),
                                yesterday: f.string(from: now.addingTimeInterval(-86400)))

@@ -271,6 +271,11 @@ struct AskView: View {
     @State private var error = ""
     /// この答えに「役に立った」（true）・「外れ」（false）を押したか
     @State private var voted: Bool?
+    /// 母艦から探す（2026-11-13。AskMothership.swift）。オフなら今までのまま
+    @AppStorage(MothershipAsk.toggleKey) private var fromMothership = false
+    @AppStorage(ClaudeRoute.useKey) private var useClaude = true
+    @AppStorage(ClaudeRoute.workKey) private var forWork = true
+    @State private var motherAnswer: MothershipAnswer?
 
     private func vote(_ good: Bool) {
         AskFeedback.record(good)
@@ -284,11 +289,20 @@ struct AskView: View {
                     .lineLimit(1...4)
                 Button(working ? "探しています…" : "質問する") { run() }
                     .disabled(working || question.trimmingCharacters(in: .whitespaces).isEmpty)
+                Toggle("母艦（LINE・写真・予定・お金も）から探す", isOn: $fromMothership)
+                    .disabled(!motherUsable)
             } footer: {
-                Text("記録から関係のありそうな会話を集めて、Groq の無料枠の言語モデルが答えます（記録に無いことは答えません）。期間を言わなければ直近60日から探します。取り込んだ「仕事のまとめ」も、質問に合うところをいっしょに読みます（職場の会話と同じ設定に従います）。")
+                if fromMothership && motherUsable {
+                    Text("家の PC が、母艦の LINE・PLAUD・予定・写真・体調・場所・1日のまとめ・仕事のまとめ・お金の記録から探して、Claude が見つかったものだけをもとに答えます（1分ほどかかります）。")
+                } else {
+                    Text(plainFooter)
+                }
             }
             if !error.isEmpty {
                 Section { Text(error).foregroundStyle(.secondary) }
+            }
+            if let motherAnswer {
+                MothershipAnswerSections(question: asked, answer: motherAnswer)
             }
             if let answer {
                 Section {
@@ -307,6 +321,12 @@ struct AskView: View {
                     }
                     .buttonStyle(.borderless)
                     .padding(.top, 4)
+                }
+                if answer.sources.isEmpty && answer.digestUsed.isEmpty && motherUsable && !working {
+                    // iPhone の記録で見つからなかったときは、母艦からも探せる（2026-11-13。AskMothership.swift）
+                    Section {
+                        Button("母艦（LINE・写真・予定・お金も）からも探す") { runMothership(asked) }
+                    }
                 }
                 if !answer.digestUsed.isEmpty {
                     Section {
@@ -353,8 +373,48 @@ struct AskView: View {
         .countsOpen("ask")
     }
 
+    private var motherUsable: Bool {
+        MothershipAsk.usable(features: pipeline.homePC.features, useClaude: useClaude, forWork: forWork)
+    }
+
+    private var motherBlocked: String? {
+        MothershipAsk.blocked(features: pipeline.homePC.features, useClaude: useClaude, forWork: forWork)
+    }
+
+    /// 今までの「記録に質問する」の説明（母艦から探せないときは、そのわけも）
+    private var plainFooter: String {
+        let base: String = "記録から関係のありそうな会話を集めて、Groq の無料枠の言語モデルが答えます（記録に無いことは答えません）。期間を言わなければ直近60日から探します。取り込んだ「仕事のまとめ」も、質問に合うところをいっしょに読みます（職場の会話と同じ設定に従います）。"
+        guard let why = motherBlocked else { return base }
+        return base + "\n母艦から探す: " + why
+    }
+
+    /// 母艦から探す（今までの答えは消す）
+    private func runMothership(_ q: String) {
+        guard !q.isEmpty else { return }
+        working = true
+        error = ""
+        Task {
+            do {
+                let got: MothershipAnswer = try await pipeline.askMothership(q)
+                motherAnswer = got
+                answer = nil
+                asked = q
+                voted = nil
+                question = ""
+            } catch {
+                self.error = "母艦から答えられませんでした: \(error.localizedDescription)"
+            }
+            working = false
+        }
+    }
+
     private func run() {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        if fromMothership && motherUsable {
+            runMothership(q)
+            return
+        }
+        motherAnswer = nil
         working = true
         error = ""
         Task {

@@ -7,7 +7,10 @@
 - 端末ごとのトークン・送った時刻・使えなくなったトークン（APNs が 410 を返したもの）は <home>/apns/state.json に置く。
 - 送る回数の上限: job は同じ端末へ10分に1回、wake は1時間に2回・1日12回、diag は1日4回（1時間に1回まで）、
   nightly は1日1回。上限を超えるものは送らない（数えるのは、APNs が受け取った 200 のものだけ）。
-記録（log.txt）には、端末の種類・送った種類・答えの番号だけを書く（トークンは書かない）。
+- promise（2026-11-13。施策 13。promises.py）だけは目に見える通知（test と同じ alert）。会話のあとの約束・頼まれごと。
+  1日6回・10分に1回まで。1時間で届けるのをあきらめる。カテゴリ "promise"（アプリの「タスクに入れる」「いらない」）。
+  文は promises.py が作る（60 文字まで。アプリの「通知に中身を出さない」がオンなら中身を入れない）。
+記録（log.txt）には、端末の種類・送った種類・答えの番号だけを書く（トークン・通知の文は書かない）。
 """
 
 from __future__ import annotations
@@ -29,22 +32,38 @@ TOPIC_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]{0,150}")
 TOPIC = "com.off53jub.lifelog"
 HOSTS = {"production": "https://api.push.apple.com", "development": "https://api.sandbox.push.apple.com"}
 JWT_EVERY = 45 * 60          # APNs の JWT は 20 分〜60 分ごとに作り直す
-KINDS = ("wake", "job", "nightly", "diag", "test")
+KINDS = ("wake", "job", "nightly", "diag", "test", "promise")
+# 目に見える通知の種類（ほかは見えない通知）
+ALERT_KINDS = ("test", "promise")
 # (秒, 回数): その秒の間に送ってよい回数（端末ごと）
 LIMITS = {"job": ((600, 1),), "wake": ((3600, 2), (86400, 12)), "diag": ((3600, 1), (86400, 4)),
-          "nightly": ((20 * 3600, 1),), "test": ((10, 1),)}
+          "nightly": ((20 * 3600, 1),), "test": ((10, 1),), "promise": ((600, 1), (86400, 6))}
 # APNs が届けるのをあきらめるまでの秒（端末が電波の無い所にいるとき）
-EXPIRE = {"job": 3600, "wake": 1800, "diag": 3600, "nightly": 3 * 3600, "test": 600}
+EXPIRE = {"job": 3600, "wake": 1800, "diag": 3600, "nightly": 3 * 3600, "test": 600, "promise": 3600}
 TEST_ALERT = {"title": "LifeLog PC", "body": "テストの通知です（家の PC から届きました）"}
+PROMISE_CATEGORY = "promise"
+ALERT_MAX = 120             # 目に見える通知の題・文の長さの上限（文字）
 HISTORY = 50
 DEAD_KEEP = 90 * 86400
 TIMEOUT = 20.0
 
 
-def payload(kind: str, job: str | None = None) -> dict:
-    """送る中身。test だけは目に見える通知、ほかは見えない通知"""
+def payload(kind: str, job: str | None = None, alert: dict | None = None, extra: dict | None = None) -> dict:
+    """送る中身。test と promise は目に見える通知、ほかは見えない通知。
+    promise は alert（{"title", "body"}）とカテゴリ "promise"、extra の "ids"（約束の id の並び）を一番上に置く
+    （アプリは知らせの userInfo["ids"] を読む）。"""
     if kind == "test":
         return {"aps": {"alert": dict(TEST_ALERT), "sound": "default"}, "lifelog": {"kind": "test"}}
+    if kind == "promise":
+        shown = {"title": str((alert or {}).get("title") or "")[:ALERT_MAX],
+                 "body": str((alert or {}).get("body") or "")[:ALERT_MAX]}
+        body = {"aps": {"alert": shown, "sound": "default", "category": PROMISE_CATEGORY, "thread-id": PROMISE_CATEGORY},
+                "lifelog": {"kind": "promise"}}
+        ids = [str(i)[:64] for i in (extra or {}).get("ids") or []][:10]
+        body["ids"] = ids
+        if (extra or {}).get("day"):
+            body["lifelog"]["day"] = str(extra["day"])[:10]
+        return body
     body: dict = {"aps": {"content-available": 1}, "lifelog": {"kind": kind}}
     if kind == "job" and job:
         body["lifelog"]["job"] = job
@@ -53,7 +72,7 @@ def payload(kind: str, job: str | None = None) -> dict:
 
 def headers_for(kind: str, topic: str, token: str, now: float) -> dict:
     """APNs に付ける見出し（authorization は jwt を作ってから足す）"""
-    alert = kind == "test"
+    alert = kind in ALERT_KINDS
     return {"authorization": f"bearer {token}", "apns-push-type": "alert" if alert else "background",
             "apns-priority": "10" if alert else "5", "apns-topic": topic,
             "apns-expiration": str(int(now + EXPIRE.get(kind, 3600)))}
@@ -297,9 +316,10 @@ class Pusher:
     # MARK: 送る
 
     def send(self, kind: str, devices: list[str] | None = None, job: str | None = None,
-             respect_limits: bool = True) -> list[dict]:
+             respect_limits: bool = True, alert: dict | None = None, extra: dict | None = None) -> list[dict]:
         """kind の通知を、devices（None なら使えるトークンのある全部の端末）に送る。端末ごとの結果の並びを返す。
-        鍵・チーム・部品が無いときは何もせず、理由だけを返す（記録には書かない）。"""
+        鍵・チーム・部品が無いときは何もせず、理由だけを返す（記録には書かない）。
+        alert・extra は promise のときだけ使う（payload を参照）。"""
         if kind not in KINDS:
             raise ValueError(f"知らない通知の種類です: {kind}")
         found = self.key()
@@ -313,12 +333,13 @@ class Pusher:
         results = []
         with self.send_lock:
             for device in targets:
-                results.append(self._send_one(device, kind, job, key_id, key, respect_limits))
+                results.append(self._send_one(device, kind, job, key_id, key, respect_limits, alert, extra))
         if any(r.get("status") is not None for r in results):
             self.save()
         return results or [{"ok": False, "reason": "通知を登録した端末がありません"}]
 
-    def _send_one(self, device: str, kind: str, job: str | None, key_id: str, key, respect_limits: bool) -> dict:
+    def _send_one(self, device: str, kind: str, job: str | None, key_id: str, key, respect_limits: bool,
+                  alert: dict | None = None, extra: dict | None = None) -> dict:
         info = dict(self.devices.get(device) or {})
         name = info.get("device") or "端末"
         if not self.usable(device):
@@ -332,7 +353,7 @@ class Pusher:
         if respect_limits and not self.allowed(device, kind, now):
             return {"device": device, "ok": False, "reason": "回数の上限です"}
         url = f"{self.hosts.get(info.get('environment'), self.hosts['production'])}/3/device/{info['token']}"
-        body = json.dumps(payload(kind, job), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        body = json.dumps(payload(kind, job, alert, extra), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         status, reason = None, None
         for attempt in range(2):
             try:

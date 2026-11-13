@@ -100,6 +100,11 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 - 後で受け取る文字起こしの食い違いの大きい行は、Claude に候補の番号を選んでもらう（精6。文は書かせない）
 - そろった行を、あなた向けのモデルの材料に自動で足す（精7・仮。config.json の "auto_samples": true のときだけ）
     LifeLogPC.exe --check-v11  これを、一時フォルダと作り物の Claude で確かめる（本物の鍵もネットも使わない）
+2026-11-13（施策 13・15。中身は promises.py・askmother.py。features に "promisesnow"・"askmother"）:
+- 会話が終わって 10 分たったら約束・頼まれごとだけを Claude で拾い、目に見える通知（kind "promise"）。
+  GET /promises-now（36 時間ぶん）・POST /promises/settings（アプリの設定）
+- POST /ask-mothership {"question"} → 母艦の Search-Lifelog.py で探して Claude が答える（出どころつき）
+    python v12checks_promises.py  これを、一時フォルダと作り物の Claude・検索で確かめる
 """
 
 from __future__ import annotations
@@ -142,6 +147,9 @@ import recordsui
 import watchroute
 # 2026-11-13: Claude（Anthropic の API）。鍵はこの PC にだけ置く（中身は claude.py）
 import claude
+# 2026-11-13（施策 13・15）: 会話の直後の約束・記録に質問するを母艦まで
+import askmother
+import promises
 import quality  # 2026-11-13（施策 9・10・11）: 品質の記録・夜の流れ・同じ人かも・夜の読み直し（中身は quality.py ほか）
 
 VERSION = 10
@@ -2097,6 +2105,7 @@ def features(engines: list | None = None) -> list[str]:
     # POST /claude・GET /claude/usage（鍵があり、今月の上限に届いていないときだけ。2026-11-13）
     if claude.available():
         found.append("claude")
+    found.extend(promises.features() + askmother.features(load_config()))  # 2026-11-13（施策 13・15）
     # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）
     if "vad" in _extras:
         found.append("silero")
@@ -2775,10 +2784,13 @@ class Handler(BaseHTTPRequestHandler):
                 quality.http_get(self, url)
             return
         if path not in ("/hello", "/train-status", "/jobs", "/index/status", "/watch-route", "/claude/usage") \
-                and path not in mothership.GETS and not path.startswith("/jobs/"):
+                and path not in mothership.GETS and path not in promises.GETS and not path.startswith("/jobs/"):
             self.send_json(404, {"error": "not found"})
             return
         if not self.authorized():
+            return
+        if path in promises.GETS:  # 2026-11-13（施策 13）: 会話のあとの約束
+            promises.http_get(self)
             return
         if path == "/claude/usage":  # 2026-11-13: 今月の Claude の値段（鍵は返さない）
             claude.http_usage(self)
@@ -2843,6 +2855,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path.startswith("/dash/ops/"):  # 版 7（ops）: 見守りの画面のボタン（鍵を入れる・テスト通知など）
             ops.dash_post(self, url)
+            return
+        if url.path in promises.POSTS or url.path in askmother.POSTS:  # 2026-11-13（施策 13・15）
+            if self.authorized():
+                if url.path in promises.POSTS:
+                    promises.http_post(self, log)
+                else:
+                    askmother.http_post(self, load_config(), log)
             return
         if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample", "/llm", "/jobs", "/claude") \
                 and url.path not in semantic.POSTS and url.path not in ops.POSTS \
@@ -3131,6 +3150,10 @@ def serve(engine_factory, port: int, threads: int = 4, watch_port: int = watchro
         ops.start(sys.modules[__name__])
     except Exception as error:  # noqa: BLE001
         log(f"版 7 の見守りを始められませんでした: {error!r}")
+    try:  # 2026-11-13（施策 13）: 会話のあとの約束の見回り
+        promises.start(HOME, lambda: App.records, lambda: ops.O.pusher if ops.O.started else None, log, load_config)
+    except Exception as error:  # noqa: BLE001
+        log(f"約束の見回りを始められませんでした: {type(error).__name__}")
     # 版 10: 時計の外の道（127.0.0.1 だけで待つ、預けるだけの別の受け口）。番号が使われていれば無しで続ける
     watch = False
     if watch_port > 0:

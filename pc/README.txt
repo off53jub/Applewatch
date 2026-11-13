@@ -540,3 +540,22 @@ iPhone のタスクの「母艦のやること」に、母艦（D:\Lifelog）の
   iPhone は見せるだけで、押した言葉だけを登録します（この PC からは何も登録しません）。
 ・どちらも iPhone の合言葉が要ります。時計の外の道（Funnel）からは届きません。やることの文は log.txt に書きません。
 ・母艦の場所は config.json の "lifelog_home"（無ければ D:\Lifelog）。
+
+■ 会話のあとの約束・記録に質問するを母艦まで（2026-11-13。施策 13・15。中身は promises.py・askmother.py）
+・会話の最後の行から 10 分たったら、その会話（iPhone が送った記録。3 時間より前に終わったものは見ない）から
+  約束・頼まれごとだけを Claude の軽いモデルで拾い、iPhone に目に見える通知を送ります（通知の種類 promise）。
+  - 拾うのは、その行の言葉そのまま（quote）がある約束だけです（無いものは捨てます）。前に拾ったもの・
+    ドライブの「同期\頼まれごと帳.json」（別の場所なら config.json の "task_book_file"）・その日のまとめのやることと
+    よく似たものは足しません。1 日に Claude に頼むのは 80 回まで。
+  - 通知は 1 日 6 回・10 分に 1 回まで、1 時間で届けるのをあきらめます（apns.py の LIMITS・EXPIRE の "promise"）。
+    上限で送れなかったものは、1 時間以内なら次にまとめて送ります。届かなくても GET /promises-now（36 時間ぶん）で
+    アプリを開いたときに見られます。
+  - アプリの設定（POST /promises/settings: 知らせる・Claude を使う・職場の会話も Claude で・通知に中身を出さない）を守ります。
+    アプリから一度も設定が届いていなければ何もしません。状態は %LOCALAPPDATA%\LifeLogPC\promises\state.json。
+  - 送れた通知の数を %LOCALAPPDATA%\LifeLogPC\quality-daily.json の days.<日>.promise_alerts に足します（ほかの項目は消しません）。
+・POST /ask-mothership {"question": "…"} … 母艦の scripts\Search-Lifelog.py（LINE・PLAUD・予定・写真・体調・場所・
+  1日のまとめ・仕事のまとめ）と reports\spending（お金）から探して、Claude が出どころつきで答えます（60 秒まで）。
+  母艦のスクリプトは Python 3.11（%USERPROFILE%\AppData\Local\Programs\Python\Python311\python.exe。
+  別の場所なら config.json の "mothership_python"）で動かします。
+・どれも log.txt には数だけを書きます（会話の文・質問・答え・人の名前は書きません）。
+・確かめ: python v12checks_promises.py（一時フォルダと作り物の Claude・検索・通知の相手で。本物の鍵もネットも使いません）

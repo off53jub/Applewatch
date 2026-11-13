@@ -127,6 +127,12 @@ jobs:
           python pc/lifelog_pc.py --check-v11 > v11.txt 2>&1 || { cat v11.txt; grep '^NG' v11.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v11.txt | sed 's/^/::notice::--check-v11 の OK の数: /'
 
+      # 2026-11-13（施策 13・15）: 会話のあとの約束（接地・重ねない・設定・promise の通知と上限・品質の記録）と
+      #   記録に質問するを母艦まで（探し方・Search-Lifelog.py の出力・お金・長さの上限・受け口）を、作り物の Claude・検索で確かめる
+      - name: 会話のあとの約束と母艦への質問を確かめる
+        run: |
+          python pc/v12checks_promises.py > v12p.txt 2>&1 || { cat v12p.txt; grep '^NG' v12p.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v12p.txt | sed 's/^/::notice::v12checks_promises の OK の数: /'
       # 2026-11-13（施策 9・10・11・14）: 品質の記録・審判と PLAUD の合い方・同じ人かも・夜の読み直し・まとめて OK の印を、
       #   一時フォルダと作り物の Claude・作り物の声で確かめる（本物の鍵もネットも使わない）
       - name: 精度の記録・同じ人かも・夜の読み直しを確かめる
