@@ -205,12 +205,8 @@ enum DemoData {
         var days: [BriefCompareDay] = []
         let compareDays: [String] = [day, yesterday]
         for d in compareDays {
-            let codex: String = "昨日
-・9:00〜 朝の打ち合わせ（見本）
-今日の三つ
-1. 見本の資料を送る"
-            let claude: String = "昨日は朝の打ち合わせ（見本）で、資料の締め切りが決まりました。
-今日はまず見本の資料を送りましょう。"
+            let codex: String = "昨日\n・9:00〜 朝の打ち合わせ（見本）\n今日の三つ\n1. 見本の資料を送る"
+            let claude: String = "昨日は朝の打ち合わせ（見本）で、資料の締め切りが決まりました。\n今日はまず見本の資料を送りましょう。"
             days.append(BriefCompareDay(day: d, codex: codex, claude: claude))
         }
         write(BriefCompareFeed(generated_at: iso.string(from: now), days: days), "mfeed-briefcmp.json")
