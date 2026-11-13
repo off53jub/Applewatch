@@ -76,6 +76,16 @@ enum FeatureProof {
         Feature(name: "PLAUD で埋めた所", pr: 54, keys: ["plaudfill.viewed"], pc: "plaudfill"),
         Feature(name: "話し手の疑い", pr: 54, keys: ["spkdoubt.self", "spkdoubt.dismiss"], pc: "spkdoubt"),
         Feature(name: "職場の自分の声を1日10件", pr: 54, keys: ["screen.selfTen"], pc: "selfcand"),
+        // 2026-11-13 の施策（MothershipFeeds.swift・AppUsage.swift。番号は母艦の docs/system-proposal-2026-11-13.md）
+        Feature(name: "使われたかを残す（今日の三つ・朝のまとめ・週・会う前）", pr: 57,
+                keys: ["mfeed.today_three", "mfeed.brief", "mfeed.weekly", "mfeed.prep"], pc: "feedback"),
+        Feature(name: "夜の10秒", pr: 57, keys: ["mood.answered"], pc: "mood"),
+        Feature(name: "アプリを開いた記録（ショートカット）", pr: 57, keys: ["appusage.queued"], pc: "appusage"),
+        Feature(name: "今週のふり返り・見立ての台帳", pr: 57, keys: ["weekly.shown", "screen.hypotheses"], pc: "weekly"),
+        Feature(name: "次の予定の前に", pr: 57, keys: ["prep.shown"], pc: "prep"),
+        Feature(name: "朝のまとめ 比べる", pr: 57, keys: ["screen.briefCompare", "mfeed.brief_compare"], pc: "briefcmp"),
+        Feature(name: "精度の通信簿", pr: 57, keys: ["screen.accuracy"], pc: "accuracy"),
+        Feature(name: "あまり開かれていない画面", pr: 57, keys: ["screen.unused"], pc: "unused"),
     ]
 
     /// 画面の一覧。畳む候補を探すのに使う（見せるだけで、何も止めない）
@@ -104,12 +114,24 @@ enum FeatureProof {
         Screen(key: "proposals", name: "提案"),
         Screen(key: "speakerDoubts", name: "話し手の疑い"),
         Screen(key: "selfTen", name: "職場の自分の声（今日の10件）"),
+        // 2026-11-13（施策 17。今日・記録・設定にも計器を足し、新しい画面も数える）
+        Screen(key: "today", name: "今日"),
+        Screen(key: "recordsDays", name: "記録（日ごと）"),
+        Screen(key: "dayView", name: "1日の記録"),
+        Screen(key: "settings", name: "設定と点検"),
+        Screen(key: "detailedSettings", name: "くわしい設定"),
+        Screen(key: "hypotheses", name: "見立ての台帳"),
+        Screen(key: "briefCompare", name: "朝のまとめ 比べる"),
+        Screen(key: "accuracy", name: "精度の通信簿"),
+        Screen(key: "unused", name: "あまり開かれていない画面"),
+        Screen(key: "appUsageHowTo", name: "アプリを開いた記録の使い方"),
     ]
 
     static func screenKey(_ s: Screen) -> String { "screen." + s.key }
 
     /// 家の PC のプログラムを新しくしないと増えない働き（PC の環境しだいで出ない speakers・semantic などは入れない）
-    static let updatablePC: Set<String> = ["todo", "todokind", "card", "vocab", "pay", "good", "watchroute", "records", "edits", "diag"]
+    static let updatablePC: Set<String> = ["todo", "todokind", "card", "vocab", "pay", "good", "watchroute", "records", "edits", "diag",
+                                           "feedback", "mood"]
 
     /// 初めて動いた日を残す Tally の名前（これ以外は見ない）
     static let evidenceKeys: Set<String> = Set(features.flatMap(\.keys) + screens.map(screenKey))

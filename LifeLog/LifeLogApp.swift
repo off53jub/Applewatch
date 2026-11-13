@@ -64,6 +64,10 @@ struct LifeLogApp: App {
         #if DEBUG && targetEnvironment(simulator)
         // 見本の写し（提案・話し手の疑い・自分の声の候補）を家の PC が出していることにして、画面を撮る（2026-11-13）
         if Self.demo { pipeline.homePC.features.formUnion(["selfcand", "proposals", "plaudfill", "spkdoubt"]) }
+        // 2026-11-13 の施策の写しと送り（MothershipFeeds.swift）も
+        if Self.demo {
+            pipeline.homePC.features.formUnion(["weekly", "prep", "briefcmp", "accuracy", "unused", "feedback", "mood", "appusage"])
+        }
         #endif
         // 家の PC に送っている途中の区切りの知らせを受け取れるようにする
         if !Self.testing && !Self.demo { PCJobUploader.shared.start() }

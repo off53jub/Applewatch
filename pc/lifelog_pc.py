@@ -95,6 +95,8 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
   → {"text", "model", "usd", "month_usd", "cap_usd"}。402 今月の上限・503 鍵が無い・422 断られた・403 職場を送らない設定
 - GET /claude/usage → 今月の値段（鍵は返さない）。鍵は %LOCALAPPDATA%\\LifeLogPC\\claude-key.txt か ANTHROPIC_API_KEY
 - GET /proposals・POST /proposals/answer・GET /plaud-fill・GET /speaker-doubts（母艦の写し）
+- GET /weekly・/prep・/brief-compare・/accuracy・/unused・POST /feedback・/mood・/app-usage（母艦の写しと inbox。施策 1〜21 の
+  アプリ側。features は appfeeds.FEATURES。確かめは --check-v11 の中の feedschecks.py）
 - 後で受け取る文字起こしの食い違いの大きい行は、Claude に候補の番号を選んでもらう（精6。文は書かせない）
 - そろった行を、あなた向けのモデルの材料に自動で足す（精7・仮。config.json の "auto_samples": true のときだけ）
     LifeLogPC.exe --check-v11  これを、一時フォルダと作り物の Claude で確かめる（本物の鍵もネットも使わない）
@@ -2089,6 +2091,8 @@ def features(engines: list | None = None) -> list[str]:
     # GET /proposals・POST /proposals/answer・GET /plaud-fill・GET /speaker-doubts（母艦からの提案・PLAUD の文の補い・
     # 話し手の疑い。2026-11-13）
     found.extend(["proposals", "plaudfill", "spkdoubt"])
+    # GET /weekly・/prep・/brief-compare・/accuracy・/unused と POST /feedback・/mood・/app-usage（2026-11-13 の施策。appfeeds.py）
+    found.extend(mothership.appfeeds.FEATURES)
     # POST /claude・GET /claude/usage（鍵があり、今月の上限に届いていないときだけ。2026-11-13）
     if claude.available():
         found.append("claude")

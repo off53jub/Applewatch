@@ -27,6 +27,7 @@ import numpy as np
 
 import claude
 import appfeeds
+import feedschecks  # 2026-11-13 の施策の口（weekly・prep・feedback・mood など）
 import mothership
 import ops
 from v6checks import KEY, Client, say
@@ -51,6 +52,7 @@ def run(main) -> int:
         failed += check_judge()
         failed += check_auto_samples(main)
         failed += check_http(main)
+        failed += feedschecks.run(main)
     finally:
         claude.CLIENT_FACTORY = saved_factory
         os.environ.pop("ANTHROPIC_API_KEY", None)
