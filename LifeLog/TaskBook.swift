@@ -1218,6 +1218,12 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        // 会話のあとの約束（家の PC から届く。2026-11-13。Promises.swift）は開いているあいだも出し、「今日」の欄を読み直す
+        if notification.request.content.categoryIdentifier == PromiseRules.category {
+            Task { @MainActor in PromiseInbox.shared.poke() }
+            completionHandler([.banner, .list, .sound])
+            return
+        }
         completionHandler(Self.options(for: notification.request.identifier))
     }
 

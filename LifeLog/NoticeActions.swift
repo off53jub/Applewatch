@@ -50,6 +50,8 @@ enum NoticeActions {
             UNNotificationCategory(identifier: foundCategory, actions: [keep, reject, later], intentIdentifiers: [], options: []),
             UNNotificationCategory(identifier: dueCategory, actions: [done, hour, tomorrow], intentIdentifiers: [], options: []),
             UNNotificationCategory(identifier: digestCategory, actions: [], intentIdentifiers: [], options: []),
+            // 会話のあとの約束（家の PC から届く。2026-11-13。Promises.swift）
+            PromiseRules.notificationCategory(),
         ]
     }
 
@@ -224,6 +226,11 @@ extension Pipeline {
         var changed = false
         for p in list {
             NoticeStats.count(p.category.isEmpty ? NoticeRoute.kind(of: p.identifier) : p.category, p.action.rawValue)
+            // 会話のあとの約束は ids が約束の id（タスクの id ではない）。2026-11-13。Promises.swift
+            if p.category == PromiseRules.category {
+                handlePromiseNotice(p)
+                continue
+            }
             switch p.action {
             case .open:
                 if p.category == NoticeActions.digestCategory {

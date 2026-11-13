@@ -1485,6 +1485,7 @@ final class Pipeline {
         Task { await payments.refreshMail(homePC) }
         Task { await appFeeds.refresh(homePC) }  // 自分の声の候補・新しさ・PLAUD との差（30分に1回まで。2026-11-12）
         Task { await homeFeeds.refresh(homePC) }  // 提案・PLAUD で埋めた所・話し手の疑い（30分に1回まで。2026-11-13）
+        Task { await PromiseInbox.shared.refresh(self) }  // 会話のあとの約束と、その設定（5分に1回まで。2026-11-13。Promises.swift）
         Task {
             await good.refresh(homePC)  // いいこと帳（30分に1回まで）
             updateWidgets()  // ウィジェットの今週の数（2026-11-12）

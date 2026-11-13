@@ -176,6 +176,7 @@ private struct TodayView: View {
                 MorningBriefSection()
                 // 家の PC（母艦）からの提案を3つまで（2026-11-13。HomeFeeds.swift）。押すまでは何も変えない
                 ProposalCardsSection()
+                PromisesSection()  // 会話のあとの約束（2026-11-13。Promises.swift）
                 taskBook()
                 talkSection(today: today, talks: talks)
                 // 家の PC が書いている途中の下書き（仮。記録には入れない。2026-11-07。Drafts.swift）
@@ -951,6 +952,7 @@ private struct SettingsView: View {
 
                 // Claude（家の PC 経由。2026-11-13。Claude.swift）
                 ClaudeSettingsSection()
+                PromiseSettingsLink()  // 「会話のあとに約束を知らせる」（2026-11-13。Promises.swift）
 
                 Section {
                     Toggle("音声をドライブにも保存", isOn: Binding(

@@ -85,6 +85,7 @@ enum DemoData {
         }
         installHomeFeeds(base: base, now: now, day: f.string(from: now),
                          yesterday: f.string(from: now.addingTimeInterval(-86400)), talk: talk1, talkEnd: b)
+        installPromises(base: base, now: now, day: f.string(from: now), talkStart: a)  // 会話のあとの約束（Promises.swift）
         // 効き目の数の見本
         Tally.add("fix.proposed", 6)
         Tally.add("fix.kept", 4)
