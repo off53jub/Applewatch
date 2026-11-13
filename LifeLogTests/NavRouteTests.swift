@@ -32,6 +32,12 @@ final class NavRouteTests: XCTestCase {
         XCTAssertEqual(route("work-digest-reminder"), .digestImport(""))
     }
 
+    func testProposalNoticeOpensTheProposalsScreen() {
+        XCTAssertEqual(route(ProposalRules.noticePrefix + "2026-11-13"), .screen(.proposals))
+        XCTAssertEqual(route("proposal-2026-11-14"), .screen(.proposals))
+        XCTAssertEqual(NoticeRoute.kind(of: "proposal-2026-11-13"), ProposalRules.noticePrefix)
+    }
+
     func testMeetingBriefKeepsTheText() {
         XCTAssertEqual(route("brief-1794034705-定例"), .note(title: "題", body: "本文"))
     }

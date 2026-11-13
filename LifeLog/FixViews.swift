@@ -13,6 +13,7 @@ extension Pipeline {
             ("AI からの質問", asks.open.count),
             ("名前を付ける候補の声", newVoices.open.count),
             ("職場の自分の声", selfCandidateCount),
+            ("話し手の疑い", speakerDoubtCount),
             ("見直したい声", reviewCount),
             ("名前を付けてほしい声", namelessVoiceCount),
             ("割れやすい言葉", splitWordCandidates().count),
@@ -21,9 +22,10 @@ extension Pipeline {
         ]
     }
 
-    /// 職場の自分の声の確認（家の PC が対応しているときだけ。AppFeeds.swift）
+    /// 職場の自分の声の確認（家の PC が対応しているときだけ。AppFeeds.swift）。
+    /// 2026-11-13 から、今日の10件のうちまだ答えていない数（60件を一度に数えない。全部は「いつでも」から）
     var selfCandidateCount: Int {
-        homePC.features.contains("selfcand") ? appFeeds.visibleCandidates.count : 0
+        homePC.features.contains("selfcand") ? appFeeds.todayTenLeft().count : 0
     }
 
     /// 30秒以上話したのに名前の無い声（テレビ・動画・大勢の場らしい声は除く）
@@ -95,10 +97,20 @@ struct FixView: View {
             }
             NewVoicesSection()
             if count("職場の自分の声") > 0 {
-                Section("職場の自分の声の確認（\(count("職場の自分の声"))）") {
-                    NavigationLink("聞いて答える") { SelfCandidatesView() }
+                // 1日に10件だけ（「精10」。2026-11-13）。その日はじめて見たときに点の高い順に選び、その日は入れ替えない
+                Section {
+                    NavigationLink("職場の自分の声を10件確かめる（残り \(count("職場の自分の声"))）") {
+                        SelfCandidatesView(only: pipeline.appFeeds.todayTen())
+                            .countsOpen("selfTen")
+                    }
+                } header: {
+                    Text("職場の自分の声の確認（今日の分）")
+                } footer: {
+                    Text("全部（\(pipeline.appFeeds.visibleCandidates.count) 件）は下の「いつでも」から開けます。")
                 }
             }
+            // 話し手の疑い（家の PC から。2026-11-13。HomeFeeds.swift）。名前は自動では変えない
+            SpeakerDoubtsSection()
             if reviewCount > 0 || unnamedToday > 0 {
                 Section("見直したい声（\(reviewCount)）") {
                     if reviewCount > 0 { NavigationLink("声を聞いて直す") { VoiceReviewView() } }
@@ -136,6 +148,17 @@ struct FixView: View {
                     AnswerKeyView()
                 } label: {
                     Label("答え合わせ（週5分）・聞き取りの数字", systemImage: "checkmark.seal")
+                }
+                if pipeline.homePC.features.contains("selfcand"), !pipeline.appFeeds.visibleCandidates.isEmpty {
+                    NavigationLink {
+                        SelfCandidatesView()
+                    } label: {
+                        LabeledContent {
+                            Text("\(pipeline.appFeeds.visibleCandidates.count) 件")
+                        } label: {
+                            Label("職場の自分の声の確認（全部）", systemImage: "person.wave.2")
+                        }
+                    }
                 }
                 NavigationLink {
                     VocabularyView()

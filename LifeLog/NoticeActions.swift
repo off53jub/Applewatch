@@ -151,6 +151,8 @@ enum AppTab: String, Hashable, CaseIterable {
 /// 知らせ・ウィジェットから開く画面のうち、シートで開くもの（2026-11-12）
 enum NoticeScreen: String, Equatable {
     case questions, goodThings, money, cloudLog, reviewNudge, diagnostics, homePC
+    /// 家の PC からの提案（2026-11-13。HomeFeeds.swift）
+    case proposals
 }
 
 /// 知らせを押したときに開く画面（2026-11-10。2026-11-12 からタスク以外の知らせも、その画面を開く）
@@ -179,6 +181,7 @@ enum NoticeRoute: Identifiable, Equatable {
         if id.hasPrefix("tasks-") || id == NoticePresenter.taskFoundID { return .tab(.tasks) }
         if id.hasPrefix("brief-") { return .note(title: title, body: body) }
         if id.hasPrefix(AppFeeds.noticePrefix) || id.hasPrefix("signExpiry-") { return .tab(.today) }
+        if id.hasPrefix(ProposalRules.noticePrefix) { return .screen(.proposals) }
         switch id {
         case MorningBrief.noticeID, "watch-silent", "phone-stopped", "watch-battery", "stall",
              "watch-open-after-update", "watch-not-recording":
@@ -210,7 +213,7 @@ enum NoticeRoute: Identifiable, Equatable {
 
     /// 知らせを数えるときの種類（カテゴリの無い知らせは、名前の頭で数える）
     static func kind(of id: String) -> String {
-        for prefix in ["tasks-", "brief-", "signExpiry-", AppFeeds.noticePrefix] where id.hasPrefix(prefix) { return prefix }
+        for prefix in ["tasks-", "brief-", "signExpiry-", AppFeeds.noticePrefix, ProposalRules.noticePrefix] where id.hasPrefix(prefix) { return prefix }
         return id
     }
 }

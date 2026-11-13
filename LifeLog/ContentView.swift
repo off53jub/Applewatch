@@ -70,6 +70,7 @@ private struct NoticeScreenView: View {
         case .reviewNudge: ReviewNudgeView()
         case .diagnostics: DiagnosticsView()
         case .homePC: HomePCView()
+        case .proposals: ProposalsView()
         }
     }
 }
@@ -173,6 +174,8 @@ private struct TodayView: View {
                 PCFeatureNotice()
                 // 朝の「昨日と今日」（2026-11-09。MorningBrief.swift）
                 MorningBriefSection()
+                // 家の PC（母艦）からの提案を3つまで（2026-11-13。HomeFeeds.swift）。押すまでは何も変えない
+                ProposalCardsSection()
                 taskBook()
                 talkSection(today: today, talks: talks)
                 // 家の PC が書いている途中の下書き（仮。記録には入れない。2026-11-07。Drafts.swift）
@@ -570,6 +573,19 @@ private struct DaysPage: View {
                     }
                     ForEach(days, id: \.self) { day in
                         NavigationLink(day) { DayView(day: day) }
+                    }
+                }
+                // アプリの記録が無く、PLAUD の写しだけがある日（2026-11-13。HomeFeeds.swift。読むだけ）
+                let plaudOnly = pipeline.homeFeeds.fillOnlyDays(recorded: days)
+                if !plaudOnly.isEmpty {
+                    Section {
+                        ForEach(plaudOnly, id: \.self) { day in
+                            NavigationLink(day) { PlaudOnlyDayView(day: day) }
+                        }
+                    } header: {
+                        Text("PLAUD だけの日")
+                    } footer: {
+                        Text("アプリの記録が無い日の、PLAUD の文字起こしです（読むだけ）。")
                     }
                 }
             }

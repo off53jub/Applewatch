@@ -188,6 +188,28 @@ enum AppFeeds {
     nonisolated static func visible(_ items: [SelfCandidate], hidden: Set<String>) -> [SelfCandidate] {
         items.filter { !hidden.contains($0.id) }.sorted { $0.score > $1.score }
     }
+
+    /// 1日に確かめる数（「精10」。2026-11-13。60件を一度に出さない）
+    static let dailyCount = 10
+
+    /// 今日の10件。その日はじめて見たときに、まだ答えていない候補を点の高い順に選び、その日は入れ替えない
+    /// （答えても11件目は出てこない）。saved は "yyyy-MM-dd|id,id,…"。今日の分が空のまま候補が届いたら選び直す。
+    /// 返すのは今日の10件の id と、覚えておく文
+    nonisolated static func dailyTen(_ visible: [SelfCandidate], saved: String?, day: String,
+                                     count: Int = dailyCount) -> (ids: [String], save: String) {
+        if let saved, saved.hasPrefix(day + "|") {
+            let ids = saved.dropFirst(day.count + 1).split(separator: ",").map(String.init)
+            if !ids.isEmpty || visible.isEmpty { return (ids, saved) }
+        }
+        let ids = visible.prefix(count).map(\.id)
+        return (ids, day + "|" + ids.joined(separator: ","))
+    }
+
+    /// 朝の知らせに足す1行（まだ答えていない候補があるときだけ）
+    nonisolated static func tenBriefLine(visible: Int) -> String? {
+        guard visible > 0 else { return nil }
+        return "職場の自分の声を\(min(visible, dailyCount))件確かめる（「直す」から）"
+    }
 }
 
 // MARK: - 読み込み
@@ -207,6 +229,8 @@ final class AppFeedsBook {
     private static let hiddenKey = "selfCandidatesHidden"
     private static let notifiedKey = "freshnessNotified"
     private static let hiddenLimit = 1000
+    /// 今日の10件（"yyyy-MM-dd|id,id,…"）
+    static let tenKey = "selfCandidatesTen"
 
     private static func url(_ name: String) -> URL {
         URL.applicationSupportDirectory.appendingPathComponent("app-feed-\(name).json")
@@ -227,6 +251,23 @@ final class AppFeedsBook {
     /// 見せる候補（点の高い順）
     var visibleCandidates: [SelfCandidate] { AppFeeds.visible(candidates, hidden: hidden) }
     var staleItems: [FreshItem] { freshness.filter(\.stale) }
+
+    /// 今日の10件の id（その日はじめて見たときに選んで覚える。2026-11-13）
+    func todayTen(now: Date = .now) -> [String] {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        let saved = UserDefaults.standard.string(forKey: Self.tenKey)
+        let plan = AppFeeds.dailyTen(visibleCandidates, saved: saved, day: f.string(from: now))
+        if plan.save != saved { UserDefaults.standard.set(plan.save, forKey: Self.tenKey) }
+        return plan.ids
+    }
+
+    /// 今日の10件のうち、まだ答えていないもの（点の高い順）
+    func todayTenLeft(now: Date = .now) -> [SelfCandidate] {
+        let ids = Set(todayTen(now: now))
+        return visibleCandidates.filter { ids.contains($0.id) }
+    }
 
     /// 「違う」「確かめ済み」。もう出さない
     func hide(_ id: String) {
@@ -335,6 +376,8 @@ extension Pipeline {
 /// 職場の自分の声の確認。母艦が見つけた「自分が話していそうな場面」を、▶︎で聞いて「自分の声」か「違う」かを答える。
 struct SelfCandidatesView: View {
     @Environment(Pipeline.self) private var pipeline
+    /// 出す候補を絞る（「直す」の「今日の10件」。nil なら全部）
+    var only: [String]? = nil
     @State private var player = ClipPlayer()
     @State private var working: String?
     @State private var results: [String: String] = [:]
@@ -344,7 +387,8 @@ struct SelfCandidatesView: View {
         List {
             Section {
                 // 答えた行は、答えの一文を見せるため、この画面を開いているあいだは残す
-                let shown = book.candidates.filter { !book.hidden.contains($0.id) || results[$0.id] != nil }
+                let shown = book.candidates.filter { only?.contains($0.id) ?? true }
+                    .filter { !book.hidden.contains($0.id) || results[$0.id] != nil }
                     .sorted { $0.score > $1.score }
                 ForEach(shown) { item in
                     row(item)
@@ -356,7 +400,7 @@ struct SelfCandidatesView: View {
                 Text("PLAUD の文字起こしと突き合わせて、自分が話していそうな場面を家の PC が見つけました。▶︎で聞いて、自分の声なら「自分の声」を押してください。その場面を自分の声として覚え、記録の行も「自分」に直します。押すまでは何も変えません。違うときは「違う」を押すと、もう出しません。")
             }
         }
-        .navigationTitle("職場の自分の声の確認")
+        .navigationTitle(only == nil ? "職場の自分の声の確認" : "職場の自分の声（今日の10件）")
         .refreshable { await book.refresh(pipeline.homePC, force: true) }
         .task { await book.refresh(pipeline.homePC) }
     }

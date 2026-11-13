@@ -70,6 +70,12 @@ enum FeatureProof {
         Feature(name: "母艦のやることの「違う」「まだ」", pr: 38, keys: [], pc: "todokind"),
         Feature(name: "言葉の登録の候補", pr: 39, keys: ["screen.vocabulary"], pc: "vocab"),
         Feature(name: "いいこと帳", pr: 46, keys: ["screen.goodThings"], pc: "good"),
+        // 家の PC からの提案・PLAUD で埋めた所・話し手の疑い・職場の自分の声を10件（2026-11-13。HomeFeeds.swift）
+        Feature(name: "家の PC からの提案", pr: 54,
+                keys: ["proposal.shown", "proposal.accept", "proposal.later", "proposal.never"], pc: "proposals"),
+        Feature(name: "PLAUD で埋めた所", pr: 54, keys: ["plaudfill.viewed"], pc: "plaudfill"),
+        Feature(name: "話し手の疑い", pr: 54, keys: ["spkdoubt.self", "spkdoubt.dismiss"], pc: "spkdoubt"),
+        Feature(name: "職場の自分の声を1日10件", pr: 54, keys: ["screen.selfTen"], pc: "selfcand"),
     ]
 
     /// 画面の一覧。畳む候補を探すのに使う（見せるだけで、何も止めない）
@@ -95,6 +101,9 @@ enum FeatureProof {
         Screen(key: "recordingMap", name: "録音の抜け"),
         Screen(key: "unmatchedPayments", name: "払ったお店"),
         Screen(key: "unnamedVoices", name: "今日の人物Nを整理"),
+        Screen(key: "proposals", name: "提案"),
+        Screen(key: "speakerDoubts", name: "話し手の疑い"),
+        Screen(key: "selfTen", name: "職場の自分の声（今日の10件）"),
     ]
 
     static func screenKey(_ s: Screen) -> String { "screen." + s.key }
