@@ -431,6 +431,38 @@ GPU が使えないと CPU で動くので、答えが返るまで数十秒〜�
    features は "proposals"・"plaudfill"・"spkdoubt"。文の中身は log.txt に書きません。
 ・確かめるとき:  LifeLogPC.exe --check-v11（一時のフォルダと作り物の Claude で。本物の鍵もネットも使いません）
 
+■ 精度の記録・同じ人かも・夜の読み直し（2026-11-13。施策 9・10・11・14。中身は quality.py・judgecheck.py・
+  sameperson.py・nightreview.py。測った数とやり方は docs/s2-accuracy-2026-11-13.md）
+1. 品質の記録: %LOCALAPPDATA%\LifeLogPC\quality-daily.json（母艦の「精度の通信簿」が読みます）
+     {"version": 1, "days": {"YYYY-MM-DD": {"judge_calls", "judge_agree_plaud", "night_review_items", "same_person_groups",
+      "promise_alerts"}}}
+   いつも読んでから、自分の項目だけを書き替えます（ほかの項目は残します）。60 日より古い日は消します。
+2. 夜の流れ（01:00〜05:00 に1回。昨日の分）:
+   ・judge_calls … 帳簿の asr-judge の回数。judge_agree_plaud … 審判が文を替えた行のうち、PLAUD の公式の文字起こしに
+     多数決の文より近かった割合（judgecheck.py。PLAUD が遅れて届くので 3 日前まで測り直します。測れなければ null）
+   ・同じ人かも → same_person_groups。夜の読み直し → night_review_items。済んだ日は quality-night.json に覚えます。
+3. 割れた行の審判の1日の回数（施策 11）: claude-config.json の "judge_daily"（既定 400 のまま）。
+   2026-11-13 に測ったら、審判が PLAUD に近かったのは 23 行・多数決のほうが近かったのは 20 行（53%）で、
+   はっきり良いとは言えないので、2000 には上げていません。上げるときは {"judge_daily": 2000} と書きます。
+4. 同じ人かも（施策 10）: 同じ日の名前の無い「人物N」を、行の音声（audio・jobs に残っているもの）の声の特徴
+   （/speakers と同じ CAM++。その日の平均を引いてから比べる）で組にします。名前のある人・自分は入れません。
+   同じ区切りに出た2つは組にしません。まとめはしません（アプリで本人が「同じ人」を押したときだけ、アプリがまとめます）。
+   置き場所: same-person\<日>.json（7 日で消します）。
+   ・GET /same-person（features の "sameperson"。?refresh=1 で今日と昨日を裏で作り直します）→
+       {"available": true, "generated_at", "refreshing"?: true, "days": [{"day", "groups": [{"id", "score",
+        "people": [{"id": "12", "name": "人物12", "lines", "seconds",
+                    "samples": [{"time", "text"（40 字まで）, "audio", "start", "end"}]（3 つまで）}]（2〜4 人）}]（20 組まで）}]（3 日まで）}
+5. 夜の読み直し（施策 9）: 昨日の記録の文（職場の会話も）を区切って Claude（standard）に読ませ、聞き間違いと話し手の
+   取り違えの候補を作ります。答えは入力の文に当てて確かめ、当たらないものは捨てます。記録は変えません。
+   1日の上限は claude-config.json の "night_review_usd"（既定 0.5 ドル）。やめるときは "night_review": false。
+   置き場所: night-review\<日>.json（14 日で消します）。
+   ・GET /night-review（features の "nightreview"）→ {"available": true, "generated_at",
+       "items": [{"id", "day", "line_time", "wrong", "guess", "reason"}]}（アプリの「聞き間違いかも」に入ります）
+   ・話し手の取り違えは GET /speaker-doubts に why "night" で混ぜます（アプリの表示は「夜の読み直しから」）。
+6. まとめて OK の印（施策 14）: GET /self-candidates・/speaker-doubts・/vocab の各行に、母艦が付けた省ける
+   "sure": true と "sure_why"（60 字まで）をそのまま通します（true でなければ付けません）。
+・確かめるとき:  python pc/v12checks.py（一時のフォルダと作り物の Claude・作り物の声で。本物の鍵もネットも使いません）
+
 ■ あなた向けのモデルを作る（NVIDIA の GPU と、300 個以上の材料が要ります）
 iPhone で直した文が 300 個以上たまったら、あなたの声と言い回しに合わせて Whisper（kotoba-whisper v2.0）を学び直せます。
 NVIDIA の GPU が要ります（メモリ 8GB 以上がおすすめ。CPU だけの PC では学び直しません）。
@@ -459,6 +491,7 @@ iPhone から届いた記録・PC で直した分・残した音声: %LOCALAPPDA
 版 7: 実機の様子 diag（summary.md も）・TestFlight の報告 feedback・通知の鍵と様子 apns・App Store Connect のキー asc・
       学び直しの部品 train（どれも %LOCALAPPDATA%\LifeLogPC の下）
 2026-11-13: Claude の鍵 claude-key.txt・設定 claude-config.json・使った額の帳簿 claude-usage.jsonl（どれも %LOCALAPPDATA%\LifeLogPC）
+2026-11-13: 品質の記録 quality-daily.json・夜の流れの済み quality-night.json・same-person と night-review のフォルダ
 合言葉を変えたいときは、そこにある config.json を消して起動し直します（iPhone 側も入れ直してください）。
 
 ■ モデル
