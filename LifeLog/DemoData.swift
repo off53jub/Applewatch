@@ -68,7 +68,9 @@ enum DemoData {
                                   samples: [], updated: now, hidden: nil),
             SpeakerLabeler.Person(id: "12", name: nil, context: nil, voices: [], seconds: 40, lastHeard: b,
                                   samples: [], updated: nil, hidden: nil),
-        ], nextID: 13)
+            SpeakerLabeler.Person(id: "15", name: nil, context: nil, voices: [], seconds: 20, lastHeard: b,
+                                  samples: [], updated: nil, hidden: nil),
+        ], nextID: 16)
         if let data = try? encoder.encode(people) {
             try? data.write(to: base.appendingPathComponent("people.json"), options: .atomic)
         }
@@ -85,6 +87,7 @@ enum DemoData {
         }
         installHomeFeeds(base: base, now: now, day: f.string(from: now),
                          yesterday: f.string(from: now.addingTimeInterval(-86400)), talk: talk1, talkEnd: b)
+        installAccuracy(base: base, now: now, day: f.string(from: now), talk: talk1, noisyLine: noisy)
         // 効き目の数の見本
         Tally.add("fix.proposed", 6)
         Tally.add("fix.kept", 4)
@@ -135,22 +138,80 @@ enum DemoData {
             PlaudFillDay(day: yesterday, ranges: [span(now.addingTimeInterval(-86400 - 3600), ["きのうの PLAUD だけの見本です。"])]),
         ])
         write(fill, "app-feed-plaudfill.json")
-        let doubts = SpeakerDoubtFeed(generated_at: iso.string(from: now), items: [
+        var doubts = SpeakerDoubtFeed(generated_at: iso.string(from: now), items: [
             SpeakerDoubt(day: day, conversation_start: iso.string(from: a), line_time: iso.string(from: a.addingTimeInterval(8)),
                          text_head: "はい、お昼までに送ります。", current: "見本 花子", suggest: "self", why: "plaud-turn", score: 0.8),
             SpeakerDoubt(day: day, conversation_start: iso.string(from: talkEnd), line_time: iso.string(from: talkEnd),
                          text_head: "今どこですか。", current: "自分", suggest: "other", why: "text", score: 0.5),
+            SpeakerDoubt(day: day, conversation_start: iso.string(from: a), line_time: iso.string(from: a.addingTimeInterval(31)),
+                         text_head: "会議室も取っておきますね。", current: "見本 花子", suggest: "self", why: "night", score: 0.55),
         ])
+        // まとめて OK の見本（施策 14）: 1つ目の疑いに母艦の印
+        doubts.items[0].sure = true
+        doubts.items[0].sure_why = "PLAUD の区切りと声が両方合う"
         write(doubts, "app-feed-spkdoubt.json")
         var candidates: [SelfCandidate] = []
         for i in 1...12 {
             let start: Double = Double(i * 20)
             let score: Double = 1.0 - Double(i) / 20.0
             let why: String = i % 3 == 0 ? "plaud-most-talk" : "plaud-match"
-            candidates.append(SelfCandidate(id: "demo-c\(i)", day: day, audio: "demo.m4a", start: start, end: start + 6,
-                                            text: "職場の見本の発言 \(i)", score: score, why: why))
+            var candidate = SelfCandidate(id: "demo-c\(i)", day: day, audio: "demo.m4a", start: start, end: start + 6,
+                                          text: "職場の見本の発言 \(i)", score: score, why: why)
+            if i <= 3 {
+                candidate.sure = true
+                candidate.sure_why = "PLAUD の文とよく合う"
+            }
+            candidates.append(candidate)
         }
         write(SelfCandidateFeed(available: true, generated_at: iso.string(from: now), items: candidates), "app-feed-selfcand.json")
+    }
+
+    private struct DemoMisheard: Encodable {
+        let suspects: [MisheardBox.Suspect]
+        let checked: [String: Date]
+        let kept: [String]
+    }
+
+    /// 同じ人かも・夜の読み直しの聞き間違い・言葉の候補のまとめて OK（施策 9・10・14。2026-11-13）。名前・言葉はすべて作り物
+    private static func installAccuracy(base: URL, now: Date, day: String, talk: ConversationLog.Conversation,
+                                        noisyLine: ConversationLog.Line) {
+        let iso = ISO8601DateFormatter()
+        let encoder = JSONEncoder()
+        var members: [SamePersonGroup.Member] = []
+        let ids: [String] = ["12", "15"]
+        for (i, id) in ids.enumerated() {
+            let sample = SamePersonGroup.Sample(time: iso.string(from: noisyLine.time), text: i == 0 ? "次の駅で降ります。" : "見本の短い返事です。",
+                                                audio: "demo.m4a", start: Double(i * 5), end: Double(i * 5 + 3))
+            let lines: Int = i == 0 ? 12 : 4
+            members.append(SamePersonGroup.Member(id: id, name: "人物" + id, lines: lines, seconds: Double(lines * 3), samples: [sample]))
+        }
+        let groups: [SamePersonGroup] = [SamePersonGroup(id: "sp-demo-1", day: day, score: 0.74, people: members)]
+        if let data = try? encoder.encode(SamePersonFeed(generated_at: iso.string(from: now), groups: groups)) {
+            try? data.write(to: base.appendingPathComponent(SamePersonBook.file), options: .atomic)
+        }
+        // 夜の読み直しから来た聞き間違いの候補（「聞き間違いかも」に入っている形）
+        guard let first = talk.lines.last else { return }
+        var suspect = MisheardBox.Suspect(wrong: "会議室", guess: "第一会議室", reason: NightReviewRules.reasonHead + "：見本の理由",
+                                          refs: [MisheardBox.Ref(day: day, time: first.time, text: first.text)], found: now)
+        suspect.night = "nr-demo-1"
+        if let data = try? encoder.encode(DemoMisheard(suspects: [suspect], checked: [:], kept: [])) {
+            try? data.write(to: base.appendingPathComponent("misheard.json"), options: .atomic)
+        }
+        // 言葉の候補（母艦の辞書から）。2つに母艦の印
+        var words: [WordCandidate] = []
+        let texts: [String] = ["見本商事", "見本工業", "見本駅"]
+        for (i, text) in texts.enumerated() {
+            var w = WordCandidate(word: text, category: i == 2 ? "地名" : "社名", count: 5 - i, last: day)
+            if i < 2 {
+                w.sure = true
+                w.sure_why = "何度も出て、書き方がそろっている"
+            }
+            words.append(w)
+        }
+        let saved = WordCandidateBook.Saved(items: words, generatedAt: iso.string(from: now), fetchedAt: now, dismissed: [])
+        if let data = try? encoder.encode(saved) {
+            try? data.write(to: base.appendingPathComponent("word-candidates.json"), options: .atomic)
+        }
     }
 }
 #endif

@@ -20,7 +20,7 @@ struct ContentView: View {
 
     var body: some View {
         @Bindable var pipeline = pipeline
-        let fixCount = pipeline.fixParts(reviewCount: reviewCount).reduce(0) { $0 + $1.count }
+        let fixCount = pipeline.fixBadge(reviewCount: reviewCount)  // 今日やる分だけ（FixViews.swift。2026-11-13）
         TabView(selection: $pipeline.tab) {
             Tab("今日", systemImage: "waveform", value: AppTab.today) { TodayView() }
             Tab("タスク", systemImage: "checklist", value: AppTab.tasks) { TasksTab() }

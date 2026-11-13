@@ -25,6 +25,9 @@ struct SelfCandidate: Codable, Identifiable, Equatable {
     var score: Double
     /// "plaud-match"（PLAUD の文と突き合わせて見つけた）・"plaud-most-talk"（その時間帯でいちばん話していた）
     var why: String
+    /// 母艦が「本人が見ればほぼ必ず OK する」と印を付けたもの（施策 14。省ける。true のときだけ入る）
+    var sure: Bool? = nil
+    var sure_why: String? = nil
 }
 
 struct SelfCandidateFeed: Codable, Equatable {
@@ -384,7 +387,24 @@ struct SelfCandidatesView: View {
 
     var body: some View {
         let book = pipeline.appFeeds
+        // まとめて OK（施策 14）: 母艦が sure の印を付けた、まだ答えていない候補
+        let sure: [SelfCandidate] = book.candidates.filter { c in
+            (only?.contains(c.id) ?? true) && !book.hidden.contains(c.id) && c.sure == true
+        }
         List {
+            if !sure.isEmpty {
+                Section {
+                    BulkOKRow(count: sure.count, what: "職場の自分の声",
+                              effect: "1件ずつ「自分の声」を押したのと同じように、その場面を自分の声として覚え、記録の行を「自分」に直します。") {
+                        player.stop()
+                        let done = await pipeline.bulkConfirmSelf(sure)
+                        for (id, message) in done { results[id] = message }
+                        return "\(done.count) 件を「自分の声」にしました。"
+                    }
+                } footer: {
+                    Text("母艦が「ほぼ確か」と印を付けたものだけです。迷うものは下で1件ずつ確かめてください。")
+                }
+            }
             Section {
                 // 答えた行は、答えの一文を見せるため、この画面を開いているあいだは残す
                 let shown = book.candidates.filter { only?.contains($0.id) ?? true }
@@ -416,6 +436,10 @@ struct SelfCandidatesView: View {
                     .font(.caption2).foregroundStyle(.secondary)
             }
             if !item.text.isEmpty { Text("「\(item.text)」").lineLimit(3) }
+            if item.sure == true {
+                Text(NightReviewRules.sureLabel(item.sure_why))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
             if playable {
                 Button {
                     Task {

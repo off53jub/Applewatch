@@ -17,6 +17,9 @@ struct WordCandidate: Codable, Identifiable, Equatable, Sendable {
     var last: String? = nil
     /// 母艦の辞書にある別の書き方
     var variants: [String]? = nil
+    /// 母艦が「本人が見ればほぼ必ず OK する」と印を付けたもの（施策 14。省ける。true のときだけ入る）
+    var sure: Bool? = nil
+    var sure_why: String? = nil
 
     var id: String { word }
 }
@@ -134,8 +137,13 @@ final class WordCandidateBook {
             let variants: [String] = ((dict["variants"] as? [Any]) ?? []).compactMap { $0 as? String }
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty && $0.count <= 40 }
-            items.append(WordCandidate(word: word, category: category, count: dict["count"] as? Int, last: last,
-                                       variants: variants.isEmpty ? nil : Array(variants.prefix(6))))
+            var item = WordCandidate(word: word, category: category, count: dict["count"] as? Int, last: last,
+                                     variants: variants.isEmpty ? nil : Array(variants.prefix(6)))
+            if dict["sure"] as? Bool == true {
+                item.sure = true
+                item.sure_why = (dict["sure_why"] as? String).map { String($0.prefix(60)) }
+            }
+            items.append(item)
             if items.count >= 500 { break }
         }
         return (object["generated_at"] as? String, items)
@@ -257,6 +265,14 @@ struct WordCandidateSections: View {
 
     @ViewBuilder
     private func rows(_ items: [WordCandidate], fromDigest: Bool) -> some View {
+        // まとめて OK（施策 14）: 母艦が sure の印を付けた候補だけ
+        let sure: [WordCandidate] = fromDigest ? [] : items.filter { $0.sure == true }
+        if !sure.isEmpty {
+            BulkOKRow(count: sure.count, what: "言葉の候補",
+                      effect: "1つずつ「「\(group.label)」に足す」を押したのと同じように、言葉の登録に足します。登録した言葉は、聞き取りのヒントとしてクラウドの文字起こしにも渡ります。") {
+                await pipeline.bulkAddWords(sure, to: group)
+            }
+        }
         let first: [WordCandidate] = Array(items.prefix(WordCandidateBook.shownInForm))
         ForEach(first) { item in
             WordCandidateRow(item: item, group: group, fromDigest: fromDigest)
