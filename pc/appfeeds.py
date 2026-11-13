@@ -11,11 +11,23 @@
   {"id", "kind", "answer", "at"} を1行足す（kind は今の提案の一覧から。分からなければ ""）。
 - GET /plaud-fill（"plaudfill"）← state/plaud_fill_for_app.json  アプリに行の無い時間の PLAUD の文（見せるだけ）。
 - GET /speaker-doubts（"spkdoubt"）← state/speaker_doubts_for_app.json  話し手が違うかもしれない行（疑いだけ。
-  名前は自動で替えない）。2026-11-13（施策 9）: 家の PC の夜の読み直し（nightreview.py）の疑いを why "night" で混ぜる。
+  名前は自動で替えない）。
+2026-11-13（施策 9）: 家の PC の夜の読み直し（nightreview.py）の疑いを why "night" で混ぜる。
 2026-11-13（施策 14）: 自分の声の候補・話し手の疑いの各行の省ける "sure"（true のときだけ）・"sure_why"（60 字まで）を通す
 （母艦が「本人が見ればほぼ必ず OK する」と印を付けたもの。アプリは「まとめて OK」にする。押すまでは何も変えない）。
-どれも読むだけ。型・長さ・形を確かめ、おかしな行は落とす。無い・読めないときは {"available": false, "reason": …}。
-中身（文・ファイル名）は記録（log.txt）に書かない。
+2026-11-13 の施策（番号は D:\\Lifelog\\docs\\system-proposal-2026-11-13.md。母艦の scripts が state を作る）:
+- GET /weekly（"weekly"）← state/weekly_for_app.json  週のふり返り（2）と見立ての台帳（3）と、出したものの使われ方の数（1）。
+- GET /prep（"prep"）← state/prep_for_app.json  これから 36 時間の予定の「会う前の一枚」（4）。
+- GET /brief-compare（"briefcmp"）← state/brief_compare_for_app.json  同じ日の朝のまとめ 2 つ（Codex と Claude。5）。
+- GET /accuracy（"accuracy"）← state/accuracy_for_app.json  精度の通信簿（週ごと。12）。値の無い所は null。
+- GET /unused（"unused"）← state/unused_features_for_app.json  あまり開かれていない画面（月 1 回。21）。
+- POST /feedback（"feedback"）{"kind", "id", "value", "day"} → 母艦の inbox/app_feedback.jsonl に
+  {"kind", "id", "value", "day", "at"} を1行（1。kind と value の組は FEEDBACK に決めたものだけ）。
+- POST /mood（"mood"）{"day", "at", "mood", "energy", "grip", "note"?} → inbox/mood.jsonl（夜の 10 秒。6。1〜5 の整数）。
+- POST /app-usage（"appusage"）{"at", "app", "event"} → inbox/app_usage.jsonl（ショートカットのオートメーションから。8）。
+  iPhone の「スクリーンタイム」と Safari の履歴は、ほかのアプリからは読めない（Apple の決まり）ので、この口にした。
+どれも読むだけ（POST は1行足すだけ）。型・長さ・形を確かめ、おかしな行は落とす。無い・読めないときは {"available": false, "reason": …}。
+中身（文・ファイル名・アプリの名前・気分の値）は記録（log.txt）に書かない。
 """
 
 from __future__ import annotations
@@ -34,9 +46,21 @@ PROPOSALS = Path("state") / "proposals_for_app.json"
 PLAUD_FILL = Path("state") / "plaud_fill_for_app.json"
 SPEAKER_DOUBTS = Path("state") / "speaker_doubts_for_app.json"
 PROPOSAL_ANSWERS = Path("inbox") / "proposal_answers.jsonl"
+WEEKLY = Path("state") / "weekly_for_app.json"
+PREP = Path("state") / "prep_for_app.json"
+BRIEF_COMPARE = Path("state") / "brief_compare_for_app.json"
+ACCURACY = Path("state") / "accuracy_for_app.json"
+UNUSED = Path("state") / "unused_features_for_app.json"
+FEEDBACK_FILE = Path("inbox") / "app_feedback.jsonl"
+MOOD_FILE = Path("inbox") / "mood.jsonl"
+APP_USAGE_FILE = Path("inbox") / "app_usage.jsonl"
 ROUTES = {"/self-candidates": ("selfcand", SELF_CANDIDATES), "/freshness": ("fresh", FRESHNESS),
           "/plaud-gap": ("plaudgap", PLAUD_GAP), "/proposals": ("proposals", PROPOSALS),
-          "/plaud-fill": ("plaudfill", PLAUD_FILL), "/speaker-doubts": ("spkdoubt", SPEAKER_DOUBTS)}
+          "/plaud-fill": ("plaudfill", PLAUD_FILL), "/speaker-doubts": ("spkdoubt", SPEAKER_DOUBTS),
+          "/weekly": ("weekly", WEEKLY), "/prep": ("prep", PREP), "/brief-compare": ("briefcmp", BRIEF_COMPARE),
+          "/accuracy": ("accuracy", ACCURACY), "/unused": ("unused", UNUSED)}
+# 2026-11-13 の施策で足した名前（/hello の features。lifelog_pc.features() が足す）
+FEATURES = ("weekly", "prep", "briefcmp", "accuracy", "unused", "feedback", "mood", "appusage")
 
 PROPOSAL_LIMIT = 60
 PROPOSAL_KINDS = ("followup", "research", "selffix", "pattern", "review", "chance", "health", "prep", "vocab")
@@ -359,6 +383,333 @@ def read_speaker_doubts(base: Path) -> dict:
     return {"available": True, "generated_at": generated, "items": (keep + night_items)[:DOUBT_LIMIT]}
 
 
+# MARK: - 2026-11-13 の施策（週のふり返り・会う前の一枚・朝のまとめの比べ・精度の通信簿・開かれていない画面）
+
+WEEK = re.compile(r"\d{4}-W\d{2}")
+MONTH = re.compile(r"\d{4}-\d{2}")
+WEEKLY_KINDS = ("theme", "stuck", "change")
+HYPOTHESIS_STATUS = ("alive", "weakened", "confirmed", "unknown")
+WEEKLY_ITEMS = 5
+WEEKLY_EVIDENCE = 5
+HYPOTHESES = 30
+PREP_ITEMS = 10
+PREP_LIST = 5
+COMPARE_DAYS = 7
+COMPARE_CHARS = 20000
+ACCURACY_WEEKS = 12
+UNUSED_ITEMS = 40
+
+
+def _day(value) -> str | None:
+    """"YYYY-MM-DD" で、本当にある日か"""
+    if not isinstance(value, str) or not DAY.fullmatch(value):
+        return None
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return None
+    return value
+
+
+def _when(value) -> str | None:
+    """ISO 8601 の日時で、本当にある日時か（時差が無ければ、この PC の時刻とみなす）"""
+    text = _iso(value)
+    return text if text is not None and _moment(text) is not None else None
+
+
+def _id(value) -> str | None:
+    return value if isinstance(value, str) and ID.fullmatch(value) else None
+
+
+def _strings(value, n: int, limit: int) -> list[str]:
+    """文の並び（文でないもの・空のものは落とし、n 文字まで・limit 個まで）"""
+    out = []
+    for x in value if isinstance(value, list) else []:
+        if not isinstance(x, str):
+            continue
+        text = _text(x, n)
+        if text:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _long(value, n: int) -> str:
+    """改行を残す長い文（朝のまとめ）。前後の空白を除き、n 文字まで"""
+    if not isinstance(value, str):
+        return ""
+    return value.replace("\r\n", "\n").strip()[:n]
+
+
+def _int(value, low: int, high: int) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if low <= value <= high else None
+
+
+def _version(data: dict) -> int:
+    return data["version"] if _int(data.get("version"), 1, 1000) is not None else 1
+
+
+def read_weekly(base: Path) -> dict:
+    data, failure = _load(base, WEEKLY, "週のふり返り")
+    if failure or data is None or not isinstance(data.get("items"), list):
+        return failure or {"available": False, "reason": "母艦の週のふり返りの形が違います"}
+    items, seen = [], set()
+    for x in data["items"][:WEEKLY_ITEMS * 4]:
+        if not isinstance(x, dict):
+            continue
+        item_id, title = _id(x.get("id")), _text(x.get("title"), 40)
+        if item_id is None or item_id in seen or x.get("kind") not in WEEKLY_KINDS or not title:
+            continue
+        evidence = []
+        for e in (x.get("evidence") if isinstance(x.get("evidence"), list) else [])[:WEEKLY_EVIDENCE * 4]:
+            if not isinstance(e, dict):
+                continue
+            day, quote = _day(e.get("day")), _text(e.get("quote"), 80)
+            if day is None or not quote:
+                continue
+            evidence.append({"day": day, "source": _text(e.get("source"), 20), "quote": quote})
+            if len(evidence) >= WEEKLY_EVIDENCE:
+                break
+        seen.add(item_id)
+        items.append({"id": item_id, "kind": x["kind"], "title": title, "body": _text(x.get("body"), 300),
+                      "evidence": evidence})
+        if len(items) >= WEEKLY_ITEMS:
+            break
+    hypotheses, seen = [], set()
+    for h in (data.get("hypotheses") if isinstance(data.get("hypotheses"), list) else [])[:HYPOTHESES * 4]:
+        if not isinstance(h, dict):
+            continue
+        h_id, text = _id(h.get("id")), _text(h.get("text"), 120)
+        if h_id is None or h_id in seen or not text or h.get("status") not in HYPOTHESIS_STATUS:
+            continue
+        seen.add(h_id)
+        hypotheses.append({"id": h_id, "text": text, "said_on": _day(h.get("said_on")), "status": h["status"],
+                           "note": _text(h.get("note"), 200), "checked_on": _day(h.get("checked_on"))})
+        if len(hypotheses) >= HYPOTHESES:
+            break
+    feedback = None
+    raw = data.get("feedback")
+    if isinstance(raw, dict):
+        def counts(value, names) -> dict:
+            value = value if isinstance(value, dict) else {}
+            return {n: _count(value.get(n)) or 0 for n in names}
+        feedback = {"today_three": counts(raw.get("today_three"), ("done", "skipped", "unknown")),
+                    "proposal": counts(raw.get("proposal"), ("accept", "later", "never")),
+                    "brief_read": _count(raw.get("brief_read")) or 0}
+    return {"available": True, "version": _version(data), "generated_at": _iso(data.get("generated_at")),
+            "week": data["week"] if isinstance(data.get("week"), str) and WEEK.fullmatch(data["week"]) else None,
+            "from": _day(data.get("from")), "to": _day(data.get("to")),
+            "items": items, "hypotheses": hypotheses, "feedback": feedback}
+
+
+def read_prep(base: Path) -> dict:
+    data, failure = _load(base, PREP, "会う前の一枚")
+    if failure or data is None or not isinstance(data.get("items"), list):
+        return failure or {"available": False, "reason": "母艦の会う前の一枚の形が違います"}
+    items, seen = [], set()
+    for x in data["items"][:PREP_ITEMS * 4]:
+        if not isinstance(x, dict):
+            continue
+        item_id, start, title = _id(x.get("id")), _when(x.get("start")), _text(x.get("title"), 60)
+        end = x.get("end")
+        if item_id is None or item_id in seen or start is None or not title or (end is not None and _when(end) is None):
+            continue
+        if end is not None and _moment(end) < _moment(start):
+            continue  # 終わりが始まりより前
+        last = x.get("last_talk")
+        last_talk = None
+        if isinstance(last, dict) and _day(last.get("day")) and _text(last.get("summary"), 200):
+            last_talk = {"day": last["day"], "summary": _text(last.get("summary"), 200)}
+        seen.add(item_id)
+        items.append({"id": item_id, "start": start, "end": _when(end), "title": title,
+                      "people": _strings(x.get("people"), 20, PREP_LIST), "last_talk": last_talk,
+                      "promises": _strings(x.get("promises"), 80, PREP_LIST),
+                      "recent": _strings(x.get("recent"), 80, PREP_LIST)})
+    items.sort(key=lambda i: _moment(i["start"]))
+    return {"available": True, "version": _version(data), "generated_at": _iso(data.get("generated_at")),
+            "items": items[:PREP_ITEMS]}
+
+
+def read_brief_compare(base: Path) -> dict:
+    data, failure = _load(base, BRIEF_COMPARE, "朝のまとめの比べ")
+    if failure or data is None or not isinstance(data.get("days"), list):
+        return failure or {"available": False, "reason": "母艦の朝のまとめの比べの形が違います"}
+    days, seen = [], set()
+    for x in data["days"][:COMPARE_DAYS * 4]:
+        if not isinstance(x, dict):
+            continue
+        day, codex, by_claude = _day(x.get("day")), _long(x.get("codex"), COMPARE_CHARS), _long(x.get("claude"), COMPARE_CHARS)
+        if day is None or day in seen or not codex or not by_claude:
+            continue  # 2 つそろっていなければ比べられない
+        seen.add(day)
+        days.append({"day": day, "codex": codex, "claude": by_claude})
+    days.sort(key=lambda d: d["day"], reverse=True)
+    return {"available": True, "version": _version(data), "generated_at": _iso(data.get("generated_at")),
+            "days": days[:COMPARE_DAYS]}
+
+
+def read_accuracy(base: Path) -> dict:
+    data, failure = _load(base, ACCURACY, "精度の通信簿")
+    if failure or data is None or not isinstance(data.get("weeks"), list):
+        return failure or {"available": False, "reason": "母艦の精度の通信簿の形が違います"}
+    weeks, seen = [], set()
+    for x in data["weeks"][:ACCURACY_WEEKS * 4]:
+        if not isinstance(x, dict) or not isinstance(x.get("week"), str) or not WEEK.fullmatch(x["week"]) \
+                or x["week"] in seen:
+            continue
+        seen.add(x["week"])
+        weeks.append({"week": x["week"], "from": _day(x.get("from")), "to": _day(x.get("to")),
+                      "caught_self": _num(x.get("caught_self"), 0, 1), "caught_other": _num(x.get("caught_other"), 0, 1),
+                      "person_n_kinds_median": _int(x.get("person_n_kinds_median"), 0, 100000),
+                      "fix_kept_ratio": _num(x.get("fix_kept_ratio"), 0, 1), "judge_agree": _num(x.get("judge_agree"), 0, 1),
+                      "night_review_kept": _num(x.get("night_review_kept"), 0, 1),
+                      "speaking_score": _num(x.get("speaking_score"), 0, 100)})
+    weeks.sort(key=lambda w: w["week"], reverse=True)
+    return {"available": True, "version": _version(data), "generated_at": _iso(data.get("generated_at")),
+            "weeks": weeks[:ACCURACY_WEEKS]}
+
+
+def read_unused(base: Path) -> dict:
+    data, failure = _load(base, UNUSED, "開かれていない画面")
+    if failure or data is None or not isinstance(data.get("items"), list):
+        return failure or {"available": False, "reason": "母艦の開かれていない画面の形が違います"}
+    items, seen = [], set()
+    for x in data["items"][:UNUSED_ITEMS * 4]:
+        if not isinstance(x, dict):
+            continue
+        screen, opens, days = _text(x.get("screen"), 40), _count(x.get("opens")), _count(x.get("days"))
+        if not screen or screen in seen or opens is None or days is None:
+            continue
+        seen.add(screen)
+        items.append({"screen": screen, "opens": opens, "days": days, "note": _text(x.get("note"), 80)})
+        if len(items) >= UNUSED_ITEMS:
+            break
+    month = data.get("month")
+    return {"available": True, "version": _version(data), "generated_at": _iso(data.get("generated_at")),
+            "month": month if isinstance(month, str) and MONTH.fullmatch(month) else None, "items": items}
+
+
+# MARK: - アプリから母艦へ（1行足すだけ。proposals/answer と同じ鍵・同じ大きさの決まり）
+
+# kind → 受ける value
+FEEDBACK = {"today_three": ("done", "skipped"), "brief": ("read",), "weekly": ("useful", "not_useful"),
+            "prep": ("useful", "not_useful"), "brief_compare": ("codex", "claude"), "night_review": ("kept", "dropped"),
+            "same_person": ("merged", "different"), "promise": ("added", "ignored"), "bulk": ("ok",)}
+APP_EVENTS = ("open", "close", "focus_on", "focus_off")
+_inbox_lock = threading.Lock()
+
+
+def _json_body(data: bytes) -> dict:
+    try:
+        body = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError("中身が JSON ではありません") from None
+    if not isinstance(body, dict):
+        raise ValueError("中身が JSON ではありません")
+    return body
+
+
+def parse_feedback(data: bytes) -> dict:
+    """POST /feedback の中身。おかしければ ValueError"""
+    body = _json_body(data)
+    kind = body.get("kind")
+    if not isinstance(kind, str) or kind not in FEEDBACK:
+        raise ValueError("kind は " + "・".join(FEEDBACK) + " のどれかです")
+    if body.get("value") not in FEEDBACK[kind]:
+        raise ValueError(f"{kind} の value は " + "・".join(FEEDBACK[kind]) + " のどれかです")
+    if _id(body.get("id")) is None:
+        raise ValueError("id は英数字と _ . : - で 64 文字までです")
+    if _day(body.get("day")) is None:
+        raise ValueError("day は YYYY-MM-DD です")
+    return {"kind": kind, "id": body["id"], "value": body["value"], "day": body["day"]}
+
+
+def _score(value, name: str) -> int:
+    if _int(value, 1, 5) is None:
+        raise ValueError(f"{name} は 1〜5 の整数です")
+    return value
+
+
+def parse_mood(data: bytes) -> dict:
+    """POST /mood の中身（夜の 10 秒）。おかしければ ValueError"""
+    body = _json_body(data)
+    if _day(body.get("day")) is None:
+        raise ValueError("day は YYYY-MM-DD です")
+    if _when(body.get("at")) is None:
+        raise ValueError("at は ISO 8601 の日時です")
+    row = {"day": body["day"], "at": body["at"], "mood": _score(body.get("mood"), "mood"),
+           "energy": _score(body.get("energy"), "energy"), "grip": _score(body.get("grip"), "grip")}
+    note = body.get("note")
+    if note is not None:
+        if not isinstance(note, str) or len(note) > 200:
+            raise ValueError("note は 200 文字までの文です")
+        if _text(note, 200):
+            row["note"] = _text(note, 200)
+    return row
+
+
+def parse_app_usage(data: bytes) -> dict:
+    """POST /app-usage の中身（ショートカットのオートメーションから）。おかしければ ValueError"""
+    body = _json_body(data)
+    if _when(body.get("at")) is None:
+        raise ValueError("at は ISO 8601 の日時です")
+    app = body.get("app")
+    if not isinstance(app, str) or not _text(app, 40) or len(app.strip()) > 40:
+        raise ValueError("app は 1〜40 文字の文です")
+    if body.get("event") not in APP_EVENTS:
+        raise ValueError("event は " + "・".join(APP_EVENTS) + " のどれかです")
+    return {"at": body["at"], "app": _text(app, 40), "event": body["event"]}
+
+
+def append_inbox(base: Path, rel: Path, row: dict) -> dict:
+    """母艦の inbox の jsonl に1行足す（同じ PC の中の書き込みは1つずつ）"""
+    path = base / rel
+    with _inbox_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return row
+
+
+def _http_inbox(handler, base: Path, data: bytes, log, parse, rel: Path, label: str, add_at: bool, detail) -> None:
+    try:
+        row = parse(data)
+    except ValueError as error:
+        handler.send_json(400, {"error": str(error)})
+        return
+    if add_at:
+        row["at"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    try:
+        append_inbox(base, rel, row)
+    except OSError as error:
+        log(f"{label}を母艦に置けませんでした: {type(error).__name__}")
+        handler.send_json(503, {"error": "母艦に置けませんでした"})
+        return
+    # 中身（id・アプリの名前・気分の値・覚え書き）は書かない
+    log(f"{handler.client_address[0]} から{label}を母艦へ" + (f": {detail(row)}" if detail else ""))
+    handler.send_json(200, {"ok": True})
+
+
+def http_post_feedback(handler, base: Path, data: bytes, log) -> None:
+    _http_inbox(handler, base, data, log, parse_feedback, FEEDBACK_FILE, "使われ方の記録", True,
+                lambda r: f"{r['kind']} {r['value']}")
+
+
+def http_post_mood(handler, base: Path, data: bytes, log) -> None:
+    _http_inbox(handler, base, data, log, parse_mood, MOOD_FILE, "夜の 10 秒", False, None)
+
+
+def http_post_app_usage(handler, base: Path, data: bytes, log) -> None:
+    _http_inbox(handler, base, data, log, parse_app_usage, APP_USAGE_FILE, "アプリを開いた記録", False,
+                lambda r: r["event"])
+
+
 READERS = {"/self-candidates": read_self_candidates, "/freshness": read_freshness, "/plaud-gap": read_plaud_gap,
-           "/proposals": read_proposals, "/plaud-fill": read_plaud_fill, "/speaker-doubts": read_speaker_doubts}
-POSTS = {"/proposals/answer": http_post_answer}
+           "/proposals": read_proposals, "/plaud-fill": read_plaud_fill, "/speaker-doubts": read_speaker_doubts,
+           "/weekly": read_weekly, "/prep": read_prep, "/brief-compare": read_brief_compare,
+           "/accuracy": read_accuracy, "/unused": read_unused}
+POSTS = {"/proposals/answer": http_post_answer, "/feedback": http_post_feedback, "/mood": http_post_mood,
+         "/app-usage": http_post_app_usage}

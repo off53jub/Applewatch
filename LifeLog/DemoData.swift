@@ -88,6 +88,8 @@ enum DemoData {
         installHomeFeeds(base: base, now: now, day: f.string(from: now),
                          yesterday: f.string(from: now.addingTimeInterval(-86400)), talk: talk1, talkEnd: b)
         installAccuracy(base: base, now: now, day: f.string(from: now), talk: talk1, noisyLine: noisy)
+        installMothershipFeeds(base: base, now: now, day: f.string(from: now),
+                               yesterday: f.string(from: now.addingTimeInterval(-86400)))
         // 効き目の数の見本
         Tally.add("fix.proposed", 6)
         Tally.add("fix.kept", 4)
@@ -212,6 +214,83 @@ enum DemoData {
         if let data = try? encoder.encode(saved) {
             try? data.write(to: base.appendingPathComponent("word-candidates.json"), options: .atomic)
         }
+    }
+
+    /// 母艦から読んだことにする写し（週のふり返り・見立ての台帳・会う前の一枚・朝のまとめの比べ・精度の通信簿・
+    /// あまり開かれていない画面。2026-11-13。MothershipFeeds.swift）。人・会話・言葉はすべて作り物。
+    /// 長いクロージャの式は型を決めるのに時間がかかって CI が落ちるので、明示的なループと型で書く
+    private static func installMothershipFeeds(base: URL, now: Date, day: String, yesterday: String) {
+        let iso = ISO8601DateFormatter()
+        let encoder = JSONEncoder()
+        func write<T: Encodable>(_ value: T, _ name: String) {
+            if let data = try? encoder.encode(value) { try? data.write(to: base.appendingPathComponent(name), options: .atomic) }
+        }
+        // 週のふり返り（3つ）と見立ての台帳
+        var weekly = WeeklyFeed(generated_at: iso.string(from: now))
+        weekly.week = "2026-W46"
+        weekly.from = yesterday
+        weekly.to = day
+        let kinds: [String] = ["theme", "stuck", "change"]
+        let titles: [String] = ["見本の資料の話が3回出た", "会議室の予約が進んでいない", "先週より電車の会話が増えた"]
+        let bodies: [String] = ["打ち合わせのたびに、見本の資料の締め切りの話になっています。",
+                                "「取っておきますね」と言われたまま、まだ決まっていないようです。",
+                                "移動中の短い会話が、先週の倍ほどありました。"]
+        for i in 0..<3 {
+            let evidence = WeeklyFeed.Evidence(day: day, source: "conversation", quote: "見本の引用 \(i + 1)")
+            weekly.items.append(WeeklyFeed.Item(id: "demo-w\(i + 1)", kind: kinds[i], title: titles[i], body: bodies[i],
+                                                evidence: [evidence]))
+        }
+        let statuses: [String] = ["alive", "weakened", "confirmed", "unknown"]
+        let thoughts: [String] = ["朝に資料を作ると早く終わる（見本）", "会議は短い方が決まる（見本）",
+                                  "電車では話さない方が疲れない（見本）", "週の初めは返事が遅い（見本）"]
+        for i in 0..<4 {
+            weekly.hypotheses.append(WeeklyFeed.Hypothesis(id: "demo-h\(i + 1)", text: thoughts[i], said_on: yesterday,
+                                                           status: statuses[i], note: "見本の照らし合わせ", checked_on: day))
+        }
+        var feedback = WeeklyFeed.Feedback()
+        feedback.today_three = WeeklyFeed.Feedback.Three(done: 4, skipped: 1, unknown: 2)
+        feedback.proposal = WeeklyFeed.Feedback.Answers(accept: 2, later: 1, never: 0)
+        feedback.brief_read = 5
+        weekly.feedback = feedback
+        write(weekly, "mfeed-weekly.json")
+        // 会う前の一枚（1時間後に始まる見本の予定）
+        let start: Date = now.addingTimeInterval(3600)
+        var prep = PrepItem(id: "demo-e1", start: iso.string(from: start), end: iso.string(from: start.addingTimeInterval(1800)),
+                            title: "見本の打ち合わせ")
+        prep.people = ["見本 花子"]
+        prep.last_talk = PrepItem.LastTalk(day: yesterday, summary: "資料はお昼までに送る、と話しました（見本）。")
+        prep.promises = ["見本の資料を送る"]
+        prep.recent = ["会議室を探している（見本）"]
+        write(PrepFeed(generated_at: iso.string(from: now), items: [prep]), "mfeed-prep.json")
+        // 朝のまとめの比べ（2日）
+        var days: [BriefCompareDay] = []
+        let compareDays: [String] = [day, yesterday]
+        for d in compareDays {
+            let codex: String = "昨日\n・9:00〜 朝の打ち合わせ（見本）\n今日の三つ\n1. 見本の資料を送る"
+            let claude: String = "昨日は朝の打ち合わせ（見本）で、資料の締め切りが決まりました。\n今日はまず見本の資料を送りましょう。"
+            days.append(BriefCompareDay(day: d, codex: codex, claude: claude))
+        }
+        write(BriefCompareFeed(generated_at: iso.string(from: now), days: days), "mfeed-briefcmp.json")
+        // 精度の通信簿（3週。値の無い所は —）
+        var weeks: [AccuracyWeek] = []
+        for i in 0..<3 {
+            var w = AccuracyWeek(week: "2026-W4\(6 - i)")
+            w.caught_self = 0.7 - Double(i) * 0.03
+            w.caught_other = i == 2 ? nil : 0.6
+            w.person_n_kinds_median = 80 + i * 20
+            w.fix_kept_ratio = 0.76
+            w.judge_agree = i == 0 ? 0.8 : nil
+            w.speaking_score = i == 1 ? nil : 62
+            weeks.append(w)
+        }
+        write(AccuracyFeed(generated_at: iso.string(from: now), weeks: weeks), "mfeed-accuracy.json")
+        // あまり開かれていない画面
+        var unused = UnusedFeed(generated_at: iso.string(from: now), month: "2026-11")
+        let screens: [String] = ["money", "answerKey", "unnamedVoices"]
+        for (i, s) in screens.enumerated() {
+            unused.items.append(UnusedScreen(screen: s, opens: i, days: 30, note: i == 0 ? "見本の覚え書き" : ""))
+        }
+        write(unused, "mfeed-unused.json")
     }
 }
 #endif

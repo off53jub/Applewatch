@@ -429,7 +429,25 @@ GPU が使えないと CPU で動くので、答えが返るまで数十秒〜�
    ・GET /plaud-fill … 母艦の state\plaud_fill_for_app.json（アプリに行の無い時間の PLAUD の文。見せるだけで、記録には混ぜません）
    ・GET /speaker-doubts … 母艦の state\speaker_doubts_for_app.json（話し手が違うかもしれない行。名前は自動で替えません）
    features は "proposals"・"plaudfill"・"spkdoubt"。文の中身は log.txt に書きません。
-・確かめるとき:  LifeLogPC.exe --check-v11（一時のフォルダと作り物の Claude で。本物の鍵もネットも使いません）
+8. 施策 1〜21 のアプリ側の口（2026-11-13。中身は appfeeds.py。番号は母艦の docs\system-proposal-2026-11-13.md）:
+   読むだけ（母艦の state を確かめて返す。無ければ {"available": false, "reason"}。おかしな行は落とし、長さを切ります）:
+   ・GET /weekly … state\weekly_for_app.json（週のふり返り 3 つ・見立ての台帳・出したものの使われ方の数）。features "weekly"
+   ・GET /prep … state\prep_for_app.json（これから 36 時間の予定の「会う前の一枚」）。features "prep"
+   ・GET /brief-compare … state\brief_compare_for_app.json（同じ日の朝のまとめを Codex と Claude で。7 日まで）。features "briefcmp"
+   ・GET /accuracy … state\accuracy_for_app.json（精度の通信簿。週ごと 12 週まで。値の無い所は null）。features "accuracy"
+   ・GET /unused … state\unused_features_for_app.json（あまり開かれていない画面。月 1 回）。features "unused"
+   1行足すだけ（母艦の inbox の jsonl。/proposals/answer と同じ合言葉・同じ大きさの決まり。おかしな中身は 400）:
+   ・POST /feedback {"kind", "id", "value", "day"} → inbox\app_feedback.jsonl（"at" はこの PC が付けます）。features "feedback"
+     kind と value の組: today_three: done|skipped／brief: read／weekly: useful|not_useful／prep: useful|not_useful／
+     brief_compare: codex|claude／night_review: kept|dropped／same_person: merged|different／promise: added|ignored／bulk: ok
+   ・POST /mood {"day", "at", "mood", "energy", "grip", "note"?} → inbox\mood.jsonl（夜の 10 秒。3 つとも 1〜5 の整数。
+     energy は 1 がいちばん疲れている。note は 200 文字まで）。features "mood"
+   ・POST /app-usage {"at", "app", "event": "open"|"close"|"focus_on"|"focus_off"} → inbox\app_usage.jsonl。features "appusage"
+     iPhone のショートカットの個人用オートメーション（「アプリを開いたとき」など）から届きます。スクリーンタイムと
+     Safari の履歴は、ほかのアプリからは読めない（Apple の決まり）ので、この形にしました。
+   log.txt には種類だけを書きます（id・アプリの名前・気分の値・覚え書きは書きません）。
+・確かめるとき:  LifeLogPC.exe --check-v11（一時のフォルダと作り物の Claude で。本物の鍵もネットも使いません。
+  8. の口は feedschecks.py がここから確かめます）
 
 ■ 精度の記録・同じ人かも・夜の読み直し（2026-11-13。施策 9・10・11・14。中身は quality.py・judgecheck.py・
   sameperson.py・nightreview.py。測った数とやり方は docs/s2-accuracy-2026-11-13.md）

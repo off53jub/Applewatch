@@ -264,19 +264,29 @@ enum ClaudeRoute {
 
 // MARK: - 設定の画面
 
-/// 設定の「Claude（家の PC 経由）」。2つのスイッチと、今月使った額
+/// 設定の「Claude（家の PC 経由）」。2つのスイッチと、今月使った額。
+/// 2026-11-13 から、2つのスイッチは設定の「ふだん」に置き、くわしい設定では showSwitches: false で額だけ出す（同じものへの入口は1つ）
 struct ClaudeSettingsSection: View {
     @Environment(Pipeline.self) private var pipeline
     @AppStorage(ClaudeRoute.useKey) private var useClaude = true
     @AppStorage(ClaudeRoute.workKey) private var forWork = true
     @State private var usage: ClaudeUsage?
     @State private var problem: String?
+    private let showSwitches: Bool
+
+    init(showSwitches: Bool = true) {
+        self.showSwitches = showSwitches
+    }
 
     var body: some View {
         Section {
-            Toggle("Claude を使う", isOn: $useClaude)
-            Toggle("職場の会話も Claude で", isOn: $forWork)
-                .disabled(!useClaude)
+            if showSwitches {
+                Toggle("Claude を使う", isOn: $useClaude)
+                Toggle("職場の会話も Claude で", isOn: $forWork)
+                    .disabled(!useClaude)
+            } else {
+                LabeledContent("Claude を使う", value: useClaude ? (forWork ? "オン（職場も）" : "オン") : "オフ")
+            }
             LabeledContent("家の PC", value: ClaudeRoute.offered ? "使える" : "まだ使えない")
             if let usage, usage.available || usage.calls > 0 {
                 LabeledContent("今月", value: usage.spendText)
