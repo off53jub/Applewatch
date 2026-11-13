@@ -127,6 +127,13 @@ jobs:
           python pc/lifelog_pc.py --check-v11 > v11.txt 2>&1 || { cat v11.txt; grep '^NG' v11.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v11.txt | sed 's/^/::notice::--check-v11 の OK の数: /'
 
+      # 2026-11-13（施策 9・10・11・14）: 品質の記録・審判と PLAUD の合い方・同じ人かも・夜の読み直し・まとめて OK の印を、
+      #   一時フォルダと作り物の Claude・作り物の声で確かめる（本物の鍵もネットも使わない）
+      - name: 精度の記録・同じ人かも・夜の読み直しを確かめる
+        run: |
+          python pc/v12checks.py > v12.txt 2>&1 || { cat v12.txt; grep '^NG' v12.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v12.txt | sed 's/^/::notice::v12checks の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py
@@ -192,6 +199,7 @@ jobs:
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \
             --hidden-import claude --hidden-import v11checks \
+            --hidden-import quality --hidden-import judgecheck --hidden-import sameperson --hidden-import nightreview \
             --collect-all anthropic --collect-submodules httpx2 --collect-submodules httpcore2 \
             --collect-submodules opentelemetry --copy-metadata opentelemetry-api \
             --hidden-import cryptography.hazmat.primitives.asymmetric.ec \

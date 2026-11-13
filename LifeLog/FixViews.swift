@@ -1,7 +1,9 @@
 import SwiftUI
 
 // 「直す」タブ（2026-11-12。前の「確認箱」）。記録を正しくするために本人が答えるものを、大事な順に1か所に並べる。
-// 上は「今たまっているもの」（無くなれば消える）、下は「いつでも開けるもの」。タブの数字は上の合計（タスクの候補は「タスク」の数字に入るので入れない）。
+// 上は「今たまっているもの」（無くなれば消える）、下は「いつでも開けるもの」。
+// 2026-11-13（施策 14）: タブの数字は「今日やる分」だけ（上から足して5で止める。まとめて OK できるものは1つと数える。fixBadge）。
+// 2026-11-13（施策 18）: 同じ画面への入口は、いつも1か所だけ（上の段が出ているあいだは「いつでも」に同じ入口を出さない）。
 
 extension Pipeline {
     /// 「直す」にたまっているものの数（大事な順）。reviewCount は声の見直しの数（記録をひととおり見るので、呼ぶ側が数えておく）
@@ -14,12 +16,31 @@ extension Pipeline {
             ("名前を付ける候補の声", newVoices.open.count),
             ("職場の自分の声", selfCandidateCount),
             ("話し手の疑い", speakerDoubtCount),
+            ("同じ人かも", samePersonGroups.count),
             ("見直したい声", reviewCount),
             ("名前を付けてほしい声", namelessVoiceCount),
             ("割れやすい言葉", splitWordCandidates().count),
             ("聞き間違いかも", misheardCount),
             ("今週の答え合わせ", answers),
         ]
+    }
+
+    /// 「直す」のタブの数字（施策 14。2026-11-13）: 今日やる分だけ。上の段から足して5で止める（画面の案内「1日に上から5つまで」）。
+    /// 母艦が sure の印を付けた職場の自分の声・話し手の疑いは、「まとめて OK」の1つと数える
+    func fixBadge(reviewCount: Int) -> Int {
+        let tenLeft: [SelfCandidate] = homePC.features.contains("selfcand") ? appFeeds.todayTenLeft() : []
+        var sureSelf = 0
+        for c in tenLeft where c.sure == true { sureSelf += 1 }
+        let sureDoubts = sureSelfDoubts.count
+        var counts: [Int] = []
+        for part in fixParts(reviewCount: reviewCount) {
+            switch part.name {
+            case "職場の自分の声": counts.append(NightReviewRules.collapsed(count: part.count, sure: sureSelf))
+            case "話し手の疑い": counts.append(NightReviewRules.collapsed(count: part.count, sure: sureDoubts))
+            default: counts.append(part.count)
+            }
+        }
+        return NightReviewRules.badge(counts, cap: FixView.dailyCap)
     }
 
     /// 職場の自分の声の確認（家の PC が対応しているときだけ。AppFeeds.swift）。
@@ -49,6 +70,8 @@ struct FixTab: View {
 struct FixView: View {
     @Environment(Pipeline.self) private var pipeline
     @State private var reviewCount = 0
+    /// 1日にやる数の目安（画面の案内とタブの数字）
+    static let dailyCap = 5
 
     private static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -72,7 +95,7 @@ struct FixView: View {
                 }
             } else {
                 Section {
-                    Text("1日に上から5つまでで十分です（5分ほど）。残りは明日に回して大丈夫です。")
+                    Text("1日に上から\(Self.dailyCap)つまでで十分です（5分ほど）。残りは明日に回して大丈夫です。タブの数字も、今日の\(Self.dailyCap)つまでを数えています（全部で \(total)）。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -103,14 +126,17 @@ struct FixView: View {
                         SelfCandidatesView(only: pipeline.appFeeds.todayTen())
                             .countsOpen("selfTen")
                     }
+                    NavigationLink("全部を見る（\(pipeline.appFeeds.visibleCandidates.count) 件）") {
+                        SelfCandidatesView()
+                    }
                 } header: {
                     Text("職場の自分の声の確認（今日の分）")
-                } footer: {
-                    Text("全部（\(pipeline.appFeeds.visibleCandidates.count) 件）は下の「いつでも」から開けます。")
                 }
             }
             // 話し手の疑い（家の PC から。2026-11-13。HomeFeeds.swift）。名前は自動では変えない
             SpeakerDoubtsSection()
+            // 同じ人かも（家の PC から。2026-11-13。SamePerson.swift）。押すまでは何も変えない
+            SamePersonSection()
             if reviewCount > 0 || unnamedToday > 0 {
                 Section("見直したい声（\(reviewCount)）") {
                     if reviewCount > 0 { NavigationLink("声を聞いて直す") { VoiceReviewView() } }
@@ -139,17 +165,23 @@ struct FixView: View {
                 } label: {
                     Label("今日の聞いて直す・学び直しの材料", systemImage: "ear")
                 }
-                NavigationLink {
-                    QuestionsView()
-                } label: {
-                    Label("AI からの質問・わかったこと帳", systemImage: "lightbulb")
+                // 上の段（答える）が出ているあいだは、同じ画面への入口をここに出さない（施策 18）
+                if count("AI からの質問") == 0 {
+                    NavigationLink {
+                        QuestionsView()
+                    } label: {
+                        Label("AI からの質問・わかったこと帳", systemImage: "lightbulb")
+                    }
                 }
-                NavigationLink {
-                    AnswerKeyView()
-                } label: {
-                    Label("答え合わせ（週5分）・聞き取りの数字", systemImage: "checkmark.seal")
+                if count("今週の答え合わせ") == 0 {
+                    NavigationLink {
+                        AnswerKeyView()
+                    } label: {
+                        Label("答え合わせ（週5分）・聞き取りの数字", systemImage: "checkmark.seal")
+                    }
                 }
-                if pipeline.homePC.features.contains("selfcand"), !pipeline.appFeeds.visibleCandidates.isEmpty {
+                if count("職場の自分の声") == 0, pipeline.homePC.features.contains("selfcand"),
+                   !pipeline.appFeeds.visibleCandidates.isEmpty {
                     NavigationLink {
                         SelfCandidatesView()
                     } label: {
@@ -188,5 +220,14 @@ struct FixView: View {
         .navigationTitle("直す")
         .countsOpen("confirmBox")
         .task(id: pipeline.people.flatMap(\.samples)) { reviewCount = pipeline.voiceReview().count }
+        // 同じ人かも・夜の読み直し（2026-11-13）を家の PC から読む。ためた答え（POST /feedback）もここで送る
+        .task {
+            await SamePersonBook.shared.refresh(pipeline.homePC)
+            await NightReviewBook.shared.refresh(pipeline)
+        }
+        .refreshable {
+            await SamePersonBook.shared.refresh(pipeline.homePC, force: true)
+            await NightReviewBook.shared.refresh(pipeline, force: true)
+        }
     }
 }

@@ -235,7 +235,9 @@ def read_vocab(base: Path) -> dict:
                       "category": str(item.get("category") or "").strip()[:20],
                       "count": count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else 0,
                       "last": str(item.get("last") or "").strip()[:10],
-                      "variants": [v.strip()[:40] for v in variants if isinstance(v, str) and v.strip()][:6]})
+                      "variants": [v.strip()[:40] for v in variants if isinstance(v, str) and v.strip()][:6],
+                      # 施策 14（2026-11-13）: 母艦の「まとめて OK」の印（省ける。true のときだけ付ける）
+                      **appfeeds.sure(item)})
         if len(items) >= VOCAB_LIMIT:
             break
     return {"available": True, "generated_at": str(data.get("generated_at") or ""), "items": items}

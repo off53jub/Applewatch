@@ -93,9 +93,12 @@ struct SpeakerDoubt: Codable, Identifiable, Equatable {
     var current: String
     /// self（自分かも）・other（別の人かも）
     var suggest: String
-    /// plaud-turn（PLAUD の区切り）・text（文の中身）
+    /// plaud-turn（PLAUD の区切り）・text（文の中身）・night（家の PC の夜の読み直し。2026-11-13）
     var why: String
     var score: Double
+    /// 母艦が「本人が見ればほぼ必ず OK する」と印を付けたもの（施策 14。省ける。true のときだけ入る）
+    var sure: Bool? = nil
+    var sure_why: String? = nil
     var id: String { line_time + "|" + suggest }
 }
 
@@ -155,6 +158,9 @@ enum HomeFeeds {
         var suggest: String?
         var why: String?
         var score: Double?
+        // 施策 14 の印（型が違っても行は落とさない）
+        var sure: LossyRow<Bool>?
+        var sure_why: LossyRow<String>?
     }
 
     /// 前後の空白を除いた文。空なら nil
@@ -290,10 +296,12 @@ enum HomeFeeds {
               let head = trimmed(raw.text_head), head.count <= 40,
               let current = trimmed(raw.current), current.count <= 20,
               let suggest = raw.suggest, suggest == "self" || suggest == "other",
-              let why = raw.why, why == "plaud-turn" || why == "text",
+              let why = raw.why, why == "plaud-turn" || why == "text" || why == "night",
               let score = raw.score, score.isFinite, score >= 0, score <= 1 else { return nil }
+        let sure: Bool = raw.sure?.value == true
+        let sureWhy: String? = sure ? String((trimmed(raw.sure_why?.value) ?? "").prefix(60)) : nil
         return SpeakerDoubt(day: day, conversation_start: start, line_time: time, text_head: head, current: current,
-                            suggest: suggest, why: why, score: score)
+                            suggest: suggest, why: why, score: score, sure: sure ? true : nil, sure_why: sureWhy)
     }
 
     /// GET /speaker-doubts の答え。200件まで（同じ行・同じ向きは初めのものだけ）
@@ -380,7 +388,11 @@ enum HomeFeeds {
     }
 
     static func whyLabel(_ why: String) -> String {
-        why == "plaud-turn" ? "PLAUD の区切りから" : "文の中身から"
+        switch why {
+        case "plaud-turn": "PLAUD の区切りから"
+        case "night": "夜の読み直しから"
+        default: "文の中身から"
+        }
     }
 
     /// 「11/12 09:30」
@@ -1152,6 +1164,10 @@ struct SpeakerDoubtRow: View {
             Text("今は「\(doubt.current)」→ \(HomeFeeds.suggestLabel(doubt.suggest))")
                 .font(.caption)
                 .foregroundStyle(doubt.suggest == "self" ? Color.accentColor : Color.orange)
+            if doubt.sure == true {
+                Text(NightReviewRules.sureLabel(doubt.sure_why))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
         }
     }
 }
@@ -1167,6 +1183,7 @@ struct SpeakerDoubtsView: View {
                 if list.isEmpty {
                     Text("確かめるものはありません").foregroundStyle(.secondary)
                 }
+                SpeakerDoubtBulkRow()
                 ForEach(list) { d in
                     NavigationLink { SpeakerDoubtView(doubt: d) } label: { SpeakerDoubtRow(doubt: d) }
                 }
@@ -1227,6 +1244,7 @@ struct SpeakerDoubtView: View {
                     Button("違う") {
                         player.stop()
                         Tally.add("spkdoubt.dismiss")
+                        NightReviewRules.noteDoubt(doubt, kept: false)
                         pipeline.homeFeeds.hideDoubt(doubt.id)
                         dismiss()
                     }
@@ -1245,7 +1263,10 @@ struct SpeakerDoubtView: View {
         }
         .onDisappear {
             player.stop()
-            if resolved { pipeline.homeFeeds.hideDoubt(doubt.id) }
+            if resolved {
+                NightReviewRules.noteDoubt(doubt, kept: true)
+                pipeline.homeFeeds.hideDoubt(doubt.id)
+            }
         }
         .sheet(isPresented: $fixing) {
             if let spot {
@@ -1311,6 +1332,7 @@ struct SpeakerDoubtsSection: View {
         let list = pipeline.homeFeeds.visibleDoubts
         if !list.isEmpty {
             Section {
+                SpeakerDoubtBulkRow()
                 ForEach(Array(list.prefix(5))) { d in
                     NavigationLink { SpeakerDoubtView(doubt: d) } label: { SpeakerDoubtRow(doubt: d) }
                 }
