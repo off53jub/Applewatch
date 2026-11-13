@@ -148,12 +148,15 @@ struct HelpNote: View {
 
 // MARK: - 今日
 
+/// 2026-11-13（施策 16）: 答えが先。いちばん上に今日の三つと提案1つ、次に「次の予定の前に」「夜の10秒」「気をつけること」（どれも、あるときだけ）。
+/// 録る・印・会議・ライブ字幕は、画面の下の1行にまとめた（どこまでめくっても見えるので、録音はいつも1回押すだけ）。
+/// 今日の会話・最近の発言・いまの様子は、畳んだ「今日の記録」の中に移した（なくした働きは無い）
 private struct TodayView: View {
     @Environment(Pipeline.self) private var pipeline
     @State private var showLive = false
     @State private var showHelp = false
-    /// 「いまの様子」を開いているか（いつもは畳む）
-    @AppStorage("todayStatusOpen") private var statusOpen = false
+    /// 「今日の記録」を開いているか（いつもは畳む）
+    @AppStorage("todayRecordOpen") private var recordOpen = false
 
     private static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -168,28 +171,24 @@ private struct TodayView: View {
         let talks = pipeline.conversations(on: today)
         NavigationStack {
             List {
-                recordSection()
-                // 困ったことがあるときだけ、上に出す
+                // (a) 今日の三つと提案1つ（MothershipFeeds.swift）
+                TodayAnswerCard()
+                // (b) 次の予定の前に（3時間以内に始まる予定があるときだけ）
+                PrepCardSection()
+                // (c) 夜の10秒（20時から翌朝まで、まだ答えていない日だけ）
+                NightMoodSection()
+                // (d) 困ったことがあるときだけ
                 alerts()
                 PCFeatureNotice()
-                // 朝の「昨日と今日」（2026-11-09。MorningBrief.swift）
+                // 朝の「昨日と今日」（畳んである。2026-11-09。MorningBrief.swift）
                 MorningBriefSection()
-                // 家の PC（母艦）からの提案を3つまで（2026-11-13。HomeFeeds.swift）。押すまでは何も変えない
-                ProposalCardsSection()
-                taskBook()
-                talkSection(today: today, talks: talks)
                 // 家の PC が書いている途中の下書き（仮。記録には入れない。2026-11-07。Drafts.swift）
                 DraftSection()
-                if !pipeline.lastLines.isEmpty {
-                    Section("最近の発言") {
-                        ForEach(Array(pipeline.lastLines.suffix(8).reversed().enumerated()), id: \.offset) { _, line in
-                            Text(line).font(.callout)
-                        }
-                    }
-                }
-                statusSection()
+                recordGroup(today: today, talks: talks)
             }
             .navigationTitle("今日")
+            .countsOpen("today")
+            .safeAreaInset(edge: .bottom, spacing: 0) { recordBar() }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("使い方", systemImage: "questionmark.circle") { showHelp = true }
@@ -201,38 +200,72 @@ private struct TodayView: View {
         }
     }
 
-    /// 録る・印・会議・ライブ字幕
-    private func recordSection() -> some View {
-        Section {
-            Button {
-                Task { await pipeline.toggleRecording() }
-            } label: {
-                Label(pipeline.isRecording ? "iPhone の録音を止める" : "iPhone で録音を始める",
-                      systemImage: pipeline.isRecording ? "stop.circle.fill" : "record.circle")
-                    .font(.title2)
-            }
-            .tint(pipeline.isRecording ? .red : .accentColor)
-            Button {
-                pipeline.addMark()
-            } label: {
-                Label("今のところに印を付ける", systemImage: "star")
-            }
-            if let mark = pipeline.lastMark {
-                Text("\(mark.formatted(date: .omitted, time: .shortened)) に印を付けました（前後1分の行に★）")
-                    .foregroundStyle(.secondary)
-            }
-            MeetingButton()
-            // ライブ字幕（2026-11-12。前は1つのタブだった）
-            Button {
-                showLive = true
-            } label: {
-                LabeledContent {
-                    Text(pipeline.liveOn ? "オン" : "")
+    /// 録る・印・会議・ライブ字幕を1行に（録音のボタンを大きく。ほかの3つは小さなボタン）
+    private func recordBar() -> some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 10) {
+                recordButton()
+                Button {
+                    pipeline.addMark()
                 } label: {
-                    Label("ライブ字幕", systemImage: "captions.bubble")
+                    Image(systemName: "star")
                 }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("今のところに印を付ける")
+                meetingButton()
+                Button {
+                    showLive = true
+                } label: {
+                    Image(systemName: pipeline.liveOn ? "captions.bubble.fill" : "captions.bubble")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel(pipeline.liveOn ? "ライブ字幕（オン）" : "ライブ字幕")
+            }
+            if let line = barNote() {
+                Text(line).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
         }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    private func recordButton() -> some View {
+        let on: Bool = pipeline.isRecording
+        return Button {
+            Task { await pipeline.toggleRecording() }
+        } label: {
+            Label(on ? "録音を止める" : "録音を始める", systemImage: on ? "stop.circle.fill" : "record.circle")
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(on ? Color.red : Color.accentColor)
+        .accessibilityLabel(on ? "iPhone の録音を止める" : "iPhone で録音を始める")
+    }
+
+    private func meetingButton() -> some View {
+        let inMeeting: Bool = pipeline.meeting != nil
+        return Button {
+            pipeline.setMeeting(!inMeeting)
+        } label: {
+            Image(systemName: inMeeting ? "person.3.fill" : "person.3")
+        }
+        .buttonStyle(.bordered)
+        .tint(inMeeting ? Color.orange : Color.accentColor)
+        .accessibilityLabel(inMeeting ? "会議モードを終える" : "会議モードを始める")
+    }
+
+    /// 下の1行の小さな文（会議中・印を付けた直後だけ）
+    private func barNote() -> String? {
+        if let meeting = pipeline.meeting {
+            let title: String = meeting.title.map { "・" + $0 } ?? ""
+            return "会議モード中（" + meeting.start.formatted(date: .omitted, time: .shortened) + " から" + title + "）"
+        }
+        if let mark = pipeline.lastMark, Date.now.timeIntervalSince(mark) < 600 {
+            return mark.formatted(date: .omitted, time: .shortened) + " に印を付けました（前後1分の行に★）"
+        }
+        return nil
     }
 
     /// 困ったこと（署名の期限・録音を休む場所・止まっているかも・ログインしていない）。無ければ何も出さない
@@ -266,99 +299,87 @@ private struct TodayView: View {
         }
     }
 
-    /// タスクの入口。期限の近いものを3つまで出す（押すと「タスク」タブへ）
-    private func taskBook() -> some View {
-        let book = pipeline.tasks
-        let open = book.open
-        let end = Calendar.current.startOfDay(for: .now).addingTimeInterval(86400)
-        let late = open.filter { ($0.due ?? .distantFuture) < end }.count
-        var summary = "まだ \(open.count) 件"
-        if late > 0 { summary += "・今日まで \(late)" }
-        if !book.candidates.isEmpty { summary += "・確かめ待ち \(book.candidates.count)" }
+    /// 今日の記録（今日の会話・最近の発言・いまの様子）。いつもは畳んでおく
+    private func recordGroup(today: String, talks: [ConversationLog.Conversation]) -> some View {
+        let summary: String = "会話 \(talks.count)・時計 \(pipeline.watchStatusNow)・待ち \(pipeline.pendingCount)"
         return Section {
-            Button {
-                pipeline.tab = .tasks
+            DisclosureGroup(isExpanded: $recordOpen) {
+                talkRows(today: today, talks: talks)
+                recentRows()
+                Text("いまの様子").font(.caption.bold()).foregroundStyle(.secondary)
+                statusRows()
             } label: {
-                LabeledContent {
-                    Text(summary)
-                } label: {
-                    Label("タスク", systemImage: "checklist")
-                }
+                LabeledContent("今日の記録", value: summary)
             }
-            ForEach(open.prefix(3)) { item in
-                HStack {
-                    Text(item.what).font(.callout).lineLimit(2)
-                    Spacer(minLength: 8)
-                    if let due = item.due {
-                        let text = Pipeline.taskDueText(due)
-                        Text(text).font(.caption)
-                            .foregroundStyle(text.hasSuffix("過ぎ") || text == "今日まで" ? Color.red : Color.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func talkRows(today: String, talks: [ConversationLog.Conversation]) -> some View {
+        if talks.isEmpty {
+            Text("今日の会話はまだありません。録音すると、話の切れ目ごとにここに出ます。").foregroundStyle(.secondary)
+        } else {
+            NavigationLink {
+                DayView(day: today)
+            } label: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("今日の会話").font(.caption.bold()).foregroundStyle(.secondary)
+                    ForEach(Array(talks.suffix(8).reversed().enumerated()), id: \.offset) { _, c in
+                        Text(ConversationLog.headingText(c))
+                            .font(.callout)
+                            .lineLimit(2)
+                    }
+                    if talks.count > 8 {
+                        Text("ほか \(talks.count - 8) 件").font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
         }
     }
 
-    private func talkSection(today: String, talks: [ConversationLog.Conversation]) -> some View {
-        Section("今日の会話") {
-            if talks.isEmpty {
-                Text("まだありません。録音すると、話の切れ目ごとにここに出ます。").foregroundStyle(.secondary)
-            } else {
-                NavigationLink {
-                    DayView(day: today)
-                } label: {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(talks.suffix(8).reversed().enumerated()), id: \.offset) { _, c in
-                            Text(ConversationLog.headingText(c))
-                                .font(.callout)
-                                .lineLimit(2)
-                        }
-                        if talks.count > 8 {
-                            Text("ほか \(talks.count - 8) 件").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
+    @ViewBuilder
+    private func recentRows() -> some View {
+        let lines: [String] = Array(pipeline.lastLines.suffix(8).reversed())
+        if !lines.isEmpty {
+            Text("最近の発言").font(.caption.bold()).foregroundStyle(.secondary)
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                Text(line).font(.callout)
             }
         }
     }
 
-    /// いまの様子（時計・マイク・待ち・抜け）。いつもは畳んでおく
-    private func statusSection() -> some View {
-        Section {
-            DisclosureGroup(isExpanded: $statusOpen) {
-                LabeledContent("時計", value: pipeline.watchStatusNow)
-                // iPhone で録っているマイク（外付けのマイクをつないだとき。2026-11-07。MicInput.swift）
-                if pipeline.isRecording {
-                    LabeledContent("iPhone のマイク", value: MicRoute.shared.text)
-                }
-                if let last = pipeline.watchDelays.entries.last {
-                    NavigationLink {
-                        WatchDelayView()
-                    } label: {
-                        LabeledContent("時計の遅れ", value: "直近 " + WatchDelayLog.text(last.arrival))
-                    }
-                }
-                LabeledContent("文字起こし待ち", value: "\(pipeline.pendingCount) 件")
-                NavigationLink {
-                    RecordingMapView()
-                } label: {
-                    let gaps = pipeline.ledger.map(for: Calendar.current.startOfDay(for: .now)).gaps
-                    LabeledContent("録音の抜け（今日）", value: gaps.isEmpty ? "なし" : "\(gaps.reduce(0) { $0 + $1.minutes })分")
-                }
-                if !pipeline.lastEngine.isEmpty {
-                    LabeledContent("直近の文字起こし", value: pipeline.lastEngine)
-                }
-                if !pipeline.message.isEmpty {
-                    Text(pipeline.message).foregroundStyle(.secondary)
-                }
+    /// いまの様子（時計・マイク・待ち・抜け）
+    @ViewBuilder
+    private func statusRows() -> some View {
+        LabeledContent("時計", value: pipeline.watchStatusNow)
+        // iPhone で録っているマイク（外付けのマイクをつないだとき。2026-11-07。MicInput.swift）
+        if pipeline.isRecording {
+            LabeledContent("iPhone のマイク", value: MicRoute.shared.text)
+        }
+        if let last = pipeline.watchDelays.entries.last {
+            NavigationLink {
+                WatchDelayView()
             } label: {
-                LabeledContent("いまの様子", value: "時計 \(pipeline.watchStatusNow)・待ち \(pipeline.pendingCount)")
+                LabeledContent("時計の遅れ", value: "直近 " + WatchDelayLog.text(last.arrival))
             }
+        }
+        LabeledContent("文字起こし待ち", value: "\(pipeline.pendingCount) 件")
+        NavigationLink {
+            RecordingMapView()
+        } label: {
+            let gaps = pipeline.ledger.map(for: Calendar.current.startOfDay(for: .now)).gaps
+            LabeledContent("録音の抜け（今日）", value: gaps.isEmpty ? "なし" : "\(gaps.reduce(0) { $0 + $1.minutes })分")
+        }
+        if !pipeline.lastEngine.isEmpty {
+            LabeledContent("直近の文字起こし", value: pipeline.lastEngine)
+        }
+        if !pipeline.message.isEmpty {
+            Text(pipeline.message).foregroundStyle(.secondary)
         }
     }
 }
 
-/// 「今日」の使い方（前は画面の途中に長い説明として出していたもの）
+// 「今日」の使い方（前は画面の途中に長い説明として出していたもの）
 private struct TodayHelpView: View {
     let onClose: () -> Void
 
@@ -366,7 +387,7 @@ private struct TodayHelpView: View {
         NavigationStack {
             List {
                 Section("下のタブ") {
-                    Text("今日: 録る・印を付ける・今日の会話。困ったことがあるときだけ「気をつけること」が上に出ます。")
+                    Text("今日: いちばん上に今日の三つと提案。録る・印・会議・ライブ字幕は画面の下の1行です。今日の会話といまの様子は「今日の記録」を開くと出ます。困ったことがあるときだけ「気をつけること」が出ます。")
                     Text("タスク: やること。上の「仕事のまとめ」から職場の Claude の答えを取り込めます。")
                     Text("直す: AI からの質問・名前を付ける声・聞き間違いなど、答えると記録が正しくなるもの。タブの数字がたまっている数です。")
                     Text("記録: 言葉や名前で探す・日ごとに読む。上の切り替えで、人・場所・お金も見られます。")
@@ -597,6 +618,7 @@ private struct DaysPage: View {
         }
         .onChange(of: byMeaning) { if query.count >= 2 { run() } }
         .navigationTitle("記録")
+        .countsOpen("recordsDays")  // 開いた回数（2026-11-13。施策 17）
         .onAppear { days = pipeline.recordedDays() }
         .refreshable { days = pipeline.recordedDays() }
         // ほかの端末から記録が届いたら出し直す
@@ -630,10 +652,10 @@ private struct PeoplePage: View {
             PeopleView()
         } else {
             List {
+                // 切り替えは設定（くわしい設定の「話者」）だけに置く（2026-11-13。施策 18。同じものへの入口は1つ）
                 Section {
-                    Toggle("話している人を聞き分ける", isOn: Binding(
-                        get: { pipeline.speakerLabelsOn },
-                        set: { pipeline.speakerLabelsOn = $0 }))
+                    LabeledContent("話している人を聞き分ける", value: "オフ")
+                    NavigationLink("設定で切り替える") { DetailedSettingsView() }
                 } footer: {
                     Text("オンにすると、記録の行に「[自分]」「[人物1]」などを付け、ここに話した相手が並びます（iPhone の中だけで比べます）。")
                 }
@@ -658,9 +680,9 @@ private struct PlacesPage: View {
                         LabeledContent("登録した場所", value: "\(pipeline.places.places.count) か所")
                     }
                 } else {
-                    Toggle("場所を記録する", isOn: Binding(
-                        get: { pipeline.places.isOn },
-                        set: { pipeline.places.isOn = $0 }))
+                    // 切り替えは設定（くわしい設定の「会話のまとめ」）だけに置く（2026-11-13。施策 18）
+                    LabeledContent("場所を記録する", value: "オフ")
+                    NavigationLink("設定で切り替える") { DetailedSettingsView() }
                 }
             } footer: {
                 Text("職場にした場所では、職場の人の声と職場の言葉で照らし合わせます。")
@@ -699,14 +721,9 @@ private struct SettingsView: View {
         self.onClose = onClose
     }
     @AppStorage(AppLock.key) private var appLock = false
-    @AppStorage("morningCheck") private var morningCheck = true
     @State private var exportNote: String?
-    @AppStorage(Storage.japanTimeKey) private var japanTime = false
-    @AppStorage("secondOpinion") private var secondOpinion = false
-    @AppStorage(Summarizer.pcLLMKey) private var pcLLMForWork = false
-    /// LocalModel.modeKey と同じ名前
-    @AppStorage("localModelMode") private var localModelMode = LocalModel.Mode.fallback.rawValue
-    @AppStorage(Pipeline.autoAsideKey) private var autoAside = true
+    @AppStorage(ClaudeRoute.useKey) private var useClaude = true
+    @AppStorage(ClaudeRoute.workKey) private var claudeForWork = true
 
     var body: some View {
         NavigationStack {
@@ -722,10 +739,11 @@ private struct SettingsView: View {
                 if part == .check {
                     checkPage()
                 } else {
-                    setupPage(pipeline.settings)
+                    everydayPage()
                 }
             }
             .navigationTitle(part == .check ? "点検" : "設定")
+            .countsOpen("settings")  // 開いた回数（2026-11-13。施策 17）
             .toolbar {
                 if let onClose {
                     ToolbarItem(placement: .confirmationAction) { Button("閉じる", action: onClose) }
@@ -752,6 +770,8 @@ private struct SettingsView: View {
         }
         // 実機でまだ確かめていない新しい動き（2026-11-10。Checklist.swift。前は「今日」に出していた）
         ChecklistSection()
+        // 精度の通信簿・あまり開かれていない画面（2026-11-13。施策 12・21。MothershipFeeds.swift）
+        MothershipCheckSection()
         Section {
             NavigationLink("登録の控え") { BackupView() }
             NavigationLink("記録の掃除") { CleanupView() }
@@ -775,16 +795,63 @@ private struct SettingsView: View {
         }
     }
 
-    /// 設定（ふだん触らないもの）
+    /// 設定の「ふだん」（本人がふだん触るものだけ。2026-11-13。施策 18）と、ほかの全部の入口「くわしい設定」
     @ViewBuilder
-    private func setupPage(_ source: TranscriptionSettings) -> some View {
+    private func everydayPage() -> some View {
+        Section {
+            Toggle("開くときに Face ID", isOn: $appLock)
+            // 朝の「昨日と今日」の知らせと時刻（MorningBrief.swift）
+            MorningBriefSettingsRows()
+            // 夜の10秒の知らせと時刻（初めはオフ。MothershipFeeds.swift）
+            NightMoodSettingsRows()
+            // Claude（家の PC 経由。Claude.swift）
+            Toggle("Claude を使う", isOn: $useClaude)
+                .onChange(of: useClaude) { _, _ in ClaudeRoute.resetPauses() }
+            Toggle("職場の会話も Claude で", isOn: $claudeForWork)
+                .disabled(!useClaude)
+                .onChange(of: claudeForWork) { _, _ in ClaudeRoute.resetPauses() }
+        } header: {
+            Text("ふだん")
+        } footer: {
+            Text("Face ID をオンにすると、アプリが前に出るたびに確かめるまで記録を隠します（録音と文字起こしは続きます）。")
+        }
+        Section {
+            NavigationLink {
+                DetailedSettingsView()
+            } label: {
+                Label("くわしい設定", systemImage: "slider.horizontal.3")
+            }
+        } footer: {
+            Text("Google ドライブ・同期・Apple Watch・文字起こし・話者・言語モデル・音声・ほかのアプリとつなぐ、など。")
+        }
+    }
+}
+
+/// くわしい設定（ふだん触らないもの。2026-11-13 に「設定」から分けた。記録の「人」「場所」の切り替えも、ここが入口）
+private struct DetailedSettingsView: View {
+    @Environment(Pipeline.self) private var pipeline
+    @AppStorage("morningCheck") private var morningCheck = true
+    @AppStorage(Storage.japanTimeKey) private var japanTime = false
+    @AppStorage("secondOpinion") private var secondOpinion = false
+    @AppStorage(Summarizer.pcLLMKey) private var pcLLMForWork = false
+    /// LocalModel.modeKey と同じ名前
+    @AppStorage("localModelMode") private var localModelMode = LocalModel.Mode.fallback.rawValue
+    @AppStorage(Pipeline.autoAsideKey) private var autoAside = true
+
+    var body: some View {
+        List {
+            sections(pipeline.settings)
+        }
+        .navigationTitle("くわしい設定")
+        .countsOpen("detailedSettings")
+    }
+
+    @ViewBuilder
+    private func sections(_ source: TranscriptionSettings) -> some View {
         @Bindable var settings = source
                 // 守り（2026-11-06）
                 Section {
-                    Toggle("開くときに Face ID", isOn: $appLock)
                     Toggle("毎朝、前の日の点検を知らせる", isOn: $morningCheck)
-                    // 朝の「昨日と今日」の知らせと時刻（2026-11-09。前の「朝の読み上げ」。MorningBrief.swift）
-                    MorningBriefSettingsRows()
                     Toggle("もう1つの言語モデルでも見比べる（充電中か開いているとき）", isOn: $secondOpinion)
                     // 2026-11-06
                     Toggle("職場の会話は、家の PC の言語モデルで作る（PC に Ollama があるとき）", isOn: $pcLLMForWork)
@@ -796,7 +863,7 @@ private struct SettingsView: View {
                 } header: {
                     Text("守り")
                 } footer: {
-                    Text("Face ID をオンにすると、アプリが前に出るたびに確かめるまで記録を隠します（録音と文字起こしは続きます）。")
+                    Text("Face ID と朝の知らせは、「設定」のいちばん上の「ふだん」にあります。")
                 }
 
                 Section("Google ドライブ") {
@@ -950,7 +1017,8 @@ private struct SettingsView: View {
                 }
 
                 // Claude（家の PC 経由。2026-11-13。Claude.swift）
-                ClaudeSettingsSection()
+                // スイッチの2つは「ふだん」にある。ここは今月使った額など
+                ClaudeSettingsSection(showSwitches: false)
 
                 Section {
                     Toggle("音声をドライブにも保存", isOn: Binding(
@@ -974,8 +1042,9 @@ private struct SettingsView: View {
                 Section("ほかのアプリとつなぐ") {
                     NavigationLink("カレンダー・連絡先・移動・睡眠") { IntegrationsView() }
                     NavigationLink("ロック画面・時計の文字盤から使う") { ShortcutsHelpView() }
+                    // ショートカットのオートメーションでアプリを開いた記録を残す（2026-11-13。施策 8。AppUsage.swift）
+                    NavigationLink("アプリを開いた記録の使い方") { AppUsageHowToView() }
                 }
 
-                // 点検・控え・掃除は、上の「点検」に移した（2026-11-12）
     }
 }

@@ -27,6 +27,7 @@ struct DayView: View {
             .background(.bar)
         }
         .navigationTitle(day)
+        .countsOpen("dayView")  // 開いた回数（2026-11-13。施策 17）
         .toolbar {
             NavigationLink {
                 MinutesView(day: day)
