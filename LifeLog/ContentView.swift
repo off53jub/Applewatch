@@ -279,8 +279,11 @@ private struct TodayView: View {
         let noLogin = pipeline.email == nil
         // 家の PC と 6 時間やり取りできていない（2026-11-15。強化案 38。PCSilence.swift）
         let pcQuiet: String? = PCSilence.todayLine(configured: pipeline.homePC.isConfigured, last: PCSilence.lastContactNow(), now: .now)
-        if sign != nil || held || !stale.isEmpty || noLogin || pcQuiet != nil {
+        // 期限が3日以内の決めごと（2026-11-15。強化案 61。PagesFeeds.swift）
+        let decisionsDue: [DecisionItem] = PagesBook.shared.dueSoon()
+        if sign != nil || held || !stale.isEmpty || noLogin || pcQuiet != nil || !decisionsDue.isEmpty {
             Section("気をつけること") {
+                DecisionDueRows(items: decisionsDue)
                 if let pcQuiet {
                     Label(pcQuiet, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
                 }
@@ -667,6 +670,7 @@ private struct PeoplePage: View {
             PeopleView()
         } else {
             List {
+                PeoplePagesSection()  // 人のページ（2026-11-15。強化案 53。聞き分けが切でも見られる）
                 // 切り替えは設定（くわしい設定の「話者」）だけに置く（2026-11-13。施策 18。同じものへの入口は1つ）
                 Section {
                     LabeledContent("話している人を聞き分ける", value: "オフ")
@@ -702,6 +706,7 @@ private struct PlacesPage: View {
             } footer: {
                 Text("職場にした場所では、職場の人の声と職場の言葉で照らし合わせます。")
             }
+            PlacePagesSection()  // 行った場所のページ（2026-11-15。強化案 55。PagesFeeds.swift。写しがあるときだけ）
             Section {
                 // 行ったお店（2026-11-08。ShopVisitViews.swift）
                 NavigationLink {

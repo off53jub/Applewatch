@@ -94,6 +94,8 @@ enum DemoData {
         installOneTimeline(base: base, now: now, day: f.string(from: now),
                            yesterday: f.string(from: now.addingTimeInterval(-86400)), first: a)
         installSettle(base: base, now: now, day: f.string(from: now), yesterday: f.string(from: now.addingTimeInterval(-86400)))
+        installPages(base: base, now: now, day: f.string(from: now), yesterday: f.string(from: now.addingTimeInterval(-86400)),
+                     tomorrow: f.string(from: now.addingTimeInterval(86400)))
         // 効き目の数の見本
         Tally.add("fix.proposed", 6)
         Tally.add("fix.kept", 4)
@@ -412,6 +414,73 @@ enum DemoData {
         }
         // 録り方の実験: 今日が2日目の見本
         RecordingExperiment.start = yesterday
+    }
+
+    /// 人・話題の糸・場所・決めごとのページの見本（2026-11-15。PagesFeeds.swift）。名前・お店・話・決めごとはすべて作り物。
+    /// 長いクロージャの式は CI が落ちるので、明示的なループと型で書く
+    private static func installPages(base: URL, now: Date, day: String, yesterday: String, tomorrow: String) {
+        let encoder = JSONEncoder()
+        let stamp: String = MothershipOutbox.isoString(now)
+        // 人のページ（「見本 花子」は話した相手の見本と同じ名前）
+        var hanako = PersonPage(id: "pp-demo000000001", name: "見本 花子")
+        hanako.group = "仕事"
+        hanako.aliases = ["花子さん"]
+        hanako.last_talk = PageTalk(day: day, summary: "朝の打ち合わせで、見本の資料を昼までに送る話", source: "app")
+        hanako.last_line = yesterday
+        hanako.line_7d = 4
+        hanako.line_30d = 18
+        hanako.talks_30d = 6
+        hanako.topics = [PageDated(text: "見本の資料の締め切り", day: day), PageDated(text: "来月の見本の旅行の宿", day: yesterday)]
+        hanako.promises = [PagePromise(text: "見本の資料を昼までに送る", by: "them", day: day, source: "talk"),
+                           PagePromise(text: "会議室を取る", by: "me", day: day, source: "task")]
+        hanako.likes = ["甘いものが好き（見本）"]
+        hanako.next_line = "旅行の宿は決まりましたか（見本）"
+        hanako.next_why = "来月の旅行の宿をまだ決めていない"
+        hanako.upcoming = PageUpcoming(day: tomorrow, time: "15:00", title: "見本の会議")
+        var taro = PersonPage(id: "pp-demo000000002", name: "見本 太郎")
+        taro.group = "友人"
+        taro.last_talk = PageTalk(day: yesterday, summary: "LINE「週末どうする？」", source: "line")
+        taro.line_7d = 2
+        taro.line_30d = 9
+        let people = PeoplePagesFeed(generated_at: stamp, items: [hanako, taro])
+        if let data = try? encoder.encode(people) {
+            try? data.write(to: base.appendingPathComponent(PagesBook.peopleFile), options: .atomic)
+        }
+        // 話題の糸（仕事と自分の予定を1本ずつ）
+        var work = ThreadPage(id: "th-demo000000001", title: "見本案件", kind: "work", status: "open", last_day: day)
+        work.decided = [PageDated(text: "締め切りは金曜（見本）", day: yesterday)]
+        work.open = [PageDated(text: "見積もりの確認（見本）", day: day)]
+        work.next = "見本の資料を直して送る"
+        work.days = [day, yesterday]
+        work.source = "claude"
+        var trip = ThreadPage(id: "th-demo000000002", title: "見本の旅行", kind: "private", status: "settled", last_day: yesterday)
+        trip.decided = [PageDated(text: "宿は予約した（見本）", day: yesterday)]
+        trip.days = [yesterday]
+        let threads = ThreadsFeed(generated_at: stamp, items: [work, trip])
+        if let data = try? encoder.encode(threads) {
+            try? data.write(to: base.appendingPathComponent(PagesBook.threadsFile), options: .atomic)
+        }
+        // 場所のページ
+        var cafe = PlacePage(id: "pl-demo000000001", name: "見本カフェ", sure: true, visit_days: 2, visits: 3, last_day: day)
+        cafe.spent = 1280
+        cafe.with = ["見本 花子"]
+        cafe.recent = [PlaceVisit(day: day, time: "12:10–12:50", amount: 780, with: ["見本 花子"], talk: "見本の資料の話"),
+                       PlaceVisit(day: yesterday, time: "09:00–09:20", amount: nil, with: [], talk: "")]
+        let places = PlacePagesFeed(generated_at: stamp, items: [cafe])
+        if let data = try? encoder.encode(places) {
+            try? data.write(to: base.appendingPathComponent(PagesBook.placesFile), options: .atomic)
+        }
+        // 決めごと（1つは明日が期限＝今日の「気をつけること」に出る）
+        let options: [DecisionOption] = [DecisionOption(n: 1, label: "やめる（見本）", detail: "何もしない", is_default: true),
+                                         DecisionOption(n: 2, label: "続ける（見本）", detail: "月 500 円", is_default: false)]
+        let soon = DecisionItem(id: "d-demo00000001", title: "見本の月額サービスを続けるか", deadline: tomorrow,
+                                defaultAnswer: "やめる（見本）", options: options, background: "見本の背景の説明です。", opened: yesterday)
+        let later = DecisionItem(id: "d-demo00000002", title: "見本の音声をいつまで残すか", deadline: nil,
+                                 defaultAnswer: "全部残す（見本）", options: [], background: "", opened: nil)
+        let decisions = DecisionsFeed(generated_at: stamp, items: [soon, later])
+        if let data = try? encoder.encode(decisions) {
+            try? data.write(to: base.appendingPathComponent(PagesBook.decisionsFile), options: .atomic)
+        }
     }
 
     /// PayPay のスクショから読めたことにする行（PayPayShotView の見本。1つは「もうある」）
