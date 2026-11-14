@@ -116,6 +116,18 @@ claude-config.json の "stopped"・"daily_caps" で用途ごとに止める（40
 2026-11-15（強化案 58・60・62。中身は drafts.py・relay/。features に "replies"・"timeledger"）: GET /replies（LINE の返事と
 メールの下書き。何も送らない）・GET /time-ledger（時間の家計簿）。relay/ は別の機械で動かす見張り（ここでは動かさない）
     python v15checks_actions.py  これを、一時フォルダで確かめる
+2026-11-15（強化案 50・51・52。中身は livecoach.py。features に "meetinglive"・"coach"・"tension"・"hrsamples"）:
+会議モードのあいだ、区切りの文から「決まったこと・自分の宿題・聞き忘れ」を 1 分に 1 回まで更新（GET /meeting-live?since=・
+POST /meeting-live/state）・GET /coach・GET /tension（母艦の写し）・POST /health/hr（時計の心拍を分ごとに母艦へ）
+    python v15checks_live.py  これを、一時フォルダと作り物の Claude で確かめる
+2026-11-15（強化案 53・54・55・61。中身は pages.py。features に "peoplepages"・"threads"・"placepages"・"decisions"）:
+GET /people-pages・/threads・/place-pages・/decisions（母艦の人・話題の糸・場所・決めごとのページ）と
+POST /decisions/answer（アプリで選んだ決めごとを母艦の inbox に 1 行。帳面に書くのは母艦）
+    python v15checks_pages.py  これを、一時フォルダで確かめる
+2026-11-15（強化案 56・57。中身は voices.py・quality.py・canonical.py。features に "canonical"）: 区間ごとの声の特徴を
+HOME/voices に置き、日をまたぐ「同じ人かも」と「名前のある人かも」を GET /same-person の "across"・"maybe" に足す。
+GET /canonical?day=（母艦の 1 日の正本）
+    python v15checks_voices.py  これを、一時フォルダと作り物の声の特徴で確かめる
 """
 
 from __future__ import annotations
@@ -162,6 +174,7 @@ import claude
 import askmother
 import mothersearch  # 2026-11-15（強化案 42）: 母艦の文も意味で探す（semantic.db の別の表）
 import promises
+import livecoach  # 2026-11-15（強化案 50〜52）: 会議の相棒（その場版）・話し方コーチ・緊張した場面・心拍の分ごとの記録
 import quality  # 2026-11-13（施策 9・10・11）: 品質の記録・夜の流れ・同じ人かも・夜の読み直し（中身は quality.py ほか）
 
 VERSION = 10
@@ -2119,6 +2132,12 @@ def features(engines: list | None = None) -> list[str]:
     # GET /rollout・/checks・/costs（2026-11-15。強化案 36・37・41。settle.py）
     found.extend(mothership.settle.FEATURES)
     found.extend(mothership.drafts.FEATURES)  # GET /replies・/time-ledger（2026-11-15。強化案 58・60。drafts.py）
+    # GET /meeting-live・/coach・/tension と POST /meeting-live/state・/health/hr（2026-11-15。強化案 50〜52。livecoach.py）
+    found.extend(livecoach.features())
+    # GET /people-pages・/threads・/place-pages・/decisions と POST /decisions/answer（2026-11-15。強化案 53・54・55・61。pages.py）
+    found.extend(mothership.pages.FEATURES)
+    # GET /canonical?day=（2026-11-15。強化案 57。canonical.py）
+    found.extend(mothership.canonical.features())
     # POST /claude・GET /claude/usage（鍵があり、今月の上限に届いていないときだけ。2026-11-13）
     if claude.available():
         found.append("claude")
@@ -2276,6 +2295,9 @@ def run_job(path: Path, params: dict, name: str, draft=None) -> tuple[dict, dict
                                       f"後で受け取る文字起こし {name}: " + ("（CPU のモデルだけ）" if cpu_only else ""), "job",
                                       started, on_draft=draft, cpu_only=cpu_only)
     lines = reply.get("lines") or []
+    # 2026-11-15（強化案 50）: 会議モードのあいだだけ、区切りの文を会議の相棒にためる（受け取った時刻と録音の時刻つき）
+    meta = (App.jobs.jobs.get(name) if App.jobs is not None else None) or {}
+    livecoach.feed(lines, meta.get("queued_at"), meta.get("times"))
     # 2026-11-13（精6）: 食い違いの大きい行は、Claude に候補の番号を選んでもらう（使えなければ多数決の文のまま）
     judged = judge_job(lines, list(params.get("hints") or []), params.get("work"), name)
     if judged and judged["asked"]:
@@ -2805,13 +2827,17 @@ class Handler(BaseHTTPRequestHandler):
                 quality.http_get(self, url)
             return
         if path not in ("/hello", "/train-status", "/jobs", "/index/status", "/watch-route", "/claude/usage") \
-                and path not in mothership.GETS and path not in promises.GETS and not path.startswith("/jobs/"):
+                and path not in mothership.GETS and path not in promises.GETS and path not in livecoach.GETS \
+                and not path.startswith("/jobs/"):
             self.send_json(404, {"error": "not found"})
             return
         if not self.authorized():
             return
         if path in promises.GETS:  # 2026-11-13（施策 13）: 会話のあとの約束
             promises.http_get(self)
+            return
+        if path in livecoach.GETS:  # 2026-11-15（強化案 50〜52）: 会議の相棒・話し方コーチ・緊張した場面
+            livecoach.http_get(self, path, url.query, mothership.home(load_config()))
             return
         if path == "/claude/usage":  # 2026-11-13: 今月の Claude の値段（鍵は返さない）
             claude.http_usage(self)
@@ -2876,6 +2902,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path.startswith("/dash/ops/"):  # 版 7（ops）: 見守りの画面のボタン（鍵を入れる・テスト通知など）
             ops.dash_post(self, url)
+            return
+        if url.path in livecoach.POSTS:  # 2026-11-15（強化案 50・52）: 会議モードの様子・心拍の分ごとの記録
+            if self.authorized():
+                livecoach.http_post(self, url.path, mothership.home(load_config()), log)
             return
         if url.path in promises.POSTS or url.path in askmother.POSTS:  # 2026-11-13（施策 13・15）
             if self.authorized():
@@ -3060,6 +3090,7 @@ class Handler(BaseHTTPRequestHandler):
                 union = (query.get("vad") or [""])[0] == "union"
                 reply, _ = transcribe_reply(self.engine, audio, segments, hints, prompt, weights, enhance, union,
                                             f"{self.client_address[0]} から ", "transcribe", started)
+                livecoach.feed(reply.get("lines"), started)  # 2026-11-15（強化案 50）: 会議モードのあいだだけためる
             except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
                 log(f"文字にできませんでした: {error!r}")
                 self.send_json(500, {"error": str(error)})
@@ -3175,6 +3206,10 @@ def serve(engine_factory, port: int, threads: int = 4, watch_port: int = watchro
         promises.start(HOME, lambda: App.records, lambda: ops.O.pusher if ops.O.started else None, log, load_config)
     except Exception as error:  # noqa: BLE001
         log(f"約束の見回りを始められませんでした: {type(error).__name__}")
+    try:  # 2026-11-15（強化案 50）: 会議の相棒（その場版）
+        livecoach.start(HOME, log)
+    except Exception as error:  # noqa: BLE001
+        log(f"会議の相棒を始められませんでした: {type(error).__name__}")
     # 版 10: 時計の外の道（127.0.0.1 だけで待つ、預けるだけの別の受け口）。番号が使われていれば無しで続ける
     watch = False
     if watch_port > 0:

@@ -15,6 +15,9 @@ GET /same-person（features の "sameperson"）→
      "people": [{"id": "12", "name": "人物12", "lines": int, "seconds": float,
                  "samples": [{"time": ISO, "text": str(≤40), "audio": str, "start": float, "end": float}](≤3)}](2〜4)}](≤20)}](≤3)}
   まだ作っていない・作れないときは {"available": false, "reason": …}。
+  2026-11-15（強化案 56。voices.py）: 省ける "across"（日をまたぐ組。上の組と同じ形に "day"（いちばん新しい日）・
+  "days"・人ごとの "days" を足したもの・≤20）と "maybe"（名前のある人かも。{"id", "day", "score", "margin",
+  "person": 上の人の形, "named": {"id", "name"}}・≤20）を quality.http_get が足す。
 """
 
 from __future__ import annotations

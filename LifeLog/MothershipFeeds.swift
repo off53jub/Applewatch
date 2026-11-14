@@ -630,6 +630,7 @@ enum MothershipOutbox {
         case "feedback": return "feedback"
         case "mood": return "mood"
         case "app-usage": return "appusage"
+        case "decisions/answer": return "decisions"  // 決めごとの答え（2026-11-15。強化案 61。PagesFeeds.swift）
         default: return path
         }
     }
@@ -1375,6 +1376,7 @@ struct PrepCardSection: View {
         if let item = pipeline.mothershipFeeds.nextPrep() {
             Section {
                 PrepCard(item: item)
+                PrepPeopleLinks(names: item.people)  // 相手の人のページ（2026-11-15。強化案 53。PagesFeeds.swift）
             } header: {
                 Text("次の予定の前に")
             }

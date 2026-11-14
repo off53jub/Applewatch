@@ -63,6 +63,18 @@ struct WatchInfo: Codable {
         var lines: [String]?
     }
     var draft: Draft?
+
+    /// 会議の相棒（会議モードの最中と、終わって 30 分まで。2026-11-15。iPhone の MeetingLive.swift）
+    struct Meeting: Codable {
+        var start: Double
+        var on: Bool?
+        var decided: Int?
+        var homework: Int?
+        var unasked: Int?
+        var items: [String]?
+        var updated: Double?
+    }
+    var meeting: Meeting?
 }
 
 /// 時計の画面の中身（頼まれごと・次の予定・さっきの会話・聞く・朝の読み上げ）を持つ。

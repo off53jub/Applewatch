@@ -10,6 +10,11 @@
   3. 夜の読み直し（nightreview.py）→ night_review_items
   どれが失敗しても、ほかは続ける。済んだ日は HOME\\quality-night.json に覚える（同じ夜に2回しない）。
 - GET /same-person（features の "sameperson"。?refresh=1 で今日と昨日を裏で作り直す）・GET /night-review（"nightreview"）。
+- 2026-11-15（強化案 56。voices.py）: 夜の流れの頭に「声の特徴を置く」（直近 7 日のまだ測っていない区間。30 分まで）と
+  「日をまたぐ組・名前のある人かも」を作る段を足した。昼（08:30〜18:00）と夜の枠の外の 00:00〜01:00・05:00 まででも、
+  30 分に 1 回、今日と昨日の新しい区間だけを測り（3 分まで）作り直す。1 日の組（sameperson.py）は置いてある特徴を使い、
+  無い区間だけを測る。GET /same-person に "across"・"maybe" を足して返す。quality-daily.json に省ける
+  "same_person_across"・"same_person_maybe"（数）を足す。
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ import claude
 import judgecheck
 import nightreview
 import sameperson
+import voices
 
 FILE = "quality-daily.json"
 NIGHT_FILE = "quality-night.json"
@@ -36,6 +42,9 @@ CHECK_EVERY = 600.0
 AGREE_BACK = 3                    # 審判と PLAUD の合い方は、PLAUD が遅れて届くので 3 日前まで測り直す
 GETS = ("/same-person", "/night-review")
 FIELDS = ("judge_calls", "judge_agree_plaud", "night_review_items", "same_person_groups", "promise_alerts")
+VOICES_NIGHT_BUDGET = 1800.0      # 夜に声の特徴を測る時間の上限（秒）
+VOICES_TICK_BUDGET = 180.0        # 昼の 1 回の上限（秒）
+VOICES_EVERY = 1800.0             # 昼に測り直す間（秒）
 
 _lock = threading.Lock()
 
@@ -49,6 +58,8 @@ class State:
     log: Callable[[str], None] = staticmethod(lambda _m: None)
     thread: threading.Thread | None = None
     refreshing = False
+    voices_at = 0.0          # 昼に最後に声の特徴を測った時刻
+    voices_busy = False
 
 
 # MARK: - quality-daily.json
@@ -127,6 +138,38 @@ def find_audio(name: str) -> Path | None:
     return None
 
 
+def cached(day: str) -> tuple[Callable, Callable]:
+    """その日の (find_audio, embed)。embed は置き場所（voices.py）にある区間を測り直さない"""
+    names: dict[str, str] = {}
+
+    def find(name: str) -> Path | None:
+        found = find_audio(name)
+        if found is not None:
+            names[str(found)] = name
+        return found
+
+    def embed(path: Path, ranges: list[tuple[float, float]]) -> list:
+        return voices.cached_embed(State.home, day, names.get(str(path)), path, ranges, State.embed)
+
+    return find, embed
+
+
+def run_voices(days: int, budget: float, today: datetime.date | None = None) -> dict | None:
+    """直近 days 日のまだ測っていない区間を測り（budget 秒まで）、日をまたぐ組・名前のある人かもを作り直す。数だけを返す"""
+    if State.home is None or State.store is None or State.embed is None or State.voices_busy:
+        return None
+    State.voices_busy = True
+    try:
+        today = today or datetime.date.today()
+        added = voices.update_recent(State.home, State.store, find_audio, State.embed, days, budget, today)
+        built = voices.run(State.home, State.store, State.log, today)
+        update_day(State.home, today.isoformat(), {"same_person_across": len(built["across"]),
+                                                   "same_person_maybe": len(built["maybe"])})
+        return {"added": added["added"], "across": len(built["across"]), "maybe": len(built["maybe"])}
+    finally:
+        State.voices_busy = False
+
+
 def judge_stats(home: Path, day: str, base: Path | None) -> dict:
     values: dict = {"judge_calls": claude.LEDGER.day_calls(day, claude.JUDGE_PURPOSE)}
     if base is not None:
@@ -137,7 +180,7 @@ def judge_stats(home: Path, day: str, base: Path | None) -> dict:
     return values
 
 
-def run_night(today: datetime.date | None = None, steps: tuple = ("judge", "sameperson", "night")) -> dict:
+def run_night(today: datetime.date | None = None, steps: tuple = ("judge", "voices", "sameperson", "night")) -> dict:
     """昨日の分の夜の流れ（済んだ段は飛ばす）。数だけを返す"""
     home = State.home
     if home is None:
@@ -162,9 +205,18 @@ def run_night(today: datetime.date | None = None, steps: tuple = ("judge", "same
             _mark_done(home, day, "judge")
         except Exception as error:  # noqa: BLE001
             log(f"品質の記録（審判）を書けませんでした: {type(error).__name__}")
+    if "voices" in steps and "voices" not in done and State.embed is not None:
+        try:
+            got = run_voices(voices.WINDOW, VOICES_NIGHT_BUDGET, today)
+            if got is not None:
+                out["voices"] = got
+                _mark_done(home, day, "voices")
+        except Exception as error:  # noqa: BLE001
+            log(f"声の名寄せを作れませんでした: {type(error).__name__}")
     if "sameperson" in steps and "sameperson" not in done and State.embed is not None:
         try:
-            groups = sameperson.run_day(home, State.store, day, find_audio, State.embed, log)
+            find, embed = cached(day)
+            groups = sameperson.run_day(home, State.store, day, find, embed, log)
             if groups is not None:
                 update_day(home, day, {"same_person_groups": groups})
                 out["sameperson"] = groups
@@ -187,11 +239,22 @@ def in_window(moment: datetime.datetime) -> bool:
     return NIGHT_START <= moment.hour < NIGHT_END
 
 
+def voices_tick(moment: datetime.datetime | None = None) -> dict | None:
+    """夜の流れの外で、重い仕事をしてよい時間なら 30 分に 1 回、今日と昨日の新しい区間だけを測って作り直す"""
+    moment = moment or datetime.datetime.now()
+    if in_window(moment) or not voices.heavy_ok(moment) or time.time() - State.voices_at < VOICES_EVERY:
+        return None
+    State.voices_at = time.time()
+    return run_voices(2, VOICES_TICK_BUDGET, moment.date())
+
+
 def _loop() -> None:
     while True:
         try:
             if in_window(datetime.datetime.now()):
                 run_night()
+            else:
+                voices_tick()
         except Exception as error:  # noqa: BLE001 — 夜の流れが止まっても、受け付けは続ける
             State.log(f"夜の流れ: {type(error).__name__}")
         time.sleep(CHECK_EVERY)
@@ -230,9 +293,14 @@ def refresh_same_person() -> bool:
             today = datetime.date.today()
             for back in (0, 1):
                 d = (today - datetime.timedelta(days=back)).isoformat()
-                groups = sameperson.run_day(State.home, State.store, d, find_audio, State.embed, State.log)
+                find, embed = cached(d)
+                groups = sameperson.run_day(State.home, State.store, d, find, embed, State.log)
                 if groups is not None:
                     update_day(State.home, d, {"same_person_groups": groups})
+            # 日をまたぐ組・名前のある人かも（測ってある分だけで作り直す。測るのは夜と昼の見回り）
+            built = voices.run(State.home, State.store, State.log, today)
+            update_day(State.home, today.isoformat(), {"same_person_across": len(built["across"]),
+                                                       "same_person_maybe": len(built["maybe"])})
         except Exception as error:  # noqa: BLE001
             State.log(f"同じ人かもを作り直せませんでした: {type(error).__name__}")
         finally:
@@ -252,6 +320,12 @@ def http_get(handler, url) -> None:
             query = parse_qs(url.query or "")
             started = (query.get("refresh") or ["0"])[0] == "1" and refresh_same_person()
             body = sameperson.read(State.home)
+            # 2026-11-15（強化案 56）: 日をまたぐ組・名前のある人かも（voices.py。無ければ足さない）
+            extra = voices.read_extra(State.home)
+            if extra.get("across") or extra.get("maybe"):
+                if not body.get("available"):
+                    body = {"available": True, "generated_at": "", "days": []}
+                body.update(extra)
             if started or State.refreshing:
                 body["refreshing"] = True
             handler.send_json(200, body)

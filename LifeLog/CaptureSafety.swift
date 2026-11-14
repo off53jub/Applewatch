@@ -162,6 +162,8 @@ extension Pipeline {
         // 録り方の実験より会議モードを先に（iPhone の録音の部品が読む。2026-11-15。RecordingExperiment）
         UserDefaults.standard.set(meeting != nil, forKey: RecordingExperiment.meetingKey)
         receiver.sendSettings(skipSilence: skipSilence, held: recordingHeld, meeting: on)
+        // 会議の相棒（その場版）: 家の PC に始まり・終わりを伝え、Live Activity と時計に出す（2026-11-15。MeetingLive.swift）
+        MeetingLiveBook.shared.meetingChanged(on, pipeline: self)
         if !on { processQueue() }
     }
 

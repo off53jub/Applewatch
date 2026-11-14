@@ -16,7 +16,8 @@ extension Pipeline {
             ("名前を付ける候補の声", newVoices.open.count),
             ("職場の自分の声", selfCandidateCount),
             ("話し手の疑い", speakerDoubtCount),
-            ("同じ人かも", samePersonGroups.count),
+            // 2026-11-15（強化案 56）: 日をまたぐ組と「◯◯さんかも」も同じ段で数える
+            ("同じ人かも", samePersonGroups.count + samePersonMaybes.count),
             // 正しさの抜き取り（2026-11-15。強化案 41。SettleFeeds.swift。まだ答えていない日の1つ）
             ("合ってる？", pendingCheckCount),
             ("見直したい声", reviewCount),
