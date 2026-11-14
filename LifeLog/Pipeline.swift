@@ -1499,6 +1499,9 @@ final class Pipeline {
         Task { await NoticeGate.scanDelivered() }
         Task { await checkPCSilence() }
         noteRecordingExperiment()
+        MeetingLiveBook.shared.resumeIfNeeded(self)  // 会議モードの最中なら、会議の相棒と Live Activity を続ける（2026-11-15。MeetingLive.swift）
+        Task { await CoachBook.shared.refresh(homePC) }  // 話し方コーチ・緊張した場面（30分に1回まで）と心拍の送り（2026-11-15。CoachTension.swift）
+        Task { await sendHeartMinutesIfDue() }
         Task {
             await good.refresh(homePC)  // いいこと帳（30分に1回まで）
             updateWidgets()  // ウィジェットの今週の数（2026-11-12）
@@ -1719,6 +1722,8 @@ final class Pipeline {
             await writeWorkDigests()
             // ヘルスケアの終わった日を、母艦に渡すためドライブに書く
             await exportHealthIfDue()
+            // 時計の心拍と歩数の 1 分ごと（直近 24 時間）を家の PC へ（1 時間に 1 回まで。2026-11-15。強化案 52。CoachTension.swift）
+            await sendHeartMinutesIfDue()
             // 位置の終わった日も、母艦に渡すためドライブに書く（2026-11-09。LocationExport.swift）
             await exportLocationIfDue()
             // 終わった滞在と今の滞在を、15分に1回まで家の PC へ（2026-11-14。強化案 30。OneTimeline.swift）

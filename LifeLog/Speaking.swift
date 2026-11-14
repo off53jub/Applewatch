@@ -185,6 +185,8 @@ struct SpeakingView: View {
 
     var body: some View {
         List {
+            // 今夜のコーチ（家の PC が毎晩選ぶ よかった一言・直すとよい一言と週の数。2026-11-15。強化案 51。CoachTension.swift）
+            CoachSection()
             SpeakingScoreSection(now: SpeakStats.score(report.month), before: SpeakStats.score(report.lastMonth))
             Section {
                 row("直近7日", report.recent)
