@@ -93,6 +93,7 @@ enum DemoData {
                                yesterday: f.string(from: now.addingTimeInterval(-86400)))
         installOneTimeline(base: base, now: now, day: f.string(from: now),
                            yesterday: f.string(from: now.addingTimeInterval(-86400)), first: a)
+        installSettle(base: base, now: now, day: f.string(from: now), yesterday: f.string(from: now.addingTimeInterval(-86400)))
         // 効き目の数の見本
         Tally.add("fix.proposed", 6)
         Tally.add("fix.kept", 4)
@@ -365,6 +366,52 @@ enum DemoData {
         if let data = try? encoder.encode(sent) {
             try? data.write(to: base.appendingPathComponent(PayShots.sentFile), options: .atomic)
         }
+    }
+
+    /// 入れた施策の様子・Claude の費用・正しさの抜き取り・録り方の実験の見本（2026-11-15。SettleFeeds.swift・
+    /// RecordingExperimentViews.swift）。施策の名前は架空の見本、額も作り物。長いクロージャの式は CI が落ちるので、明示的なループと型で書く
+    private static func installSettle(base: URL, now: Date, day: String, yesterday: String) {
+        let encoder = JSONEncoder()
+        let stamp: String = MothershipOutbox.isoString(now)
+        // 入れた施策の様子（状態の違う見本を5つ）
+        let numbers: [Int] = [36, 37, 38, 41, 47]
+        let titles: [String] = ["施策の検品表（見本）", "費用の見張り（見本）", "家の PC の外からの見張り（見本）",
+                                "正しさの抜き取り（見本）", "録り方の実験（見本）"]
+        let statuses: [String] = ["live", "live", "not_started", "unused", "retire_candidate"]
+        let uses: [Int?] = [6, 3, nil, 0, 0]
+        let evidences: [String] = ["点検で 6 回開いた（見本）", "上限で止めた用途 1（見本）", "", "7 日答えなし（見本）",
+                                   "7 日使われていない（見本）"]
+        var rollout = RolloutFeed(generated_at: stamp)
+        for i in 0..<numbers.count {
+            let first: String? = statuses[i] == "not_started" ? nil : yesterday
+            let last: String? = statuses[i] == "live" ? day : (statuses[i] == "not_started" ? nil : yesterday)
+            rollout.items.append(RolloutItem(no: numbers[i], title: titles[i], first_live: first, last_live: last,
+                                             uses_7d: uses[i], evidence: evidences[i], status: statuses[i]))
+        }
+        if let data = try? encoder.encode(rollout) {
+            try? data.write(to: base.appendingPathComponent(SettleBook.rolloutFile), options: .atomic)
+        }
+        // 正しさの抜き取り（1つ）
+        let check = CheckItem(id: "demo-check-1", day: yesterday, source: "digest",
+                              claim: "昨日は見本の打ち合わせで、資料の締め切りが金曜に決まった（見本）",
+                              evidence: "朝のまとめ「見本の資料は金曜まで」")
+        if let data = try? encoder.encode(ChecksFeed(generated_at: stamp, items: [check])) {
+            try? data.write(to: base.appendingPathComponent(SettleBook.checksFile), options: .atomic)
+        }
+        // Claude の費用（作り物の額）
+        var costs = CostsFeed(month: String(day.prefix(7)), month_usd: 12.4, projected_usd: 26.57, monthly_usd: 100)
+        let purposes: [String] = ["misheard", "correct", "headline", "asr-judge"]
+        let spent: [Double] = [0.3, 0.12, 0.02, 0]
+        let caps: [Double?] = [0.3, 0.2, 0.03, nil]
+        for i in 0..<purposes.count {
+            costs.today.append(CostToday(purpose: purposes[i], usd: spent[i], cap: caps[i], stopped: purposes[i] == "asr-judge"))
+            costs.month_by_purpose.append(CostPurpose(purpose: purposes[i], usd: spent[i] * 10, calls: (i + 1) * 40))
+        }
+        if let data = try? encoder.encode(costs) {
+            try? data.write(to: base.appendingPathComponent(SettleBook.costsFile), options: .atomic)
+        }
+        // 録り方の実験: 今日が2日目の見本
+        RecordingExperiment.start = yesterday
     }
 
     /// PayPay のスクショから読めたことにする行（PayPayShotView の見本。1つは「もうある」）

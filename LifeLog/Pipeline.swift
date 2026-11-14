@@ -513,7 +513,8 @@ final class Pipeline {
         content.body = body
         content.sound = .default
         content.interruptionLevel = UrgentNotice.level(for: id)  // 録音が止まった知らせは即時（2026-11-07。Push.swift）
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+        // 録音が止まった知らせは束ねない（いつも出す）が、1時間の数には入れる（2026-11-15。NoticeGate.swift）
+        NoticeGate.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 
     /// 声の登録で iPhone のマイクを使うあいだ、待機モードの無音を止める
@@ -1492,6 +1493,12 @@ final class Pipeline {
         Task { await PromiseInbox.shared.refresh(self) }  // 会話のあとの約束と、その設定（5分に1回まで。2026-11-13。Promises.swift）
         Task { await refreshMothershipFeeds() }  // 週のふり返り・会う前の一枚など（30分に1回まで）とためた答えの送り（2026-11-13）
         Task { await refreshOneTimeline() }  // 今日と昨日の年表・反映の見張り・滞在の送り（2026-11-14。OneTimeline.swift）
+        // 入れた施策の様子・Claude の費用・正しさの抜き取り（30分に1回まで）・見えた知らせの数・家の PC の外からの見張り・
+        // 録り方の実験のその日の組（2026-11-15。強化案 36〜38・41・44・47。SettleFeeds.swift・NoticeGate.swift・PCSilence.swift）
+        Task { await SettleBook.shared.refresh(homePC) }
+        Task { await NoticeGate.scanDelivered() }
+        Task { await checkPCSilence() }
+        noteRecordingExperiment()
         Task {
             await good.refresh(homePC)  // いいこと帳（30分に1回まで）
             updateWidgets()  // ウィジェットの今週の数（2026-11-12）
@@ -1545,6 +1552,10 @@ final class Pipeline {
         checkStall()
         // 家の PC が長くつながらない・版が古いなら知らせる
         checkHomePC()
+        // 家の PC と 6 時間やり取りできていなければ知らせる・見えた知らせを数える・録り方の実験の組（2026-11-15）
+        Task { await checkPCSilence() }
+        Task { await NoticeGate.scanDelivered() }
+        noteRecordingExperiment()
         // 家の PC に様子（1時間に1回）を送り、記録と直し（10分に1回）をやり取りする（PC の版 7 から。2026-11-07。PCDiag.swift）
         pcLinkTick()
         // アプリを開いていれば、閉じたばかりの会話の話し手を PC の声のモデルでも見比べる（2026-11-06）
@@ -2858,6 +2869,8 @@ final class Pipeline {
                 MainActor.assumeIsolated {
                     let work = Task {
                         await self?.runQueue()
+                        // 前の日のヘルスケアを夜中のうちに書く（日が変わって 0:30 から。2026-11-15。強化案 46。HealthExport.swift）
+                        await self?.exportHealthIfDue()
                         // 充電中の長い処理では、1日分の聞き直しもする
                         if id == Self.processingTaskID { await self?.runNightly() }
                     }

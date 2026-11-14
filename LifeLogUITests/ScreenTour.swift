@@ -16,7 +16,9 @@ final class ScreenTour: XCTestCase {
     /// 押さない行（中身を変える・外に送る・権限を求める操作）
     private static let avoid = ["録音", "印を付ける", "消す", "削除", "ログイン", "ログアウト", "書く", "送る", "戻す",
                                 "まとめ直", "始める", "止める", "控えから", "取り込", "入れ直", "リセット", "初期化", "全部",
-                                "直す", "まとめる", "付け替", "分ける", "選ぶ", "撮る", "許可"]
+                                "直す", "まとめる", "付け替", "分ける", "選ぶ", "撮る", "許可",
+                                // 「合ってる？」の答えのボタン（押すと母艦に答えを返す。2026-11-15）
+                                "合ってる", "違う", "わからない"]
 
     override func setUp() {
         continueAfterFailure = true
@@ -408,6 +410,58 @@ final class ScreenTour: XCTestCase {
             openSegment(app, "点検")
             if tapFinding(app, "反映の見張り", swipes: 5, place: "歯車 - 点検") {
                 snap(app, "歯車 › 点検 › 反映の見張り")
+            }
+        }
+    }
+
+    // MARK: - 2026-11-15 の強化案の画面
+
+    /// 見本の写し（DemoData.installSettle）で、点検の「入れた施策の様子」「Claude の費用」・直すの「合ってる？」・
+    /// 設定の「録り方の実験」を撮る。押すのは開く行だけ（「合ってる」「違う」「わからない」は押さない）
+    func testTourSettle() {
+        // 1. 歯車 → 点検 → 入れた施策の様子・Claude の費用（毎回起動し直す）
+        for row in ["入れた施策の様子", "Claude の費用"] {
+            let app = launch()
+            openTab(app, "今日")
+            guard openSettings(app) else { continue }
+            openSegment(app, "点検")
+            if tapFinding(app, row, swipes: 6, place: "歯車 - 点検") {
+                snap(app, "歯車 › 点検 › " + row)
+                app.swipeUp()
+                sleep(1)
+                snap(app, "歯車 › 点検 › " + row + "（下）")
+            }
+            app.terminate()
+        }
+        // 2. 直す: 合ってる？（いちばん上の方に出る。見えるところまでめくる）
+        var app = launch()
+        openTab(app, "直す")
+        var found = false
+        for _ in 0..<4 {
+            if app.staticTexts["合ってる？"].exists || app.buttons["合ってる"].exists {
+                found = true
+                break
+            }
+            app.swipeUp()
+            sleep(1)
+        }
+        snap(app, found ? "直す - 合ってる？" : "直す - 合ってる？（見つからない）")
+        // 3. 歯車 → 設定 → くわしい設定 → 録り方の実験
+        app.terminate()
+        app = launch()
+        openTab(app, "今日")
+        if openSettings(app) {
+            openSegment(app, "設定")
+            if tapFinding(app, "くわしい設定", swipes: 8, place: "歯車 - 設定") {
+                var shown = false
+                for _ in 0..<12 {
+                    if app.staticTexts["録り方の実験"].exists {
+                        shown = true
+                        break
+                    }
+                    app.swipeUp()
+                }
+                snap(app, shown ? "歯車 › くわしい設定 › 録り方の実験" : "歯車 › くわしい設定（録り方の実験が見つからない）")
             }
         }
     }
