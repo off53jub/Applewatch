@@ -94,6 +94,7 @@ enum DemoData {
         installOneTimeline(base: base, now: now, day: f.string(from: now),
                            yesterday: f.string(from: now.addingTimeInterval(-86400)), first: a)
         installSettle(base: base, now: now, day: f.string(from: now), yesterday: f.string(from: now.addingTimeInterval(-86400)))
+        installActions(base: base, now: now, day: f.string(from: now))  // 返事の下書き・時間の家計簿（DraftActions.swift）
         // 効き目の数の見本
         Tally.add("fix.proposed", 6)
         Tally.add("fix.kept", 4)

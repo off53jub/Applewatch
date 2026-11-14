@@ -13,6 +13,7 @@ struct LookBackTab: View {
             List {
                 // 今週のふり返り・見立ての台帳・使われ方の数（2026-11-13。施策 2・3・1。MothershipFeeds.swift。写しがあるときだけ）
                 WeeklyLookBackSection()
+                TimeLedgerSection()  // 時間の家計簿（2026-11-15。強化案 60。DraftActions.swift。写しがあるときだけ）
                 Section {
                     if hasGood {
                         NavigationLink {

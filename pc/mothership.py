@@ -49,6 +49,8 @@ import oneline  # 1日の年表・PayPay の写真・位置を当日のうちに
 import settle  # 施策の検品表・正しさの抜き取り・Claude の費用（2026-11-15。強化案 36・37・41）
 
 GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS, *oneline.GETS, *settle.READERS)
+import drafts  # noqa: E402  返事の下書き・時間の家計簿（2026-11-15。強化案 58・60。GET /replies・/time-ledger）
+GETS = (*GETS, *drafts.READERS)
 # POST /proposals/answer（母艦からの提案への答え。2026-11-13。中身は appfeeds.py）
 POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback", *appfeeds.POSTS, *oneline.POSTS)
 BODY_LIMIT = 16 * 1024
@@ -424,6 +426,9 @@ def http_get(handler, config: dict) -> None:
         return
     if path in settle.READERS:  # GET /rollout・/checks・/costs（2026-11-15）
         handler.send_json(200, settle.READERS[path](home(config)))
+        return
+    if path in drafts.READERS:  # GET /replies・/time-ledger（2026-11-15。強化案 58・60）
+        handler.send_json(200, drafts.READERS[path](home(config)))
         return
     handler.send_json(200, read_export(home(config)))
 
