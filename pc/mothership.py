@@ -29,6 +29,7 @@
   1件は {"id","day","time","kind":"word"|"laugh","verdict":"wrong"|"right"}。2000 件まで。中身は記録に書かない（件数だけ）。
 - 2026-11-14（強化案 25・28・30・34。中身は oneline.py）: GET /timeline?day=・GET /reflection・POST /pay/paypay-shot・
   POST /pay/paypay-rows・POST /location/stays。
+- 2026-11-15（強化案 36・37・41。中身は settle.py）: GET /rollout・GET /checks・GET /costs。
 """
 
 from __future__ import annotations
@@ -45,8 +46,9 @@ from urllib.parse import urlparse
 
 import appfeeds  # 自分の声の候補・新しさ・PLAUD との差（2026-11-12）
 import oneline  # 1日の年表・PayPay の写真・位置を当日のうちに・反映の見張り（2026-11-14。強化案 25・28・30・34）
+import settle  # 施策の検品表・正しさの抜き取り・Claude の費用（2026-11-15。強化案 36・37・41）
 
-GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS, *oneline.GETS)
+GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS, *oneline.GETS, *settle.READERS)
 # POST /proposals/answer（母艦からの提案への答え。2026-11-13。中身は appfeeds.py）
 POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback", *appfeeds.POSTS, *oneline.POSTS)
 BODY_LIMIT = 16 * 1024
@@ -419,6 +421,9 @@ def http_get(handler, config: dict) -> None:
         return
     if path in oneline.GETS:  # GET /timeline?day=・/reflection（2026-11-14）
         oneline.http_get(handler, home(config))
+        return
+    if path in settle.READERS:  # GET /rollout・/checks・/costs（2026-11-15）
+        handler.send_json(200, settle.READERS[path](home(config)))
         return
     handler.send_json(200, read_export(home(config)))
 

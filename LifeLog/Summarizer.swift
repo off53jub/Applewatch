@@ -862,7 +862,8 @@ enum Summarizer {
     /// Claude に頼む（同じ指示・同じ文。職場の会話でテレビ・動画の手がかりを外した文もそのまま渡す）。
     /// 頼めなかったら nil（数を数え、わけによってはしばらく頼まない）
     private static func viaClaude(_ job: ClaudeJob, maxWait: Double, prompt: String) async -> [String: Any]? {
-        guard claudeFirst, let claude = claudeLLM else { return nil }
+        // 家の PC で止めた用途・今日の上限に届いた用途は、しばらく頼まない（2026-11-15。強化案 37）
+        guard claudeFirst, let claude = claudeLLM, !ClaudeRoute.purposePaused(job.purpose) else { return nil }
         let work = sensitive
         do {
             let text = try await claude(ClaudeCall(system: system, prompt: prompt, json: true, maxTokens: 8192,
@@ -875,6 +876,7 @@ enum Summarizer {
         } catch {
             let failure = (error as? ClaudeFailure) ?? .server(status: 0, reason: error.localizedDescription)
             ClaudeRoute.note(failure)
+            if case .purposeOff = failure { ClaudeRoute.pausePurpose(job.purpose) }
             if let key = failure.tallyKey { Tally.add(key) }
             return nil
         }

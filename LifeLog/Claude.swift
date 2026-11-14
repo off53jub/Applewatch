@@ -48,6 +48,9 @@ struct ClaudeJob: Sendable, Equatable {
         "minutes.notes": "長い会議の要点メモ", "day": "1日のまとめ", "week": "週のまとめ", "month": "月のまとめ",
         "activity.blocks": "過ごし方の区切り", "activity.details": "過ごし方の中身", "minutes": "議事録",
         "ask.answer": "記録への質問（答え）", "questions": "AI からの質問", "tasks.photo": "写真のやること",
+        // 家の PC・母艦から頼む分（2026-11-15。Claude の費用の画面に出す）
+        "asr-judge": "割れた行の審判", "brief-compare": "朝のまとめの比べ", "mark-sure": "まとめて OK の印",
+        "promises": "会話のあとの約束", "proposals": "提案", "weekly": "週のふり返り", "prep": "会う前の一枚",
     ]
 
     static func label(_ purpose: String) -> String { labels[purpose] ?? purpose }
@@ -95,6 +98,9 @@ enum ClaudeFailure: LocalizedError, Equatable {
     case workNotAllowed
     /// 答えが読めなかった（JSON でない・途中で切れた）
     case unreadable
+    /// この用途は家の PC の設定で止めてある・今日の上限に届いた（409。2026-11-15。強化案 37）。
+    /// why は "stopped" か "daily_cap"。ほかの用途は頼み続ける
+    case purposeOff(why: String)
     case server(status: Int, reason: String)
 
     var errorDescription: String? {
@@ -105,6 +111,7 @@ enum ClaudeFailure: LocalizedError, Equatable {
         case .refused: "Claude に断られました"
         case .workNotAllowed: "家の PC の設定で、職場の会話は Claude に送らないことになっています"
         case .unreadable: "Claude の答えを読めませんでした"
+        case .purposeOff(let why): why == "daily_cap" ? "この用途は今日の上限に届きました" : "この用途は家の PC の設定で止めてあります"
         case .server(_, let reason): "Claude に頼めませんでした: \(reason)"
         }
     }
@@ -119,6 +126,7 @@ enum ClaudeFailure: LocalizedError, Equatable {
         case 503: return .noKey
         case 422: return .refused
         case 403: return .workNotAllowed
+        case 409: return .purposeOff(why: (json?["purpose_off"] as? String) ?? "")
         default: return .server(status: status, reason: (json?["error"] as? String) ?? "HTTP \(status)")
         }
     }
@@ -131,6 +139,8 @@ enum ClaudeFailure: LocalizedError, Equatable {
         case .noKey: return (all: 1800, work: 0)
         case .workNotAllowed: return (all: 0, work: 3600)
         case .refused, .unreadable: return (all: 0, work: 0)
+        // 用途ごとに止める（ClaudeRoute.pausePurpose）。ほかの用途は止めない
+        case .purposeOff: return (all: 0, work: 0)
         case .notReady, .server: return (all: 120, work: 0)
         }
     }
@@ -140,6 +150,7 @@ enum ClaudeFailure: LocalizedError, Equatable {
         switch self {
         case .notReady: return nil
         case .capped: return "claude.capped"
+        case .purposeOff: return "claude.purposeOff"
         default: return "claude.failed"
         }
     }
@@ -256,6 +267,26 @@ enum ClaudeRoute {
         defer { lock.unlock() }
         pausedUntil = nil
         workPausedUntil = nil
+        purposePausedUntil = [:]
+    }
+
+    // MARK: 用途ごとに頼まない（家の PC の止めた用途・今日の上限。409。2026-11-15。強化案 37）
+
+    nonisolated(unsafe) private static var purposePausedUntil: [String: Date] = [:]
+    /// 409 のあと、その用途をしばらく頼まない長さ（今日の上限は日が変わると戻るので、長くしすぎない）
+    static let purposePause: TimeInterval = 30 * 60
+
+    static func pausePurpose(_ purpose: String, now: Date = .now) {
+        lock.lock()
+        defer { lock.unlock() }
+        purposePausedUntil[purpose] = now.addingTimeInterval(purposePause)
+    }
+
+    static func purposePaused(_ purpose: String, now: Date = .now) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let until = purposePausedUntil[purpose] else { return false }
+        return now < until
     }
 
     /// 待つ長さ。Groq で待ってよい長さ（maxWait）の2倍、40〜180秒
@@ -300,6 +331,10 @@ struct ClaudeSettingsSection: View {
             } else if let problem {
                 Text(problem).font(.caption).foregroundStyle(.secondary)
             }
+            // 月末の見込み・今日の多い用途・止めた用途（GET /costs。2026-11-15。強化案 37。SettleFeeds.swift）
+            if let costs = SettleBook.shared.costs {
+                ClaudeCostRows(costs: costs)
+            }
         } header: {
             Text("Claude（家の PC 経由）")
         } footer: {
@@ -315,6 +350,7 @@ struct ClaudeSettingsSection: View {
             problem = "家の PC をつなぐと、今月使った額が出ます。"
             return
         }
+        await SettleBook.shared.refreshCosts(pipeline.homePC)
         do {
             let read = try await pipeline.homePC.claudeUsage()
             usage = read

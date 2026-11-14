@@ -277,8 +277,13 @@ private struct TodayView: View {
         let stale: [FreshItem] = pipeline.homePC.features.contains("fresh") ? pipeline.appFeeds.staleItems : []
         let held = pipeline.recordingHeld
         let noLogin = pipeline.email == nil
-        if sign != nil || held || !stale.isEmpty || noLogin {
+        // 家の PC と 6 時間やり取りできていない（2026-11-15。強化案 38。PCSilence.swift）
+        let pcQuiet: String? = PCSilence.todayLine(configured: pipeline.homePC.isConfigured, last: PCSilence.lastContactNow(), now: .now)
+        if sign != nil || held || !stale.isEmpty || noLogin || pcQuiet != nil {
             Section("気をつけること") {
+                if let pcQuiet {
+                    Label(pcQuiet, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                }
                 if let sign {
                     // 無料の署名は7日で切れ、切れるとアプリが起動しなくなって録音が止まる
                     Label("署名の期限 \(sign)。切れる前に Sideloadly で入れ直してください（記録は消えません）",
@@ -784,6 +789,8 @@ private struct SettingsView: View {
         MothershipCheckSection()
         // 反映の見張り（2026-11-14。強化案 34。OneTimelineViews.swift）
         ReflectionCheckSection()
+        // 入れた施策の様子・Claude の費用（2026-11-15。強化案 36・37。SettleFeeds.swift）
+        SettleCheckSection()
         Section {
             NavigationLink("登録の控え") { BackupView() }
             NavigationLink("記録の掃除") { CleanupView() }
@@ -944,6 +951,9 @@ private struct DetailedSettingsView: View {
                         HelpNote("「音がしないあいだは書かない」をオンにすると、時計と iPhone で1分続けて静かなときは録音ファイルに書かず、音がしたらその1秒前から書き始めます（マイクは聞き続けます）。無音を送ったり文字にしたりしないぶん、電池が長持ちします。\n「区切りの長さ」は、録音を区切って送る長さです。短め（初め）は45秒を過ぎた話の切れ目で区切り、長くても2分で区切るので、文字になるまでが早くなります。ふつうは今までどおり5分ほどで区切ります（送る回数が少ないぶん、時計の電池が少し長持ちします）。どちらも次の区切りから変わります。\n「電池が少ないときは5分に」をオンにすると（初めはオン）、時計の電池が 30% より少ないときと低電力モードのあいだは、短めの設定でも時計が自動で5分ごとに区切ります。電池が 35% まで戻るか充電を始めると、短めに戻ります。いま5分にしているかは、時計の画面と自己点検に出ます。時計の設定は、時計と iPhone がつながったときに伝わります。")
                     }
                 }
+
+                // 録り方の実験（2026-11-15。強化案 47。RecordingExperimentViews.swift）
+                RecordingExperimentSection()
 
                 // 外付けマイク（2026-11-07。MicViews.swift）
                 MicSettingsSection()

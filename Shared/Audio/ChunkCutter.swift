@@ -64,8 +64,12 @@ struct ChunkCutter {
         set { UserDefaults.standard.set(newValue, forKey: batterySavingKey) }
     }
 
-    /// 実際に使う長さ（設定が短めでも、電池のために5分にしているあいだは、ふつう）
-    static var current: Length { effective(length, saving: batterySaving) }
+    /// 実際に使う長さ（設定が短めでも、電池のために5分にしているあいだは、ふつう）。
+    /// 録り方の実験の日（2026-11-15。RecordingExperiment）は、その日の組の長さ（電池のための5分は、それより優先）
+    static var current: Length {
+        let planned: Length = RecordingExperiment.length(base: length, combo: RecordingExperiment.current())
+        return effective(planned, saving: batterySaving)
+    }
 
     static func effective(_ length: Length, saving: Bool) -> Length { saving ? .normal : length }
 
@@ -96,6 +100,8 @@ struct ChunkCutter {
     static func addSettings(to context: inout [String: Any]) {
         context[lengthKey] = length.rawValue
         context[batterySaverKey] = batterySaverOn
+        // 録り方の実験のオンオフと1日目（2026-11-15）
+        RecordingExperiment.addSettings(to: &context)
     }
 
     /// 時計が iPhone から届いた設定を読む（区切りの長さと「電池が少ないときは5分に」。次の区切りから効く）
@@ -104,6 +110,7 @@ struct ChunkCutter {
             self.length = length
         }
         if let on = context[batterySaverKey] as? Bool { batterySaverOn = on }
+        RecordingExperiment.readSettings(context)
     }
 
     /// 静かな瞬間をこれだけ待つ

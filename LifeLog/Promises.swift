@@ -218,41 +218,19 @@ enum PromiseRules {
     }
 }
 
-/// 母艦に返す答えをためておく所。
-/// TODO: 担当 S1 の MothershipFeeds.swift（POST /feedback をまとめて送る仕組み）が main に入ったら、そちらに渡してこれは消す。
-/// 中身の形は同じ（{"kind","id","value","day"}）。家の PC が "feedback" を知らせるまでは送らずにためる（200 件まで）。
+/// 母艦に返す答え（{"kind","id","value","day"}）。
+/// 2026-11-15（強化案 46）: ため場所と送り口は MothershipFeeds.swift の MothershipOutbox の1つにまとめた
+/// （前のため場所 "promiseFeedbackQueue" にあった分は、起動のときに MothershipOutbox.migrateLegacy が移す）。
+/// 家の PC が "feedback" を知らせるまでは送らずにためる（MothershipOutbox.send が飛ばして残す）。
 enum PromiseFeedbackQueue {
-    private static let key = "promiseFeedbackQueue"
-    private static let limit = 200
-
-    static var pending: [Data] { UserDefaults.standard.array(forKey: key) as? [Data] ?? [] }
-
+    @MainActor
     static func add(_ body: Data) {
-        let list: [Data] = Array((pending + [body]).suffix(limit))
-        UserDefaults.standard.set(list, forKey: key)
+        MothershipOutbox.enqueue(path: "feedback", body: body)
     }
-
-    /// 古い順に送る。1つでも送れなければ、そこでやめる
-    @MainActor private static var flushing = false
 
     @MainActor
     static func flush(_ pc: HomePC) async {
-        guard !flushing, pc.features.contains("feedback") else { return }
-        flushing = true
-        defer { flushing = false }
-        var list: [Data] = pending
-        while let first = list.first {
-            do {
-                _ = try await pc.postJSONData("feedback", body: first, timeout: 10)
-            } catch {
-                break
-            }
-            // 送っている間に足されたものを消さないよう、読み直してから外す
-            var current: [Data] = pending
-            if current.first == first { current.removeFirst() }
-            UserDefaults.standard.set(current, forKey: key)
-            list = current
-        }
+        await MothershipOutbox.send(pc)
     }
 }
 

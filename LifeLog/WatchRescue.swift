@@ -45,8 +45,7 @@ extension Pipeline {
         content.title = "時計の LifeLog を一度開いてください"
         content.body = "アプリを新しくしたあとは、時計の LifeLog を一度開くまで、時計の録音が iPhone と家の PC に届かないことがあります。"
         content.sound = .default
-        UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: "watch-open-after-update", content: content, trigger: nil))
+        NoticeGate.add(UNNotificationRequest(identifier: "watch-open-after-update", content: content, trigger: nil))
     }
 
     /// 時計の様子が届くたびに呼ぶ
@@ -74,8 +73,8 @@ extension Pipeline {
                 content.title = "時計の LifeLog が録音していません"
                 content.body = "時計の LifeLog を開くと録音を再開します。"
                 content.sound = .default
-                UNUserNotificationCenter.current().add(
-                    UNNotificationRequest(identifier: "watch-not-recording", content: content, trigger: nil))
+                // 録音していない知らせは束ねない（いつも出す。2026-11-15。NoticeGate.swift）
+                NoticeGate.add(UNNotificationRequest(identifier: "watch-not-recording", content: content, trigger: nil))
             }
         }
     }

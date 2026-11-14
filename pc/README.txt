@@ -576,3 +576,20 @@ iPhone のタスクの「母艦のやること」に、母艦（D:\Lifelog）の
 ・提案の kind に "profile"（本人の台帳の候補。action は none・根拠のあるものだけ）を足しました（appfeeds.py）。
 ・どれも log.txt には数だけを書きます（店の名前・金額・場所の名前・座標・画像は書きません）。
 ・確かめ: python v13checks_oneline.py（一時フォルダと作り物の Claude で）
+
+■ 施策の検品表・Claude の費用・正しさの抜き取り（2026-11-15。強化案 36・37・41・49。中身は settle.py・claude.py・appfeeds.py）
+・claude-config.json に省ける 2 つ（母艦の scripts\claude_call.py も同じ決まり）:
+    {"monthly_usd": 100, "work": true, "daily_caps": {"misheard": 0.5}, "stopped": ["asr-judge"]}
+  stopped にある用途（purpose）は Claude に頼みません。daily_caps は、その日（この PC の日付）のその用途の帳簿の合計が
+  上限に届いたら頼みません（前方一致のうち一番長いもの）。どちらも 409 {"error", "purpose_off": "stopped"|"daily_cap"}。
+  アプリはその用途だけを今までの作り方に戻し、ほかの用途は Claude のまま。割れた行の審判（asr-judge）も同じ決まりで止まります。
+・GET /costs … {"available", "month", "month_usd", "projected_usd"（今月のここまでを過ぎた日数で割り、月の日数を掛けた見込み）,
+  "monthly_usd", "today": [{"purpose", "usd", "cap", "stopped"}], "month_by_purpose": [{"purpose", "usd", "calls"}]}。
+  帳簿（claude-usage.jsonl。母艦の分も入る）から。features "costs"
+・GET /rollout … 母艦の state\rollout_for_app.json（入れた施策の様子。status は live・unused・not_started・broken・
+  retire_candidate）。features "rollout"
+・GET /checks … 母艦の state\checks_for_app.json（正しさの抜き取り。7 つまで）。答えは POST /feedback の kind "check"・
+  value right・wrong・unsure。features "checks"
+・提案の kind に "wish"（欲しい物）。精度の通信簿の週に省ける "check_right"（合っていた割合）。
+・どれも log.txt には数だけを書きます（施策の名前・主張の文は書きません）。
+・確かめ: python v14checks_settle.py（一時フォルダと作り物の Claude で）

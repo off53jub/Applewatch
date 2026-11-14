@@ -26,6 +26,8 @@
 - POST /mood（"mood"）{"day", "at", "mood", "energy", "grip", "note"?} → inbox/mood.jsonl（夜の 10 秒。6。1〜5 の整数）。
 - POST /app-usage（"appusage"）{"at", "app", "event"} → inbox/app_usage.jsonl（ショートカットのオートメーションから。8）。
   iPhone の「スクリーンタイム」と Safari の履歴は、ほかのアプリからは読めない（Apple の決まり）ので、この口にした。
+2026-11-15: 提案の kind "wish"（49）・POST /feedback の kind "check"（41）・通信簿の週の省ける "check_right"（41）。
+  GET /rollout・/checks・/costs は settle.py。
 どれも読むだけ（POST は1行足すだけ）。型・長さ・形を確かめ、おかしな行は落とす。無い・読めないときは {"available": false, "reason": …}。
 中身（文・ファイル名・アプリの名前・気分の値）は記録（log.txt）に書かない。
 """
@@ -65,7 +67,9 @@ FEATURES = ("weekly", "prep", "briefcmp", "accuracy", "unused", "feedback", "moo
 PROPOSAL_LIMIT = 60
 # "profile"（2026-11-14。強化案 32）: 本人の台帳（profile.md・people-index.md）に入れる候補。action は none だけ
 # （受けても答えを返すだけで、台帳に足すのは母艦）
-PROPOSAL_KINDS = ("followup", "research", "selffix", "pattern", "review", "chance", "health", "prep", "vocab", "profile")
+# "wish"（2026-11-15。強化案 49）: 欲しい物リストから・会話の「欲しい」から（受けたら WISHLIST.md に足すのは母艦）
+PROPOSAL_KINDS = ("followup", "research", "selffix", "pattern", "review", "chance", "health", "prep", "vocab", "profile",
+                  "wish")
 EVIDENCE_LIMIT = 10
 EVIDENCE_SOURCES = ("conversation", "line", "calendar", "plaud", "stats", "task", "web")
 ACTION_TYPES = ("task", "vocab", "none")
@@ -571,7 +575,9 @@ def read_accuracy(base: Path) -> dict:
                       "person_n_kinds_median": _int(x.get("person_n_kinds_median"), 0, 100000),
                       "fix_kept_ratio": _num(x.get("fix_kept_ratio"), 0, 1), "judge_agree": _num(x.get("judge_agree"), 0, 1),
                       "night_review_kept": _num(x.get("night_review_kept"), 0, 1),
-                      "speaking_score": _num(x.get("speaking_score"), 0, 100)})
+                      "speaking_score": _num(x.get("speaking_score"), 0, 100),
+                      # 正しさの抜き取りで「合ってる」だった割合（2026-11-15。強化案 41。省ける）
+                      "check_right": _num(x.get("check_right"), 0, 1)})
     weeks.sort(key=lambda w: w["week"], reverse=True)
     return {"available": True, "version": _version(data), "generated_at": _iso(data.get("generated_at")),
             "weeks": weeks[:ACCURACY_WEEKS]}
@@ -602,7 +608,9 @@ def read_unused(base: Path) -> dict:
 # kind → 受ける value
 FEEDBACK = {"today_three": ("done", "skipped"), "brief": ("read",), "weekly": ("useful", "not_useful"),
             "prep": ("useful", "not_useful"), "brief_compare": ("codex", "claude"), "night_review": ("kept", "dropped"),
-            "same_person": ("merged", "different"), "promise": ("added", "ignored"), "bulk": ("ok",)}
+            "same_person": ("merged", "different"), "promise": ("added", "ignored"), "bulk": ("ok",),
+            # 正しさの抜き取りの答え（2026-11-15。強化案 41。GET /checks の id）
+            "check": ("right", "wrong", "unsure")}
 APP_EVENTS = ("open", "close", "focus_on", "focus_off")
 _inbox_lock = threading.Lock()
 
