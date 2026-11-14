@@ -84,6 +84,9 @@ struct LifeLogApp: App {
         Recall.recent = { pipeline.recentWords() }
         Recall.lastTalk = { pipeline.lastTalk(with: $0) }
         Recall.homework = { pipeline.todayHomework() }
+        // 「記録に聞く」「朝のまとめを聞く」（2026-11-15。強化案 59。VoiceAsk.swift）
+        VoiceRecall.ask = { await pipeline.voiceAnswer($0) }
+        VoiceRecall.morning = { pipeline.morningSpeech() }
         // ショートカットの「仕事のまとめを取り込む」から渡された文で、取り込む画面を開く（2026-11-10）
         DigestInbox.opened = { pipeline.noticeRoute = .digestImport($0) }
         // ウォレットでかざしたとき（ショートカットの「支払いを記録」）に読み直す（2026-11-09）

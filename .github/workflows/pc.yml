@@ -161,6 +161,13 @@ jobs:
           python pc/v14checks_search.py > v14.txt 2>&1 || { cat v14.txt; grep '^NG' v14.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v14.txt | sed 's/^/::notice::v14checks_search の OK の数: /'
 
+      # 2026-11-15（強化案 50・51・52）: 会議の相棒（会議モードのあいだの区切りの文・接地・1 分に 1 回・職場と Claude の設定・
+      #   遅れ・GET /meeting-live?since=）・GET /coach・/tension（形を確かめる）・POST /health/hr（分ごとに母艦へ）を、
+      #   一時フォルダと作り物の Claude・作り物のモデルで確かめる
+      - name: 会議の相棒・話し方コーチ・緊張した場面を確かめる
+        run: |
+          python pc/v15checks_live.py > v15l.txt 2>&1 || { cat v15l.txt; grep '^NG' v15l.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v15l.txt | sed 's/^/::notice::v15checks_live の OK の数: /'
       # 2026-11-15（強化案 53・54・55・61）: GET /people-pages・/threads・/place-pages・/decisions（形を確かめておかしな行を落とす）・
       #   POST /decisions/answer（写しで確かめて母艦の inbox に 1 行・409・400）を、一時フォルダで確かめる
       - name: 人・話題の糸・場所・決めごとのページを確かめる
