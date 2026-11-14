@@ -537,6 +537,8 @@ enum ProposalRules {
         case "prep": return "準備"
         case "vocab": return "言葉の登録"
         case "place": return "行ったお店"
+        // 本人の台帳（profile.md・people-index.md）に入れる候補（2026-11-14。強化案 32。受けても答えを返すだけ）
+        case "profile": return "台帳"
         default: return kind
         }
     }
@@ -563,6 +565,8 @@ enum ProposalRules {
 
     /// 受けたら何をするか（何もしないなら nil）
     static func actionLine(_ p: Proposal) -> String? {
+        // 台帳の候補（2026-11-14）: 受けても、この iPhone では何も変えない。家の PC（母艦）が台帳に足す
+        if p.kind == "profile" { return "受けると、家の PC（母艦）が本人の台帳に足します（この iPhone では何も変えません）" }
         guard let a = p.action, let text = a.text else { return nil }
         switch a.type {
         case "task": return "受けると、タスク「\(text)」を足します"
@@ -819,6 +823,7 @@ extension Pipeline {
                     note = acceptPlace(text, action: action)
                 }
             }
+            if p.kind == "profile" { note = "受けました。家の PC（母艦）が台帳に足します。" }
             Tally.add("proposal.accept")
         case .later:
             note = "\(ProposalRules.laterDays)日たったら、もう一度出します。"

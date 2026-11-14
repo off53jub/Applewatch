@@ -827,6 +827,19 @@ final class HomePC {
         return data
     }
 
+    /// JSON でない中身（画像など）を送り、答えを受け取る（POST /pay/paypay-shot の JPEG。2026-11-14。OneTimeline.swift）
+    func postBody(_ path: String, body: Data, type: String, timeout: TimeInterval) async throws -> Data {
+        var req = try request(path)
+        req.httpMethod = "POST"
+        req.setValue(type, forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        let session = makeSession(timeout: timeout)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: req)
+        try Self.check(response, data: data)
+        return data
+    }
+
     /// 答えを受け取る（/edits?after=…）
     func getJSONData(_ path: String, query: [URLQueryItem] = [], timeout: TimeInterval) async throws -> Data {
         var req = try request(path)

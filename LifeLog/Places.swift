@@ -121,6 +121,16 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         return names[String(format: "%.3f,%.3f", latitude, longitude)]
     }
 
+    /// 登録した場所の種類（位置を当日のうちに母艦へ。2026-11-14。OneTimeline.swift）。
+    /// 職場は "work"、名前が「自宅」を含むか「家」「うち」なら "home"、ほかの登録した場所は "other"。登録した場所でなければ nil
+    func placeKind(latitude: Double, longitude: Double, accuracy: Double) -> String? {
+        let location = CLLocation(latitude: latitude, longitude: longitude)
+        guard let place = registered(near: location, accuracy: accuracy) else { return nil }
+        if place.isWork == true { return "work" }
+        if place.name.contains("自宅") || place.name == "家" || place.name == "うち" { return "home" }
+        return "other"
+    }
+
     /// 端末に残っている位置の点（7日分）のうち、from〜to のもの。位置の書き出し用（2026-11-09）
     func points(from: Date, to: Date) -> [LocationExport.Point] {
         samples.filter { $0.time >= from && $0.time < to }.map {

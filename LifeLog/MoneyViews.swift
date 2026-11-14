@@ -49,6 +49,8 @@ struct MoneyView: View {
                     }
                 }
             }
+            // PayPay の取引履歴のスクショから（2026-11-14。強化案 28。OneTimelineViews.swift）
+            PayPayShotSection()
             PaymentSection()
         }
         .navigationTitle("お金")
