@@ -117,6 +117,14 @@ claude-config.json の "stopped"・"daily_caps" で用途ごとに止める（40
 会議モードのあいだ、区切りの文から「決まったこと・自分の宿題・聞き忘れ」を 1 分に 1 回まで更新（GET /meeting-live?since=・
 POST /meeting-live/state）・GET /coach・GET /tension（母艦の写し）・POST /health/hr（時計の心拍を分ごとに母艦へ）
     python v15checks_live.py  これを、一時フォルダと作り物の Claude で確かめる
+2026-11-15（強化案 53・54・55・61。中身は pages.py。features に "peoplepages"・"threads"・"placepages"・"decisions"）:
+GET /people-pages・/threads・/place-pages・/decisions（母艦の人・話題の糸・場所・決めごとのページ）と
+POST /decisions/answer（アプリで選んだ決めごとを母艦の inbox に 1 行。帳面に書くのは母艦）
+    python v15checks_pages.py  これを、一時フォルダで確かめる
+2026-11-15（強化案 56・57。中身は voices.py・quality.py・canonical.py。features に "canonical"）: 区間ごとの声の特徴を
+HOME/voices に置き、日をまたぐ「同じ人かも」と「名前のある人かも」を GET /same-person の "across"・"maybe" に足す。
+GET /canonical?day=（母艦の 1 日の正本）
+    python v15checks_voices.py  これを、一時フォルダと作り物の声の特徴で確かめる
 """
 
 from __future__ import annotations
@@ -2122,6 +2130,10 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(mothership.settle.FEATURES)
     # GET /meeting-live・/coach・/tension と POST /meeting-live/state・/health/hr（2026-11-15。強化案 50〜52。livecoach.py）
     found.extend(livecoach.features())
+    # GET /people-pages・/threads・/place-pages・/decisions と POST /decisions/answer（2026-11-15。強化案 53・54・55・61。pages.py）
+    found.extend(mothership.pages.FEATURES)
+    # GET /canonical?day=（2026-11-15。強化案 57。canonical.py）
+    found.extend(mothership.canonical.features())
     # POST /claude・GET /claude/usage（鍵があり、今月の上限に届いていないときだけ。2026-11-13）
     if claude.available():
         found.append("claude")

@@ -15,6 +15,8 @@ struct LookBackTab: View {
                 WeeklyLookBackSection()
                 // 緊張した場面（心拍が上がった時刻と会話。2026-11-15。強化案 52。CoachTension.swift。写しがあるときだけ）
                 TensionLookBackSection()
+                // 話題の糸（2026-11-15。強化案 54。PagesFeeds.swift。写しがあるときだけ）
+                ThreadsLookBackSection()
                 Section {
                     if hasGood {
                         NavigationLink {

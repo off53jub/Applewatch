@@ -1515,6 +1515,8 @@ struct TaskBookView: View {
                 }
             }
         }
+        // 決めごと（母艦の帳面のまだ決めていないもの。1 タップで選ぶ。2026-11-15。強化案 61。PagesFeeds.swift）
+        DecisionsTaskSection()
         // 今日の三つ（期限を過ぎた・今日までのもの、家の PC が選んだもの。朝の「昨日と今日」と同じ選び方。2026-11-09）。
         // 押すと「解き方」（手順・だいたいの時間・送る文の下書き。2026-11-10）
         let three = pipeline.todayThree()
