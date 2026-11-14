@@ -287,6 +287,11 @@ private struct LastTalkPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
                 PageTitle(text: "さっきの会話", symbol: "text.bubble")
+                // 会議の相棒（会議モードのあいだの宿題・聞き忘れ・決まったこと。2026-11-15）
+                if let meeting = board.info?.meeting {
+                    MeetingGlance(meeting: meeting)
+                    Divider()
+                }
                 // 家の PC が書いている途中の下書き（仮。30分より前のものは出さない。2026-11-07）
                 if let draft = board.info?.draft, let lines = draft.lines, !lines.isEmpty,
                    Date().timeIntervalSince1970 - draft.start < 30 * 60 {

@@ -18,6 +18,8 @@ struct LifeLogWidgets: WidgetBundle {
         // 今週のお礼とほめ言葉の数（2026-11-12）
         GoodWidget()
         RecordingLiveActivity()
+        // 会議モードのあいだの「決まったこと・宿題・聞き忘れ」（2026-11-15。強化案 50。MeetingActivityWidget.swift）
+        MeetingLiveActivity()
     }
 }
 

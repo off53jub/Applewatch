@@ -77,6 +77,21 @@ struct WatchInfo: Codable, Equatable {
     /// 家の PC の下書き（仮）。無ければ省く（古い時計のアプリは読み飛ばす。2026-11-07）
     var draft: Draft? = nil
 
+    /// 会議の相棒（会議モードの最中と、終わって 30 分まで。2026-11-15。強化案 50。MeetingLive.swift）
+    struct Meeting: Codable, Equatable {
+        /// 会議モードを始めた時刻
+        var start: Double
+        var on: Bool = true
+        var decided: Int = 0
+        var homework: Int = 0
+        var unasked: Int = 0
+        /// 「宿 …」「聞 …」「決 …」（6 つまで）
+        var items: [String] = []
+        /// 家の PC が最後に作り直した時刻
+        var updated: Double? = nil
+    }
+    var meeting: Meeting? = nil
+
     /// 時計に送る applicationContext の名前
     static let contextKey = "watchInfo"
     /// 送る大きさの上限（applicationContext は小さく保つ）
@@ -278,6 +293,7 @@ extension Pipeline {
         info.next = nextEventForWatch(now: now)
         info.last = lastTalkForWatch()
         info.draft = draftForWatch()
+        info.meeting = MeetingLiveBook.shared.watchMeeting()  // 会議の相棒（2026-11-15。MeetingLive.swift）
         let today = watchDayKey.string(from: now)
         if let brief = MorningBriefStore.shared.current, brief.day >= today {
             info.morning = WatchInfo.Brief(day: brief.day, text: brief.text)
