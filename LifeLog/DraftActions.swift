@@ -783,6 +783,7 @@ struct LedgerRow: View {
 
 // MARK: - 見本（CI の画面の写真）
 
+#if DEBUG && targetEnvironment(simulator)  // DemoData はこの条件のときだけある（DemoData.swift）
 extension DemoData {
     /// 返事の下書き・メールの下書き・時間の家計簿の見本（2026-11-15。名前・文・時間はすべて作り物）。
     /// 長いクロージャの式は CI が落ちるので、明示的なループと型で書く
@@ -820,3 +821,4 @@ extension DemoData {
         }
     }
 }
+#endif
