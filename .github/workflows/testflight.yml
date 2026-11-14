@@ -23,6 +23,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 強化案 45: 組み立ての前に、文字列の中の生の改行と、見本の長いクロージャ（型推論の時間切れ）を数秒で見つける
+      - name: Swift の組み立ての前の検査
+        run: python3 .github/scripts/swift_precheck.py
+
       - name: Xcode を選ぶ
         run: |
           sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"

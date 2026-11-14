@@ -5,9 +5,9 @@ name: PC
 on:
   push:
     branches: [main]
-    paths: ['pc/**', '.github/workflows/pc.yml']
+    paths: ['pc/**', '.github/workflows/pc.yml', '.github/scripts/**']
   pull_request:
-    paths: ['pc/**', '.github/workflows/pc.yml']
+    paths: ['pc/**', '.github/workflows/pc.yml', '.github/scripts/**']
   workflow_dispatch:
 
 jobs:
@@ -153,6 +153,14 @@ jobs:
           python pc/v14checks_settle.py > v14.txt 2>&1 || { cat v14.txt; grep '^NG' v14.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v14.txt | sed 's/^/::notice::v14checks_settle の OK の数: /'
 
+      # 2026-11-15（強化案 42・45・48）: 母艦の文の意味の索引（置く対象・まとめ方・変わったものだけ・重い時間・アプリの記録と
+      #   混ざらない・読むだけ）・母艦への質問で意味と言葉をいっしょに使う（同じものは 1 つ・長さの上限・人・欲しい物・決めごとの節）・
+      #   組み立ての前の Swift の検査を、一時フォルダと作り物の埋め込み・Claude で確かめる（本物の母艦も Ollama も使わない）
+      - name: 母艦の意味の索引と、組み立ての前の Swift の検査を確かめる
+        run: |
+          python pc/v14checks_search.py > v14.txt 2>&1 || { cat v14.txt; grep '^NG' v14.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v14.txt | sed 's/^/::notice::v14checks_search の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py
@@ -215,7 +223,7 @@ jobs:
             --hidden-import trainer --hidden-import gpu --hidden-import v7checks_ops \
             --hidden-import v8checks --hidden-import v9checks --hidden-import lifelog_mcp \
             --hidden-import watchroute --hidden-import v10checks --hidden-import mothership --hidden-import appfeeds \
-            --hidden-import oneline --hidden-import settle \
+            --hidden-import oneline --hidden-import askmother --hidden-import mothersearch --hidden-import settle \
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \
             --hidden-import claude --hidden-import v11checks \
