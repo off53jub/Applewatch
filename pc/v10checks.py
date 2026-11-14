@@ -224,10 +224,13 @@ def check_routes(main) -> int:
         took = time.time() - began
         wait_until(lambda: (queue.jobs.get(n1) or {}).get("status") == "working", 5)
         meta = dict(queue.jobs.get(n1) or {})
+        # 記録の行は、答えを送ってから受け口の糸が書く（watchroute.Handler.jobs）。答えを受け取った時点ではまだ無いことが
+        # ある（2026-11-14 に CI と手元で 1 回ずつ落ちた原因）。書かれるまで待ってから確かめる（確かめる中身は同じ）
+        stored_line = wait_until(lambda: any(f"時計から（外の道） {n1}: " in line and "を預かりました" in line
+                                             for line in list(logged)), 5)
         ok = stored[0] == 200 and stored[1] == {"id": n1, "status": "queued"} and took < 2.0 \
             and n1 not in queue.waiters and meta.get("origin") == "watch" and "chunk_end" in (meta.get("times") or {}) \
-            and any(f"時計から（外の道） {n1}: " in line and "を預かりました" in line for line in logged) \
-            and not any("ヒミツ" in line for line in logged)
+            and stored_line and not any("ヒミツ" in line for line in list(logged))
         failed += say(ok, f"POST /w/jobs: wait=1 でも待たずに答え（{took:.2f} 秒・{stored[1]}）、origin watch と時刻を残し、"
                           "記録に「時計から（外の道）」と書く（ヒントは書かない）")
 
@@ -247,7 +250,8 @@ def check_routes(main) -> int:
         gates[n1].set()
         thread.join(15)
         answer = box.get("answer") or {}
-        time.sleep(0.3)
+        # 「渡した」の印は、iPhone が読み終えて閉じたあとに付く（leave_wait）。決まった秒ではなく、付くまで待つ
+        wait_until(lambda: (queue.jobs.get(n1) or {}).get("handed") is True, 5)
         ok = entered and box.get("status") == 200 and answer.get("status") == "done" \
             and (answer.get("result") or {}).get("lines", [{}])[0].get("text") == "でき上がり" \
             and answer.get("origin") == "watch" and queue.jobs[n1].get("seq") == seq and queue.jobs[n1].get("handed") is True \
@@ -264,8 +268,10 @@ def check_routes(main) -> int:
 
         # 10. 時計から同じ名前をもう一度送っても、2つにならない
         again = watch.call("POST", f"/w/jobs?name={n2}", b"audio-2-again", key=token)
-        ok = again[0] == 200 and again[1].get("id") == n2 and again[1].get("status") == "done" \
-            and any(f"時計から（外の道） {n2}: もう預かっています" in line for line in logged)
+        # 6 と同じ: 記録の行は答えのあとに書かれるので、書かれるまで待つ
+        again_line = wait_until(lambda: any(f"時計から（外の道） {n2}: もう預かっています" in line
+                                            for line in list(logged)), 5)
+        ok = again[0] == 200 and again[1].get("id") == n2 and again[1].get("status") == "done" and again_line
         failed += say(ok, f"時計から同じ名前をもう一度送っても、預かっている仕事の様子を返すだけ（{again[1]}）")
 
         # 11. GET /jobs?origin=watch と、ふだんの GET /jobs
