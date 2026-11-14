@@ -16,10 +16,17 @@ struct LifeLogShortcuts: AppShortcutsProvider {
                     phrases: ["\(.applicationName)の録音をオフにする"],
                     shortTitle: "録音を止める",
                     systemImageName: "stop.circle")
-        AppShortcut(intent: StartRecordingInAppIntent(),
-                    phrases: ["\(.applicationName)を開いて録音する"],
-                    shortTitle: "開いて録音を始める",
-                    systemImageName: "mic.circle")
+        // Apple の決まりで、ここに並べられるのは 10 個まで。2026-11-15 に「記録に聞く」「朝のまとめを聞く」（VoiceAsk.swift）を入れ、
+        // 「開いて録音を始める」（iPad 用）と「支払いを記録」（ウォレットのオートメーションから呼ぶもの）を外した。
+        // 外した 2 つも、ショートカット App の「アクション」とオートメーションからは今までどおり使える
+        AppShortcut(intent: AskRecordsIntent(),
+                    phrases: ["\(.applicationName)の記録に聞く", "\(.applicationName)に聞く"],
+                    shortTitle: "記録に聞く",
+                    systemImageName: "questionmark.bubble")
+        AppShortcut(intent: ListenMorningBriefIntent(),
+                    phrases: ["\(.applicationName)で朝のまとめを聞く"],
+                    shortTitle: "朝のまとめを聞く",
+                    systemImageName: "speaker.wave.2")
         AppShortcut(intent: MarkIntent(),
                     phrases: ["\(.applicationName)で印を付ける"],
                     shortTitle: "印を付ける",
@@ -28,10 +35,6 @@ struct LifeLogShortcuts: AppShortcutsProvider {
                     phrases: ["\(.applicationName)でさっき何て言った", "\(.applicationName)の直近の記録"],
                     shortTitle: "さっき何て言った？",
                     systemImageName: "text.bubble")
-        AppShortcut(intent: RecordPaymentIntent(),
-                    phrases: ["\(.applicationName)に支払いを記録"],
-                    shortTitle: "支払いを記録",
-                    systemImageName: "creditcard")
         AppShortcut(intent: LastTalkIntent(),
                     phrases: ["\(.applicationName)で前回の話"],
                     shortTitle: "この人と前回何を話した？",

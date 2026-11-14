@@ -410,6 +410,13 @@ struct MorningBriefSection: View {
                 DisclosureGroup(isExpanded: $open) {
                     Text(record.text)
                         .font(.callout)
+                    // 耳で聞く（押したときだけ。2 分ほど。2026-11-15。強化案 59。VoiceAsk.swift）
+                    Button {
+                        MorningSpeaker.shared.toggle(VoiceRecall.morningScript(record.text))
+                    } label: {
+                        Label(MorningSpeaker.shared.speaking ? "読み上げを止める" : "耳で聞く（2 分ほど）",
+                              systemImage: MorningSpeaker.shared.speaking ? "stop.circle" : "speaker.wave.2")
+                    }
                     Button {
                         Task { await pipeline.makeMorningBrief(for: Calendar.current.startOfDay(for: .now), force: true) }
                     } label: {

@@ -15,6 +15,8 @@ struct MeetingButton: View {
                       + (meeting.title.map { "・\($0)" } ?? "") + "）", systemImage: "person.3.fill")
             }
             .tint(.orange)
+            // 会議の相棒（その場版）: 自分の宿題・聞き忘れ・決まったこと（2026-11-15。MeetingLive.swift）
+            MeetingLiveRows()
         } else {
             Button {
                 pipeline.setMeeting(true)

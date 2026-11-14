@@ -41,6 +41,22 @@ struct RecordingActivityAttributes: ActivityAttributes {
     }
 }
 
+/// 会議モードのあいだに出す Live Activity の中身（会議の相棒・その場版。2026-11-15。強化案 50。MeetingLive.swift）。
+/// 家の PC が 1 分に 1 回まで作り直す「決まったこと・自分の宿題・聞き忘れ」の数と、新しく出た 1〜2 行
+struct MeetingActivityAttributes: ActivityAttributes {
+    struct ContentState: Codable, Hashable {
+        /// 会議モードを始めた時刻（経過時間を出す）
+        var started: Date
+        var decided: Int = 0
+        var homework: Int = 0
+        var unasked: Int = 0
+        /// 新しく出た 1〜2 行（「宿 資料を金曜までに送る」のように、頭に種類の 1 文字）
+        var lines: [String] = []
+        /// 家の PC が最後に作り直した時刻（まだなら nil）
+        var updated: Date? = nil
+    }
+}
+
 /// 録音を始める・止める。録音の印として扱われるよう AudioRecordingIntent にし、
 /// Live Activity のボタンから押されてもアプリの中で動くよう LiveActivityIntent にもする。
 struct ToggleRecordingIntent: AudioRecordingIntent, LiveActivityIntent {

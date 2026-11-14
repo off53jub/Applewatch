@@ -51,6 +51,8 @@ struct ClaudeJob: Sendable, Equatable {
         // 家の PC・母艦から頼む分（2026-11-15。Claude の費用の画面に出す）
         "asr-judge": "割れた行の審判", "brief-compare": "朝のまとめの比べ", "mark-sure": "まとめて OK の印",
         "promises": "会話のあとの約束", "proposals": "提案", "weekly": "週のふり返り", "prep": "会う前の一枚",
+        // 2026-11-15（強化案 50・51）
+        "meeting-live": "会議の相棒（その場）", "speaking-coach": "話し方コーチ",
     ]
 
     static func label(_ purpose: String) -> String { labels[purpose] ?? purpose }

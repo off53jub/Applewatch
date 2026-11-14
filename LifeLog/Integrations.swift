@@ -387,6 +387,36 @@ final class HealthLink {
                                       core: total(.asleepCore), awake: total(.awake))
     }
 
+    /// 1 分ごとの心拍（平均・1分あたり）と歩数（合計）。記録の無い分は入らない（2026-11-15。強化案 52。CoachTension.swift が
+    /// 家の PC の POST /health/hr に送る。読む許可は前からの心拍・歩数のまま）
+    func minuteSeries(from start: Date, to end: Date) async -> (heart: [(Date, Double)], steps: [(Date, Double)]) {
+        guard enabled, available, end > start else { return ([], []) }
+        let perMinute: HKUnit = HKUnit.count().unitDivided(by: .minute())
+        let heart: [(Date, Double)] = await collection(.heartRate, from: start, to: end, sum: false, unit: perMinute)
+        let steps: [(Date, Double)] = await collection(.stepCount, from: start, to: end, sum: true, unit: .count())
+        return (heart, steps)
+    }
+
+    private func collection(_ id: HKQuantityTypeIdentifier, from start: Date, to end: Date, sum: Bool,
+                            unit: HKUnit) async -> [(Date, Double)] {
+        await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+            let options: HKStatisticsOptions = sum ? .cumulativeSum : .discreteAverage
+            let query = HKStatisticsCollectionQuery(quantityType: HKQuantityType(id), quantitySamplePredicate: predicate,
+                                                    options: options, anchorDate: start,
+                                                    intervalComponents: DateComponents(minute: 1))
+            query.initialResultsHandler = { _, results, _ in
+                var out: [(Date, Double)] = []
+                results?.enumerateStatistics(from: start, to: end) { stats, _ in
+                    let quantity: HKQuantity? = sum ? stats.sumQuantity() : stats.averageQuantity()
+                    if let value = quantity?.doubleValue(for: unit) { out.append((stats.startDate, value)) }
+                }
+                continuation.resume(returning: out)
+            }
+            store.execute(query)
+        }
+    }
+
     private func categorySamples(_ id: HKCategoryTypeIdentifier, from start: Date, to end: Date) async -> [HKCategorySample] {
         await withCheckedContinuation { continuation in
             let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
