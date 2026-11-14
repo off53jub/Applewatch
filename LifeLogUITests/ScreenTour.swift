@@ -354,4 +354,61 @@ final class ScreenTour: XCTestCase {
             }
         }
     }
+
+    // MARK: - 2026-11-14 の強化案の画面
+
+    /// 見本の写し（DemoData.installOneTimeline）で、1日の画面の年表の行（全部・会話だけ）・PayPay のスクショの取り込み（読めた行の見本）・
+    /// 点検の反映の見張りを撮る。押すのは開く行と見方の切り替えだけ（「取り込む」「スクショを選ぶ」は押さない）
+    func testTourOneTimeline() {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        // 1. 記録 → 日ごと → 今日: 全部（会話のあいだに年表の行）と会話だけ
+        var app = launch()
+        openTab(app, "記録")
+        openSegment(app, "日ごと")
+        if tapFinding(app, f.string(from: Date()), swipes: 2, place: "記録 - 日ごと") {
+            snap(app, "記録 › 今日（全部: 年表の行つき・過ごし方）")
+            if openSegment(app, "会話ごと") {
+                snap(app, "記録 › 今日（全部: 年表の行つき・会話ごと）")
+            }
+            if openSegment(app, "会話だけ") {
+                snap(app, "記録 › 今日（会話だけ）")
+            }
+            // 次の確かめに残さないよう、元に戻す
+            _ = openSegment(app, "全部")
+            _ = openSegment(app, "過ごし方")
+        }
+        // 2. 記録 → 日ごと → 昨日（年表の写しだけの日）
+        app.terminate()
+        app = launch()
+        openTab(app, "記録")
+        openSegment(app, "日ごと")
+        if tapFinding(app, f.string(from: Date().addingTimeInterval(-86400)), swipes: 3, place: "記録 - 日ごと") {
+            snap(app, "記録 › 昨日（年表の行）")
+        }
+        // 3. 記録 → お金 → PayPay の履歴をスクショで取り込む
+        app.terminate()
+        app = launch()
+        openTab(app, "記録")
+        if openSegment(app, "お金") {
+            snap(app, "記録 - お金（スクショの入口）")
+            if tapFinding(app, "PayPay の履歴をスクショで取り込む", swipes: 4, place: "記録 - お金") {
+                snap(app, "記録 › お金 › PayPay のスクショ")
+                app.swipeUp()
+                sleep(1)
+                snap(app, "記録 › お金 › PayPay のスクショ（下）")
+            }
+        }
+        // 4. 歯車 → 点検 → 反映の見張り
+        app.terminate()
+        app = launch()
+        openTab(app, "今日")
+        if openSettings(app) {
+            openSegment(app, "点検")
+            if tapFinding(app, "反映の見張り", swipes: 5, place: "歯車 - 点検") {
+                snap(app, "歯車 › 点検 › 反映の見張り")
+            }
+        }
+    }
 }

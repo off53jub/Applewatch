@@ -91,6 +91,8 @@ enum DemoData {
         installAccuracy(base: base, now: now, day: f.string(from: now), talk: talk1, noisyLine: noisy)
         installMothershipFeeds(base: base, now: now, day: f.string(from: now),
                                yesterday: f.string(from: now.addingTimeInterval(-86400)))
+        installOneTimeline(base: base, now: now, day: f.string(from: now),
+                           yesterday: f.string(from: now.addingTimeInterval(-86400)), first: a)
         // 効き目の数の見本
         Tally.add("fix.proposed", 6)
         Tally.add("fix.kept", 4)
@@ -292,6 +294,92 @@ enum DemoData {
             unused.items.append(UnusedScreen(screen: s, opens: i, days: 30, note: i == 0 ? "見本の覚え書き" : ""))
         }
         write(unused, "mfeed-unused.json")
+    }
+
+    /// 1日の年表の写し（今日と昨日）・反映の見張り・前に取り込んだ PayPay の行の印（2026-11-14。OneTimeline.swift）。
+    /// 店・場所・人はすべて作り物。長いクロージャの式は CI が落ちるので、明示的なループと型で書く
+    private static func installOneTimeline(base: URL, now: Date, day: String, yesterday: String, first: Date) {
+        let encoder = JSONEncoder()
+        let clock = DateFormatter()
+        clock.locale = Locale(identifier: "en_US_POSIX")
+        clock.dateFormat = "HH:mm"
+        let midnight: Date = Calendar.current.startOfDay(for: now)
+        let dir: URL = base.appendingPathComponent(OneTimelineBook.folder, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // 今日: 会話（見本）の前・あいだ・あと
+        let offsets: [TimeInterval] = [-1800, 1200, 2400, 4500, 5400, -600]
+        let lanes: [String] = ["位置", "決済", "LINE", "予定", "注文", "天気"]
+        let texts: [String] = ["見本の駅に滞在", "見本のパン屋（かざした）", "見本 花子 と 3 件", "見本の打ち合わせ",
+                               "見本の本の注文", "晴れ 18℃"]
+        let amounts: [Int?] = [nil, 480, nil, nil, 1980, nil]
+        let places: [String?] = ["見本の駅", nil, nil, nil, nil, nil]
+        var rows: [TimelineRow] = []
+        for i in 0..<offsets.count {
+            var at: Date = first.addingTimeInterval(offsets[i])
+            if at < midnight.addingTimeInterval(60) { at = midnight.addingTimeInterval(60 + Double(i) * 60) }
+            if at > now { at = now.addingTimeInterval(-Double(i + 1) * 60) }
+            var row = TimelineRow(time: clock.string(from: at), lane: lanes[i], text: texts[i])
+            row.amount = amounts[i]
+            row.place = places[i]
+            if lanes[i] == "位置" { row.end = clock.string(from: min(now, at.addingTimeInterval(1500))) }
+            rows.append(row)
+        }
+        let today = TimelineDay(day: day, generated_at: MothershipOutbox.isoString(now), rows: OneTimeline.sortedByTime(rows),
+                                fetched: now.addingTimeInterval(-900))
+        if let data = try? encoder.encode(today) { try? data.write(to: dir.appendingPathComponent(day + ".json"), options: .atomic) }
+        var old: [TimelineRow] = []
+        let oldTimes: [String] = ["08:10", "12:30", "19:05"]
+        let oldLanes: [String] = ["位置", "決済", "LINE"]
+        let oldTexts: [String] = ["見本の職場に滞在", "見本の定食屋（カードのメール）", "見本 太郎 と 5 件"]
+        for i in 0..<oldTimes.count {
+            var row = TimelineRow(time: oldTimes[i], lane: oldLanes[i], text: oldTexts[i])
+            if oldLanes[i] == "決済" { row.amount = 850 }
+            old.append(row)
+        }
+        let before = TimelineDay(day: yesterday, generated_at: MothershipOutbox.isoString(now), rows: old, fetched: now)
+        if let data = try? encoder.encode(before) {
+            try? data.write(to: dir.appendingPathComponent(yesterday + ".json"), options: .atomic)
+        }
+        // 反映の見張り（いくつかの所が止まっている見本）
+        var table = ReflectionTable(generated_at: MothershipOutbox.isoString(now), today: day)
+        table.destinations = ["取り込み", "年表", "朝のまとめ", "アプリへの配り", "ノート"]
+        let elements: [String] = ["会話", "LINE", "位置", "決済", "PayPay", "予定", "注文"]
+        let lags: [[Int?]] = [[0, 0, 0, 0, 0], [0, 0, 0, nil, 3], [0, 0, 1, 0, 9], [0, 0, 2, 0, nil],
+                              [5, nil, nil, nil, nil], [0, 0, 0, 0, nil], [nil, nil, nil, nil, nil]]
+        for i in 0..<elements.count {
+            var cells: [String?] = []
+            for lag in lags[i] {
+                if let lag {
+                    cells.append(HealthExport.dayKey(now.addingTimeInterval(-Double(lag) * 86400)))
+                } else {
+                    cells.append(nil)
+                }
+            }
+            table.elements.append(ReflectionTable.Element(element: elements[i], cells: cells))
+        }
+        if let data = try? encoder.encode(table) {
+            try? data.write(to: base.appendingPathComponent(OneTimelineBook.reflectionFile), options: .atomic)
+        }
+        // 前に取り込んだ PayPay の行（「もうある」の見本）
+        let sent: [String] = [PayShots.knownKey(day: day, amount: 680)]
+        if let data = try? encoder.encode(sent) {
+            try? data.write(to: base.appendingPathComponent(PayShots.sentFile), options: .atomic)
+        }
+    }
+
+    /// PayPay のスクショから読めたことにする行（PayPayShotView の見本。1つは「もうある」）
+    static func payShotRows() -> [PayShotRow] {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        let day: String = f.string(from: Date())
+        let yesterday: String = f.string(from: Date().addingTimeInterval(-86400))
+        var rows: [PayShotRow] = []
+        rows.append(PayShotRow(time: day + "T12:34:00+09:00", day: day, shop: "見本の弁当屋", amount: 680, method: "PayPay残高"))
+        rows.append(PayShotRow(time: nil, day: day, shop: "見本のコンビニ", amount: 248, method: "PayPay残高"))
+        rows.append(PayShotRow(time: yesterday + "T19:02:00+09:00", day: yesterday, shop: "見本の居酒屋", amount: 3200,
+                               method: "クレジット"))
+        return rows
     }
 }
 #endif

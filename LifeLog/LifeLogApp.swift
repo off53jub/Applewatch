@@ -68,6 +68,8 @@ struct LifeLogApp: App {
         if Self.demo {
             pipeline.homePC.features.formUnion(["weekly", "prep", "briefcmp", "accuracy", "unused", "feedback", "mood", "appusage"])
         }
+        // 1日の年表・PayPay の写真・滞在・反映の見張り（2026-11-14。OneTimeline.swift）
+        if Self.demo { pipeline.homePC.features.formUnion(["timeline", "paypayshot", "paypayrows", "livestays", "reflection"]) }
         #endif
         // 家の PC に送っている途中の区切りの知らせを受け取れるようにする
         if !Self.testing && !Self.demo { PCJobUploader.shared.start() }
