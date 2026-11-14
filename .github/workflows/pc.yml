@@ -161,6 +161,13 @@ jobs:
           python pc/v14checks_search.py > v14.txt 2>&1 || { cat v14.txt; grep '^NG' v14.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v14.txt | sed 's/^/::notice::v14checks_search の OK の数: /'
 
+      # 2026-11-15（強化案 53・54・55・61）: GET /people-pages・/threads・/place-pages・/decisions（形を確かめておかしな行を落とす）・
+      #   POST /decisions/answer（写しで確かめて母艦の inbox に 1 行・409・400）を、一時フォルダで確かめる
+      - name: 人・話題の糸・場所・決めごとのページを確かめる
+        run: |
+          python pc/v15checks_pages.py > v15p.txt 2>&1 || { cat v15p.txt; grep '^NG' v15p.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v15p.txt | sed 's/^/::notice::v15checks_pages の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py
@@ -223,7 +230,7 @@ jobs:
             --hidden-import trainer --hidden-import gpu --hidden-import v7checks_ops \
             --hidden-import v8checks --hidden-import v9checks --hidden-import lifelog_mcp \
             --hidden-import watchroute --hidden-import v10checks --hidden-import mothership --hidden-import appfeeds \
-            --hidden-import oneline --hidden-import askmother --hidden-import mothersearch --hidden-import settle \
+            --hidden-import oneline --hidden-import askmother --hidden-import mothersearch --hidden-import settle --hidden-import pages \
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \
             --hidden-import claude --hidden-import v11checks \
