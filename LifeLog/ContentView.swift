@@ -176,6 +176,7 @@ private struct TodayView: View {
                 // (b) 次の予定の前に（3時間以内に始まる予定があるときだけ）
                 PrepCardSection()
                 PromisesSection()  // 会話のあとの約束（2026-11-13。Promises.swift。無いときは何も出さない）
+                RepliesSection()  // 返事・メールの下書き（2026-11-15。強化案 58。DraftActions.swift。無いときは何も出さない）
                 // (c) 夜の10秒（20時から翌朝まで、まだ答えていない日だけ）
                 NightMoodSection()
                 // (d) 困ったことがあるときだけ

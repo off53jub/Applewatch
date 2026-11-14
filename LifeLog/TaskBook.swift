@@ -118,6 +118,8 @@ final class TaskBook {
         var repeats: Repeat? = nil
         /// iPhone のリマインダーに送ったときの、その項目の id
         var reminderID: String? = nil
+        /// 「予定に仮登録」で入れた予定の id（2026-11-15。強化案 58。前の記録には無い。DraftActions.swift）
+        var eventID: String? = nil
         /// 2つの言語モデルが両方拾った（true）・片方だけ（false）・見比べていない（nil）。2026-11-06
         var agreed: Bool? = nil
         /// 確かめ待ちから、本人が採った・却下した（頼まれごとの候補の学びに使う。2026-11-06。前の記録には無い）
@@ -1856,7 +1858,6 @@ struct TaskEditView: View {
     @State private var due = Date.now
     @State private var hasTime = false
     @State private var time = Date.now
-    @State private var reminderNote: String?
 
     var body: some View {
         Form {
@@ -1894,22 +1895,8 @@ struct TaskEditView: View {
                     Text("聞いた言い方: \(dueText)").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Section {
-                Button(item.reminderID == nil ? "iPhone のリマインダーに送る" : "リマインダーに送り直す") {
-                    applyDue()
-                    Task {
-                        do {
-                            item.reminderID = try await RemindersExport.send(item)
-                            reminderNote = "リマインダーに入れました。"
-                        } catch {
-                            reminderNote = "入れられませんでした: \(error.localizedDescription)"
-                        }
-                    }
-                }
-                if let reminderNote { Text(reminderNote).font(.caption).foregroundStyle(.secondary) }
-            } footer: {
-                Text("リマインダーでは、期限の時刻に知らせが来ます。場所で知らせるのは、リマインダーの側で設定してください。")
-            }
+            // 「予定に仮登録」「リマインダーに」（2026-11-15。強化案 58。確かめの画面で押すまで入れない。DraftActions.swift）
+            TaskDraftSection(item: $item, hasDue: hasDue, prepare: { applyDue() })
             Section("メモ") {
                 TextField("自分用のメモ", text: Binding(get: { item.memo ?? "" },
                                                   set: { item.memo = $0.isEmpty ? nil : $0 }), axis: .vertical)
