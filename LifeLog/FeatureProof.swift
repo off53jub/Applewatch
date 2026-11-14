@@ -125,6 +125,9 @@ enum FeatureProof {
         Screen(key: "accuracy", name: "精度の通信簿"),
         Screen(key: "unused", name: "あまり開かれていない画面"),
         Screen(key: "appUsageHowTo", name: "アプリを開いた記録の使い方"),
+        // 2026-11-14（強化案 28・34）
+        Screen(key: "paypayShot", name: "PayPay のスクショ"),
+        Screen(key: "reflection", name: "反映の見張り"),
     ]
 
     static func screenKey(_ s: Screen) -> String { "screen." + s.key }

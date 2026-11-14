@@ -773,6 +773,8 @@ private struct SettingsView: View {
         ChecklistSection()
         // 精度の通信簿・あまり開かれていない画面（2026-11-13。施策 12・21。MothershipFeeds.swift）
         MothershipCheckSection()
+        // 反映の見張り（2026-11-14。強化案 34。OneTimelineViews.swift）
+        ReflectionCheckSection()
         Section {
             NavigationLink("登録の控え") { BackupView() }
             NavigationLink("記録の掃除") { CleanupView() }

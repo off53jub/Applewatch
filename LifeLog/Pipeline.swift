@@ -208,6 +208,8 @@ final class Pipeline {
     let homeFeeds = HomeFeedsBook()
     /// 週のふり返り・会う前の一枚・朝のまとめの比べ・精度の通信簿と、使われ方・夜の10秒の送り（2026-11-13。MothershipFeeds.swift）
     let mothershipFeeds = MothershipFeedsBook()
+    /// 1日の年表・反映の見張り・位置を当日のうちに（2026-11-14。強化案 25・30・34。OneTimeline.swift）
+    let oneTimeline = OneTimelineBook()
     /// 仕事のまとめ（職場の Claude の答えを写真・貼り付けで取り込む。2026-11-08。WorkDigest.swift）
     let workDigests = WorkDigest()
     /// 言葉の登録の候補（母艦の辞書から。押した言葉だけ登録する。2026-11-10。WordCandidates.swift）
@@ -1489,6 +1491,7 @@ final class Pipeline {
         Task { await homeFeeds.refresh(homePC) }  // 提案・PLAUD で埋めた所・話し手の疑い（30分に1回まで。2026-11-13）
         Task { await PromiseInbox.shared.refresh(self) }  // 会話のあとの約束と、その設定（5分に1回まで。2026-11-13。Promises.swift）
         Task { await refreshMothershipFeeds() }  // 週のふり返り・会う前の一枚など（30分に1回まで）とためた答えの送り（2026-11-13）
+        Task { await refreshOneTimeline() }  // 今日と昨日の年表・反映の見張り・滞在の送り（2026-11-14。OneTimeline.swift）
         Task {
             await good.refresh(homePC)  // いいこと帳（30分に1回まで）
             updateWidgets()  // ウィジェットの今週の数（2026-11-12）
@@ -1707,6 +1710,8 @@ final class Pipeline {
             await exportHealthIfDue()
             // 位置の終わった日も、母艦に渡すためドライブに書く（2026-11-09。LocationExport.swift）
             await exportLocationIfDue()
+            // 終わった滞在と今の滞在を、15分に1回まで家の PC へ（2026-11-14。強化案 30。OneTimeline.swift）
+            await sendLiveStaysIfDue()
             // 朝の「昨日と今日」（充電しない夜にも。作り終えていれば何もしない。2026-11-09。MorningBrief.swift）
             let hour = Calendar.current.component(.hour, from: .now)
             if hour >= 20 || hour < 7 { await makeMorningBriefAtNight() }

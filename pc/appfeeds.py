@@ -63,7 +63,9 @@ ROUTES = {"/self-candidates": ("selfcand", SELF_CANDIDATES), "/freshness": ("fre
 FEATURES = ("weekly", "prep", "briefcmp", "accuracy", "unused", "feedback", "mood", "appusage")
 
 PROPOSAL_LIMIT = 60
-PROPOSAL_KINDS = ("followup", "research", "selffix", "pattern", "review", "chance", "health", "prep", "vocab")
+# "profile"（2026-11-14。強化案 32）: 本人の台帳（profile.md・people-index.md）に入れる候補。action は none だけ
+# （受けても答えを返すだけで、台帳に足すのは母艦）
+PROPOSAL_KINDS = ("followup", "research", "selffix", "pattern", "review", "chance", "health", "prep", "vocab", "profile")
 EVIDENCE_LIMIT = 10
 EVIDENCE_SOURCES = ("conversation", "line", "calendar", "plaud", "stats", "task", "web")
 ACTION_TYPES = ("task", "vocab", "none")
@@ -245,9 +247,12 @@ def read_proposals(base: Path, now: datetime.datetime | None = None) -> dict:
         ends = _moment(_iso(expires))
         if ends is not None and ends < now:
             continue  # 期限が過ぎたものは出さない
+        evidence = _evidence(x.get("evidence"))
+        if x["kind"] == "profile" and (action["type"] != "none" or not evidence):
+            continue  # 台帳の候補は、根拠つきで、受けても何も変えないものだけ（2026-11-14）
         seen.add(item_id)
         items.append({"id": item_id, "kind": x["kind"], "title": title, "body": body,
-                      "evidence": _evidence(x.get("evidence")), "action": action,
+                      "evidence": evidence, "action": action,
                       "created": created, "expires": _iso(expires)})
     return {"available": True, "generated_at": _text(data.get("generated_at"), 40), "items": items[:PROPOSAL_LIMIT]}
 

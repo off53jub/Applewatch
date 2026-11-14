@@ -15,6 +15,7 @@ anthropic の部品（anthropic==2.8.0）は、頼むときに初めて読み込
 
 from __future__ import annotations
 
+import base64
 import datetime
 import json as _json
 import os
@@ -332,10 +333,36 @@ def parse_json_text(text: str):
     raise ValueError("JSON を読めません")
 
 
+IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
+IMAGE_MAX = 4 * 1024 * 1024      # 1枚の大きさ（base64 にする前）
+IMAGES_MAX = 4                   # 1回に渡す枚数
+
+
+def image_blocks(images: list | None) -> list[dict]:
+    """[(media_type, bytes)] を Claude の画像の部品に（2026-11-14。PayPay の写真）。おかしければ ValueError。
+    画像はどこにも書かない（帳簿・記録にも、枚数と大きさ以外は残さない）"""
+    blocks = []
+    for item in images or []:
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise ValueError("画像は (種類, 中身) の組です")
+        media_type, data = item
+        if media_type not in IMAGE_TYPES:
+            raise ValueError("画像の種類は JPEG・PNG・WebP・GIF です")
+        if not isinstance(data, (bytes, bytearray)) or not 0 < len(data) <= IMAGE_MAX:
+            raise ValueError("画像が空か、大きすぎます（4MB まで）")
+        blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type,
+                                                   "data": base64.b64encode(bytes(data)).decode("ascii")}})
+    if len(blocks) > IMAGES_MAX:
+        raise ValueError(f"画像は {IMAGES_MAX} 枚までです")
+    return blocks
+
+
 def call(system: str | None, prompt: str, json: bool = False, max_tokens: int = DEFAULT_TOKENS,
          tier: str = "light", purpose: str = "pc", work: bool = False, schema: dict | None = None,
-         who: str = "pc", timeout: float | None = None, log: Callable[[str], None] | None = None) -> dict:
+         who: str = "pc", timeout: float | None = None, log: Callable[[str], None] | None = None,
+         images: list | None = None) -> dict:
     """Claude に1回頼む。{"text", "data"（json のとき）, "model", "usd", "month_usd", "cap_usd"} を返す。
+    images は [(media_type, bytes)]（2026-11-14。文の前に画像を置く）。
     頼めなければ ClaudeError（status と body。鍵は入れない）。おかしな頼み方は ValueError。"""
     if tier not in TIERS:
         raise ValueError("tier は light・standard・deep のどれかです")
@@ -343,6 +370,7 @@ def call(system: str | None, prompt: str, json: bool = False, max_tokens: int = 
         raise ValueError("purpose は英数字と _ . : - で 40 文字までです")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt がありません")
+    pictures = image_blocks(images)
     config = load_config()
     cap = config["monthly_usd"]
     if work and not config["work"]:
@@ -355,7 +383,8 @@ def call(system: str | None, prompt: str, json: bool = False, max_tokens: int = 
         raise ClaudeError(402, "今月の上限に達しました", month_usd=round(spent, 6), cap_usd=cap)
     model = TIERS[tier]
     tokens = int(min(MAX_TOKENS, max(1, max_tokens)))
-    kwargs: dict = {"model": model, "max_tokens": tokens, "messages": [{"role": "user", "content": prompt}]}
+    content = pictures + [{"type": "text", "text": prompt}] if pictures else prompt
+    kwargs: dict = {"model": model, "max_tokens": tokens, "messages": [{"role": "user", "content": content}]}
     if system:
         # 決まった長い頭の部分は覚えておいてもらう（毎回まったく同じ文にする）
         kwargs["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
@@ -405,7 +434,7 @@ def call(system: str | None, prompt: str, json: bool = False, max_tokens: int = 
     if log:
         # 頼んだ文と答えの中身は書かない（長さ・モデル・値段だけ）
         log(f"Claude（{purpose}・{answered}）: 入 {used['in']}+{used['cache_read']}（覚えた分）・出 {used['out']} トークン、"
-            f"{len(prompt)} 文字 → {len(text)} 文字、${usd:.4f}（今月 ${total:.2f}／${cap:.0f}）、"
+            f"{len(prompt)} 文字" + (f"・画像 {len(pictures)} 枚" if pictures else "") + f" → {len(text)} 文字、${usd:.4f}（今月 ${total:.2f}／${cap:.0f}）、"
             f"{time.time() - started:.1f} 秒" + (f"、{stop}" if stop not in (None, "end_turn") else ""))
     if stop == "refusal":
         raise ClaudeError(422, "断られました", refusal=True)

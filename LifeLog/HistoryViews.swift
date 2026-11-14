@@ -4,28 +4,42 @@ import SwiftUI
 
 /// 1日の記録。「過ごし方」（何時から何時まで何をしていたか）と「会話ごと」を切り替えて見る。
 struct DayView: View {
+    @Environment(Pipeline.self) private var pipeline
     let day: String
     /// 0: 過ごし方、1: 会話ごと
     @AppStorage("dayViewMode") private var mode = 0
+    /// 0: 全部（会話のあいだに、場所・お金・LINE・予定などの年表の行を挟む）、1: 会話だけ（2026-11-14。強化案 25。端末ごとに覚える）
+    @AppStorage("dayTimelineFilter") private var filter = 0
 
     var body: some View {
+        let withTimeline: Bool = filter == 0
         Group {
             if mode == 0 {
-                ActivitiesView(day: day)
+                ActivitiesView(day: day, withTimeline: withTimeline)
             } else {
-                ConversationsView(day: day)
+                ConversationsView(day: day, withTimeline: withTimeline)
             }
         }
         .safeAreaInset(edge: .top) {
-            Picker("見方", selection: $mode) {
-                Text("過ごし方").tag(0)
-                Text("会話ごと").tag(1)
+            VStack(spacing: 6) {
+                Picker("見方", selection: $mode) {
+                    Text("過ごし方").tag(0)
+                    Text("会話ごと").tag(1)
+                }
+                .pickerStyle(.segmented)
+                Picker("並べるもの", selection: $filter) {
+                    Text("全部").tag(0)
+                    Text("会話だけ").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.small)
             }
-            .pickerStyle(.segmented)
             .padding(.horizontal)
             .padding(.bottom, 6)
             .background(.bar)
         }
+        // 母艦の1日の年表（家の PC から。開くたびに読み直す。つながらないときは写し。OneTimeline.swift）
+        .task(id: day) { await pipeline.oneTimeline.refresh(day: day, pc: pipeline.homePC) }
         .navigationTitle(day)
         .countsOpen("dayView")  // 開いた回数（2026-11-13。施策 17）
         .toolbar {
@@ -47,6 +61,8 @@ struct DayView: View {
 struct ActivitiesView: View {
     @Environment(Pipeline.self) private var pipeline
     let day: String
+    /// 塊のあいだに年表の行（会話以外）を挟む（2026-11-14。強化案 25）
+    var withTimeline: Bool = false
     @State private var activities: [Activity] = []
     @State private var building = false
     /// まだ塊にまとめていない会話（閉じていない会話や、まとめたあとに増えた会話）
@@ -59,7 +75,11 @@ struct ActivitiesView: View {
     }()
 
     var body: some View {
+        let rows: [TimelineRow] = withTimeline ? pipeline.oneTimeline.rows(for: day) : []
+        let anchors: [Date] = activities.map(\.start)
+        let slots: [[TimelineRow]] = OneTimeline.slots(anchors: anchors, rows: rows, day: day)
         List {
+            if withTimeline { TimelineNoteSection(day: day) }
             // PLAUD で埋めた所（アプリの記録が無い時間。読むだけ。2026-11-13。HomeFeeds.swift）
             PlaudFillSection(day: day)
             if building {
@@ -68,7 +88,9 @@ struct ActivitiesView: View {
                     Text("過ごし方をまとめています…").foregroundStyle(.secondary)
                 }
             }
-            ForEach(activities) { activity in
+            // 年表の行のうち、最初の塊より前のもの（2026-11-14）
+            TimelineRowsSection(rows: slots[0])
+            ForEach(Array(activities.enumerated()), id: \.element.id) { index, activity in
                 Section {
                     if activity.kind == .recorded, let first = activity.first, let last = activity.last {
                         NavigationLink {
@@ -81,6 +103,8 @@ struct ActivitiesView: View {
                         ActivityRow(activity: activity)
                     }
                 }
+                // この塊のあとの年表の行
+                TimelineRowsSection(rows: index + 1 < slots.count ? slots[index + 1] : [])
             }
             if let first = newer.first {
                 Section {
@@ -102,7 +126,7 @@ struct ActivitiesView: View {
             }
         }
         .overlay {
-            if activities.isEmpty && newer.isEmpty && !building && pipeline.homeFeeds.fill(for: day) == nil {
+            if activities.isEmpty && newer.isEmpty && !building && pipeline.homeFeeds.fill(for: day) == nil && rows.isEmpty {
                 ContentUnavailableView("記録がありません", systemImage: "calendar.day.timeline.left")
             }
         }
@@ -176,6 +200,8 @@ struct ConversationsView: View {
     @Environment(Pipeline.self) private var pipeline
     let day: String
     var range: ClosedRange<Date>? = nil
+    /// 会話のあいだに年表の行（会話以外）を挟む（1日を見るときだけ。2026-11-14。強化案 25）
+    var withTimeline: Bool = false
     @State private var conversations: [ConversationLog.Conversation] = []
     @State private var player = ClipPlayer()
     @State private var fixing: Fix?
@@ -210,11 +236,18 @@ struct ConversationsView: View {
     }()
 
     var body: some View {
-        List {
+        let groups: [[ConversationLog.Conversation]] = ConversationLog.grouped(conversations)
+        let rows: [TimelineRow] = withTimeline && range == nil ? pipeline.oneTimeline.rows(for: day) : []
+        var anchors: [Date] = []
+        for group in groups { anchors.append(group.first?.start ?? .distantFuture) }
+        let slots: [[TimelineRow]] = OneTimeline.slots(anchors: anchors, rows: rows, day: day)
+        return List {
+            if withTimeline && range == nil { TimelineNoteSection(day: day) }
             // PLAUD で埋めた所（1日を見るときだけ。読むだけで、会話には入れない。2026-11-13。HomeFeeds.swift）
             if range == nil { PlaudFillSection(day: day) }
-            // 間が短く、場所と相手が同じ会話は1つのまとまりで見せる
-            ForEach(Array(ConversationLog.grouped(conversations).enumerated()).reversed(), id: \.offset) { g, group in
+            // 間が短く、場所と相手が同じ会話は1つのまとまりで見せる（新しい順。年表の行は、そのまとまりのあとの分を上に）
+            ForEach(Array(groups.enumerated()).reversed(), id: \.offset) { g, group in
+                TimelineRowsSection(rows: g + 1 < slots.count ? Array(slots[g + 1].reversed()) : [])
                 Section {
                     ForEach(Array(group.enumerated()), id: \.offset) { c, conversation in
                         if group.count > 1, let title = conversation.title, !title.isEmpty {
@@ -278,9 +311,11 @@ struct ConversationsView: View {
                     Text(heading(for: group))
                 }
             }
+            // 最初の会話より前の年表の行（新しい順）
+            TimelineRowsSection(rows: Array(slots[0].reversed()))
         }
         .overlay {
-            if conversations.isEmpty && (range != nil || pipeline.homeFeeds.fill(for: day) == nil) {
+            if conversations.isEmpty && rows.isEmpty && (range != nil || pipeline.homeFeeds.fill(for: day) == nil) {
                 ContentUnavailableView("記録がありません", systemImage: "text.bubble")
             }
         }

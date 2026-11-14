@@ -105,6 +105,10 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
   GET /promises-now（36 時間ぶん）・POST /promises/settings（アプリの設定）
 - POST /ask-mothership {"question"} → 母艦の Search-Lifelog.py で探して Claude が答える（出どころつき）
     python v12checks_promises.py  これを、一時フォルダと作り物の Claude・検索で確かめる
+2026-11-14（強化案 25・28・30・34。中身は oneline.py。features に "timeline"・"paypayshot"・"paypayrows"・"livestays"・
+"reflection"）: GET /timeline?day=（母艦の 1 日の年表）・POST /pay/paypay-shot（PayPay の画面の写真を Claude で読む。
+画像は残さない）・POST /pay/paypay-rows・POST /location/stays・GET /reflection（反映の見張り）
+    python v13checks_oneline.py  これを、一時フォルダと作り物の Claude で確かめる
 """
 
 from __future__ import annotations
@@ -2102,6 +2106,8 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(["proposals", "plaudfill", "spkdoubt"])
     # GET /weekly・/prep・/brief-compare・/accuracy・/unused と POST /feedback・/mood・/app-usage（2026-11-13 の施策。appfeeds.py）
     found.extend(mothership.appfeeds.FEATURES)
+    # GET /timeline・/reflection と POST /pay/paypay-shot・/pay/paypay-rows・/location/stays（2026-11-14。oneline.py）
+    found.extend(mothership.oneline.features())
     # POST /claude・GET /claude/usage（鍵があり、今月の上限に届いていないときだけ。2026-11-13）
     if claude.available():
         found.append("claude")
