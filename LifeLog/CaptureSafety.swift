@@ -137,7 +137,8 @@ extension Pipeline {
             let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
             trigger = UNCalendarNotificationTrigger(dateMatching: parts, repeats: false)
         }
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+        // すぐ出す知らせは、1時間に3通を超えたら1通にまとめる（2026-11-15。強化案 44。NoticeGate.swift）
+        NoticeGate.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
     }
 
     // MARK: 会議モード
@@ -158,6 +159,8 @@ extension Pipeline {
         }
         MeetingMode.sessions = sessions
         meeting = MeetingMode.active
+        // 録り方の実験より会議モードを先に（iPhone の録音の部品が読む。2026-11-15。RecordingExperiment）
+        UserDefaults.standard.set(meeting != nil, forKey: RecordingExperiment.meetingKey)
         receiver.sendSettings(skipSilence: skipSilence, held: recordingHeld, meeting: on)
         if !on { processQueue() }
     }

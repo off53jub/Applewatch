@@ -459,10 +459,10 @@ class Watcher:
                 with self.lock:
                     if error.status in (403, 422):
                         self.state["processed"][key] = last
-                    else:
+                    elif error.status != claude.PURPOSE_OFF:  # 用途を止めた・今日の上限（2026-11-15）は数えずに次の見回りへ
                         self.state["tries"][key] = tries + 1
                 self.log(f"約束: Claude に頼めませんでした（{error.status}）")
-                if error.status in (402, 503):
+                if error.status in (402, 503, claude.PURPOSE_OFF):
                     break
                 continue
             except Exception as error:  # noqa: BLE001 — 見回りは止めない

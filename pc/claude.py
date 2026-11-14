@@ -3,7 +3,12 @@
 - 鍵: 環境変数 ANTHROPIC_API_KEY、無ければ %LOCALAPPDATA%\\LifeLogPC\\claude-key.txt の最初の空でない1行。
   鍵は記録（log.txt）・答え・エラー・/hello・見守りの画面のどこにも出さない（scrub で消してから外に出す）。
 - 設定（無くてよい）: %LOCALAPPDATA%\\LifeLogPC\\claude-config.json
-  {"monthly_usd": 100, "work": true, "judge": true, "judge_daily": 400}
+  {"monthly_usd": 100, "work": true, "judge": true, "judge_daily": 400,
+   "daily_caps": {"<purpose の前方一致>": usd}, "stopped": ["<purpose>"]}
+  2026-11-15（強化案 37。母艦の scripts/claude_call.py も同じ決まり）: stopped にある purpose は頼まない。daily_caps は、
+  その日（この PC のローカルの日付）のその purpose の帳簿の合計が上限に届いたら頼まない（前方一致のうち一番長いもの）。
+  どちらも 409 {"error", "purpose_off": "stopped"|"daily_cap"}（402 の今月の上限とは分ける。アプリはその用途だけを
+  今までの作り方に戻す）。GET /costs（settle.py）が今月・見込み・今日の用途ごとの額を返す。
 - 帳簿: %LOCALAPPDATA%\\LifeLogPC\\claude-usage.jsonl に、1回ごとに1行足す（母艦の scripts も同じ帳簿に足す）。
   会話の文は書かない（数と値段だけ）。月は "at" の YYYY-MM。
 - 上限: 頼む前に、今月の値段の合計が monthly_usd 以上なら断る（1回分だけ少し越えるのはよい）。
@@ -46,7 +51,10 @@ TIERS = {"light": "claude-haiku-5-5", "standard": "claude-sonnet-5-5", "deep": "
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 FALLBACK_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5")
 
-DEFAULTS = {"monthly_usd": 100.0, "work": True, "judge": True, "judge_daily": 400}
+DEFAULTS = {"monthly_usd": 100.0, "work": True, "judge": True, "judge_daily": 400, "daily_caps": {}, "stopped": []}
+# 用途ごとの止め・1日の上限で断るときの番号（2026-11-15。強化案 37）。402（今月の上限）・403（職場）と分けるのは、
+# アプリがその用途だけを今までの作り方に戻し、ほかの用途は Claude に頼み続けられるようにするため
+PURPOSE_OFF = 409
 
 PURPOSE = re.compile(r"[0-9A-Za-z_.:-]{1,40}")
 PROMPT_MAX = 200_000
@@ -139,7 +147,37 @@ def load_config() -> dict:
     daily = data.get("judge_daily")
     if isinstance(daily, int) and not isinstance(daily, bool) and 0 <= daily <= 100_000:
         config["judge_daily"] = daily
+    # 2026-11-15（強化案 37。母艦の scripts/claude_call.py も同じ読み方）: 省ける2つ
+    caps = data.get("daily_caps")
+    if isinstance(caps, dict):
+        config["daily_caps"] = {k: float(v) for k, v in caps.items()
+                                if isinstance(k, str) and 0 < len(k) <= 40 and isinstance(v, (int, float))
+                                and not isinstance(v, bool) and 0 <= v <= 100_000}
+    stopped = data.get("stopped")
+    if isinstance(stopped, list):
+        config["stopped"] = sorted({s for s in stopped if isinstance(s, str) and 0 < len(s) <= 40})
     return config
+
+
+def cap_for(purpose: str, caps: dict) -> tuple[str, float] | None:
+    """purpose に効く1日の上限（前方一致のうち、いちばん長いもの）。無ければ None"""
+    best = None
+    for prefix, usd in caps.items():
+        if purpose.startswith(prefix) and (best is None or len(prefix) > len(best[0])):
+            best = (prefix, usd)
+    return best
+
+
+def purpose_gate(purpose: str, config: dict | None = None, day: str | None = None) -> tuple[str, str] | None:
+    """この用途を今は頼まないなら (わけの印 "stopped"|"daily_cap", 文)。頼んでよければ None。
+    daily_cap は、その日（この PC のローカルの日付）のその用途の台帳の合計が上限に届いたとき"""
+    config = config or load_config()
+    if purpose in config.get("stopped", []):
+        return "stopped", "この用途は止めてあります（claude-config.json の stopped）"
+    found = cap_for(purpose, config.get("daily_caps") or {})
+    if found is not None and LEDGER.day_usd(day or today(), purpose) >= found[1]:
+        return "daily_cap", f"この用途の今日の上限 ${found[1]:.2f} に届きました"
+    return None
 
 
 # MARK: - 値段と帳簿
@@ -190,6 +228,7 @@ class _Ledger:
         self.pos = 0
         self.months: dict[str, dict] = {}
         self.days: dict[str, dict[str, int]] = {}
+        self.days_usd: dict[str, dict[str, float]] = {}
 
     def add(self, row: dict) -> None:
         at = row.get("at")
@@ -199,13 +238,17 @@ class _Ledger:
         usd = float(usd) if isinstance(usd, (int, float)) and not isinstance(usd, bool) and usd >= 0 else 0.0
         purpose = str(row.get("purpose") or "")[:40] or "?"
         who = str(row.get("who") or "")[:20] or "?"
-        month = self.months.setdefault(at[:7], {"usd": 0.0, "calls": 0, "by_purpose": {}, "by_who": {}})
+        month = self.months.setdefault(at[:7], {"usd": 0.0, "calls": 0, "by_purpose": {}, "by_who": {},
+                                                "purpose_calls": {}})
         month["usd"] += usd
         month["calls"] += 1
         month["by_purpose"][purpose] = month["by_purpose"].get(purpose, 0.0) + usd
         month["by_who"][who] = month["by_who"].get(who, 0.0) + usd
+        month["purpose_calls"][purpose] = month["purpose_calls"].get(purpose, 0) + 1
         day = self.days.setdefault(at[:10], {})
         day[purpose] = day.get(purpose, 0) + 1
+        spent = self.days_usd.setdefault(at[:10], {})
+        spent[purpose] = spent.get(purpose, 0.0) + usd
 
     def refresh(self) -> None:
         path = ledger_path()
@@ -242,14 +285,25 @@ class _Ledger:
     def month(self, month: str) -> dict:
         self.refresh()
         with self.lock:
-            got = self.months.get(month) or {"usd": 0.0, "calls": 0, "by_purpose": {}, "by_who": {}}
+            got = self.months.get(month) or {"usd": 0.0, "calls": 0, "by_purpose": {}, "by_who": {},
+                                             "purpose_calls": {}}
             return {"usd": got["usd"], "calls": got["calls"], "by_purpose": dict(got["by_purpose"]),
-                    "by_who": dict(got["by_who"])}
+                    "by_who": dict(got["by_who"]), "purpose_calls": dict(got.get("purpose_calls") or {})}
 
     def day_calls(self, day: str, purpose: str) -> int:
         self.refresh()
         with self.lock:
             return int((self.days.get(day) or {}).get(purpose, 0))
+
+    def day_usd(self, day: str, purpose: str) -> float:
+        self.refresh()
+        with self.lock:
+            return float((self.days_usd.get(day) or {}).get(purpose, 0.0))
+
+    def day_by_purpose(self, day: str) -> dict[str, float]:
+        self.refresh()
+        with self.lock:
+            return dict(self.days_usd.get(day) or {})
 
 
 LEDGER = _Ledger()
@@ -286,6 +340,39 @@ def usage_report() -> dict:
             "month_usd": round(got["usd"], 6), "cap_usd": cap, "calls": got["calls"],
             "by_purpose": {k: round(v, 6) for k, v in sorted(got["by_purpose"].items())},
             "by_who": {k: round(v, 6) for k, v in sorted(by_who.items())}}
+
+
+def projected(spent: float, when: float | None = None) -> float:
+    """今月の終わりの見込み（今月のここまでの額を、過ぎた日数で割って月の日数を掛ける。過ぎた日数は 1 日から数える）"""
+    moment = datetime.datetime.fromtimestamp(time.time() if when is None else when)
+    start = moment.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    following = (start + datetime.timedelta(days=32)).replace(day=1)
+    days_in_month = (following - start).days
+    elapsed = max(1.0, (moment - start).total_seconds() / 86400)
+    return round(spent * days_in_month / elapsed, 6)
+
+
+def costs_report(when: float | None = None) -> dict:
+    """GET /costs の中身（2026-11-15。強化案 37。共有の帳簿から。鍵は入れない）。
+    today は、今日使った用途と、止めてある用途（使っていなくても出す）。多い順"""
+    month = this_month(when)
+    day = today(when)
+    config = load_config()
+    got = LEDGER.month(month)
+    spent_today = LEDGER.day_by_purpose(day)
+    names = set(spent_today) | set(config["stopped"])
+    rows = []
+    for purpose in names:
+        found = cap_for(purpose, config["daily_caps"])
+        rows.append({"purpose": purpose, "usd": round(spent_today.get(purpose, 0.0), 6),
+                     "cap": found[1] if found is not None else None, "stopped": purpose in config["stopped"]})
+    rows.sort(key=lambda r: (-r["usd"], r["purpose"]))
+    by_month = [{"purpose": p, "usd": round(u, 6), "calls": int(got["purpose_calls"].get(p, 0))}
+                for p, u in got["by_purpose"].items()]
+    by_month.sort(key=lambda r: (-r["usd"], r["purpose"]))
+    return {"available": True, "month": month, "month_usd": round(got["usd"], 6),
+            "projected_usd": projected(got["usd"], when), "monthly_usd": config["monthly_usd"],
+            "today": rows[:60], "month_by_purpose": by_month[:80]}
 
 
 # MARK: - 頼む
@@ -381,6 +468,9 @@ def call(system: str | None, prompt: str, json: bool = False, max_tokens: int = 
     spent = month_usd()
     if spent >= cap:
         raise ClaudeError(402, "今月の上限に達しました", month_usd=round(spent, 6), cap_usd=cap)
+    gate = purpose_gate(purpose, config)
+    if gate is not None:
+        raise ClaudeError(PURPOSE_OFF, gate[1], purpose_off=gate[0])
     model = TIERS[tier]
     tokens = int(min(MAX_TOKENS, max(1, max_tokens)))
     content = pictures + [{"type": "text", "text": prompt}] if pictures else prompt
@@ -584,6 +674,9 @@ def judge_gate(work: bool | None) -> str | None:
         return "今月の上限"
     if LEDGER.day_calls(today(), JUDGE_PURPOSE) >= config["judge_daily"]:
         return "今日の回数の上限"
+    gate = purpose_gate(JUDGE_PURPOSE, config)
+    if gate is not None:
+        return "止めた用途" if gate[0] == "stopped" else "今日の額の上限"
     return None
 
 
@@ -633,7 +726,7 @@ def judge(lines: list[dict], hints: list[str] | None = None, work: bool | None =
                        work=work is not False, schema=JUDGE_SCHEMA, timeout=JUDGE_TIMEOUT, log=log)
         except ClaudeError as error:
             result["skipped"] = scrub(error.body.get("error", ""))
-            if error.status in (402, 403, 503):
+            if error.status in (402, 403, 503, PURPOSE_OFF):
                 break
             continue
         except Exception as error:  # noqa: BLE001 — 審判が使えなくても、多数決の文で続ける

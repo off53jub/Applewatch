@@ -198,12 +198,18 @@ final class Recorder: NSObject {
 /// 1分続けて静かなら区切りを閉じて休み、音がしたらその1秒前から次の区切りを書き始める（SilenceGate）。
 final class ChunkWriter: @unchecked Sendable {
     static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
-    static let fileSettings: [String: Any] = [
-        AVFormatIDKey: kAudioFormatMPEG4AAC,
-        AVSampleRateKey: 16_000,
-        AVNumberOfChannelsKey: 1,
-        AVEncoderBitRateKey: 32_000,
-    ]
+    /// ふだんは 32kbps。録り方の実験の日は、その日の組の音質（会議モードのあいだは今までどおり 32kbps。2026-11-15。RecordingExperiment）
+    static var fileSettings: [String: Any] {
+        let combo: RecordingExperiment.Combo? = RecordingExperiment.current()
+        let rate: Int = RecordingExperiment.bitrate(combo: combo, meeting: RecordingExperiment.meetingNow,
+                                                    meetingRate: RecordingExperiment.defaultBitrate)
+        return [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 16_000,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRateKey: rate,
+        ]
+    }
 
     private let lock = NSLock()
     private var file: AVAudioFile?

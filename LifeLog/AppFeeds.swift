@@ -318,13 +318,13 @@ final class AppFeedsBook {
         let plan = AppFeeds.staleToNotify(freshness, notified: notified)
         UserDefaults.standard.set(Array(plan.remember), forKey: Self.notifiedKey)
         guard !plan.notify.isEmpty else { return }
-        let center = UNUserNotificationCenter.current()
         for item in plan.notify {
             let content = UNMutableNotificationContent()
             content.title = "止まっているかも"
             content.body = AppFeeds.freshLine(item).replacingOccurrences(of: "止まっているかも: ", with: "")
             content.sound = .default
-            try? await center.add(UNNotificationRequest(
+            // 1時間に3通を超えたら1通にまとめる（2026-11-15。強化案 44。NoticeGate.swift）
+            NoticeGate.add(UNNotificationRequest(
                 identifier: AppFeeds.noticePrefix + item.key, content: content,
                 trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)))
         }

@@ -13,12 +13,15 @@ final class HealthExportTests: XCTestCase {
         tokyo.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: min))!
     }
 
-    func testDueDaysWaitUntilNoonOfNextDay() {
+    func testDueDaysWaitUntilJustAfterMidnight() {
         let cal = tokyo
-        // 5/21 11:00: 5/19 は済み（5/20 12:00 を過ぎた）、5/20 はまだ（5/21 12:00 前）
-        XCTAssertEqual(HealthExport.dueDays(now: at(2026, 5, 21, 11), done: [], first: "2026-05-19", calendar: cal), ["2026-05-19"])
-        XCTAssertEqual(HealthExport.dueDays(now: at(2026, 5, 21, 12), done: [], first: "2026-05-19", calendar: cal),
+        // 2026-11-15 から、次の日の 0:30 を過ぎたら書く（前は次の日の昼）。5/21 0:20: 5/19 は済み、5/20 はまだ
+        XCTAssertEqual(HealthExport.dueDays(now: at(2026, 5, 21, 0, 20), done: [], first: "2026-05-19", calendar: cal), ["2026-05-19"])
+        XCTAssertEqual(HealthExport.dueDays(now: at(2026, 5, 21, 0, 30), done: [], first: "2026-05-19", calendar: cal),
                        ["2026-05-19", "2026-05-20"])
+        // 昼に開いたとき（夜中に書けなかった分の受け皿）も同じ日を書く
+        XCTAssertEqual(HealthExport.dueDays(now: at(2026, 5, 21, 12), done: ["2026-05-19"], first: "2026-05-19", calendar: cal),
+                       ["2026-05-20"])
     }
 
     func testDueDaysSkipDoneAndLimit() {

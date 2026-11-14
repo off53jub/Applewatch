@@ -1088,7 +1088,8 @@ extension Pipeline {
         content.categoryIdentifier = NoticeActions.foundCategory
         content.userInfo = ["ids": ids]
         NoticeStats.count(NoticeActions.foundCategory, "sent")
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: NoticePresenter.taskFoundID, content: content, trigger: nil))
+        // ボタンのある知らせは束ねない（いつも出す）が、1時間の数には入れる（2026-11-15。NoticeGate.swift）
+        NoticeGate.add(UNNotificationRequest(identifier: NoticePresenter.taskFoundID, content: content, trigger: nil))
     }
 
     private static let taskDueFormat: DateFormatter = {
@@ -1218,13 +1219,20 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        let request = notification.request
         // 会話のあとの約束（家の PC から届く。2026-11-13。Promises.swift）は開いているあいだも出し、「今日」の欄を読み直す
-        if notification.request.content.categoryIdentifier == PromiseRules.category {
+        if request.content.categoryIdentifier == PromiseRules.category {
             Task { @MainActor in PromiseInbox.shared.poke() }
+            NoticeGate.noteShown(identifier: request.identifier, category: request.content.categoryIdentifier, date: notification.date)
             completionHandler([.banner, .list, .sound])
             return
         }
-        completionHandler(Self.options(for: notification.request.identifier))
+        let options: UNNotificationPresentationOptions = Self.options(for: request.identifier)
+        // 画面の上に出した知らせを数える（出さないものは数えない。2026-11-15。強化案 44。NoticeGate.swift）
+        if !options.isEmpty {
+            NoticeGate.noteShown(identifier: request.identifier, category: request.content.categoryIdentifier, date: notification.date)
+        }
+        completionHandler(options)
     }
 
     /// 知らせのボタン・知らせそのものを押されたとき（2026-11-10。中身は NoticeActions.swift）
@@ -1232,6 +1240,8 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let request = response.notification.request
         let content = request.content
+        // 押された知らせも、見えた知らせとして数える（同じものは1回だけ。2026-11-15。NoticeGate.swift）
+        NoticeGate.noteShown(identifier: request.identifier, category: content.categoryIdentifier, date: response.notification.date)
         // カテゴリの無い知らせも、知らせそのものを押したときは画面を開く（2026-11-12。NoticeRoute.route）
         guard let action = NoticeActions.action(for: response.actionIdentifier),
               !content.categoryIdentifier.isEmpty || action == .open else {

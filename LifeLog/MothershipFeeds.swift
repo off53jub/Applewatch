@@ -619,6 +619,8 @@ enum MothershipOutbox {
         "today_three": ["done", "skipped"], "brief": ["read"], "weekly": ["useful", "not_useful"],
         "prep": ["useful", "not_useful"], "brief_compare": ["codex", "claude"], "night_review": ["kept", "dropped"],
         "same_person": ["merged", "different"], "promise": ["added", "ignored"], "bulk": ["ok"],
+        // 正しさの抜き取り「合ってる？」（2026-11-15。強化案 41。SettleFeeds.swift）
+        "check": ["right", "wrong", "unsure"],
     ]
     static let appEvents: [String] = ["open", "close", "focus_on", "focus_off"]
 
@@ -745,11 +747,130 @@ enum MothershipOutbox {
         try? data.write(to: url, options: .atomic)
     }
 
-    /// 1つためる（すぐには送らない。送るのは MothershipFeedsBook.sendOutbox）
+    /// 1つためる（すぐには送らない。送るのは send）
     @MainActor
     static func enqueue(path: String, body: Data, now: Date = .now) {
         let item = OutboxItem(id: UUID().uuidString, path: path, body: body, queued: now)
         save(appending(load(), item))
+    }
+
+    /// POST /feedback を1つためる（決めた組でなければ捨てる）。ためたら true
+    @MainActor
+    @discardableResult
+    static func enqueueFeedback(kind: String, id: String, value: String, day: String, now: Date = .now) -> Bool {
+        guard let body = feedbackBody(kind: kind, id: id, value: value, day: day) else { return false }
+        enqueue(path: "feedback", body: body, now: now)
+        return true
+    }
+
+    // MARK: 送る（送り口はここ1つ。2026-11-15。強化案 46）
+
+    @MainActor private static var sending = false
+
+    /// ためたものを古い順に送る。家の PC がまだ受けない種類は飛ばして残す。通じなければそこでやめる。
+    /// 家の PC に断られたもの（中身がおかしい）は、5回で捨てる
+    @MainActor
+    static func send(_ pc: HomePC) async {
+        guard !sending, pc.isConfigured else { return }
+        sending = true
+        defer { sending = false }
+        var skipped = Set<String>()
+        sendLoop: while true {
+            let list: [OutboxItem] = load()
+            guard let item = list.first(where: { !skipped.contains($0.id) }) else { break sendLoop }
+            guard pc.features.contains(feature(for: item.path)) else {
+                skipped.insert(item.id)
+                continue sendLoop
+            }
+            do {
+                _ = try await pc.postJSONData(item.path, body: item.body, timeout: 10)
+                save(removing(load(), id: item.id))
+                Tally.add("mfeed.sent")
+            } catch {
+                if let failure = error as? HomePC.Failure, case .server(_) = failure {
+                    save(failing(load(), id: item.id))
+                    skipped.insert(item.id)
+                    continue sendLoop
+                }
+                break sendLoop
+            }
+        }
+    }
+
+    // MARK: 前の送り口からの引っ越し（2026-11-15。強化案 46）
+
+    /// 前の「直す」の答えのため場所（SamePerson.swift の FixFeedback。[{"kind","id","value","day"}] の JSON）
+    static let legacyFixKey = "fixFeedbackPending"
+    /// 前の約束の答えのため場所（Promises.swift の PromiseFeedbackQueue。送る JSON の並び）
+    static let legacyPromiseKey = "promiseFeedbackQueue"
+
+    private struct LegacyFeedback: Codable {
+        let kind: String
+        let id: String
+        let value: String
+        let day: String
+    }
+
+    /// 前の2つの送り口にたまっていたものを、古い順にうしろへ足す（数の上限で落とさない。次に足すときに上限に戻る）
+    static func migrating(_ list: [OutboxItem], fix: [Data], promise: [Data], now: Date) -> [OutboxItem] {
+        var next: [OutboxItem] = list
+        var bodies: [Data] = fix
+        bodies.append(contentsOf: promise)
+        for (i, body) in bodies.enumerated() {
+            let item = OutboxItem(id: "legacy-\(i)-" + UUID().uuidString, path: "feedback", body: body, queued: now)
+            next = appending(next, item, limit: Int.max)
+        }
+        return next
+    }
+
+    /// 前の「直す」のため場所の中身を、1つずつの JSON に（読めなければ nil。そのときは前の所を消さない）
+    static func legacyFixBodies(_ data: Data) -> [Data]? {
+        guard let rows = try? JSONDecoder().decode([LegacyFeedback].self, from: data) else { return nil }
+        var out: [Data] = []
+        for row in rows {
+            if let body = try? JSONEncoder().encode(row) { out.append(body) }
+        }
+        return out
+    }
+
+    /// 起動のときに1回。前の2つの送り口にたまっていたものをここへ移し、書けたのを確かめてから前の所を消す
+    @MainActor
+    static func migrateLegacy(now: Date = .now) {
+        let defaults = UserDefaults.standard
+        var fix: [Data] = []
+        var fixReadable = true
+        if let data = defaults.data(forKey: legacyFixKey) {
+            if let bodies = legacyFixBodies(data) {
+                fix = bodies
+            } else {
+                fixReadable = false
+            }
+        }
+        let promise: [Data] = defaults.array(forKey: legacyPromiseKey) as? [Data] ?? []
+        guard !fix.isEmpty || !promise.isEmpty else {
+            if fixReadable { defaults.removeObject(forKey: legacyFixKey) }
+            defaults.removeObject(forKey: legacyPromiseKey)
+            return
+        }
+        let before: [OutboxItem] = load()
+        let next: [OutboxItem] = migrating(before, fix: fix, promise: promise, now: now)
+        guard saveChecked(next) else { return }
+        if fixReadable { defaults.removeObject(forKey: legacyFixKey) }
+        defaults.removeObject(forKey: legacyPromiseKey)
+        Tally.add("mfeed.migrated", fix.count + promise.count)
+    }
+
+    /// 書いて、読み直して同じ数なら true
+    @MainActor
+    private static func saveChecked(_ list: [OutboxItem]) -> Bool {
+        guard let data = try? JSONEncoder().encode(list) else { return false }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            return false
+        }
+        return load().count == list.count
     }
 
     /// アプリを開いた記録（ショートカットの「アプリを開いた記録」から。AppUsage.swift）。足せたら true
@@ -876,7 +997,6 @@ final class MothershipFeedsBook {
     private(set) var waiting = 0
     private(set) var fetchedAt: Date?
     @ObservationIgnored private var fetching = false
-    @ObservationIgnored private var sending = false
 
     private static let every: TimeInterval = 30 * 60
     static let weeklyFile = "mfeed-weekly.json"
@@ -925,6 +1045,8 @@ final class MothershipFeedsBook {
                 localUnreadable = true
             }
         }
+        // 前の2つの送り口（直すの答え・約束の答え）にたまっていたものを、ここへ移す（2026-11-15。強化案 46）
+        MothershipOutbox.migrateLegacy()
         waiting = MothershipOutbox.load().count
     }
 
@@ -1064,33 +1186,9 @@ final class MothershipFeedsBook {
     /// ためたものを古い順に送る。家の PC がまだ受けない種類は飛ばして残す。通じなければそこでやめる。
     /// 家の PC に断られたもの（中身がおかしい）は、5回で捨てる
     func sendOutbox(_ pc: HomePC) async {
-        guard !sending, pc.isConfigured else { return }
-        sending = true
-        defer {
-            sending = false
-            waiting = MothershipOutbox.load().count
-        }
-        var skipped = Set<String>()
-        sendLoop: while true {
-            let list: [OutboxItem] = MothershipOutbox.load()
-            guard let item = list.first(where: { !skipped.contains($0.id) }) else { break sendLoop }
-            guard pc.features.contains(MothershipOutbox.feature(for: item.path)) else {
-                skipped.insert(item.id)
-                continue sendLoop
-            }
-            do {
-                _ = try await pc.postJSONData(item.path, body: item.body, timeout: 10)
-                MothershipOutbox.save(MothershipOutbox.removing(MothershipOutbox.load(), id: item.id))
-                Tally.add("mfeed.sent")
-            } catch {
-                if let failure = error as? HomePC.Failure, case .server(_) = failure {
-                    MothershipOutbox.save(MothershipOutbox.failing(MothershipOutbox.load(), id: item.id))
-                    skipped.insert(item.id)
-                    continue sendLoop
-                }
-                break sendLoop
-            }
-        }
+        // 送り口は MothershipOutbox.send の1つ（直す・約束の答えも同じ所から。2026-11-15。強化案 46）
+        await MothershipOutbox.send(pc)
+        waiting = MothershipOutbox.load().count
     }
 }
 

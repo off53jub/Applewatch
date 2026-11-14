@@ -4,7 +4,7 @@ import Foundation
 ///
 /// - 母艦（家の PC の D:\Lifelog）のヘルスケアは、2026-05-18 を最後に止まっていた（前は別のアプリ Health Auto Export が書いていた）。
 ///   母艦の取り込み（Process-HealthInbox.ps1）がそのまま読めるよう、同じ形の JSON にする。
-/// - 書くのは終わった日だけ（次の日の昼を過ぎてから。睡眠は朝までかかるため）。一度書いた日は書き直さない。
+/// - 書くのは終わった日だけ（2026-11-15 から次の日の 0:30 を過ぎてから。前は次の日の昼）。一度書いた日は書き直さない。
 /// - 止まっていた日の分も、iPhone のヘルスケアに残っている分を少しずつ書く（1回に `perRun` 日まで）。
 /// - 読むだけで、ヘルスケアには何も書かない。iPhone だけで動かす（iPad と二重に書かない）。
 enum HealthExport {
@@ -47,15 +47,21 @@ enum HealthExport {
 
     static func fileName(_ day: String) -> String { "lifelog-health-\(day).json" }
 
-    /// 書く日（古い順）。first から、終わった日（次の日の昼を過ぎた日）まで、まだ書いていない日を limit 日まで。
+    /// 日が変わってから、これだけたったら前の日を書く（2026-11-15。強化案 46。前は次の日の昼）。
+    /// その日の睡眠は「前の日の18時〜その日の昼」なので、日が変わった時点でそろっている。夜中の裏の処理（充電中）で書き、
+    /// iPhone がロック中でヘルスケアを読めなかった（どの日も空）ときは印を付けないので、次に開いたとき（昼まで含む）に書く
+    static let readyAfterMidnight: TimeInterval = 30 * 60
+
+    /// 書く日（古い順）。first から、終わった日（次の日の 0:30 を過ぎた日）まで、まだ書いていない日を limit 日まで。
     static func dueDays(now: Date, done: Set<String>, first: String = firstDay, limit: Int = perRun,
                         calendar: Calendar = .current) -> [String] {
         guard let start = dayDate(first, calendar: calendar) else { return [] }
         var result: [String] = []
         var day = start
         while result.count < limit {
-            guard let next = calendar.date(byAdding: .day, value: 1, to: day),
-                  let ready = calendar.date(byAdding: .hour, value: 12, to: next), now >= ready else { break }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            let ready: Date = next.addingTimeInterval(readyAfterMidnight)
+            guard now >= ready else { break }
             let key = dayKey(day, calendar: calendar)
             if !done.contains(key) { result.append(key) }
             day = next

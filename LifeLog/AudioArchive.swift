@@ -11,8 +11,11 @@ final class AudioArchive {
     private let docs: GoogleDocs
     private let monitor = NWPathMonitor()
     private var onWiFi = false
+    private var online = false
     /// Wi-Fi につながっているか（モバイル通信・テザリングでは false）
     var isOnWiFi: Bool { onWiFi }
+    /// ネットにつながっているか（Wi-Fi でもモバイル通信でも。家の PC の外からの見張り。2026-11-15。PCSilence.swift）
+    var isOnline: Bool { online }
     /// ファイル名 → ドライブ上の id
     private var uploaded: [String: String]
     /// ほかの端末が上げた音声（ファイル名 → ドライブ上の id）。端末間の同期で受け取る
@@ -40,7 +43,11 @@ final class AudioArchive {
         monitor.pathUpdateHandler = { [weak self] path in
             // モバイル通信やテザリングでは上げない
             let wifi = path.status == .satisfied && !path.isExpensive && !path.isConstrained
-            Task { @MainActor in self?.onWiFi = wifi }
+            let reachable = path.status == .satisfied
+            Task { @MainActor in
+                self?.onWiFi = wifi
+                self?.online = reachable
+            }
         }
         monitor.start(queue: DispatchQueue(label: "LifeLog.network"))
     }

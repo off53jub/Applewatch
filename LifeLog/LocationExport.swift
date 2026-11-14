@@ -49,16 +49,59 @@ enum LocationExport {
         return result
     }
 
-    /// 母艦の取り込みが読む形（Google の新しい書き出しと同じ: { semanticSegments: [...] }）。点も立ち寄りも無ければ nil
+    /// 同じ滞在とみなす始まりの差（2026-11-15。強化案 46。母艦の staylib.py の SAME_START_MIN と同じ2分）
+    static let sameStart: TimeInterval = 120
+    /// 1つにした滞在のあと、点の滞在がこれより長く続くなら、残りを広い名前の滞在として残す
+    static let remainderMin: TimeInterval = 300
+
+    /// 点の滞在（広い名前）と立ち寄り（お店の推測）で、始まりが sameStart 以内の組（点の番号 → 立ち寄りの番号。近いものから1対1）。
+    /// 1つの滞在が「駅の近く」と「たぶん◯◯」の2行になっていた（11/3〜14 で10か所。2026-11-15 に直した）
+    static func pairs(points: [Point], stays: [Stay]) -> [Int: Int] {
+        var used = Set<Int>()
+        var out: [Int: Int] = [:]
+        for (i, p) in points.enumerated() {
+            var best: Int?
+            var bestGap: TimeInterval = .infinity
+            for (j, s) in stays.enumerated() where !used.contains(j) {
+                let gap: TimeInterval = abs(s.start.timeIntervalSince(p.time))
+                if gap <= sameStart, gap < bestGap {
+                    best = j
+                    bestGap = gap
+                }
+            }
+            if let best {
+                out[i] = best
+                used.insert(best)
+            }
+        }
+        return out
+    }
+
+    /// 母艦の取り込みが読む形（Google の新しい書き出しと同じ: { semanticSegments: [...] }）。点も立ち寄りも無ければ nil。
+    /// 2026-11-15（強化案 46）: 点の滞在と立ち寄りの始まりが2分以内なら1つの滞在にする。名前（semanticType）は立ち寄りの名前
+    /// （お店の推測「たぶん◯◯」。今までの読み手もそのまま読める）、省ける "guess" に立ち寄りの名前、"area" に点の広い名前。
+    /// 時刻は早い方の始まりから立ち寄りの終わりまで。点の滞在が5分より長く続くなら、残りは広い名前の滞在のまま残す
     static func json(day: String, points: [Point], stays: [Stay], dayEnd: Date, calendar: Calendar = .current) -> Data? {
         let points = points.sorted { $0.time < $1.time }
+        let stays = stays.sorted { $0.start < $1.start }
         guard !points.isEmpty || !stays.isEmpty else { return nil }
+        let paired: [Int: Int] = pairs(points: points, stays: stays)
         var segments: [[String: Any]] = []
         for (i, p) in points.enumerated() {
             let next = i + 1 < points.count ? points[i + 1] : nil
-            // 次の点まで（最後の点はその日の終わりまで）そこにいた
-            segments.append(visit(start: p.time, end: next?.time ?? dayEnd, latitude: p.latitude, longitude: p.longitude,
-                                  name: p.name, calendar: calendar))
+            let end: Date = next?.time ?? dayEnd
+            if let j = paired[i] {
+                let s = stays[j]
+                segments.append(mergedVisit(point: p, stay: s, calendar: calendar))
+                if end.timeIntervalSince(s.end) > remainderMin {
+                    segments.append(visit(start: s.end, end: end, latitude: p.latitude, longitude: p.longitude,
+                                          name: p.name, calendar: calendar))
+                }
+            } else {
+                // 次の点まで（最後の点はその日の終わりまで）そこにいた
+                segments.append(visit(start: p.time, end: end, latitude: p.latitude, longitude: p.longitude,
+                                      name: p.name, calendar: calendar))
+            }
             if let next {
                 let meters = distance(p.latitude, p.longitude, next.latitude, next.longitude)
                 segments.append([
@@ -73,12 +116,27 @@ enum LocationExport {
                 ])
             }
         }
-        for s in stays.sorted(by: { $0.start < $1.start }) {
+        let usedStays = Set(paired.values)
+        for (j, s) in stays.enumerated() where !usedStays.contains(j) {
             segments.append(visit(start: s.start, end: s.end, latitude: s.latitude, longitude: s.longitude,
                                   name: s.name ?? "立ち寄り", calendar: calendar))
         }
         let object: [String: Any] = ["source": "LifeLog", "day": day, "semanticSegments": segments]
         return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
+    /// 点の滞在と立ち寄りを1つにした滞在（場所は立ち寄りの方。立ち寄りの方が細かい）
+    private static func mergedVisit(point: Point, stay: Stay, calendar: Calendar) -> [String: Any] {
+        let start: Date = min(point.time, stay.start)
+        let name: String = stay.name ?? point.name ?? "立ち寄り"
+        var top: [String: Any] = ["placeLocation": ["latLng": latLng(stay.latitude, stay.longitude)], "semanticType": name]
+        if let shop = stay.name, !shop.isEmpty { top["guess"] = shop }
+        if let area = point.name, !area.isEmpty, area != name { top["area"] = area }
+        return [
+            "startTime": HealthExport.stamp(start, calendar: calendar),
+            "endTime": HealthExport.stamp(max(start, stay.end), calendar: calendar),
+            "visit": ["topCandidate": top],
+        ]
     }
 
     private static func visit(start: Date, end: Date, latitude: Double, longitude: Double, name: String?,

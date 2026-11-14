@@ -228,7 +228,7 @@ def review_day(day: str, parsed: dict, call: Callable[..., dict] | None = None,
                        schema=SCHEMA, timeout=TIMEOUT, log=log)
         except claude.ClaudeError as error:
             result["stopped"] = claude.scrub(error.body.get("error", ""))[:60]
-            if error.status in (402, 403, 503):
+            if error.status in (402, 403, 503, claude.PURPOSE_OFF):
                 break
             continue
         except Exception as error:  # noqa: BLE001 — 読み直せなくても、記録はそのまま

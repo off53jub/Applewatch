@@ -128,6 +128,9 @@ enum FeatureProof {
         // 2026-11-14（強化案 28・34）
         Screen(key: "paypayShot", name: "PayPay のスクショ"),
         Screen(key: "reflection", name: "反映の見張り"),
+        // 2026-11-15（強化案 36・37）
+        Screen(key: "rollout", name: "入れた施策の様子"),
+        Screen(key: "claudeCosts", name: "Claude の費用"),
     ]
 
     static func screenKey(_ s: Screen) -> String { "screen." + s.key }

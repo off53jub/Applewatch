@@ -444,13 +444,15 @@ final class WatchRecorder: NSObject {
 /// 1分続けて静かなら区切りを閉じて休み、音がしたらその1秒前から次の区切りを書き始める（SilenceGate）。
 final class ChunkWriter: @unchecked Sendable {
     static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
-    /// 会議モードのあいだは 48kbps、ふだんは 32kbps（2026-11-06。次の区切りから変わる）
+    /// 会議モードのあいだは 48kbps、ふだんは 32kbps（2026-11-06。次の区切りから変わる）。
+    /// 録り方の実験の日は、その日の組の音質（会議モードのあいだは会議モードが優先。2026-11-15。RecordingExperiment）
     static var fileSettings: [String: Any] {
-        [
+        let rate: Int = RecordingExperiment.watchBitrate()
+        return [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 16_000,
             AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: UserDefaults.standard.bool(forKey: "meetingOn") ? 48_000 : 32_000,
+            AVEncoderBitRateKey: rate,
         ]
     }
     /// 休んでいるあいだ、これだけごとに「録音は続いている」と知らせる

@@ -27,6 +27,13 @@ final class WatchPC: @unchecked Sendable {
     private static let refusedKey = "pcPublicRefused"
     private static let keepSent: TimeInterval = 86400
 
+    /// 最後に家の PC に直接送れた時刻（1970 からの秒。直近1日の分から）。iPhone が「家の PC と音沙汰なし」を見るのに使う
+    /// （時計の様子の知らせの "pcSentAt"。2026-11-15。強化案 38）
+    static var lastSentAt: Double? {
+        let list: [String: Double] = UserDefaults.standard.dictionary(forKey: sentKey) as? [String: Double] ?? [:]
+        return list.values.max()
+    }
+
     private let lock = NSLock()
     private var lastFailure: Date?
     /// 外の道で「しばらく受け付けない」と言われてから15分

@@ -194,7 +194,10 @@ enum NoticeRoute: Identifiable, Equatable {
         case "cloud-monthly": return .screen(.cloudLog)
         case "review-nudge": return .screen(.reviewNudge)
         case "morning-check": return .screen(.diagnostics)
-        case "home-pc": return .screen(.homePC)
+        // 家の PC と 6 時間やり取りできていない（2026-11-15。PCSilence.swift）
+        case "home-pc", PCSilence.noticeID: return .screen(.homePC)
+        // 1時間に3通を超えてまとめた知らせ（2026-11-15。NoticeGate.swift）
+        case NoticeBundle.bundleID: return .tab(.today)
         case "work-digest-reminder": return .digestImport("")
         default: return nil
         }

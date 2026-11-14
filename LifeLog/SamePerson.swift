@@ -213,21 +213,10 @@ final class SamePersonBook {
 // MARK: - 母艦への答え（POST /feedback）
 
 /// 「使われたか」の答えを母艦へ（共通の約束の POST /feedback {"kind", "id", "value", "day"}。features の "feedback"）。
-/// 家の PC がまだ受けないとき・つながらないときは、端末にためて次に送る（300 件まで。古いものから捨てる）。
-/// TODO: S1 の MothershipFeeds.swift の送り手が main に入ったら、そちらにまとめる（同じ形・同じ口）。
+/// 2026-11-15（強化案 46）: ため場所と送り口は MothershipFeeds.swift の MothershipOutbox の1つにまとめた
+/// （前のため場所 "fixFeedbackPending" にあった分は、起動のときに MothershipOutbox.migrateLegacy が移す）。
 @MainActor
 enum FixFeedback {
-    struct Item: Codable, Equatable {
-        var kind: String
-        var id: String
-        var value: String
-        var day: String
-    }
-
-    static let key = "fixFeedbackPending"
-    static let limit = 300
-    private static var sending = false
-
     static func today(_ date: Date = .now) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -235,42 +224,14 @@ enum FixFeedback {
         return f.string(from: date)
     }
 
-    static func pending() -> [Item] {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let list = try? JSONDecoder().decode([Item].self, from: data) else { return [] }
-        return list
-    }
-
-    private static func save(_ list: [Item]) {
-        if let data = try? JSONEncoder().encode(Array(list.suffix(limit))) { UserDefaults.standard.set(data, forKey: key) }
-    }
-
-    /// ためる（id は英数字と _ . : - の 64 字まで。合わなければ捨てる）
+    /// ためる（id は英数字と _ . : - の 64 字まで。決めた組でなければ捨てる）
     static func add(kind: String, id: String, value: String, day: String? = nil) {
-        guard HomeFeeds.isID(id) else { return }
-        save(pending() + [Item(kind: kind, id: id, value: value, day: day ?? today())])
+        MothershipOutbox.enqueueFeedback(kind: kind, id: id, value: value, day: day ?? today())
     }
 
-    /// ためた答えを古い順に送る。1つでも送れなければ、そこでやめる
+    /// ためた答えを古い順に送る（送り口は1つ）
     static func send(_ pc: HomePC) async {
-        guard !sending, pc.features.contains("feedback") else { return }
-        sending = true
-        defer { sending = false }
-        var list = pending()
-        while let first = list.first {
-            guard let body = try? JSONEncoder().encode(first) else {
-                list.removeFirst()
-                continue
-            }
-            do {
-                _ = try await pc.postJSONData("feedback", body: body, timeout: 10)
-            } catch {
-                break
-            }
-            list.removeFirst()
-            save(list)
-        }
-        save(list)
+        await MothershipOutbox.send(pc)
     }
 }
 

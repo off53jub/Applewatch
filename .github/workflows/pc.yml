@@ -146,6 +146,12 @@ jobs:
         run: |
           python pc/v13checks_oneline.py > v13.txt 2>&1 || { cat v13.txt; grep '^NG' v13.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v13.txt | sed 's/^/::notice::v13checks_oneline の OK の数: /'
+      # 2026-11-15（強化案 36・37・41・49）: Claude の用途ごとの止め・1日の上限（409）・GET /costs（今月・見込み・今日の用途）・
+      #   GET /rollout・/checks（形を確かめる）・POST /feedback の check・提案の wish を、一時フォルダと作り物の Claude で確かめる
+      - name: 施策の検品表・Claude の費用・正しさの抜き取りを確かめる
+        run: |
+          python pc/v14checks_settle.py > v14.txt 2>&1 || { cat v14.txt; grep '^NG' v14.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v14.txt | sed 's/^/::notice::v14checks_settle の OK の数: /'
 
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
@@ -209,7 +215,7 @@ jobs:
             --hidden-import trainer --hidden-import gpu --hidden-import v7checks_ops \
             --hidden-import v8checks --hidden-import v9checks --hidden-import lifelog_mcp \
             --hidden-import watchroute --hidden-import v10checks --hidden-import mothership --hidden-import appfeeds \
-            --hidden-import oneline \
+            --hidden-import oneline --hidden-import settle \
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \
             --hidden-import claude --hidden-import v11checks \
