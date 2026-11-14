@@ -131,6 +131,7 @@ struct PeopleView: View {
 
     var body: some View {
         List {
+            PeoplePagesSection()  // 人のページ（2026-11-15。強化案 53。PagesFeeds.swift。写しがあるときだけ）
             // 自分の声（声を足す・まとめた人を分け直す）
             if let me = pipeline.people.first(where: \.isSelf) {
                 Section {
@@ -407,6 +408,7 @@ struct PersonView: View {
                 }
             }
             if let person {
+                PersonPageLinkSection(name: person.displayName)  // 同じ名前の人のページ（2026-11-15。強化案 53）
                 if !person.isSelf {
                     Section {
                         TextField("名前", text: $name)

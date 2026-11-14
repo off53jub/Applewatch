@@ -30,6 +30,7 @@
 - 2026-11-14（強化案 25・28・30・34。中身は oneline.py）: GET /timeline?day=・GET /reflection・POST /pay/paypay-shot・
   POST /pay/paypay-rows・POST /location/stays。
 - 2026-11-15（強化案 36・37・41。中身は settle.py）: GET /rollout・GET /checks・GET /costs。
+- 2026-11-15（強化案 53・54・55・61。中身は pages.py）: GET /people-pages・/threads・/place-pages・/decisions・POST /decisions/answer。
 """
 
 from __future__ import annotations
@@ -47,11 +48,13 @@ from urllib.parse import urlparse
 import appfeeds  # 自分の声の候補・新しさ・PLAUD との差（2026-11-12）
 import oneline  # 1日の年表・PayPay の写真・位置を当日のうちに・反映の見張り（2026-11-14。強化案 25・28・30・34）
 import settle  # 施策の検品表・正しさの抜き取り・Claude の費用（2026-11-15。強化案 36・37・41）
+import pages  # 人・話題の糸・場所・決めごとのページ（2026-11-15。強化案 53・54・55・61）
 import canonical  # 1日の正本（2026-11-15。強化案 57）
 
-GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS, *oneline.GETS, *settle.READERS, *canonical.GETS)
+GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS, *oneline.GETS, *settle.READERS, *pages.READERS,
+        *canonical.GETS)
 # POST /proposals/answer（母艦からの提案への答え。2026-11-13。中身は appfeeds.py）
-POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback", *appfeeds.POSTS, *oneline.POSTS)
+POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback", *appfeeds.POSTS, *oneline.POSTS, *pages.POSTS)
 BODY_LIMIT = 16 * 1024
 # 支払いの記録を母艦へ（2026-11-11）
 TAPS_FILE = Path("inbox") / "card-taps" / "card-taps.json"
@@ -426,6 +429,9 @@ def http_get(handler, config: dict) -> None:
     if path in settle.READERS:  # GET /rollout・/checks・/costs（2026-11-15）
         handler.send_json(200, settle.READERS[path](home(config)))
         return
+    if path in pages.READERS:  # GET /people-pages・/threads・/place-pages・/decisions（2026-11-15）
+        handler.send_json(200, pages.READERS[path](home(config)))
+        return
     if path in canonical.GETS:  # GET /canonical?day=（2026-11-15。強化案 57）
         canonical.http_get(handler, home(config))
         return
@@ -521,6 +527,9 @@ def http_post(handler, config: dict, data: bytes, log: Callable[[str], None]) ->
         return
     if urlparse(handler.path).path in appfeeds.POSTS:
         appfeeds.POSTS[urlparse(handler.path).path](handler, home(config), data, log)
+        return
+    if urlparse(handler.path).path in pages.POSTS:  # POST /decisions/answer（2026-11-15。強化案 61）
+        pages.POSTS[urlparse(handler.path).path](handler, home(config), data, log)
         return
     if urlparse(handler.path).path in PAY_LIMITS:
         http_post_pay(handler, config, urlparse(handler.path).path, data, log)
