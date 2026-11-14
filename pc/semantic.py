@@ -546,7 +546,16 @@ def http_status(handler, index: SemanticIndex | None) -> None:
         handler.send_json(200, {"count": 0, "model": EMBED_MODEL, "ready": False})
         return
     try:
-        handler.send_json(200, index.status())
+        answer = index.status()
+        # 2026-11-15（強化案 42）: 母艦の文の索引（mothersearch.py）の数（省略できる "mother"）
+        import mothersearch
+
+        if mothersearch.INDEX is not None:
+            try:
+                answer["mother"] = mothersearch.INDEX.status()
+            except Exception:  # noqa: BLE001 — 数えられなくても、今までの答えは返す
+                pass
+        handler.send_json(200, answer)
     except Exception as error:  # noqa: BLE001
         handler.send_json(500, {"error": f"数えられませんでした: {error}"})
 

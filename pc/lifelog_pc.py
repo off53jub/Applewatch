@@ -153,6 +153,7 @@ import watchroute
 import claude
 # 2026-11-13（施策 13・15）: 会話の直後の約束・記録に質問するを母艦まで
 import askmother
+import mothersearch  # 2026-11-15（強化案 42）: 母艦の文も意味で探す（semantic.db の別の表）
 import promises
 import quality  # 2026-11-13（施策 9・10・11）: 品質の記録・夜の流れ・同じ人かも・夜の読み直し（中身は quality.py ほか）
 
@@ -2453,6 +2454,10 @@ def start_v6(threads: int) -> None:
             threading.Thread(target=App.semantic.available, kwargs={"force": True}, daemon=True).start()
             # 仕事のまとめ（ドライブの「仕事のまとめ.json」。読むだけ）も、変わったときだけ索引に置き直す（2026-11-10）
             App.semantic.start_digest_sync(lambda: mothership.read_digests(mothership.digest_file(load_config())))
+            # 2026-11-15（強化案 42）: 母艦の文も（読むだけ・別の表・重い時間だけ続けて。config.json の "mother_semantic": false で止める）
+            if load_config().get("mother_semantic") is not False:
+                mothersearch.start(SEMANTIC_DB, App.semantic.embedder, lambda: mothership.home(load_config()), log,
+                                   ready=App.semantic.available)
         except Exception as error:  # noqa: BLE001
             App.semantic = None
             log(f"意味で探す機能を始められませんでした: {error!r}")
