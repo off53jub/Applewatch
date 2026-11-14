@@ -121,6 +121,8 @@ final class HomePC {
     private static func check(_ response: URLResponse, data: Data) throws {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if status == 401 { throw Failure.unauthorized }
+        // 家の PC とやり取りできた（家の PC の外からの見張り。2026-11-15。PCSilence.swift）
+        if status == 200 { PCSilence.noteContact() }
         guard status == 200 else {
             let reason = (try? JSONDecoder().decode([String: String].self, from: data))?["error"] ?? "HTTP \(status)"
             throw Failure.server(reason)
@@ -277,6 +279,8 @@ final class HomePC {
         }
         let (data, response) = result
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        // 上限・止めた用途の答えも、家の PC からの答え（2026-11-15。PCSilence.swift）
+        if status != 0 { PCSilence.noteContact() }
         if let failure = ClaudeFailure.from(status: status, data: data) { throw failure }
         guard let reply = try? JSONDecoder().decode(ClaudeReply.self, from: data) else { throw ClaudeFailure.unreadable }
         return reply
@@ -663,6 +667,7 @@ final class HomePC {
         guard let got = try? await session.data(for: req) else { return .missing }
         let data = got.0
         let status = (got.1 as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 200 || status == 404 { PCSilence.noteContact() }  // 家の PC からの答え（2026-11-15）
         if status == 404, let since = PCJobUploader.stagedSince(name), Date.now.timeIntervalSince(since) < 30 * 60 {
             return .pending(since)
         }
@@ -711,6 +716,7 @@ final class HomePC {
         guard let got = try? await session.data(for: req), (got.1 as? HTTPURLResponse)?.statusCode == 200,
               let reply = JobReply.decode(got.0) else { return .nothing }
         let data = got.0
+        PCSilence.noteContact()  // 家の PC からの答え（2026-11-15）
         if let timing = reply.timing { Latency.notePC(name, timing: timing) }
         if reply.status == "done", reply.result != nil { return .done(data) }
         guard let draft = reply.draft, !draft.lines.isEmpty else { return .nothing }
@@ -1178,6 +1184,7 @@ final class PCJobUploader: NSObject, URLSessionDataDelegate, @unchecked Sendable
         }
         let status = (task.response as? HTTPURLResponse)?.statusCode ?? 0
         if error != nil || status != 200 { Tally.add("jobs.failed") }
+        if error == nil, status == 200 { PCSilence.noteContact() }  // 裏で送った区切りが届いた（2026-11-15）
         // 待ち合わせの返事ででき上がりが届いたら、端末の中に置いて取り込みを進めてもらう
         guard error == nil, status == 200, let name = task.taskDescription, let body = received, PCResults.isDone(body) else { return }
         PCResults.save(body, name: name)

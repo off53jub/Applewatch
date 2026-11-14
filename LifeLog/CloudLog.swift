@@ -103,7 +103,7 @@ enum CloudLog {
         content.title = "先月クラウドに送ったもの"
         content.body = body
         content.sound = .default
-        try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "cloud-monthly", content: content, trigger: nil))
+        NoticeGate.add(UNNotificationRequest(identifier: "cloud-monthly", content: content, trigger: nil))  // 2026-11-15。NoticeGate.swift
     }
 
     static func monthKey(_ date: Date) -> String {

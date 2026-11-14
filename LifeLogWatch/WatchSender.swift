@@ -188,6 +188,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if let skip = WatchPC.skipNote { out["pcSkip"] = skip }
         if let fail = WatchPC.failNote { out["pcFail"] = fail }
         if WatchPC.publicRefused { out["pcPublicRefused"] = true }
+        // 最後に家の PC に直接送れた時刻（iPhone の「家の PC と音沙汰なし」の見張り。2026-11-15）
+        if let sent = WatchPC.lastSentAt { out["pcSentAt"] = sent }
         return out
     }
 
