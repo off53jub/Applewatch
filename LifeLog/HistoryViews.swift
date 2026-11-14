@@ -10,11 +10,16 @@ struct DayView: View {
     @AppStorage("dayViewMode") private var mode = 0
     /// 0: 全部（会話のあいだに、場所・お金・LINE・予定などの年表の行を挟む）、1: 会話だけ（2026-11-14。強化案 25。端末ごとに覚える）
     @AppStorage("dayTimelineFilter") private var filter = 0
+    /// 1日の正本で見る（2026-11-15。強化案 57。Canonical.swift。端末ごとに覚える）
+    @AppStorage("dayCanonical") private var canonical = false
 
     var body: some View {
         let withTimeline: Bool = filter == 0
+        let canShowCanonical: Bool = canonical || pipeline.homePC.features.contains("canonical")
         Group {
-            if mode == 0 {
+            if canonical {
+                CanonicalDayView(day: day)
+            } else if mode == 0 {
                 ActivitiesView(day: day, withTimeline: withTimeline)
             } else {
                 ConversationsView(day: day, withTimeline: withTimeline)
@@ -22,17 +27,23 @@ struct DayView: View {
         }
         .safeAreaInset(edge: .top) {
             VStack(spacing: 6) {
-                Picker("見方", selection: $mode) {
-                    Text("過ごし方").tag(0)
-                    Text("会話ごと").tag(1)
+                if canShowCanonical {
+                    Toggle("正本で見る", isOn: $canonical)
+                        .font(.subheadline)
                 }
-                .pickerStyle(.segmented)
-                Picker("並べるもの", selection: $filter) {
-                    Text("全部").tag(0)
-                    Text("会話だけ").tag(1)
+                if !canonical {
+                    Picker("見方", selection: $mode) {
+                        Text("過ごし方").tag(0)
+                        Text("会話ごと").tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                    Picker("並べるもの", selection: $filter) {
+                        Text("全部").tag(0)
+                        Text("会話だけ").tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
                 }
-                .pickerStyle(.segmented)
-                .controlSize(.small)
             }
             .padding(.horizontal)
             .padding(.bottom, 6)

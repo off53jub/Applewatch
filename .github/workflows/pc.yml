@@ -167,6 +167,13 @@ jobs:
         run: |
           python pc/v15checks_pages.py > v15p.txt 2>&1 || { cat v15p.txt; grep '^NG' v15p.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v15p.txt | sed 's/^/::notice::v15checks_pages の OK の数: /'
+      # 2026-11-15（強化案 56・57）: 声の特徴の置き場所（まだ無い区間だけ・時間切れ・モデル違い）・日の平均を引いた名寄せ
+      #   （日をまたぐ組・名前のある人かも・自分は候補にしない）・GET /same-person の across と maybe・GET /canonical?day= を、
+      #   一時フォルダと作り物の声の特徴で確かめる（本物の音声・モデル・母艦は使わない）
+      - name: 声の名寄せと1日の正本を確かめる
+        run: |
+          python pc/v15checks_voices.py > v15.txt 2>&1 || { cat v15.txt; grep '^NG' v15.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v15.txt | sed 's/^/::notice::v15checks_voices の OK の数: /'
 
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
