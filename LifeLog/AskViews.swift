@@ -273,6 +273,8 @@ struct AskView: View {
     @State private var voted: Bool?
     /// 母艦から探す（2026-11-13。AskMothership.swift）。オフなら今までのまま
     @AppStorage(MothershipAsk.toggleKey) private var fromMothership = false
+    /// 「母艦も探す」を自分で切り替えたことがあるか（2026-11-15。強化案 48）。無ければ、家の PC が askmother を出しているときはオン
+    @AppStorage("askFromMothershipChosen") private var motherChosen = false
     @AppStorage(ClaudeRoute.useKey) private var useClaude = true
     @AppStorage(ClaudeRoute.workKey) private var forWork = true
     @State private var motherAnswer: MothershipAnswer?
@@ -289,11 +291,11 @@ struct AskView: View {
                     .lineLimit(1...4)
                 Button(working ? "探しています…" : "質問する") { run() }
                     .disabled(working || question.trimmingCharacters(in: .whitespaces).isEmpty)
-                Toggle("母艦（LINE・写真・予定・お金も）から探す", isOn: $fromMothership)
+                Toggle("母艦も探す（LINE・PLAUD・写真・予定・お金も）", isOn: motherOn)
                     .disabled(!motherUsable)
             } footer: {
-                if fromMothership && motherUsable {
-                    Text("家の PC が、母艦の LINE・PLAUD・予定・写真・体調・場所・1日のまとめ・仕事のまとめ・お金の記録から探して、Claude が見つかったものだけをもとに答えます（1分ほどかかります）。")
+                if motherOn.wrappedValue {
+                    Text("家の PC が、母艦の LINE・PLAUD・予定・写真・体調・場所・1日と週のまとめ・仕事のまとめ・お金の記録を、言葉と意味の両方で探します。人・欲しい物・決めたことの質問なら、欲しい物リスト・決めごと・人のノートの合うところも読みます。Claude が見つかったものだけをもとに答えます（1分ほどかかります）。")
                 } else {
                     Text(plainFooter)
                 }
@@ -377,6 +379,21 @@ struct AskView: View {
         MothershipAsk.usable(features: pipeline.homePC.features, useClaude: useClaude, forWork: forWork)
     }
 
+    /// 母艦も探すか。自分で切り替えたことが無ければ、使えるとき（家の PC が askmother を出しているとき）はオン
+    private var motherOn: Binding<Bool> {
+        Binding<Bool>(
+            get: {
+                guard motherUsable else { return false }
+                let chosen: Bool = motherChosen || UserDefaults.standard.object(forKey: MothershipAsk.toggleKey) != nil
+                return chosen ? fromMothership : true
+            },
+            set: { (on: Bool) in
+                fromMothership = on
+                motherChosen = true
+            }
+        )
+    }
+
     private var motherBlocked: String? {
         MothershipAsk.blocked(features: pipeline.homePC.features, useClaude: useClaude, forWork: forWork)
     }
@@ -410,7 +427,7 @@ struct AskView: View {
 
     private func run() {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        if fromMothership && motherUsable {
+        if motherOn.wrappedValue {
             runMothership(q)
             return
         }
