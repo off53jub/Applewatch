@@ -53,6 +53,8 @@ import canonical  # 1日の正本（2026-11-15。強化案 57）
 
 GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS, *oneline.GETS, *settle.READERS, *pages.READERS,
         *canonical.GETS)
+import drafts  # noqa: E402  返事の下書き・時間の家計簿（2026-11-15。強化案 58・60。GET /replies・/time-ledger）
+GETS = (*GETS, *drafts.READERS)
 # POST /proposals/answer（母艦からの提案への答え。2026-11-13。中身は appfeeds.py）
 POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback", *appfeeds.POSTS, *oneline.POSTS, *pages.POSTS)
 BODY_LIMIT = 16 * 1024
@@ -428,6 +430,9 @@ def http_get(handler, config: dict) -> None:
         return
     if path in settle.READERS:  # GET /rollout・/checks・/costs（2026-11-15）
         handler.send_json(200, settle.READERS[path](home(config)))
+        return
+    if path in drafts.READERS:  # GET /replies・/time-ledger（2026-11-15。強化案 58・60）
+        handler.send_json(200, drafts.READERS[path](home(config)))
         return
     if path in pages.READERS:  # GET /people-pages・/threads・/place-pages・/decisions（2026-11-15）
         handler.send_json(200, pages.READERS[path](home(config)))

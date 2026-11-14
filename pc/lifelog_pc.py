@@ -113,6 +113,9 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 GET /rollout（入れた施策の様子）・GET /checks（正しさの抜き取り）・GET /costs（Claude の今月・見込み・今日の用途ごと）。
 claude-config.json の "stopped"・"daily_caps" で用途ごとに止める（409）。POST /feedback の kind "check"・提案の kind "wish"
     python v14checks_settle.py  これを、一時フォルダと作り物の Claude で確かめる
+2026-11-15（強化案 58・60・62。中身は drafts.py・relay/。features に "replies"・"timeledger"）: GET /replies（LINE の返事と
+メールの下書き。何も送らない）・GET /time-ledger（時間の家計簿）。relay/ は別の機械で動かす見張り（ここでは動かさない）
+    python v15checks_actions.py  これを、一時フォルダで確かめる
 2026-11-15（強化案 50・51・52。中身は livecoach.py。features に "meetinglive"・"coach"・"tension"・"hrsamples"）:
 会議モードのあいだ、区切りの文から「決まったこと・自分の宿題・聞き忘れ」を 1 分に 1 回まで更新（GET /meeting-live?since=・
 POST /meeting-live/state）・GET /coach・GET /tension（母艦の写し）・POST /health/hr（時計の心拍を分ごとに母艦へ）
@@ -2128,6 +2131,7 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(mothership.oneline.features())
     # GET /rollout・/checks・/costs（2026-11-15。強化案 36・37・41。settle.py）
     found.extend(mothership.settle.FEATURES)
+    found.extend(mothership.drafts.FEATURES)  # GET /replies・/time-ledger（2026-11-15。強化案 58・60。drafts.py）
     # GET /meeting-live・/coach・/tension と POST /meeting-live/state・/health/hr（2026-11-15。強化案 50〜52。livecoach.py）
     found.extend(livecoach.features())
     # GET /people-pages・/threads・/place-pages・/decisions と POST /decisions/answer（2026-11-15。強化案 53・54・55・61。pages.py）

@@ -454,6 +454,7 @@ struct PromiseRow: View {
                     .buttonStyle(.bordered)
             }
             .font(.callout)
+            PromiseDraftButtons(item: item)  // 期限の日が読めるときだけ「予定に仮登録」「リマインダーに」（2026-11-15。強化案 58）
         }
         .padding(.vertical, 2)
     }
