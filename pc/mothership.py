@@ -47,8 +47,9 @@ from urllib.parse import urlparse
 import appfeeds  # 自分の声の候補・新しさ・PLAUD との差（2026-11-12）
 import oneline  # 1日の年表・PayPay の写真・位置を当日のうちに・反映の見張り（2026-11-14。強化案 25・28・30・34）
 import settle  # 施策の検品表・正しさの抜き取り・Claude の費用（2026-11-15。強化案 36・37・41）
+import canonical  # 1日の正本（2026-11-15。強化案 57）
 
-GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS, *oneline.GETS, *settle.READERS)
+GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS, *oneline.GETS, *settle.READERS, *canonical.GETS)
 # POST /proposals/answer（母艦からの提案への答え。2026-11-13。中身は appfeeds.py）
 POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback", *appfeeds.POSTS, *oneline.POSTS)
 BODY_LIMIT = 16 * 1024
@@ -424,6 +425,9 @@ def http_get(handler, config: dict) -> None:
         return
     if path in settle.READERS:  # GET /rollout・/checks・/costs（2026-11-15）
         handler.send_json(200, settle.READERS[path](home(config)))
+        return
+    if path in canonical.GETS:  # GET /canonical?day=（2026-11-15。強化案 57）
+        canonical.http_get(handler, home(config))
         return
     handler.send_json(200, read_export(home(config)))
 

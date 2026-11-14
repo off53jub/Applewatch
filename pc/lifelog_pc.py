@@ -113,6 +113,10 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 GET /rollout（入れた施策の様子）・GET /checks（正しさの抜き取り）・GET /costs（Claude の今月・見込み・今日の用途ごと）。
 claude-config.json の "stopped"・"daily_caps" で用途ごとに止める（409）。POST /feedback の kind "check"・提案の kind "wish"
     python v14checks_settle.py  これを、一時フォルダと作り物の Claude で確かめる
+2026-11-15（強化案 56・57。中身は voices.py・quality.py・canonical.py。features に "canonical"）: 区間ごとの声の特徴を
+HOME/voices に置き、日をまたぐ「同じ人かも」と「名前のある人かも」を GET /same-person の "across"・"maybe" に足す。
+GET /canonical?day=（母艦の 1 日の正本）
+    python v15checks_voices.py  これを、一時フォルダと作り物の声の特徴で確かめる
 """
 
 from __future__ import annotations
@@ -2115,6 +2119,8 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(mothership.oneline.features())
     # GET /rollout・/checks・/costs（2026-11-15。強化案 36・37・41。settle.py）
     found.extend(mothership.settle.FEATURES)
+    # GET /canonical?day=（2026-11-15。強化案 57。canonical.py）
+    found.extend(mothership.canonical.features())
     # POST /claude・GET /claude/usage（鍵があり、今月の上限に届いていないときだけ。2026-11-13）
     if claude.available():
         found.append("claude")

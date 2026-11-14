@@ -470,6 +470,14 @@ GPU が使えないと CPU で動くので、答えが返るまで数十秒〜�
        {"available": true, "generated_at", "refreshing"?: true, "days": [{"day", "groups": [{"id", "score",
         "people": [{"id": "12", "name": "人物12", "lines", "seconds",
                     "samples": [{"time", "text"（40 字まで）, "audio", "start", "end"}]（3 つまで）}]（2〜4 人）}]（20 組まで）}]（3 日まで）}
+   2026-11-15（強化案 56。voices.py。測り方と数は docs/s7-voices-2026-11-15.md）: 記録の行（話し手の 1 回ぶん）ごとの
+   声の特徴を voices\<日>.npz に置きます（音声の名前と区間・声の特徴の数の並びだけ。文・名前は入れません。21 日で消します。
+   この PC の外には出しません）。夜（01:00〜）に直近 7 日を 30 分まで、00:00〜01:00 と 08:30〜18:00 は 30 分に 1 回、
+   今日と昨日の新しい行だけを測ります。日の平均を引いてから、別の日の人物N どうし（0.65 以上）と、名前のある人
+   （0.65 以上・2 番目との差 0.10 以上・1 人に 3 件まで）に照らし、same-person\voices.json に置きます。
+   GET /same-person に省ける "across"（日をまたぐ組。上の組の形に "days" を足したもの）と
+   "maybe"（[{"id", "day", "score", "margin", "person": 上の人の形, "named": {"id", "name"}}]）が足されます。
+   名前は付けません・まとめません（アプリで本人が押したときだけ）。
 5. 夜の読み直し（施策 9）: 昨日の記録の文（職場の会話も）を区切って Claude（standard）に読ませ、聞き間違いと話し手の
    取り違えの候補を作ります。答えは入力の文に当てて確かめ、当たらないものは捨てます。記録は変えません。
    1日の上限は claude-config.json の "night_review_usd"（既定 0.5 ドル）。やめるときは "night_review": false。
@@ -510,6 +518,7 @@ iPhone から届いた記録・PC で直した分・残した音声: %LOCALAPPDA
       学び直しの部品 train（どれも %LOCALAPPDATA%\LifeLogPC の下）
 2026-11-13: Claude の鍵 claude-key.txt・設定 claude-config.json・使った額の帳簿 claude-usage.jsonl（どれも %LOCALAPPDATA%\LifeLogPC）
 2026-11-13: 品質の記録 quality-daily.json・夜の流れの済み quality-night.json・same-person と night-review のフォルダ
+2026-11-15: 区間ごとの声の特徴 voices\<日>.npz（強化案 56。21 日で消します）
 合言葉を変えたいときは、そこにある config.json を消して起動し直します（iPhone 側も入れ直してください）。
 
 ■ モデル
@@ -588,6 +597,8 @@ iPhone のタスクの「母艦のやること」に、母艦（D:\Lifelog）の
   帳簿（claude-usage.jsonl。母艦の分も入る）から。features "costs"
 ・GET /rollout … 母艦の state\rollout_for_app.json（入れた施策の様子。status は live・unused・not_started・broken・
   retire_candidate）。features "rollout"
+・GET /canonical?day=YYYY-MM-DD … 母艦の digests\canonical\YYYY-MM-DD.json（1日の正本。PLAUD の文にアプリの話し手と時刻を
+  重ねたもの。2026-11-15・強化案 57・canonical.py）。直近 14 日だけ。形を確かめ、おかしな行は落とします。features "canonical"
 ・GET /checks … 母艦の state\checks_for_app.json（正しさの抜き取り。7 つまで）。答えは POST /feedback の kind "check"・
   value right・wrong・unsure。features "checks"
 ・提案の kind に "wish"（欲しい物）。精度の通信簿の週に省ける "check_right"（合っていた割合）。
