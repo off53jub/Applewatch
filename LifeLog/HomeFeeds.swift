@@ -539,6 +539,8 @@ enum ProposalRules {
         case "place": return "行ったお店"
         // 本人の台帳（profile.md・people-index.md）に入れる候補（2026-11-14。強化案 32。受けても答えを返すだけ）
         case "profile": return "台帳"
+        // 欲しい物リストから・会話の「欲しい」から（2026-11-15。強化案 49。受けても答えを返すだけ）
+        case "wish": return "欲しい物"
         default: return kind
         }
     }
@@ -567,6 +569,8 @@ enum ProposalRules {
     static func actionLine(_ p: Proposal) -> String? {
         // 台帳の候補（2026-11-14）: 受けても、この iPhone では何も変えない。家の PC（母艦）が台帳に足す
         if p.kind == "profile" { return "受けると、家の PC（母艦）が本人の台帳に足します（この iPhone では何も変えません）" }
+        // 欲しい物（2026-11-15）: 会話から拾ったものは、受けると母艦が欲しい物リストに足す
+        if p.kind == "wish" { return "受けると、家の PC（母艦）が欲しい物リストに足します（リストから出たものは、そのままです）" }
         guard let a = p.action, let text = a.text else { return nil }
         switch a.type {
         case "task": return "受けると、タスク「\(text)」を足します"
@@ -785,7 +789,8 @@ final class HomeFeedsBook {
         content.title = "家の PC からの提案"
         content.body = first.title + (fresh.count > 1 ? " ほか \(fresh.count - 1) 件" : "")
         content.sound = .default
-        try? await UNUserNotificationCenter.current().add(UNNotificationRequest(
+        // 1時間に3通を超えたら1通にまとめる（2026-11-15。強化案 44。NoticeGate.swift）
+        NoticeGate.add(UNNotificationRequest(
             identifier: ProposalRules.noticePrefix + today, content: content,
             trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)))
     }
@@ -824,6 +829,7 @@ extension Pipeline {
                 }
             }
             if p.kind == "profile" { note = "受けました。家の PC（母艦）が台帳に足します。" }
+            if p.kind == "wish" { note = "受けました。会話から拾ったものなら、家の PC（母艦）が欲しい物リストに足します。" }
             Tally.add("proposal.accept")
         case .later:
             note = "\(ProposalRules.laterDays)日たったら、もう一度出します。"
