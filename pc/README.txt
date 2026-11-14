@@ -559,3 +559,20 @@ iPhone のタスクの「母艦のやること」に、母艦（D:\Lifelog）の
   別の場所なら config.json の "mothership_python"）で動かします。
 ・どれも log.txt には数だけを書きます（会話の文・質問・答え・人の名前は書きません）。
 ・確かめ: python v12checks_promises.py（一時フォルダと作り物の Claude・検索・通知の相手で。本物の鍵もネットも使いません）
+
+■ 1日の流れを1つに・PayPay の写真・位置を当日のうちに・反映の見張り（2026-11-14。強化案 25・28・30・32・34。中身は oneline.py）
+・GET /timeline?day=YYYY-MM-DD … 母艦の digests\timeline\YYYY-MM-DD.json（母艦が年表の md の隣に作る）。直近 14 日だけ。
+  無い・読めない・形が違うときは {"available": false, "reason"}。行は time（HH:MM）・end・lane（会話・位置・決済・LINE・予定・
+  写真・閲覧・PC・iPhone・体調・天気・注文）・text（80 文字まで）・amount（円の整数か null）・place（40 文字まで）。features "timeline"
+・POST /pay/paypay-shot … PayPay のアプリの取引履歴のスクリーンショット 1 枚（JPEG・4MB まで）。Claude の軽いモデル（画像つき。
+  claude.py の上限と帳簿を通る。purpose "paypay-shot"）で読み、{"rows": [{"time", "day", "shop", "amount", "method"}]} を返します。
+  画像はどこにも保存しません。PayPay の画面でなければ 422。features "paypayshot"（Claude が使えるときだけ）
+・POST /pay/paypay-rows {"rows": [...]} … 本人が iPhone で「取り込む」を押した行だけ → 母艦の inbox\paypay_shots.jsonl に
+  1 行ずつ（"at" 付き。同じ行は 2 回足しません）。features "paypayrows"
+・POST /location/stays {"stays": [{"start", "end"|null, "lat", "lon", "name"|null, "kind"|null}]} … 母艦の
+  inbox\location_live.jsonl（同じ start は 1 行。閉じた滞在が届いたら置き換えます）。features "livestays"
+・GET /reflection … 母艦の state\reflection.json（要素 × 反映先の「最後に反映された日」）を
+  {"destinations": [...], "elements": [{"element", "cells": [日|null]}], "today"} にして返します。features "reflection"
+・提案の kind に "profile"（本人の台帳の候補。action は none・根拠のあるものだけ）を足しました（appfeeds.py）。
+・どれも log.txt には数だけを書きます（店の名前・金額・場所の名前・座標・画像は書きません）。
+・確かめ: python v13checks_oneline.py（一時フォルダと作り物の Claude で）

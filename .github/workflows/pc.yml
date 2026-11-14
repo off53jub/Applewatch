@@ -140,6 +140,13 @@ jobs:
           python pc/v12checks.py > v12.txt 2>&1 || { cat v12.txt; grep '^NG' v12.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v12.txt | sed 's/^/::notice::v12checks の OK の数: /'
 
+      # 2026-11-14（強化案 25・28・30・32・34）: 1日の年表（GET /timeline）・PayPay の写真（画像を Claude に・残さない・422）・
+      #   確かめた行と滞在を母艦の inbox へ・反映の見張り（GET /reflection）・提案の profile を、一時フォルダと作り物の Claude で確かめる
+      - name: 1日の流れ・PayPay の写真・位置・反映の見張りを確かめる
+        run: |
+          python pc/v13checks_oneline.py > v13.txt 2>&1 || { cat v13.txt; grep '^NG' v13.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v13.txt | sed 's/^/::notice::v13checks_oneline の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py
@@ -202,6 +209,7 @@ jobs:
             --hidden-import trainer --hidden-import gpu --hidden-import v7checks_ops \
             --hidden-import v8checks --hidden-import v9checks --hidden-import lifelog_mcp \
             --hidden-import watchroute --hidden-import v10checks --hidden-import mothership --hidden-import appfeeds \
+            --hidden-import oneline \
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \
             --hidden-import claude --hidden-import v11checks \

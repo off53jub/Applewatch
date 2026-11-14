@@ -27,6 +27,8 @@
 - POST /good/feedback {"items": [...]}（2026-11-12。features の "goodfb"）→ いいこと帳で本人が付けた
   「違う」「当たり」「外れ」の全部を、母艦の inbox/good-feedback/feedback.json に置き換えで書く（iPhone の good-feedback.json が正）。
   1件は {"id","day","time","kind":"word"|"laugh","verdict":"wrong"|"right"}。2000 件まで。中身は記録に書かない（件数だけ）。
+- 2026-11-14（強化案 25・28・30・34。中身は oneline.py）: GET /timeline?day=・GET /reflection・POST /pay/paypay-shot・
+  POST /pay/paypay-rows・POST /location/stays。
 """
 
 from __future__ import annotations
@@ -42,10 +44,11 @@ from typing import Callable
 from urllib.parse import urlparse
 
 import appfeeds  # 自分の声の候補・新しさ・PLAUD との差（2026-11-12）
+import oneline  # 1日の年表・PayPay の写真・位置を当日のうちに・反映の見張り（2026-11-14。強化案 25・28・30・34）
 
-GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS)
+GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS, *oneline.GETS)
 # POST /proposals/answer（母艦からの提案への答え。2026-11-13。中身は appfeeds.py）
-POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback", *appfeeds.POSTS)
+POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback", *appfeeds.POSTS, *oneline.POSTS)
 BODY_LIMIT = 16 * 1024
 # 支払いの記録を母艦へ（2026-11-11）
 TAPS_FILE = Path("inbox") / "card-taps" / "card-taps.json"
@@ -414,10 +417,15 @@ def http_get(handler, config: dict) -> None:
     if path in appfeeds.READERS:
         handler.send_json(200, appfeeds.READERS[path](home(config)))
         return
+    if path in oneline.GETS:  # GET /timeline?day=・/reflection（2026-11-14）
+        oneline.http_get(handler, home(config))
+        return
     handler.send_json(200, read_export(home(config)))
 
 
 def body_limit(path: str) -> int:
+    if path in oneline.LIMITS:  # PayPay の写真は 4MB まで（2026-11-14）
+        return oneline.LIMITS[path]
     return PAY_LIMITS.get(path, BODY_LIMIT)
 
 
@@ -499,6 +507,9 @@ def http_post_pay(handler, config: dict, path: str, data: bytes, log: Callable[[
 
 
 def http_post(handler, config: dict, data: bytes, log: Callable[[str], None]) -> None:
+    if urlparse(handler.path).path in oneline.POSTS:  # 2026-11-14（強化案 28・30）
+        oneline.POSTS[urlparse(handler.path).path](handler, home(config), data, log)
+        return
     if urlparse(handler.path).path in appfeeds.POSTS:
         appfeeds.POSTS[urlparse(handler.path).path](handler, home(config), data, log)
         return
