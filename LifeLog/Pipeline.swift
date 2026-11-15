@@ -2447,6 +2447,7 @@ final class Pipeline {
     /// 議事録を作った会話に、そのドキュメントの名前を記す
     func setScene(_ scene: String, start: Date, day: String) { conversations.setScene(scene, start: start, day: day) }
     func markSpeakerDoubt(_ other: String, time: Date, day: String) { conversations.markSpeakerDoubt(other, time: time, day: day) }
+    func markSpeakerDoubts(_ marks: [(other: String, time: Date)], day: String) { conversations.markSpeakerDoubts(marks, day: day) }
     /// その日の記録を最後に書き換えた時刻（意味で探す索引の入れ直しに使う。2026-11-07）
     func dayModified(_ day: String) -> Date? { conversations.modified(day) }
 

@@ -1081,6 +1081,24 @@ final class ConversationLog {
         }
     }
 
+    /// まとめて印を付ける（1 日を 1 回だけ読み書きする。2026-11-16）
+    func markSpeakerDoubts(_ marks: [(other: String, time: Date)], day: String) {
+        guard !marks.isEmpty else { return }
+        var log = load(day)
+        var changed = false
+        for mark in marks {
+            for i in log.conversations.indices {
+                guard let k = log.conversations[i].lines.firstIndex(where: { $0.time == mark.time }) else { continue }
+                if log.conversations[i].lines[k].speakerDoubt != mark.other {
+                    log.conversations[i].lines[k].speakerDoubt = mark.other
+                    changed = true
+                }
+                break
+            }
+        }
+        if changed { save(log, day: day) }
+    }
+
     func setMinutes(_ name: String, start: Date, day: String) {
         var log = load(day)
         guard let i = log.conversations.firstIndex(where: { $0.start == start }) else { return }

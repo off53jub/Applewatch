@@ -494,6 +494,11 @@ def run(home: Path, store, log: Callable[[str], None], today: datetime.date | No
     save(home, built)
     log(f"声の名寄せ: 日 {len(built['window'])}・区間 {built['segments']}・人物N {built['unnamed']}・名前のある人 {built['named']}"
         f" → 日をまたぐ組 {len(built['across'])}・名前のある人かも {len(built['maybe'])}、{time.time() - started:.0f} 秒")
+    # 2026-11-16: 同じ置き場所で、名前のある人と自分の行の話し手を見比べる（測り直さない。数秒）
+    try:
+        run_check(home, store, log, today)
+    except Exception as error:  # noqa: BLE001 — 見比べが失敗しても名寄せは返す
+        log(f"話し手の見比べを作れませんでした: {type(error).__name__}")
     return built
 
 
@@ -516,6 +521,150 @@ def update_recent(home: Path, store, find_audio, embed, days: int, budget: float
         total["stopped"] = total["stopped"] or got["stopped"]
     prune(home, today)
     return total
+
+
+# MARK: - 話し手の見比べ（GET /speaker-check。2026-11-16）
+#
+# iPhone の見比べ（CrossCheck.swift）は、名前のある人の「声のひとこま」1〜数個を物差しにして、行の声をそのまま比べていた。
+# 自己点検で 204 行中 143 行（70%）が食い違い、使えない数になっていた。2026-11-09〜15 の置き場所で比べ直すと（docs/v18-speaker-check.md）、
+# - 物差しを 1 行にすると、記録どおりの行の 15% を「違う」と言った（余白 0.1。iPhone と同じ決まり）
+# - 物差しを「同じ音声の行を除いた、その人の行の平均」にすると 2.5%（余白 0.1）・1.1%（余白 0.15）
+# - その平均を直近 7 日の行で作ると、見られる行が 709 → 1875 に増え、誤報は 0.8%（余白 0.15）。
+#   わざと別の人にした行の本当の人を当てる割合は 41%（同じ日だけの物差しでは 54%）
+# - 日の平均を引く比べ方は、この見比べでは誤報が増えた（余白 0.1 で 19%）ので使わない（名寄せの束ね方とは別）
+# 記録は変えない。iPhone が確認箱と行の「？」に出し、本人が押したときだけ直す。
+
+CHECK_MARGIN = 0.15
+CHECK_MIN_CLIPS = 4     # 物差しに要るその人の行の数（同じ音声を除く前）
+CHECK_MAX_ITEMS = 200
+CHECK_FILE = "speaker-check.json"
+
+
+def _check_label(label: str | None) -> str | None:
+    """名前のある人と自分だけ（人物N は物差しが弱いので見比べない）。返すのは iPhone の番号（"me" か人の番号）"""
+    if label == SELF_LABEL:
+        return SELF_ID
+    if label and label.startswith("n:"):
+        return label[2:]
+    return None
+
+
+def check_days(home: Path, store, days: list[str]) -> list[dict]:
+    """days の名前のある人と自分の行を、days 全部の行で作った物差しで見比べる。
+    記録のある日ごとに {"day", "checked", "items": [...]}（記録の無い日は入れない）"""
+    people: dict[str, list[dict]] = {}
+    present: list[str] = []
+    for day in days:
+        parsed = store.day(day) if store is not None else None
+        if parsed is None:
+            continue
+        present.append(day)
+        ds = DayStore(home, day).load()
+        for s in segments(parsed):
+            ident = _check_label(s["label"])
+            vector = ds.vectors.get(s["key"])
+            if ident is None or vector is None:
+                continue
+            unit = _unit(np.asarray(vector, dtype=np.float64))
+            if unit is not None:
+                people.setdefault(ident, []).append({**s, "day": day, "vec": unit})
+    people = {k: v for k, v in people.items() if len(v) >= CHECK_MIN_CLIPS and len({x["audio"] for x in v}) >= 2}
+    out = {day: {"day": day, "checked": 0, "items": []} for day in present}
+    if len(people) < 2:
+        return list(out.values())
+    # 人ごと・音声ごとの合計（同じ音声を除いた平均をすぐ出すため）
+    sums = {k: (np.sum([x["vec"] for x in v], axis=0), len(v)) for k, v in people.items()}
+    by_audio: dict[tuple[str, str], tuple[np.ndarray, int]] = {}
+    for k, v in people.items():
+        for x in v:
+            got = by_audio.get((k, x["audio"]))
+            by_audio[(k, x["audio"])] = (x["vec"] + (got[0] if got else 0), (got[1] if got else 0) + 1)
+
+    def ref(ident: str, audio: str) -> np.ndarray | None:
+        total, count = sums[ident]
+        part = by_audio.get((ident, audio))
+        if part is not None:
+            total, count = total - part[0], count - part[1]
+        return _unit(total) if count >= 2 else None
+
+    for ident, lines in people.items():
+        for x in lines:
+            own = ref(ident, x["audio"])
+            if own is None:
+                continue
+            others = {k: r for k in people if k != ident and (r := ref(k, x["audio"])) is not None}
+            if not others:
+                continue
+            entry = out[x["day"]]
+            entry["checked"] += 1
+            mine = float(x["vec"] @ own)
+            best_id, best = max(((k, float(x["vec"] @ r)) for k, r in others.items()), key=lambda kv: kv[1])
+            when = x["line"].get("time")
+            if best - mine < CHECK_MARGIN or not _num(when):
+                continue
+            entry["items"].append({"day": x["day"], "line_time": _iso(when), "audio": x["audio"],
+                                   "start": round(x["start"], 2), "end": round(x["end"], 2), "assigned": ident,
+                                   "suggest": best_id, "gap": round(best - mine, 3)})
+    for entry in out.values():
+        entry["items"].sort(key=lambda i: -i["gap"])
+    return list(out.values())
+
+
+def check_day(home: Path, store, day: str) -> dict | None:
+    """その日だけで見比べる（確かめ用）。記録が無ければ None"""
+    got = check_days(home, store, [day])
+    return got[0] if got else None
+
+
+def run_check(home: Path, store, log: Callable[[str], None], today: datetime.date | None = None,
+              window: int = WINDOW) -> dict:
+    """直近 window 日を見比べて HOME/same-person/speaker-check.json に置く。記録には数だけを書く"""
+    today = today or datetime.date.today()
+    days = check_days(home, store, [(today - datetime.timedelta(days=back)).isoformat() for back in range(window)])
+    built = {"version": 1, "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+             "model": MODEL, "margin": CHECK_MARGIN, "days": days}
+    target = Path(home) / OUT_FOLDER / CHECK_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part = target.with_name(target.name + ".part")
+    with _lock:
+        part.write_text(json.dumps(built, ensure_ascii=False), encoding="utf-8")
+        os.replace(part, target)
+    log(f"話し手の見比べ: 日 {len(days)}・見た行 {sum(d['checked'] for d in days)}"
+        f"・疑い {sum(len(d['items']) for d in days)}")
+    return built
+
+
+def read_check(home: Path, now: float | None = None) -> dict:
+    """GET /speaker-check の中身（古い・読めない・形が違うものは出さない）"""
+    path = Path(home) / OUT_FOLDER / CHECK_FILE
+    try:
+        if (now or time.time()) - path.stat().st_mtime > SERVE_STALE_DAYS * 86400:
+            return {"available": False, "reason": "話し手の見比べが古くなっています"}
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"available": False, "reason": "まだ話し手の見比べをしていません"}
+    if not isinstance(data, dict) or not isinstance(data.get("days"), list):
+        return {"available": False, "reason": "話し手の見比べの形が違います"}
+    days, left = [], CHECK_MAX_ITEMS
+    for d in data["days"]:
+        if not isinstance(d, dict) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(d.get("day") or "")) \
+                or not isinstance(d.get("checked"), int) or isinstance(d.get("checked"), bool) \
+                or not isinstance(d.get("items"), list):
+            continue
+        items = []
+        for x in d["items"]:
+            if left <= 0:
+                break
+            if not isinstance(x, dict) or x.get("day") != d["day"] or not isinstance(x.get("line_time"), str) \
+                    or not all(isinstance(x.get(k), str) and x.get(k) for k in ("assigned", "suggest", "audio")) \
+                    or x["assigned"] == x["suggest"] or UNNAMED.fullmatch(x["assigned"]) \
+                    or not all(_num(x.get(k)) for k in ("start", "end", "gap")):
+                continue
+            items.append({k: x[k] for k in ("day", "line_time", "audio", "start", "end", "assigned", "suggest", "gap")})
+            left -= 1
+        days.append({"day": d["day"], "checked": max(0, d["checked"]), "items": items})
+    return {"available": True, "generated_at": str(data.get("generated_at") or "")[:40], "model": str(data.get("model") or ""),
+            "days": days}
 
 
 # MARK: - GET /same-person に足す分

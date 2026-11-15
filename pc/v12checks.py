@@ -360,7 +360,9 @@ def check_run_night() -> int:
         try:
             quality.State.thread = object()  # 裏の流れは始めない
             quality.start(home, store, None, lambda: home / "base", fake_embed, logged.append)
-            failed += say(quality.features() == ["sameperson", "nightreview"], "features に sameperson・nightreview")
+            # 2026-11-16: 話し手の見比べ（spkcheck）も、声の特徴を測れるときだけ並ぶ
+            failed += say(quality.features() == ["sameperson", "nightreview", "spkcheck"],
+                          "features に sameperson・nightreview・spkcheck")
             out = quality.run_night(today)
             daily = quality.read_daily(home)["days"].get(DAY, {})
             failed += say(out.get("night") == 1 and "judge" in out and daily.get("night_review_items") == 1
