@@ -71,7 +71,6 @@ extension Pipeline {
             Tally.add("sameperson.auto")
             merged += 1
         }
-        if merged > 0 { lastEngine += "・別の日の同じ声を \(merged) 組まとめた" }
         return merged
     }
 }
