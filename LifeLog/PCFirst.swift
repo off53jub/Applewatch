@@ -200,8 +200,11 @@ extension Pipeline {
             PCResults.remove(name)
             Task { await homePC.deleteJob(name) }
         }
-        // 1回で入れきれなかったら、アプリを開いているあいだは少ししてからもう一度
-        if names.count >= PCFirst.perPass, UIApplication.shared.applicationState == .active, state.again == nil {
+        // 時計の区切りの音声も、時計からではなく家の PC から受け取る（PC が "jobaudio" を持つとき。2026-11-15。強化案 64。PCRelay.swift）。
+        // 上で「音声を待つ」と決めた区切り（職場・寝ている時間）は、ここで音声が届くので、同じ取り込みの回で記録に入る
+        let moreAudio = await pullRelayAudio(jobs)
+        // 1回で入れきれなかったら（音声を受け取りきれなかったときも）、アプリを開いているあいだは少ししてからもう一度
+        if names.count >= PCFirst.perPass || moreAudio, UIApplication.shared.applicationState == .active, state.again == nil {
             state.again = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(PCFirst.interval + 1))
                 PCFirstState.shared.again = nil

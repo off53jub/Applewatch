@@ -15,6 +15,9 @@ import WatchKit
 /// 30分たっても返事が無ければ送り直す（30分ごとに3回、そのあとは6時間ごと）。控えは7日・300MB まで（2026-11-07）。
 /// iPhone から頼まれたとき・iPhone のアプリが入れ直されたときは、残っている区切りを全部送り直す（2026-11-07）。
 /// 返事をしない古い iPhone のアプリには、今までどおり送り終わったら消す。
+/// iPhone が「音声は家の PC から受け取れる」と言っているあいだは、PC に届いた区切りを iPhone には送らずに20分まで待つ。
+/// iPhone が PC から受け取って「受け取った」（gotPC）と返事をすれば、送らずに消す。返事が無ければ今までどおり送る
+/// （2026-11-15。強化案 64。docs/v17-watch-relay.md）。
 final class WatchSender: NSObject, WCSessionDelegate {
     static let pendingDir: URL = {
         let dir = URL.documentsDirectory.appendingPathComponent("pending", isDirectory: true)
@@ -172,8 +175,18 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// - held: 時計が「録音を休む場所にいる」と思っているか（iPhone の思っていることと違えば、iPhone が設定を送り直す）
     /// - wanted: 止めるボタンを押さずに録音していた（録音しているつもり）か
     private func deliveryState() -> [String: Any] {
-        var out: [String: Any] = ["kept": sentFiles().count, "unsent": unsentCount(), "held": SilenceGate.held,
+        // 家の PC に届いていて、iPhone が PC から受け取るのを待っている区切りは「まだ送っていない」に数えない
+        // （わざと待っているので。別に relayHeld として知らせる。2026-11-15。強化案 64）
+        let unsent = unsentFiles().map(\.lastPathComponent)
+        let relay = WatchPC.relayOn
+        let now = Date.now
+        let waiting = relay ? unsent.filter { isHeldForRelay($0, now: now) }.count : 0
+        var out: [String: Any] = ["kept": sentFiles().count, "unsent": unsent.count - waiting, "held": SilenceGate.held,
                                   "wanted": UserDefaults.standard.bool(forKey: Self.wantedKey)]
+        if relay {
+            out["relayHeld"] = waiting
+            out["relayDone"] = WatchPC.relayDoneCount(now: now)
+        }
         if WCSession.default.activationState == .activated {
             out["outstanding"] = WCSession.default.outstandingFileTransfers.count
         }
@@ -339,6 +352,37 @@ final class WatchSender: NSObject, WCSessionDelegate {
         }
     }
 
+    // MARK: - 音声は家の PC から iPhone へ（2026-11-15。強化案 64。WatchDelivery の同じ見出し）
+
+    /// 家の PC に届いていて（送っている途中で）、iPhone が PC から受け取るのを待っている区切りか。
+    /// startedNow は、いま PC に送り始めたところか
+    private func isHeldForRelay(_ name: String, startedNow: Bool = false, now: Date = .now) -> Bool {
+        WatchDelivery.relayHold(relay: WatchPC.relayOn, sentToPC: WatchPC.sentAt(name),
+                                sendingToPC: startedNow || pc.isSending(name), now: now)
+    }
+
+    /// iPhone が家の PC から音声を受け取ったので、時計の中の同じ区切りを消す（まだ送っていないものも、返事待ちの控えも）。
+    /// iPhone に送っている途中なら、取りやめる。名前は iPhone で付く名前で届くので、時計の名前に直して探す
+    private func acknowledgedViaPC(_ phoneName: String) {
+        let phoneZone = UserDefaults.standard.string(forKey: WatchDelivery.phoneZoneKey)
+            .flatMap(TimeZone.init(identifier:)) ?? .current
+        guard let name = WatchDelivery.watchName(phoneName, watchZone: .current, phoneZone: phoneZone),
+              recording?.lastPathComponent != name else { return }
+        if WCSession.isSupported(), WCSession.default.activationState == .activated {
+            for transfer in WCSession.default.outstandingFileTransfers
+            where transfer.file.fileURL.lastPathComponent == name {
+                transfer.cancel()
+            }
+        }
+        let pending = Self.pendingDir.appendingPathComponent(name)
+        let had = FileManager.default.fileExists(atPath: pending.path)
+            || FileManager.default.fileExists(atPath: Self.sentDir.appendingPathComponent(name).path)
+        try? FileManager.default.removeItem(at: pending)
+        // 控えと、送り直しの覚えを消す（「受け取った」の返事と同じ）
+        acknowledged(name)
+        if had { WatchPC.noteRelayDone(name) }
+    }
+
     /// 送ってから30分たっても返事の無い区切りを、送り直す（30分ごとに3回まで。そのあとは6時間ごと。2026-11-07）。
     /// 前は送り直した時刻を残していなかったので、30分たつと3回を数分のうちに使い切り、そのあとは送らなかった
     func resendUnacknowledged() {
@@ -486,6 +530,10 @@ final class WatchSender: NSObject, WCSessionDelegate {
         let battery = lock.withLock { batteryInfo }
         let direct = pc.send(url, lowPower: lowPower, battery: battery?.level, charging: battery?.charging ?? false)
         guard active else { return }
+        // 家の PC に届いた（送っている途中の）区切りは、iPhone が PC から受け取るのを少し待つ（2026-11-15。強化案 64）。
+        // 「受け取った」（gotPC）が来れば、iPhone には送らずに済む。来なければ、待つ時間が過ぎたあとの次の見回り
+        // （区切るたびの heartbeat → resendPending）で、今までどおり iPhone に送る。PC に送れなかった区切りは待たない
+        if isHeldForRelay(url.lastPathComponent, startedNow: direct) { return }
         // 名前の時刻は時計の時間帯。iPhone が自分の時間帯に直せるよう、時間帯も送る（2026-11-06）。
         // 区切った時刻と送り始めた時刻も添える（iPhone が「時計で待った」と「受け渡し」を分けて測る。2026-11-07）
         WCSession.default.transferFile(url, metadata: WatchDelivery.metadata(
@@ -546,6 +594,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// iPhone からの返事（受け取った区切り）と知らせ
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         if let got = userInfo["got"] as? String { acknowledged(got) }
+        // iPhone が家の PC から音声を受け取った（時計からは送らなくてよい。2026-11-15。強化案 64）
+        if let got = userInfo[WatchDelivery.relayGotKey] as? String { acknowledgedViaPC(got) }
         if let alert = userInfo["alert"] as? String { onAlert?(alert) }
         // 家の PC の家の中の住所と合言葉（合言葉は時計の Keychain に置く。2026-11-07。WatchPC）
         WatchPC.applyCredentials(userInfo)

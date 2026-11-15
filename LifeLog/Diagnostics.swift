@@ -251,6 +251,9 @@ extension Pipeline {
                 route.value + (route.checkedAt.map { "・PC に聞いた " + Self.when($0) } ?? ""), route.ok)
         }
 
+        // 時計の音声を、時計からではなく家の PC から受け取った数（2026-11-15。強化案 64。PCRelay.swift）
+        if let relay = relayDiag { add("時計", "音声を家の PC から受け取る", relay.value, relay.ok) }
+
         // 文字になるまで（区間ごとの中央値。2026-11-07。Latency.swift）
         for row in Latency.rows() { add("文字になるまで", row.label, row.value, row.ok) }
         // 時計の区切りを、音声が届く前に家の PC の答えから記録に入れた数（版 10。PCFirst.swift）

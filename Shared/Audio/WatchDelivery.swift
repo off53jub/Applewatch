@@ -291,6 +291,45 @@ enum WatchDelivery {
         return fresh.sorted { ($0.start, $0.name) < ($1.start, $1.name) }.prefix(catchUpLimit).map { $0.name }
     }
 
+    // MARK: - 音声は家の PC から iPhone へ（2026-11-15。強化案 64）
+    //
+    // 前は、時計が同じ区切りを2回送っていた（家の PC へ直接と、iPhone へ WatchConnectivity で）。iPhone への受け渡しは
+    // Apple に絞られて何時間も遅れ、返事待ちの控えが 1000 個を超えて、送り直しが続いていた（2026-11-15 の自己点検で 1327 個）。
+    // PC はもう音声を持っているので、iPhone は PC から音声を受け取り（PCRelay.swift）、時計に「受け取った」と返事をする。
+    // 時計は、PC に届いた区切りを少しのあいだ iPhone に送らずに待ち、その間に返事が来たら送らない（無線を使うのが1回で済む）。
+    // 返事が来なければ、今までどおり iPhone に送る（何も失わない。遅れるのは長くて relayWait）。
+
+    /// applicationContext（iPhone → 時計）: iPhone がいま、時計の音声を家の PC から受け取れる
+    /// （PC が "jobaudio" を持ち、設定がオンで、つながり方が合っている）。古い iPhone のアプリは送らない＝時計は待たない
+    static let relayKey = "pcRelay"
+    /// transferUserInfo（iPhone → 時計）: 家の PC から音声を受け取った区切り（iPhone で付く名前）
+    static let relayGotKey = "gotPC"
+    /// 時計が、PC に届いた区切りを iPhone に送らずに待つ長さ
+    static let relayWait: TimeInterval = 20 * 60
+
+    /// 時計が、この区切りを iPhone に送るのを待つか。
+    /// relay は iPhone が「PC から受け取れる」と言っているか。sentToPC は PC に届いた時刻。sendingToPC はいま PC に送っている途中か。
+    /// PC に送れなかった（sentToPC が無く、送っている途中でもない）区切りは待たない
+    static func relayHold(relay: Bool, sentToPC: Date?, sendingToPC: Bool, now: Date) -> Bool {
+        guard relay else { return false }
+        if sendingToPC { return true }
+        guard let sentToPC else { return false }
+        let waited = now.timeIntervalSince(sentToPC)
+        return waited >= 0 && waited < relayWait
+    }
+
+    /// iPhone で付く名前から、時計のファイルの名前（phoneName の逆。「-w」を外し、時計の時間帯に直す）。
+    /// 時計の区切りの名前でなければ nil
+    static func watchName(_ phoneName: String, watchZone: TimeZone, phoneZone: TimeZone) -> String? {
+        let stem = (phoneName as NSString).deletingPathExtension
+        guard (phoneName as NSString).pathExtension == "m4a", !phoneName.contains("/"),
+              stem.hasSuffix("-w"), stem.count >= 17 else { return nil }
+        let body = String(stem.dropLast(2))
+        let tail = String(body.dropFirst(15))
+        guard let date = formatter(phoneZone).date(from: String(body.prefix(15))) else { return nil }
+        return formatter(watchZone).string(from: date) + tail + ".m4a"
+    }
+
     /// POST /jobs に付ける query（iPhone の送りと同じ形。待ち合わせ wait=1 は付けない＝答えは iPhone が受け取る）
     static func jobQuery(name: String, chunkStart: Date?, chunkEnd: Date?, sent: Date,
                          hints: String?, weights: String?) -> [URLQueryItem] {

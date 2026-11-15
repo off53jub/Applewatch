@@ -52,6 +52,7 @@ enum FeatureProof {
         Feature(name: "時計の区切りの送り直し", pr: 23, keys: ["watch.resendAsked"]),
         Feature(name: "毎朝の聞いて直す", pr: 24, keys: ["review.fixed", "review.ok", "review.skipped"]),
         Feature(name: "PC から先に記録に入れる", pr: 25, keys: ["pcFirst.applied"], pc: "watchroute"),
+        Feature(name: "時計の音声を家の PC から受け取る", pr: 67, keys: ["relay.got"], pc: "jobaudio"),
         Feature(name: "時計の更新の知らせ", pr: 37, keys: ["watch.updateReminder"]),
         Feature(name: "長い会話の自動の分け直し", pr: 35, keys: ["talk.autoSplit"]),
         Feature(name: "名前の無い声の夜の整理", pr: 35, keys: ["voice.tidyMerged", "voice.tidyForgot", "voice.tidySkipped"]),
