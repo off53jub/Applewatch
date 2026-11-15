@@ -133,6 +133,7 @@ enum Tally {
             let good: Bool? = total >= 20 ? (Double(ok) / Double(total) >= 0.8) : nil
             let value: String = "作れた \(ok)" + pct(ok, total) + "（うち職場 \(n("claude.work"))）・頼めずほかで作った \(failed)"
                 + (capped > 0 ? "・今月の上限で見送った \(capped)" : "")
+                + (n("claude.cancelled") > 0 ? "・こちらで取りやめた \(n("claude.cancelled"))" : "")
             rows.append(("Claude（家の PC 経由）", value, good))
         }
         if n("talk.joined") + n("talk.split") > 0 {

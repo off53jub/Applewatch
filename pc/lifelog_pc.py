@@ -135,6 +135,10 @@ POST /decisions/answer（アプリで選んだ決めごとを母艦の inbox に
 HOME/voices に置き、日をまたぐ「同じ人かも」と「名前のある人かも」を GET /same-person の "across"・"maybe" に足す。
 GET /canonical?day=（母艦の 1 日の正本）
     python v15checks_voices.py  これを、一時フォルダと作り物の声の特徴で確かめる
+2026-11-16（強化案 75。docs/v19-pc-llm.md）: 意味で探すの bge-m3 を使い終わってから 30 分載せておく（"embed_keep_alive"。
+MCP も同じ）。/llm で Ollama を待つのは 175 秒まで（"llm_timeout_seconds"。iPhone は 180 秒でやめる）。時間切れのあとも
+Ollama を使えないにしない
+    python v19checks_llm.py  これを、作り物の Ollama と一時フォルダで確かめる
 """
 
 from __future__ import annotations
@@ -2493,9 +2497,10 @@ def start_v6(threads: int) -> None:
                   lambda p, r: extra_model("speaker", 1).embed(load_audio(p.read_bytes()), r), log)
     if App.use_semantic:
         try:
-            # bge-m3 は、GPU の文字起こしのモデルが載っていても、空きがあれば GPU に（2026-11-15。gpu.embed_options）
-            App.semantic = semantic.SemanticIndex(SEMANTIC_DB,
-                                                  semantic.OllamaEmbedder(LLM.url, options=embed_ollama_options), log)
+            # bge-m3 は、GPU の文字起こしのモデルが載っていても、空きがあれば GPU に（2026-11-15。gpu.embed_options）。
+            # 2026-11-16: 使い終わってから 30 分は載せておく（約 11 分おきの読み込み直しをやめる。"embed_keep_alive"）
+            App.semantic = semantic.SemanticIndex(SEMANTIC_DB, semantic.OllamaEmbedder(
+                LLM.url, options=embed_ollama_options, keep_alive=semantic.embed_keep_alive(load_config())), log)
             threading.Thread(target=App.semantic.available, kwargs={"force": True}, daemon=True).start()
             # 仕事のまとめ（ドライブの「仕事のまとめ.json」。読むだけ）も、変わったときだけ索引に置き直す（2026-11-10）
             App.semantic.start_digest_sync(lambda: mothership.read_digests(mothership.digest_file(load_config())))
@@ -2554,8 +2559,20 @@ LLM_BODY_LIMIT = 1_000_000   # /llm に送ってよい大きさ（1MB まで）
 LLM_PROMPT_MAX = 200_000     # 頼む文の長さの上限（文字）
 LLM_DEFAULT_TOKENS = 1024
 LLM_MAX_TOKENS = 8192
-LLM_TIMEOUT = 600.0          # CPU で動かすと遅いので長めに待つ
+# 2026-11-16（強化案 75。docs/v19-pc-llm.md）: 待つのは 175 秒まで（前は 600 秒）。/llm を頼むのは iPhone だけで、
+# iPhone は 180 秒で待つのをやめる（HomePC.llm）。11/15 は CPU だけの qwen3:8b が 600 秒で 46 回時間切れになり、
+# 答えた 18 回のうち 16 回も 180 秒を越えていた（iPhone はもう待っていない）。Ollama は 1 度に 1 つしか答えないので、
+# 誰も待っていない答えを作るあいだ、次の頼みも待たされていた。config.json の "llm_timeout_seconds" で変えられる（30〜600）
+LLM_TIMEOUT = 175.0
 LLM_CHECK_EVERY = 60.0       # Ollama があるかを確かめ直す間（秒）
+
+
+def llm_timeout(config: dict | None) -> float:
+    """/llm で Ollama の答えを待つ秒（config.json の "llm_timeout_seconds"。おかしければ 175）"""
+    value = (config or {}).get("llm_timeout_seconds", LLM_TIMEOUT)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return LLM_TIMEOUT
+    return float(min(600.0, max(30.0, value)))
 # 合言葉が違うときなどに読み捨てる中身の上限。これより大きいものは読まずに接続を閉じる
 DRAIN_LIMIT = 200_000_000
 DRAIN_TIMEOUT = 30.0
@@ -2620,7 +2637,7 @@ class LocalLLM:
     options を渡すと、頼むたびにその答え（{"num_gpu": 0} など）を Ollama の options に足す。"""
 
     def __init__(self, url: str = OLLAMA_URL, model: str = LLM_MODEL, enabled: bool = True,
-                 options=None) -> None:
+                 options=None, timeout: float = LLM_TIMEOUT) -> None:
         if not is_local_url(url):
             raise ValueError(f"Ollama の宛先はこの PC の中（http://127.0.0.1:…）にしてください: {url}")
         import urllib.request
@@ -2629,6 +2646,7 @@ class LocalLLM:
         self.model = model
         self.enabled = enabled
         self.options = options
+        self.timeout = timeout
         # プロキシの設定があっても使わない（この PC の中にだけつなぐ）
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self.ok = False
@@ -2687,14 +2705,19 @@ class LocalLLM:
         extra = self.extra_options()
         try:
             answer = self.call("/api/chat", ollama_chat_body(self.model, prompt, as_json, max_tokens,
-                                                             self.supports_think, extra), timeout=LLM_TIMEOUT)
+                                                             self.supports_think, extra), timeout=self.timeout)
         except urllib.error.HTTPError as error:
             # 古い Ollama・考える過程を持たないモデルが "think" を断ったときは、付けずにもう一度
             if error.code != 400 or not self.supports_think:
                 raise
             self.supports_think = False
             answer = self.call("/api/chat", ollama_chat_body(self.model, prompt, as_json, max_tokens, False, extra),
-                               timeout=LLM_TIMEOUT)
+                               timeout=self.timeout)
+        except TimeoutError:
+            # 2026-11-16: 時間切れは「Ollama が動いていない」ではない（前は次の頼みを、確かめ直すまで断っていた。
+            # 11/15 は時間切れの直後に 11 回、すぐ断っていた）。11/15 の Ollama の記録では、こちらが閉じたところで
+            # その頼みは 500 で終わっている（答えを作り続けない）
+            raise
         except OSError:
             self.ok = False
             self.checked = time.time()
@@ -4052,7 +4075,7 @@ def main() -> None:
     try:
         LLM = LocalLLM(url=str(config.get("ollama_url") or OLLAMA_URL),
                        model=args.llm_model or str(config.get("llm_model") or LLM_MODEL),
-                       enabled=not args.no_llm and config.get("llm") is not False)
+                       enabled=not args.no_llm and config.get("llm") is not False, timeout=llm_timeout(config))
     except ValueError as error:
         log(f"/llm は使いません: {error}")
         LLM = LocalLLM(enabled=False)
