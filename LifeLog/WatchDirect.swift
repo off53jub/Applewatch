@@ -27,6 +27,8 @@ final class WatchDirectState {
     var sentPublicURL: String?
     var sentPublicKey: String?
     var hintsSentAt = Date.distantPast
+    /// この起動で最後に時計に知らせた「音声は家の PC から受け取れる」（変わったら、10分を待たずに知らせ直す。PCRelay.swift）
+    var sentRelay: Bool?
     /// 時計が受け取っていないので送り直した時刻（checkWatchPCDelivery。送りすぎないため）
     var resentAt = Date.distantPast
     /// アプリが前に出たときの知らせ
@@ -351,7 +353,12 @@ extension Pipeline {
             }
         }
         let weights = on && !HomePC.skipWeights ? HomePC.weightsText(noisy: false) : nil
-        receiver.sendWatchPCContext(direct: on, hints: words.joined(separator: "\n"), weights: weights, force: resend)
+        // 時計の音声を家の PC から受け取れるか（受け取れるあいだ、時計は PC に届いた区切りを iPhone に送らずに少し待つ。
+        // 2026-11-15。強化案 64。PCRelay.swift）
+        let relay = on && relayUsableNow()
+        state.sentRelay = relay
+        receiver.sendWatchPCContext(direct: on, hints: words.joined(separator: "\n"), weights: weights, relay: relay,
+                                    force: resend)
     }
 
     /// 時計の区切りが届いたとき、PC に送る（今までどおり）。時計が PC にも直接送っていたら、先に PC の答えを見て、

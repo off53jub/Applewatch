@@ -28,6 +28,15 @@ final class HomePC {
     var watchDirect = UserDefaults.standard.object(forKey: "homePCWatchDirect") as? Bool ?? true {
         didSet { UserDefaults.standard.set(watchDirect, forKey: "homePCWatchDirect"); onWatchSettingsChange?() }
     }
+    /// 時計の区切りの音声を、時計からではなく家の PC から受け取る（初めはオン。2026-11-15。強化案 64。PCRelay.swift）。
+    /// 時計が同じ音声を2回送らずに済む。PC がまだ対応していない・受け取れないときは、今までどおり時計から届く
+    var watchRelay = UserDefaults.standard.object(forKey: "homePCWatchRelay") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(watchRelay, forKey: "homePCWatchRelay"); onWatchSettingsChange?() }
+    }
+    /// 上の受け取りを、モバイル通信でもする（初めはオフ＝Wi-Fi のときだけ。外にいるあいだ、1時間に15MBほど使う）
+    var relayCellular = UserDefaults.standard.object(forKey: "homePCRelayCellular") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(relayCellular, forKey: "homePCRelayCellular"); onWatchSettingsChange?() }
+    }
     /// 時計に送る設定（住所・合言葉・オンオフ）が変わったら呼ぶ（Pipeline が時計に送り直す）
     @ObservationIgnored var onWatchSettingsChange: (@MainActor () -> Void)?
 
@@ -148,6 +157,8 @@ final class HomePC {
         UserDefaults.standard.set(features.contains("draft"), forKey: Self.draftKey)
         // 時計から直接届いた区切りを、PC から先に記録に入れられるか（版 10。PCFirst.swift）
         UserDefaults.standard.set(features.contains(PCFirst.feature), forKey: PCFirst.featureKey)
+        // 時計の区切りの音声を PC から受け取れるか（2026-11-15。強化案 64。PCRelay.swift）
+        UserDefaults.standard.set(features.contains(PCRelay.feature), forKey: PCRelay.featureKey)
         // Claude に頼めるか（鍵があり、今月の上限より下。2026-11-13。Claude.swift。言語モデルの呼び出しはどのスレッドからも読む）
         UserDefaults.standard.set(features.contains(ClaudeRoute.feature), forKey: ClaudeRoute.featureKey)
         speakerModel = hello.speaker_model
@@ -723,6 +734,25 @@ final class HomePC {
         return .draft(draft.lines.map {
             Line(offset: $0.start, end: $0.end, text: $0.text, confidence: nil, alternatives: [], votes: [:])
         })
+    }
+
+    /// 時計から PC に直接届いた区切りの音声を受け取る（GET /jobs/<名前>/audio。PC の "jobaudio"。2026-11-15。強化案 64）。
+    /// cellular が false なら、モバイル通信・テザリングでは受け取らない（そのときは、時計からの受け渡しを待つ）。
+    /// PC に無い・つながらない・受け取れないつながり方なら nil
+    func jobAudio(_ name: String, cellular: Bool, timeout: TimeInterval = 20) async -> Data? {
+        guard shouldTry, Self.acceptsJobs, let req = try? request("jobs/" + name + "/audio") else { return nil }
+        let config = URLSessionConfiguration.ephemeral
+        config.allowsCellularAccess = cellular && useCellular
+        config.allowsExpensiveNetworkAccess = cellular && useCellular
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout * 2
+        let session = URLSession(configuration: config)
+        defer { session.finishTasksAndInvalidate() }
+        guard let got = try? await session.data(for: req),
+              (got.1 as? HTTPURLResponse)?.statusCode == 200, !got.0.isEmpty else { return nil }
+        PCSilence.noteContact()  // 家の PC からの答え
+        return got.0
     }
 
     /// 使い終わった結果を PC から消す（失敗してもよい。PC は7日で消す）

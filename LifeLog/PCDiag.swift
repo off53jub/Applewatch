@@ -555,6 +555,9 @@ extension Pipeline {
         if let cut = state.lastCut { detail["watchLastCut"] = cut.timeIntervalSince1970 }
         if let held = state.held { detail["watchHeld"] = held }
         if let wanted = state.wanted { detail["watchWanted"] = wanted }
+        // 家の PC に届いていて iPhone が PC から受け取るのを待っている数・送らずに済んだ数（2026-11-15。強化案 64。PCRelay.swift）
+        if let held = state.relayHeld { detail["watchRelayHeld"] = held }
+        if let done = state.relayDone { detail["watchRelayDone"] = done }
         UserDefaults.standard.set(detail, forKey: PCDiag.watchDetailKey)
     }
 

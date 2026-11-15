@@ -137,6 +137,12 @@ enum Storage {
         return (UserDefaults.standard.dictionary(forKey: receivedKey) as? [String: Double])?[name] != nil
     }
 
+    /// 受け取ったと覚えている区切りの名前（たくさんの名前をまとめて見るとき用。1つずつ alreadyReceived を呼ぶと、
+    /// そのたびに覚えを読み直して遅い。2026-11-15。PCRelay.swift）
+    static func receivedNames() -> Set<String> {
+        Set((UserDefaults.standard.dictionary(forKey: receivedKey) as? [String: Double] ?? [:]).keys)
+    }
+
     /// 受け取った区切りの名前を覚える（古いものは忘れる）
     static func noteReceived(_ name: String) {
         var list = UserDefaults.standard.dictionary(forKey: receivedKey) as? [String: Double] ?? [:]

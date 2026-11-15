@@ -98,6 +98,15 @@ struct HomePCView: View {
                 if let problem = pc.homeAddressProblem {
                     Text(problem).font(.caption).foregroundStyle(.orange)
                 }
+                // 時計の音声は、時計からではなく家の PC から受け取る（2026-11-15。強化案 64。PCRelay.swift）
+                if pc.watchDirect {
+                    Toggle("時計の音声は家の PC から受け取る", isOn: $pc.watchRelay)
+                    if pc.watchRelay {
+                        Toggle("モバイル通信でも受け取る", isOn: $pc.relayCellular)
+                        Text("時計は、家の PC に届いた区切りを iPhone には送らずに待ち、iPhone が PC から音声を受け取ります（時計が同じ音声を2回送らずに済むので、時計の電池と、届くまでの遅れが減ります）。20分たっても受け取れなければ、今までどおり時計から届きます。モバイル通信でも受け取ると、外にいるあいだ1時間に15MBほど使います。オフなら Wi-Fi のときだけ受け取ります。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             } header: {
                 Text("時計から直接")
             } footer: {

@@ -140,6 +140,10 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         var lastCut: Date? = nil
         /// 時計が「録音を休む場所にいる」と思っているか
         var held: Bool? = nil
+        /// 家の PC に届いていて、iPhone が PC から受け取るのを時計が待っている数と、直近1日に iPhone へ送らずに済んだ数
+        /// （新しい時計のアプリだけ。2026-11-15。強化案 64。PCRelay.swift）
+        var relayHeld: Int? = nil
+        var relayDone: Int? = nil
         /// 時計で、止めるボタンを押さずに録音していた（録音しているつもり）か
         var wanted: Bool? = nil
 
@@ -178,13 +182,17 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     // MARK: - 時計から家の PC に直接送る（2026-11-07。WatchPC.swift）
 
     /// 直接送るか・聞き取りのヒント・多数決の重みを、設定と一緒に送る（変わったときだけ。force なら変わっていなくても送る）
-    func sendWatchPCContext(direct: Bool, hints: String, weights: String?, force: Bool = false) {
+    /// relay は、いま iPhone が時計の音声を家の PC から受け取れるか（時計は、PC に届いた区切りを iPhone に送らずに少し待つ。
+    /// 2026-11-15。強化案 64。PCRelay.swift）
+    func sendWatchPCContext(direct: Bool, hints: String, weights: String?, relay: Bool = false, force: Bool = false) {
         var next = lastSettings
         next[WatchDelivery.directKey] = direct
         next[WatchDelivery.hintsKey] = hints
         next[WatchDelivery.weightsKey] = weights ?? ""
         next[WatchDelivery.phoneZoneKey] = TimeZone.current.identifier
+        next[WatchDelivery.relayKey] = relay
         let changed = (lastSettings[WatchDelivery.directKey] as? Bool) != direct
+            || (lastSettings[WatchDelivery.relayKey] as? Bool) != relay
             || (lastSettings[WatchDelivery.hintsKey] as? String) != hints
             || (lastSettings[WatchDelivery.weightsKey] as? String) != (weights ?? "")
             || (lastSettings[WatchDelivery.phoneZoneKey] as? String) != TimeZone.current.identifier
@@ -268,6 +276,8 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         state.lastCut = (context["lastCut"] as? Double).map { Date(timeIntervalSince1970: $0) }
         state.held = context["held"] as? Bool
         state.wanted = context["wanted"] as? Bool
+        state.relayHeld = context["relayHeld"] as? Int
+        state.relayDone = context["relayDone"] as? Int
         let snapshot = state
         Task { @MainActor in
             if let lowPower { self.onWatchLowPower?(lowPower) }
@@ -323,5 +333,14 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     private func acknowledge(_ name: String) {
         guard WCSession.default.activationState == .activated else { return }
         WCSession.default.transferUserInfo(["got": name])
+    }
+
+    /// 時計の区切りの音声を家の PC から受け取ったと、時計に知らせる（時計は、その区切りを iPhone に送らずに消す。
+    /// 名前は iPhone で付く名前。2026-11-15。強化案 64。PCRelay.swift）。知らせを出せたら true
+    @discardableResult
+    func acknowledgeViaPC(_ name: String) -> Bool {
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return false }
+        WCSession.default.transferUserInfo([WatchDelivery.relayGotKey: name])
+        return true
     }
 }

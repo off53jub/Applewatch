@@ -100,6 +100,40 @@ final class WatchPC: @unchecked Sendable {
         if let hints = context[WatchDelivery.hintsKey] as? String { defaults.set(hints, forKey: WatchDelivery.hintsKey) }
         if let weights = context[WatchDelivery.weightsKey] as? String { defaults.set(weights, forKey: WatchDelivery.weightsKey) }
         if let zone = context[WatchDelivery.phoneZoneKey] as? String { defaults.set(zone, forKey: WatchDelivery.phoneZoneKey) }
+        // iPhone が、時計の音声を家の PC から受け取れるか（2026-11-15。強化案 64。古い iPhone のアプリは送らない＝オフのまま）
+        if let relay = context[WatchDelivery.relayKey] as? Bool { defaults.set(relay, forKey: WatchDelivery.relayKey) }
+    }
+
+    /// iPhone が「音声は家の PC から受け取れる」と言っているか（2026-11-15。強化案 64）
+    static var relayOn: Bool { UserDefaults.standard.bool(forKey: WatchDelivery.relayKey) }
+
+    /// その区切りが PC に届いた時刻（直近1日の分。届いていなければ nil）
+    static func sentAt(_ fileName: String) -> Date? {
+        let list = UserDefaults.standard.dictionary(forKey: sentKey) as? [String: Double] ?? [:]
+        return list[fileName].map { Date(timeIntervalSince1970: $0) }
+    }
+
+    /// その区切りを、いま PC に送っている途中か
+    func isSending(_ fileName: String) -> Bool {
+        lock.withLock { sending.contains(fileName) }
+    }
+
+    /// PC に届いた区切りを iPhone に送らずに待っている数と、iPhone が PC から受け取ってくれた数（直近1日）。
+    /// iPhone の自己点検に出す（2026-11-15。強化案 64）
+    private static let relayDoneKey = "pcRelayDone"
+
+    static func noteRelayDone(_ fileName: String, now: Date = .now) {
+        var list = UserDefaults.standard.dictionary(forKey: relayDoneKey) as? [String: Double] ?? [:]
+        let seconds = now.timeIntervalSince1970
+        list = list.filter { seconds - $0.value < keepSent }
+        list[fileName] = seconds
+        UserDefaults.standard.set(list, forKey: relayDoneKey)
+    }
+
+    static func relayDoneCount(now: Date = .now) -> Int {
+        let list = UserDefaults.standard.dictionary(forKey: relayDoneKey) as? [String: Double] ?? [:]
+        let seconds = now.timeIntervalSince1970
+        return list.values.filter { seconds - $0 < keepSent }.count
     }
 
     /// 外の道で合言葉が違うと言われたか
