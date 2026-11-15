@@ -1,0 +1,96 @@
+name: Symbolicate
+
+# iPhone の落ち・書き込み過多の記録（MetricKit）は、アプリの中を番地でしか持っていない。
+# 前の版のコミットを同じ作り方で組み立て直し、dSYM で番地を関数名に直す（2026-11-16）。
+# 番地の一覧は .github/symbolicate/<名前>.txt（1 行目は "uuid <UUID>"、そのあと 1 行に 1 つの番地）。
+on:
+  push:
+    branches: ['symbolicate/**']
+
+jobs:
+  symbolicate:
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: b279
+            ref: 666f70193
+            build: 279
+          - name: b260
+            ref: 2d8a2e36c
+            build: 260
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 番地の一覧を取っておき、前の版に切り替える
+        run: |
+          cp ".github/symbolicate/${{ matrix.name }}.txt" "$RUNNER_TEMP/offsets.txt"
+          git checkout -q "${{ matrix.ref }}"
+          git log --oneline -1
+      - name: Xcode を選ぶ
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+      - name: Haas-ja の Swift 部品を取ってくる
+        run: |
+          set -e
+          rev=62f542657b454afa7873424e3dfb6d7a1d9c270d
+          base=https://huggingface.co/Sanami/haas-ja-coreml/resolve/$rev
+          mkdir -p Vendor/HaasCore/Sources/HaasCore LifeLog/Haas
+          for f in Audio Frontend HaasASR Tokenizer; do
+            curl -fsSL "$base/swift/Sources/HaasCore/$f.swift" -o "Vendor/HaasCore/Sources/HaasCore/$f.swift"
+          done
+          curl -fsSL "$base/LICENSE" -o Vendor/HaasCore/LICENSE
+          curl -fsSL "$base/NOTICE" -o Vendor/HaasCore/NOTICE
+          curl -fsSL "$base/swift/Resources/frontend.bin" -o LifeLog/Haas/frontend.bin
+          curl -fsSL "$base/swift/Resources/vocab.json" -o LifeLog/Haas/vocab.json
+          cat > Vendor/HaasCore/Package.swift <<'SWIFT'
+          // swift-tools-version:5.9
+          import PackageDescription
+
+          let package = Package(
+              name: "HaasCoreML",
+              platforms: [.macOS(.v14), .iOS(.v17)],
+              products: [.library(name: "HaasCore", targets: ["HaasCore"])],
+              targets: [.target(name: "HaasCore", path: "Sources/HaasCore")]
+          )
+          SWIFT
+      - name: プロジェクトを生成
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: アーカイブ（署名なし）
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_REVERSED_CLIENT_ID: ${{ secrets.GOOGLE_REVERSED_CLIENT_ID }}
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project LifeLog.xcodeproj -scheme LifeLog \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/LifeLog.xcarchive" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CURRENT_PROJECT_VERSION="${{ matrix.build }}" \
+            GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
+            GOOGLE_REVERSED_CLIENT_ID="$GOOGLE_REVERSED_CLIENT_ID" \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5
+      - name: 番地を関数名に直す
+        run: |
+          dsym="$RUNNER_TEMP/LifeLog.xcarchive/dSYMs/LifeLog.app.dSYM"
+          bin="$dsym/Contents/Resources/DWARF/LifeLog"
+          echo "記録の UUID: $(head -1 "$RUNNER_TEMP/offsets.txt")"
+          echo "作り直した UUID:"; dwarfdump --uuid "$bin"
+          tail -n +2 "$RUNNER_TEMP/offsets.txt" | while read -r off; do
+            [ -z "$off" ] && continue
+            addr=$(printf '0x%x' $((0x100000000 + off)))
+            echo "$off $(atos -arch arm64 -o "$bin" -l 0x100000000 "$addr" | xcrun swift-demangle --simplified)"
+          done | tee "$RUNNER_TEMP/symbols-${{ matrix.name }}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: symbols-${{ matrix.name }}
+          path: ${{ runner.temp }}/symbols-${{ matrix.name }}.txt
+          retention-days: 7
