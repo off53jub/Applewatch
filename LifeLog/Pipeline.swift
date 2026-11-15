@@ -1465,6 +1465,11 @@ final class Pipeline {
     /// アプリを閉じて10分たったら、ライブを自動で切る（切り忘れで電池と無料枠を使わないように）
     func appMovedToBackground() {
         RunClock.movedToBackground()  // 裏にいた時間を数える（2026-11-07。RunClock.swift）
+        // まとめて書くのを待っている分を書いておく（2026-11-16。書き込み過多の直し）
+        ledger.saveNow()
+        conversations.saveTrashNow()
+        Latency.flush()
+        Task { await speakers.saveNow() }
         // 下書き（仮）を見に行くのは、アプリが前にあるときだけ（2026-11-07。Drafts.swift）
         stopDraftPolling()
         guard liveOn, liveAutoOff == nil else { return }

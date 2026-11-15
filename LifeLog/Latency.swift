@@ -301,7 +301,23 @@ enum Latency {
         }
         store.samples = store.samples.filter { now.timeIntervalSince($0.at) < keepSamples }
         cache = store
-        if let data = try? JSONEncoder().encode(store) { try? data.write(to: url, options: .atomic) }
+        // 2026-11-16: 印を付けるたびに 48 時間分を書き直していた（書き込み過多の 7%）。読むのはアプリの中の写しなので、
+        // ファイルには writeDelay 秒まとめて書く
+        guard !writePending else { return }
+        writePending = true
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + writeDelay) { Latency.flush() }
+    }
+
+    private static let writeDelay: TimeInterval = 120
+    nonisolated(unsafe) private static var writePending = false
+
+    /// まとめて書くのを待たずに書く（アプリが裏に回ったときにも呼ぶ）
+    static func flush() {
+        lock.lock()
+        defer { lock.unlock() }
+        writePending = false
+        guard let cache, let data = try? JSONEncoder().encode(cache) else { return }
+        try? data.write(to: url, options: .atomic)
     }
 }
 

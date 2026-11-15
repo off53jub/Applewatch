@@ -1215,8 +1215,37 @@ actor SpeakerLabeler {
         return store
     }
 
+    // 2026-11-16: 書き込み過多（iPhone が 1 日に 16GB を超えて書いた）の 3 割がここだった。区切りを聞き分けるたびに、
+    // 覚えている人の全部（声の特徴つき）を書き直していた。人の番号・名前・隠す印・本人が直した声（pinned）が変わったときは
+    // すぐ書き、声の特徴の覚え足しだけのときは saveDelay まとめて書く（落ちても失うのは数分の覚え足しだけで、番号は使い回さない）
+    private static let saveDelay: Duration = .seconds(180)
+    private var savedShape: String?
+    private var saveTask: Task<Void, Never>?
+
+    private static func shape(_ s: Store) -> String {
+        "\(s.nextID)|" + s.people.map { "\($0.id):\($0.name ?? ""):\($0.hidden == true ? 1 : 0):\($0.pinnedCount)" }
+            .joined(separator: ",")
+    }
+
     private func save() {
+        guard let loadedStore else { return }
+        if Self.shape(loadedStore) != savedShape {
+            saveNow()
+            return
+        }
+        guard saveTask == nil else { return }
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.saveDelay)
+            await self?.saveNow()
+        }
+    }
+
+    /// まとめて書くのを待たずに書く（アプリが裏に回ったときにも呼ぶ）
+    func saveNow() {
+        saveTask?.cancel()
+        saveTask = nil
         guard let loadedStore, let data = try? JSONEncoder().encode(loadedStore) else { return }
         try? data.write(to: Self.storeURL, options: .atomic)
+        savedShape = Self.shape(loadedStore)
     }
 }
