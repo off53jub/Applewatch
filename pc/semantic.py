@@ -177,11 +177,35 @@ def text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
 
 
+# 2026-11-16（強化案 75。docs/v19-pc-llm.md）: bge-m3 を載せておく長さ。Ollama の既定は 5 分で、意味で探すの取り込みは
+# 約 11 分おきに来るので、11/15 は 10〜12 分おきに読み込み直していた（11/15 6:15〜8:28 だけで 13 回）。
+# config.json の "embed_keep_alive": "30m"（既定）・"1h"・秒の数。false・0・"off" なら付けない（Ollama の既定の 5 分。前と同じ）
+EMBED_KEEP_ALIVE = "30m"
+_KEEP = re.compile(r"\d{1,4}[smh]")
+
+
+def embed_keep_alive(config: dict | None) -> str | int | None:
+    """bge-m3 に頼むときの keep_alive（付けないなら None）。おかしな値は既定に。ずっと載せたまま（-1）にはしない"""
+    value = (config or {}).get("embed_keep_alive", EMBED_KEEP_ALIVE)
+    if value is False or value is None or value == 0 \
+            or (isinstance(value, str) and value.strip().lower() in ("off", "false", "0")):
+        return None
+    if isinstance(value, bool):
+        return EMBED_KEEP_ALIVE
+    if isinstance(value, (int, float)):
+        return int(value) if 1 <= value <= 86400 else EMBED_KEEP_ALIVE
+    if isinstance(value, str) and _KEEP.fullmatch(value.strip().lower()):
+        return value.strip().lower()
+    return EMBED_KEEP_ALIVE
+
+
 class OllamaEmbedder:
     """この PC の中の Ollama で、文を数の並びにする。
-    options を渡すと、頼むたびにその答え（GPU の文字起こしのモデルが載っているあいだは {"num_gpu": 0}）を options に付ける。"""
+    options を渡すと、頼むたびにその答え（GPU の文字起こしのモデルが載っているあいだは {"num_gpu": 0}）を options に付ける。
+    keep_alive を渡すと、頼むたびに付ける（使い終わってから、それだけ載せておく。None なら Ollama の既定の 5 分）。"""
 
-    def __init__(self, url: str, model: str = EMBED_MODEL, options: Callable[[], dict] | None = None) -> None:
+    def __init__(self, url: str, model: str = EMBED_MODEL, options: Callable[[], dict] | None = None,
+                 keep_alive: str | int | None = None) -> None:
         if not is_local_url(url):
             raise ValueError(f"Ollama の宛先はこの PC の中（http://127.0.0.1:…）にしてください: {url}")
         import urllib.request
@@ -189,6 +213,7 @@ class OllamaEmbedder:
         self.url = url.rstrip("/")
         self.model = model
         self.options = options
+        self.keep_alive = keep_alive
         # プロキシの設定があっても使わない（この PC の中にだけつなぐ）
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -223,6 +248,8 @@ class OllamaEmbedder:
         for i in range(0, len(texts), BATCH):
             part = texts[i:i + BATCH]
             body = {"model": self.model, "input": part, "truncate": True}
+            if self.keep_alive is not None:
+                body["keep_alive"] = self.keep_alive
             extra = self.extra_options()
             if extra:
                 body["options"] = extra

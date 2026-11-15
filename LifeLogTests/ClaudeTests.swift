@@ -136,6 +136,11 @@ final class ClaudeTests: XCTestCase {
         XCTAssertEqual(row?.value, "作れた 18（90%）（うち職場 5）・頼めずほかで作った 2")
         XCTAssertEqual(row?.ok, true)
         XCTAssertFalse(Tally.report([:]).contains { $0.label == "Claude（家の PC 経由）" })
+        // こちらで取りやめた分は失敗と分けて出し、作れた割合には入れない（2026-11-16）
+        let cancelled = Tally.report(["claude.ok": 18, "claude.work": 5, "claude.failed": 2, "claude.cancelled": 7])
+            .first { $0.label == "Claude（家の PC 経由）" }
+        XCTAssertEqual(cancelled?.value, "作れた 18（90%）（うち職場 5）・頼めずほかで作った 2・こちらで取りやめた 7")
+        XCTAssertEqual(cancelled?.ok, true)
         XCTAssertTrue(FeatureProof.evidenceKeys.contains("claude.ok"))
     }
 }

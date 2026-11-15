@@ -205,6 +205,13 @@ jobs:
           python pc/v18checks_spkcheck.py > v18.txt 2>&1 || { cat v18.txt; grep '^NG' v18.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v18.txt | sed 's/^/::notice::v18checks_spkcheck の OK の数: /'
 
+      # 2026-11-16（強化案 75）: bge-m3 を 30 分載せておく（keep_alive）・/llm で待つのは iPhone より短く・
+      #   時間切れで Ollama を使えないにしないのを、作り物の Ollama で確かめる
+      - name: この PC の言語モデルの載せ方と待ち方を確かめる
+        run: |
+          python pc/v19checks_llm.py > v19.txt 2>&1 || { cat v19.txt; grep '^NG' v19.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v19.txt | sed 's/^/::notice::v19checks_llm の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py

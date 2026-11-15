@@ -683,7 +683,9 @@ def make_tools(home: Path, ollama_url: str | None = None) -> Tools:
             # LifeLog PC が GPU に文字起こしのモデルを載せているあいだ（<home>/gpu-state.json を読むだけ）は、
             # bge-m3 も CPU だけで動かす（options に num_gpu 0。2026-11-07）。ただし LifeLog PC が「空きがあるので
             # bge-m3 は GPU に」と決めていれば、それに合わせる（2026-11-15。違う num_gpu で頼むと読み込み直しになる）
-            embedder = semantic.OllamaEmbedder(url, options=lambda: gpu.state_embed_options(home, config))
+            # 2026-11-16: 載せておく長さも LifeLog PC と同じ（config.json の "embed_keep_alive"）
+            embedder = semantic.OllamaEmbedder(url, options=lambda: gpu.state_embed_options(home, config),
+                                               keep_alive=semantic.embed_keep_alive(config))
         except ValueError as error:
             note(f"意味で探すは使いません: {error}")
     return Tools(home, embedder, config)

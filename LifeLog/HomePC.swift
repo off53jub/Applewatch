@@ -248,17 +248,37 @@ final class HomePC {
     func llm(system: String, prompt: String) async throws -> String {
         guard shouldTry, features.contains("llm") else { throw Failure.notConfigured }
         struct Reply: Decodable { let text: String }
+        let full = system + "\n\n" + prompt
+        // 2026-11-16: PC に「長すぎる」と断られた長さより長い頼みは送らない（同じ長い頼みを何度も送り直していた）
+        if let limit = Self.llmMaxChars, full.count > limit {
+            Tally.add("llm.tooLong")
+            throw Failure.server("頼む文が長すぎます（家の PC は \(limit) 文字まで）")
+        }
         var request = try request("llm")
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "prompt": system + "\n\n" + prompt, "json": true, "max_tokens": 2000,
+            "prompt": full, "json": true, "max_tokens": 2000,
         ] as [String: Any])
         let session = makeSession(timeout: 180)
         defer { session.finishTasksAndInvalidate() }
         let (data, response) = try await session.data(for: request)
+        if (response as? HTTPURLResponse)?.statusCode == 413 {
+            struct TooLong: Decodable { let max_chars: Int? }
+            if let limit = (try? JSONDecoder().decode(TooLong.self, from: data))?.max_chars, limit > 0 {
+                Self.llmMaxChars = limit
+            }
+            Tally.add("llm.tooLong")
+        }
         try Self.check(response, data: data)
         return try JSONDecoder().decode(Reply.self, from: data).text
+    }
+
+    /// 家の PC の言語モデルが受ける頼む文の長さ（PC が 413 で返した上限。まだ断られていなければ nil）
+    private static let llmMaxKey = "homePCLLMMaxChars"
+    static var llmMaxChars: Int? {
+        get { UserDefaults.standard.object(forKey: llmMaxKey) as? Int }
+        set { UserDefaults.standard.set(newValue, forKey: llmMaxKey) }
     }
 
     // MARK: - Claude（家の PC 経由。2026-11-13。Claude.swift）

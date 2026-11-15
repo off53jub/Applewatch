@@ -874,6 +874,13 @@ enum Summarizer {
             if work { Tally.add("claude.work") }
             return result
         } catch {
+            // こちらが取りやめた（通知で起きた 10 秒・裏の時間切れなど）。失敗と分けて数え、Claude を止めない。
+            // 11/13〜15 は claude.failed 99 回のうち 85 回、家の PC では答えを作れていた（取りやめが原因という見立ては仮。
+            // この数で確かめる。2026-11-16。強化案 75。docs/v19-pc-llm.md）
+            if Task.isCancelled {
+                Tally.add("claude.cancelled")
+                return nil
+            }
             let failure = (error as? ClaudeFailure) ?? .server(status: 0, reason: error.localizedDescription)
             ClaudeRoute.note(failure)
             if case .purposeOff = failure { ClaudeRoute.pausePurpose(job.purpose) }
