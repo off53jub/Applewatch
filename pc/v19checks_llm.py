@@ -8,6 +8,7 @@
 - MCP サーバーも同じ config.json の値で頼む
 - /llm で待つのは既定 175 秒（iPhone の 180 秒より短く）。"llm_timeout_seconds" は 30〜600 に収める
 - 時間切れのあとも「Ollama が動いていない」にしない（すぐ次の頼みに答える）。つながらないときは今までどおり使えないにする
+- 長すぎる頼み（既定 5,000 文字より長い。"llm_prompt_max_chars"）は Ollama に渡さず、すぐ 413 と上限を返す（2026-11-16）
 """
 
 from __future__ import annotations
@@ -172,6 +173,51 @@ def check_llm(url: str) -> int:
     return failed
 
 
+def check_too_long() -> int:
+    """長すぎる頼みはすぐ断る（Ollama に渡さない）。上限の読み方と、/llm の答え"""
+    failed = 0
+    import lifelog_pc as main
+
+    read = main.llm_prompt_max
+    values = [read({}), read(None), read({"llm_prompt_max_chars": 8000}), read({"llm_prompt_max_chars": 10}),
+              read({"llm_prompt_max_chars": 10**9}), read({"llm_prompt_max_chars": "長く"}),
+              read({"llm_prompt_max_chars": True})]
+    failed += say(values == [5000, 5000, 8000, 1000, main.LLM_PROMPT_MAX, 5000, 5000],
+                  f"上限の読み方（{values}）")
+
+    class Stub:
+        calls = 0
+        model = "stub"
+
+        def generate(self, prompt, as_json, max_tokens):
+            Stub.calls += 1
+            return '{"ok": true}'
+
+    class Fake:
+        client_address = ("127.0.0.1", 0)
+
+        def __init__(self):
+            self.sent = None
+
+        def send_json(self, status, body):
+            self.sent = (status, body)
+
+    saved = main.LLM
+    try:
+        main.LLM = Stub()
+        long = Fake()
+        main.Handler.llm(long, json.dumps({"prompt": "あ" * 5001, "json": True}).encode("utf-8"))
+        short = Fake()
+        main.Handler.llm(short, json.dumps({"prompt": "あ" * 4999, "json": True}).encode("utf-8"))
+    finally:
+        main.LLM = saved
+    failed += say(long.sent is not None and long.sent[0] == 413 and long.sent[1].get("max_chars") == 5000,
+                  f"5,001 文字は 413 と上限 5000（{long.sent and long.sent[0]}）")
+    failed += say(short.sent is not None and short.sent[0] == 200 and Stub.calls == 1,
+                  f"4,999 文字は今までどおり答える・長い頼みは Ollama に渡さない（呼んだ回数 {Stub.calls}）")
+    return failed
+
+
 def main() -> int:
     import lifelog_pc
 
@@ -179,7 +225,7 @@ def main() -> int:
     lifelog_pc.isolate_home()
     server, url = start_fake()
     try:
-        failed = check_keep_alive(url) + check_llm(url)
+        failed = check_keep_alive(url) + check_llm(url) + check_too_long()
     finally:
         server.shutdown()
     print("ぜんぶ OK" if not failed else f"NG が {failed} 個")

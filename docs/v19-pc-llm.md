@@ -84,6 +84,13 @@ GPU に置いているときは約 0.7GB を 30 分持つが、空きの決め�
 既にある仕組み（`gpu.ollama_options`：GPU に文字起こしのモデルが無いあいだは num_gpu を付けない）で、夜に whisper が
 下りたときは今までも qwen3:8b は GPU を使ってよいことになっている。文字起こしは、そのあいだ CPU のモデル（haas・reazon）で受ける。
 
+## 長すぎる頼み（2026-11-16。本人「B で」）
+
+- PC: /llm は頼む文が 5,000 文字（`llm_prompt_max_chars`）より長ければ、Ollama に渡さずすぐ 413 `{"error", "max_chars"}` を返す。
+  log.txt の実測で 4,558 文字までは答えていて、11,194 文字（8,741 トークン）は切り詰められていた（1 文字およそ 0.78 トークン・文脈 4096）。
+- iPhone: 413 の `max_chars` を覚え、それより長い頼みは PC に送らない（`llm.tooLong` と数える）。見出しと要点は Claude・Groq が今までどおり作る。
+- 確かめ: `pc/v19checks_llm.py` の check_too_long。
+
 ## まだ（確かめていない・決めること）
 
 - 取りやめが `claude.failed` のわけ、という見立ては仮。新しい版の iPhone の数（claude.cancelled）で確かめる。

@@ -2567,6 +2567,21 @@ LLM_TIMEOUT = 175.0
 LLM_CHECK_EVERY = 60.0       # Ollama があるかを確かめ直す間（秒）
 
 
+# 2026-11-16（強化案 75 の続き。本人「B で」）: 長すぎる頼みはすぐ断る（413）。CPU の qwen3:8b は文脈 4096 トークンで、
+# 11/15 の夜は 11,194 文字（8,741 トークン）の頼みが 45 回、2,050 トークンに切り詰められ、そのたびに Ollama を数分ふさいだ。
+# 4,558 文字までは答えていた（log.txt）。1 文字およそ 0.78 トークンなので、既定は 5,000 文字。
+# config.json の "llm_prompt_max_chars" で変えられる（1000〜200000）。断るときは上限を返し、iPhone はそれより長い頼みを送らなくなる
+LLM_PROMPT_SOFT = 5000
+
+
+def llm_prompt_max(config: dict | None) -> int:
+    """/llm で受ける頼む文の長さの上限（文字。config.json の "llm_prompt_max_chars"。おかしければ 5000）"""
+    value = (config or {}).get("llm_prompt_max_chars", LLM_PROMPT_SOFT)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value:
+        return LLM_PROMPT_SOFT
+    return int(min(LLM_PROMPT_MAX, max(1000, value)))
+
+
 def llm_timeout(config: dict | None) -> float:
     """/llm で Ollama の答えを待つ秒（config.json の "llm_timeout_seconds"。おかしければ 175）"""
     value = (config or {}).get("llm_timeout_seconds", LLM_TIMEOUT)
@@ -2928,6 +2943,12 @@ class Handler(BaseHTTPRequestHandler):
             request = parse_llm_request(data)
         except ValueError as error:
             self.send_json(400, {"error": str(error)})
+            return
+        limit = llm_prompt_max(load_config())
+        if len(request["prompt"]) > limit:
+            # 中身は記録に書かない（長さだけ）
+            log(f"{self.client_address[0]} から /llm: {len(request['prompt'])} 文字は長すぎるので断りました（{limit} 文字まで）")
+            self.send_json(413, {"error": f"頼む文が長すぎます（{limit} 文字まで）", "max_chars": limit})
             return
         started = time.time()
         try:
