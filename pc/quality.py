@@ -43,7 +43,7 @@ KEEP_DAYS = 60
 NIGHT_START, NIGHT_END = 1, 5     # 01:00〜05:00（記録がそろうのを少し待つ）
 CHECK_EVERY = 600.0
 AGREE_BACK = 3                    # 審判と PLAUD の合い方は、PLAUD が遅れて届くので 3 日前まで測り直す
-GETS = ("/same-person", "/night-review")
+GETS = ("/same-person", "/night-review", "/speaker-check")
 FIELDS = ("judge_calls", "judge_agree_plaud", "night_review_items", "same_person_groups", "promise_alerts")
 VOICES_NIGHT_BUDGET = 1800.0      # 夜に声の特徴を測る時間の上限（秒）
 VOICES_TICK_BUDGET = 180.0        # 昼の 1 回の上限（秒）
@@ -300,6 +300,7 @@ def features() -> list[str]:
     found = ["nightreview"]
     if State.embed is not None:
         found.insert(0, "sameperson")
+        found.append("spkcheck")  # 2026-11-16: GET /speaker-check（話し手の見比べ。voices.py）
     return found
 
 
@@ -353,6 +354,8 @@ def http_get(handler, url) -> None:
             if started or State.refreshing:
                 body["refreshing"] = True
             handler.send_json(200, body)
+        elif url.path == "/speaker-check":
+            handler.send_json(200, voices.read_check(State.home))
         else:
             handler.send_json(200, nightreview.read(State.home))
     except Exception as error:  # noqa: BLE001

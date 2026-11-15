@@ -36,6 +36,67 @@ enum PCVoiceRefs {
     }
 }
 
+/// 家の PC の話し手の見比べ（GET /speaker-check。features の "spkcheck"。2026-11-16）。
+/// iPhone の見比べ（声のひとこまを物差しに、行の声をそのまま比べる）は、自己点検で 204 行中 143 行（70%）が食い違い、使えなかった。
+/// PC は名寄せ用に置いてある声の特徴（voices.py）で、直近 7 日のその人の行の平均（同じ音声を除く）を物差しにし、
+/// ほかの人のほうが 0.15 以上近い行だけを返す（2026-11-09〜15 の記録どおりの行で 1875 行中 15 行＝0.8%）。docs/v18-speaker-check.md
+struct SpeakerCheckFeed: Decodable {
+    struct Item: Decodable {
+        var day: String
+        var line_time: String
+        var assigned: String
+        var suggest: String
+        var gap: Double
+    }
+    struct Day: Decodable {
+        var day: String
+        var checked: Int
+        var items: [Item]
+    }
+    var available: Bool?
+    var days: [Day]?
+}
+
+enum SpeakerCheck {
+    static let feature = "spkcheck"
+    /// 日ごとに、もう数えた「見た行」（PC は作り直すたびに同じ日を返すので、増えた分だけ数える）
+    static let countedKey = "pcSpeakerCheckCounted"
+    /// もう確認箱に出した疑い（本人が消しても、次に読んだとき出し直さない）
+    static let seenKey = "pcSpeakerCheckSeen"
+    static let seenLimit = 2000
+    static let countedDays = 14
+    /// 行の時刻の合わせ方（PC はミリ秒まで返す）
+    static let tolerance: TimeInterval = 1
+
+    static func decode(_ data: Data) -> [SpeakerCheckFeed.Day]? {
+        guard let feed = try? JSONDecoder().decode(SpeakerCheckFeed.self, from: data), feed.available == true else { return nil }
+        return feed.days ?? []
+    }
+
+    static func time(_ text: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: text) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: text)
+    }
+
+    /// 増えた分だけ（減ったときは 0。PC の窓から外れた日は数え直さない）
+    static func added(counted: [String: Int], day: String, checked: Int) -> Int {
+        max(0, checked - (counted[day] ?? 0))
+    }
+
+    static func noteID(assigned: String, time: Date) -> String {
+        "pc-\(assigned)-\(Int(time.timeIntervalSince1970))"
+    }
+
+    /// 古い日の数えを捨てる（新しい日から countedDays 日だけ残す）
+    static func trimmed(_ counted: [String: Int]) -> [String: Int] {
+        let keep = Set(counted.keys.sorted().suffix(countedDays))
+        return counted.filter { keep.contains($0.key) }
+    }
+}
+
 /// 場面を決める（AudioSet の名前と、iPhone の背景の音の名前を、場面の名前にそろえて数える）
 enum SceneVote {
     /// AudioSet の名前 → 場面
@@ -133,6 +194,11 @@ extension Pipeline {
     }
 
     private func crossCheckSpeakers(limit: Int) async {
+        // 2026-11-16: 家の PC が置き場所の声の特徴で見比べていれば、その答えを使う（音声を送らない・測り直さない）
+        if homePC.features.contains(SpeakerCheck.feature) {
+            await applyPCSpeakerCheck()
+            return
+        }
         let refs = await pcReferences()
         guard refs.count >= 2 else { return }
         var checked = UserDefaults.standard.stringArray(forKey: Self.crossCheckedKey) ?? []
@@ -177,6 +243,47 @@ extension Pipeline {
         box.save()
         newVoices = box
         UserDefaults.standard.set(Array(checked.suffix(400)), forKey: Self.crossCheckedKey)
+    }
+
+    /// 家の PC の見比べの答えを、確認箱と行の「？」に出す（記録の話し手は変えない）
+    private func applyPCSpeakerCheck() async {
+        guard let body = try? await homePC.appFeed("speaker-check", feature: SpeakerCheck.feature),
+              let days = SpeakerCheck.decode(body) else { return }
+        var counted = UserDefaults.standard.dictionary(forKey: SpeakerCheck.countedKey) as? [String: Int] ?? [:]
+        var seen = UserDefaults.standard.stringArray(forKey: SpeakerCheck.seenKey) ?? []
+        var seenSet = Set(seen)
+        var added: [NewVoiceBox.Note] = []
+        for day in days {
+            let more = SpeakerCheck.added(counted: counted, day: day.day, checked: day.checked)
+            if more > 0 { Tally.add("pc.speakerChecked", more) }
+            counted[day.day] = max(counted[day.day] ?? 0, day.checked)
+            guard !day.items.isEmpty else { continue }
+            let lines = conversations(on: day.day).flatMap(\.lines)
+            var marks: [(other: String, time: Date)] = []
+            for item in day.items {
+                guard let when = SpeakerCheck.time(item.line_time),
+                      let line = lines.first(where: {
+                          $0.speakerID == item.assigned && abs($0.time.timeIntervalSince(when)) < SpeakerCheck.tolerance
+                      }) else { continue }
+                let id = SpeakerCheck.noteID(assigned: item.assigned, time: line.time)
+                guard !seenSet.contains(id), !newVoices.notes.contains(where: { $0.id == id }) else { continue }
+                seenSet.insert(id)
+                seen.append(id)
+                var note = NewVoiceBox.Note(id: id, time: line.time, personID: item.assigned, claimed: nil, quote: line.text)
+                note.pcSuggests = item.suggest
+                added.append(note)
+                marks.append((other: item.suggest, time: line.time))
+                Tally.add("pc.speakerDiffer")
+            }
+            markSpeakerDoubts(marks, day: day.day)
+        }
+        UserDefaults.standard.set(SpeakerCheck.trimmed(counted), forKey: SpeakerCheck.countedKey)
+        UserDefaults.standard.set(Array(seen.suffix(SpeakerCheck.seenLimit)), forKey: SpeakerCheck.seenKey)
+        guard !added.isEmpty else { return }
+        var box = newVoices
+        for note in added where !box.notes.contains(where: { $0.id == note.id }) { box.notes.append(note) }
+        box.save()
+        newVoices = box
     }
 
     private func crossCheckScenes(limit: Int) async {

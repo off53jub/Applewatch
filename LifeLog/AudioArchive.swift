@@ -59,17 +59,25 @@ final class AudioArchive {
     /// Wi-Fi なら、まだ上げていない音声を古い順に上げる。そのあと古い手元の音声を片付ける。
     func uploadPending() async {
         if enabled(), onWiFi {
+            // 2026-11-16: 1 つ上げるたびに、上げた全部の一覧を書き直していた（書き込み過多の 7%）。10 個ごとと終わりに書く
+            //（落ちても、上げ直すのは最後の 9 個まで）
+            var unsaved = 0
             for file in Storage.keptAudio() where uploaded[file.lastPathComponent] == nil {
                 if Task.isCancelled || !onWiFi { break }
                 let day = dayFormatter.string(from: Storage.startDate(of: file) ?? .now)
                 do {
                     uploaded[file.lastPathComponent] = try await docs.uploadAudio(file, day: day)
-                    save()
+                    unsaved += 1
+                    if unsaved >= 10 {
+                        save()
+                        unsaved = 0
+                    }
                 } catch {
                     // 通信が切れたなどは、次の機会にやり直す
                     break
                 }
             }
+            if unsaved > 0 { save() }
         }
         prune()
     }

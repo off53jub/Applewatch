@@ -802,23 +802,53 @@ final class ConversationLog {
     }
 
     private static let trashURL = URL.applicationSupportDirectory.appendingPathComponent("trash.json")
+    /// 消した行のアプリの中の写し（読んだあと・書いたあと。ファイルと同じ中身）
+    private var trashCache: [Junk.TrashItem]?
+    private var trashTask: Task<Void, Never>?
     private static let trashKeep: TimeInterval = 30 * 24 * 3600
 
     /// 消した行（新しい順。30日より前のものは捨てる）
     /// 書かなかった行を「消した行」に入れておく（あとで戻せる）。
     func addToTrash(_ items: [Junk.TrashItem]) {
         guard !items.isEmpty else { return }
-        saveTrash(items + trash())
+        // 2026-11-16: 区切りを文字にするたびに 30 日分を読んで書き直していた（書き込み過多の 10%）。
+        // 自動で外した行は、アプリの中の写しに足して、ファイルにはまとめて書く。本人が戻す・消すときはすぐ書く
+        saveTrash(items + trash(), soon: true)
     }
 
     func trash() -> [Junk.TrashItem] {
-        guard let data = try? Data(contentsOf: Self.trashURL),
-              let items = try? JSONDecoder().decode([Junk.TrashItem].self, from: data) else { return [] }
+        let items: [Junk.TrashItem]
+        if let trashCache {
+            items = trashCache
+        } else {
+            guard let data = try? Data(contentsOf: Self.trashURL),
+                  let read = try? JSONDecoder().decode([Junk.TrashItem].self, from: data) else { return [] }
+            items = read
+            trashCache = read
+        }
         return items.filter { $0.removed.timeIntervalSinceNow > -Self.trashKeep }.sorted { $0.removed > $1.removed }
     }
 
-    private func saveTrash(_ items: [Junk.TrashItem]) {
-        guard let data = try? JSONEncoder().encode(items) else { return }
+    private static let trashDelay: Duration = .seconds(180)
+
+    private func saveTrash(_ items: [Junk.TrashItem], soon: Bool = false) {
+        trashCache = items
+        guard soon else {
+            saveTrashNow()
+            return
+        }
+        guard trashTask == nil else { return }
+        trashTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.trashDelay)
+            self?.saveTrashNow()
+        }
+    }
+
+    /// まとめて書くのを待たずに書く（アプリが裏に回ったときにも呼ぶ）
+    func saveTrashNow() {
+        trashTask?.cancel()
+        trashTask = nil
+        guard let trashCache, let data = try? JSONEncoder().encode(trashCache) else { return }
         try? data.write(to: Self.trashURL, options: .atomic)
     }
 
@@ -1079,6 +1109,24 @@ final class ConversationLog {
             save(log, day: day)
             return
         }
+    }
+
+    /// まとめて印を付ける（1 日を 1 回だけ読み書きする。2026-11-16）
+    func markSpeakerDoubts(_ marks: [(other: String, time: Date)], day: String) {
+        guard !marks.isEmpty else { return }
+        var log = load(day)
+        var changed = false
+        for mark in marks {
+            for i in log.conversations.indices {
+                guard let k = log.conversations[i].lines.firstIndex(where: { $0.time == mark.time }) else { continue }
+                if log.conversations[i].lines[k].speakerDoubt != mark.other {
+                    log.conversations[i].lines[k].speakerDoubt = mark.other
+                    changed = true
+                }
+                break
+            }
+        }
+        if changed { save(log, day: day) }
     }
 
     func setMinutes(_ name: String, start: Date, day: String) {

@@ -1465,6 +1465,11 @@ final class Pipeline {
     /// アプリを閉じて10分たったら、ライブを自動で切る（切り忘れで電池と無料枠を使わないように）
     func appMovedToBackground() {
         RunClock.movedToBackground()  // 裏にいた時間を数える（2026-11-07。RunClock.swift）
+        // まとめて書くのを待っている分を書いておく（2026-11-16。書き込み過多の直し）
+        ledger.saveNow()
+        conversations.saveTrashNow()
+        Latency.flush()
+        Task { await speakers.saveNow() }
         // 下書き（仮）を見に行くのは、アプリが前にあるときだけ（2026-11-07。Drafts.swift）
         stopDraftPolling()
         guard liveOn, liveAutoOff == nil else { return }
@@ -2447,6 +2452,7 @@ final class Pipeline {
     /// 議事録を作った会話に、そのドキュメントの名前を記す
     func setScene(_ scene: String, start: Date, day: String) { conversations.setScene(scene, start: start, day: day) }
     func markSpeakerDoubt(_ other: String, time: Date, day: String) { conversations.markSpeakerDoubt(other, time: time, day: day) }
+    func markSpeakerDoubts(_ marks: [(other: String, time: Date)], day: String) { conversations.markSpeakerDoubts(marks, day: day) }
     /// その日の記録を最後に書き換えた時刻（意味で探す索引の入れ直しに使う。2026-11-07）
     func dayModified(_ day: String) -> Date? { conversations.modified(day) }
 
