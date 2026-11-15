@@ -123,6 +123,10 @@ POST /meeting-live/state）・GET /coach・GET /tension（母艦の写し）・P
 - 2026-11-15: 意味で探すの bge-m3 だけは、GPU に空きがあれば文字起こしのモデルと並べて GPU に（gpu.embed_options。
   config.json の "embed_gpu"）。この PC の Ollama の優先度を「通常以下」に（priority.py。"ollama_priority"）。
     python v16checks_ollama.py  これを、作り物の空きと作り物のプロセスで確かめる
+2026-11-15（中身は jobqueue.py・presence.py・load.py。features に "jobaudio"）: GET /jobs/<名前>/audio（iPhone が時計の音声を受け取る）。
+PC を使っているあいだ（最後に触って 3 分以内）は母艦の重い取り込みを譲る（"yield_when_used"。false で前と同じ）。
+LifeLog PC と Ollama が使った CPU の秒・譲った分を quality-daily.json に毎日足す（"load_meter": false で止める）
+    python v17checks_relay.py  これを、一時フォルダと作り物の音声・作り物の時刻で確かめる
 2026-11-15（強化案 53・54・55・61。中身は pages.py。features に "peoplepages"・"threads"・"placepages"・"decisions"）:
 GET /people-pages・/threads・/place-pages・/decisions（母艦の人・話題の糸・場所・決めごとのページ）と
 POST /decisions/answer（アプリで選んだ決めごとを母艦の inbox に 1 行。帳面に書くのは母艦）
@@ -177,6 +181,7 @@ import claude
 import askmother
 import mothersearch  # 2026-11-15（強化案 42）: 母艦の文も意味で探す（semantic.db の別の表）
 import priority  # 2026-11-15: この PC の Ollama の優先度を「通常以下」に（中身は priority.py）
+import load  # 2026-11-15: PC の負荷（CPU の秒・譲った分）を毎日数える（中身は load.py）
 import promises
 import livecoach  # 2026-11-15（強化案 50〜52）: 会議の相棒（その場版）・話し方コーチ・緊張した場面・心拍の分ごとの記録
 import quality  # 2026-11-13（施策 9・10・11）: 品質の記録・夜の流れ・同じ人かも・夜の読み直し（中身は quality.py ほか）
@@ -2165,7 +2170,7 @@ def features(engines: list | None = None) -> list[str]:
     if App.jobs is not None:
         found.append("jobs")
         # 版 8: 待ち合わせ（POST /jobs?wait=1）・時間（timing）・下書き（速いモデルがあり、ほかにも票があるとき）
-        found += ["jobwait", "timing"]
+        found += ["jobwait", "timing", "jobaudio"]  # 2026-11-15: jobaudio = GET /jobs/<名前>/audio
         names = [getattr(e, "name", "") for e in engines or getattr(getattr(Handler, "engine", None), "engines", None) or []]
         if any(n in DRAFT_ENGINES for n in names) and any(n not in DRAFT_ENGINES for n in names):
             found.append("draft")
@@ -2472,6 +2477,10 @@ def start_v6(threads: int) -> None:
         # 版 7（records）: 記録の機能があれば、iPhone が消した区切りの音声を消さずに移す
         App.jobs = jobqueue.JobQueue(JOBS_DIR, run_job, log,
                                      keep_audio=App.records.keep_audio if App.records is not None else None)
+        # 2026-11-15: GET /jobs/<名前>/audio（iPhone が時計の音声を受け取る）。残してある音声も探し、渡した数を日ごとに足す
+        if App.records is not None:
+            App.jobs.find_kept = App.records.audio_file
+        App.jobs.on_pulled = lambda _name, _size: quality.add_today({"audio_pulled": 1}, HOME)
         App.jobs.start()
         counts = App.jobs.counts()
         if counts["queued"]:
@@ -2493,7 +2502,7 @@ def start_v6(threads: int) -> None:
             # 2026-11-15（強化案 42）: 母艦の文も（読むだけ・別の表・重い時間だけ続けて。config.json の "mother_semantic": false で止める）
             if load_config().get("mother_semantic") is not False:
                 mothersearch.start(SEMANTIC_DB, App.semantic.embedder, lambda: mothership.home(load_config()), log,
-                                   ready=App.semantic.available)
+                                   ready=App.semantic.available, config=load_config)
         except Exception as error:  # noqa: BLE001
             App.semantic = None
             log(f"意味で探す機能を始められませんでした: {error!r}")
@@ -4070,6 +4079,8 @@ def main() -> None:
         gpu.EMBED_CHANGED = embed_gpu_changed  # 2026-11-15: bge-m3 だけは空きがあれば GPU に
         # 2026-11-15: この PC の Ollama（llama-server も）の優先度を「通常以下」に（速さは削らず、ほかの仕事を先に通す）
         priority.start(load_config, log)
+        # 2026-11-15: LifeLog PC と Ollama が使った CPU の秒・譲った分を、1 分ごとに quality-daily.json へ足す
+        load.start(load_config, log, HOME)
 
     def factory() -> Ensemble:
         if args.fake_models:  # 版 7（ops）: 試すとき用の作り物のモデル
