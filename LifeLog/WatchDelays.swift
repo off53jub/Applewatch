@@ -76,7 +76,23 @@ final class WatchDelayLog {
         save()
     }
 
+    // 2026-11-16: 区切りが届く・文字になるたびに 2400 件を書き直していた（書き込み過多の 4%）。中身はアプリの中の写しが正で、
+    // 記録には影響しない控えなので、ファイルには saveDelay まとめて書く（落ちたら数分の遅れの控えを失うだけ）
+    private static let saveDelay: Duration = .seconds(120)
+    @ObservationIgnored private var saveTask: Task<Void, Never>?
+
     private func save() {
+        guard saveTask == nil else { return }
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.saveDelay)
+            self?.saveNow()
+        }
+    }
+
+    /// まとめて書くのを待たずに書く（アプリが裏に回ったときにも呼ぶ）
+    func saveNow() {
+        saveTask?.cancel()
+        saveTask = nil
         guard let data = try? JSONEncoder().encode(entries) else { return }
         try? data.write(to: Self.url, options: .atomic)
     }

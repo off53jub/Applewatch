@@ -23,8 +23,14 @@ enum CloudLog {
     private static let url = URL.applicationSupportDirectory.appendingPathComponent("cloud-log.json")
     private static let keep: TimeInterval = 90 * 24 * 3600
 
+    /// ファイルと同じ中身のアプリの中の写し（読めたあと・足したあと。lock の中だけで触る）
+    nonisolated(unsafe) private static var cache: [Entry]?
+    nonisolated(unsafe) private static var writePending = false
+    private static let writeDelay: TimeInterval = 120
+
     static func load() -> [Entry] {
         lock.withLock {
+            if let cache { return cache }
             guard let data = try? Data(contentsOf: url) else { return [] }
             return (try? JSONDecoder().decode([Entry].self, from: data)) ?? []
         }
@@ -34,7 +40,9 @@ enum CloudLog {
     static func add(service: String, what: String, work: Bool?, size: Int) {
         lock.withLock {
             var list: [Entry] = []
-            if let data = try? Data(contentsOf: url) {
+            if let cache {
+                list = cache
+            } else if let data = try? Data(contentsOf: url) {
                 // 読めないファイルは上書きせずに脇によける（読む前に保存しない）
                 guard let decoded = try? JSONDecoder().decode([Entry].self, from: data) else {
                     let aside = url.deletingLastPathComponent().appendingPathComponent("cloud-log-unreadable.json")
@@ -47,7 +55,21 @@ enum CloudLog {
             let old = Date.now.addingTimeInterval(-keep)
             list.removeAll { $0.at < old }
             list.append(Entry(at: .now, service: service, what: what, work: work, size: size))
-            try? JSONEncoder().encode(list).write(to: url, options: .atomic)
+            cache = list
+            // 2026-11-16: 送るたびに 90 日分を読んで書き直していた（書き込み過多の 2.5%）。読むのはアプリの中の写しなので、
+            // ファイルには writeDelay 秒まとめて書く（落ちたら、失うのは数分の送った記録だけ）
+            guard !writePending else { return }
+            writePending = true
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + writeDelay) { CloudLog.flush() }
+        }
+    }
+
+    /// まとめて書くのを待たずに書く（アプリが裏に回ったときにも呼ぶ）
+    static func flush() {
+        lock.withLock {
+            writePending = false
+            guard let cache, let data = try? JSONEncoder().encode(cache) else { return }
+            try? data.write(to: url, options: .atomic)
         }
     }
 

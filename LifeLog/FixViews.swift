@@ -55,7 +55,8 @@ extension Pipeline {
     /// 30秒以上話したのに名前の無い声（テレビ・動画・大勢の場らしい声は除く）
     var namelessVoiceCount: Int {
         guard speakerLabelsOn else { return 0 }
-        let skip = broadcastLike().union(crowdLike())
+        // 下のタブの数字を描くたびに呼ばれるので、記録は読まない（2026-11-16。VoiceClues.swift の skipVoicesForView）
+        let skip = skipVoicesForView()
         return people.filter { !$0.isNamed && !$0.isSelf && $0.hidden != true && $0.seconds >= 30 && !skip.contains($0.id) }.count
     }
 }
@@ -88,6 +89,7 @@ struct FixView: View {
         let parts = pipeline.fixParts(reviewCount: reviewCount)
         let count = { (name: String) in parts.first { $0.name == name }?.count ?? 0 }
         let total = parts.reduce(0) { $0 + $1.count }
+        // body-read-ok: 今日の 1 日だけ（アプリが書いたあとは中の写しを使い、ファイルは書いた時刻を見るだけ）
         let todayIDs = Set(pipeline.conversations(on: day).flatMap(\.lines).compactMap(\.speakerID))
         let unnamedToday = pipeline.people.filter { !$0.isNamed && !$0.isSelf && todayIDs.contains($0.id) }.count
         List {
@@ -224,7 +226,10 @@ struct FixView: View {
         }
         .navigationTitle("直す")
         .countsOpen("confirmBox")
-        .task(id: pipeline.people.flatMap(\.samples)) { reviewCount = pipeline.voiceReview().count }
+        // すべての日を読むので、1 日ごとに譲る（2026-11-16）
+        .task(id: pipeline.people.flatMap(\.samples)) {
+            if let count = await pipeline.voiceReviewCount() { reviewCount = count }
+        }
         // 同じ人かも・夜の読み直し（2026-11-13）を家の PC から読む。ためた答え（POST /feedback）もここで送る
         .task {
             await SamePersonBook.shared.refresh(pipeline.homePC)

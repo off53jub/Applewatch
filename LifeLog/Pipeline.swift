@@ -1470,6 +1470,13 @@ final class Pipeline {
         conversations.saveTrashNow()
         Latency.flush()
         Task { await speakers.saveNow() }
+        // 2026-11-16（v19）: 時計の遅れ・騒がしさの控え、送った記録、効き目の数も。鍵で守るものは裏の糸で書く
+        watchDelays.saveNow()
+        noiseLog.saveNow()
+        DispatchQueue.global(qos: .utility).async {
+            CloudLog.flush()
+            Tally.flush()
+        }
         // 下書き（仮）を見に行くのは、アプリが前にあるときだけ（2026-11-07。Drafts.swift）
         stopDraftPolling()
         guard liveOn, liveAutoOff == nil else { return }
@@ -1745,8 +1752,13 @@ final class Pipeline {
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
         backupPending = archive.pendingCount
-        // 検索の索引（書き換わった日だけ）と、登録の毎日の控えと、動き具合の診断
-        refreshSearchIndex()
+        // 検索の索引（書き換わった日だけ）と、登録の毎日の控えと、動き具合の診断。
+        // 2026-11-16（v19）: 区切りのたびに今日の行を全部入れ直していたので、ここからは searchIndexEvery に 1 回まで
+        //（探すときは、探す前にいつも入れ直す。AskViews.swift）
+        if Date.now.timeIntervalSince(searchIndexRefreshed) >= Self.searchIndexEvery {
+            searchIndexRefreshed = .now
+            refreshSearchIndex()
+        }
         await backups.runIfDue(signedIn: email != nil)
         // 夜に充電していれば、名前の無い声を1日1回整理する（控えができてから。iPhone だけ。2026-11-09）
         if UIDevice.current.userInterfaceIdiom != .pad { await tidyUnnamedVoicesIfDue() }
@@ -2422,6 +2434,10 @@ final class Pipeline {
     }
 
     // MARK: - 検索の索引
+
+    /// 区切りの処理のあとに索引を入れ直した時刻（入れ直しは多くても searchIndexEvery に 1 回。2026-11-16）
+    @ObservationIgnored private var searchIndexRefreshed: Date = .distantPast
+    private static let searchIndexEvery: TimeInterval = 15 * 60
 
     /// 書き換わった日だけ、検索の索引を入れ直す（話した人・文・直す前の文）。入れ直した日の数を返す。
     @discardableResult

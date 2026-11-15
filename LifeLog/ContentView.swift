@@ -30,7 +30,10 @@ struct ContentView: View {
             Tab("記録", systemImage: "books.vertical", value: AppTab.records) { RecordsView() }
             Tab("ふり返り", systemImage: "sparkles", value: AppTab.lookBack) { LookBackTab() }
         }
-        .task(id: pipeline.people.flatMap(\.samples)) { reviewCount = pipeline.voiceReview().count }
+        // すべての日を読むので、1 日ごとに譲る（2026-11-16。途中で声が変わったら数え直し）
+        .task(id: pipeline.people.flatMap(\.samples)) {
+            if let count = await pipeline.voiceReviewCount() { reviewCount = count }
+        }
         // 知らせ・ショートカット・ウィジェットから開く画面（2026-11-10。NoticeActions.swift）。タブの切り替えはシートにしない
         .sheet(item: Binding(get: { pipeline.noticeRoute }, set: { pipeline.noticeRoute = $0 })) { route in
             NavigationStack {
@@ -168,6 +171,7 @@ private struct TodayView: View {
     var body: some View {
         let today = Self.dayFormatter.string(from: .now)
         // 最近の発言が変わる（書き足される）たびに読み直す
+        // body-read-ok: 今日の 1 日だけ（アプリが書いたあとは中の写しを使い、ファイルは書いた時刻を見るだけ）
         let talks = pipeline.conversations(on: today)
         NavigationStack {
             List {

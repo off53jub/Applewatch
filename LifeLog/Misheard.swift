@@ -226,7 +226,25 @@ extension Pipeline {
     /// その行の、いまの記録（時刻と文が同じもの。文がもう変わっていれば、時刻が同じもの）
     func currentLine(_ ref: MisheardBox.Ref) -> ConversationLog.Line? {
         let lines = conversations(on: ref.day).flatMap(\.lines)
-        return lines.first { $0.time == ref.time && $0.text == ref.text } ?? lines.first { $0.time == ref.time }
+        return Self.misheardLine(for: ref, in: lines)
+    }
+
+    /// currentLine をまとめて（1 日を 1 回だけ読み、日ごとに譲る）。
+    /// 2026-11-16: 一覧の画面が行ごとに、描き直しのたびにその日の記録を読み直していた（v19）。画面はこの答えだけを使う
+    func currentLines(_ refs: [MisheardBox.Ref]) async -> [MisheardBox.Ref: ConversationLog.Line] {
+        var result: [MisheardBox.Ref: ConversationLog.Line] = [:]
+        for (day, list) in Dictionary(grouping: refs, by: \.day) {
+            let lines = conversations(on: day).flatMap(\.lines)
+            for ref in list {
+                if let line = Self.misheardLine(for: ref, in: lines) { result[ref] = line }
+            }
+            await Task.yield()
+        }
+        return result
+    }
+
+    private static func misheardLine(for ref: MisheardBox.Ref, in lines: [ConversationLog.Line]) -> ConversationLog.Line? {
+        lines.first { $0.time == ref.time && $0.text == ref.text } ?? lines.first { $0.time == ref.time }
     }
 }
 
@@ -246,6 +264,8 @@ struct MisheardView: View {
     @State private var redoNote: String?
     /// 言葉ごとの直近 30 日の行の数（描くたびには数えない。2026-11-16）
     @State private var everywhere: [String: Int] = [:]
+    /// 行ごとの、いまの記録（話し手・音声。描くたびには読まない。2026-11-16）
+    @State private var current: [MisheardBox.Ref: ConversationLog.Line] = [:]
 
     private static let time: DateFormatter = {
         let f = DateFormatter()
@@ -294,6 +314,7 @@ struct MisheardView: View {
         .countsOpen("misheard")
         .onAppear { counts = pipeline.resummarizeCounts() }
         .task(id: list.map(\.wrong)) { everywhere = await pipeline.misheardCounts(of: list.map(\.wrong)) }
+        .task(id: list.flatMap(\.refs)) { current = await pipeline.currentLines(list.flatMap(\.refs)) }
         .onDisappear { player.stop() }
         .alert("別の書き方に直す", isPresented: Binding(get: { other != nil }, set: { if !$0 { other = nil } })) {
             TextField("正しい書き方", text: $otherText)
@@ -344,7 +365,7 @@ struct MisheardView: View {
 
     @ViewBuilder
     private func lineRow(_ ref: MisheardBox.Ref, wrong: String) -> some View {
-        let line = pipeline.currentLine(ref)
+        let line = current[ref]
         let key = "misheard-\(ref.time.timeIntervalSince1970)"
         let audio = line?.audio.flatMap { pipeline.archive.canPlay($0) ? $0 : nil }
         let label = HStack(alignment: .firstTextBaseline) {

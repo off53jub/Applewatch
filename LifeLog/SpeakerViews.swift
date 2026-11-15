@@ -1112,20 +1112,20 @@ struct UnnamedVoicesView: View {
     }
 
     /// 「この日 12 行・渋谷駅近く、自宅」
-    private func dayCaption(_ item: Item) -> String {
+    private func dayCaption(_ item: Item, _ talks: [ConversationLog.Conversation]) -> String {
         var places: [String] = []
-        for c in pipeline.conversations(on: day) where c.lines.contains(where: { $0.speakerID == item.person.id }) {
+        for c in talks where c.lines.contains(where: { $0.speakerID == item.person.id }) {
             if let place = c.place, !places.contains(place) { places.append(place) }
         }
         return "この日 \(item.lines.count) 行" + (places.isEmpty ? "" : "・" + places.joined(separator: "、"))
     }
 
-    /// その日の行に出てくる、名前の無い声と、その行（多い順。テレビ・動画らしい声は除く）
-    private var unnamed: [Item] {
-        let lines = pipeline.conversations(on: day).flatMap(\.lines)
-        let tv = pipeline.broadcastLike()
-        let crowd = pipeline.crowdLike()
-        return pipeline.people.filter { !$0.isNamed && !tv.contains($0.id) && !crowd.contains($0.id) }.compactMap { person in
+    /// その日の行に出てくる、名前の無い声と、その行（多い順。テレビ・動画らしい声は除く）。
+    /// 2026-11-16: テレビ・大勢の場の声は覚えている答えを使う（描くたびに 14 日を読み直さない。VoiceClues.swift）
+    private func unnamed(_ talks: [ConversationLog.Conversation]) -> [Item] {
+        let lines = talks.flatMap(\.lines)
+        let skip = pipeline.skipVoicesForView()
+        return pipeline.people.filter { !$0.isNamed && !skip.contains($0.id) }.compactMap { person in
             let mine = lines.filter { $0.speakerID == person.id }
             return mine.isEmpty ? nil : Item(person: person, lines: mine)
         }
@@ -1133,7 +1133,9 @@ struct UnnamedVoicesView: View {
     }
 
     var body: some View {
-        let list = unnamed
+        // body-read-ok: この日の 1 日だけを 1 回（前は行ごとにも読み直していた。2026-11-16）
+        let talks = pipeline.conversations(on: day)
+        let list = unnamed(talks)
         List {
             ForEach(list) { item in
                 Section {
@@ -1143,7 +1145,7 @@ struct UnnamedVoicesView: View {
                         }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.lines.last?.text ?? "").lineLimit(2)
-                            Text(dayCaption(item)).font(.caption).foregroundStyle(.secondary)
+                            Text(dayCaption(item, talks)).font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     if working == item.person.id {
