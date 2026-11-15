@@ -2,10 +2,14 @@
 
     python3 .github/scripts/swift_precheck.py [フォルダ…]   （既定はリポジトリの Swift の全部）
 
-見るもの（どちらも、11/13 に CI の組み立てで実際に止まった形）:
+見るもの（1 と 2 は、11/13 に CI の組み立てで実際に止まった形）:
 1. 1 行の文字列（"…"・#"…"#）の中に、生の改行がある（引用符 3 つの複数行の文字列は別。\\n と書けばよい）
 2. DemoData.swift の、式が 1 つだけで長いクロージャ（型を書いていないもの）。型推論が時間切れになる。
    明示的なループにするか、型を書く（-> 型 in）。長さの目安は CLOSURE_CHARS 文字・CLOSURE_LINES 行。
+3. 画面の body（`var x: some View {`・`-> some View {`）の中で、ディスクを読む・何日も見る呼び出し（BODY_DENY）をしている
+   （2026-11-16。11/14 に描き直しが 10 秒を超えて iOS に落とされた形。docs/v19-heavy-audit.md）。
+   .task・.onAppear・Button の押したときなど、描くときには走らないクロージャの中は見ない。
+   わざとなら、その行かすぐ上の行に「// body-read-ok: わけ」と書く。名前で見るだけなので、間に別の関数をはさむと見えない。
 見つかれば「ファイル:行: わけ」を出して 1 で終わる（GitHub Actions では ::error の印も付ける）。
 """
 
@@ -23,6 +27,20 @@ SKIP_DIRS = {".git", "build", "DerivedData", "Vendor", ".build", "Pods"}
 STATEMENT = re.compile(r"^(let|var|for|if|guard|return|switch|while|repeat|do|defer|throw|func)\b")
 CONTINUES = (",", "(", "[", "{", "+", "-", "*", "/", "?", ":", "&&", "||", "=", ".", "??", "->")
 LEADING = (".", "?", ":", "+", "-", "*", "/", "&&", "||", ")", "]", "}", "??")
+# 3. 画面の body の中で、ディスクを読む・何日も見る呼び出し（2026-11-16。11/14 に描き直しが 10 秒を超えて落とされた形）
+BODY_DENY = (
+    "conversations(on:", "recordedDays(", "currentLine(", "misheardOccurrences(", "overRemoved(", "lineTimes(",
+    "speakerLineCounts(", "voicesHeardTogether(", "savedActivities(on:", "broadcastLike(", "crowdLike(", "voiceReview(",
+    "sampleInfo(for:", "Data(contentsOf:", "String(contentsOf:", "contentsOfDirectory(",
+)
+BODY_OK = "body-read-ok"
+# 描くときには走らないクロージャ（`名前 {`・`名前(…) {`）と、ラベルの付いたクロージャ（`ラベル: {`）
+DEFERRED_CALLS = {
+    "task", "onAppear", "onDisappear", "onChange", "onReceive", "refreshable", "onSubmit", "onTapGesture",
+    "onLongPressGesture", "onDelete", "onMove", "onOpenURL", "onDrop", "dropDestination", "onEnded", "onChanged",
+    "Button", "Task", "detached", "async", "asyncAfter", "withAnimation", "onKeyPress", "onScrollGeometryChange",
+}
+DEFERRED_LABELS = {"action", "perform", "onDismiss", "set", "primaryAction", "onCommit", "onEditingChanged", "completion"}
 
 
 def lex(text: str) -> tuple[str, list[tuple[int, str]]]:
@@ -196,11 +214,85 @@ def long_closures(code: str, text: str | None = None) -> list[tuple[int, str]]:
     return found
 
 
+def _before_brace(code: str, pos: int) -> tuple[str, str]:
+    """code[pos] の { の前にある名前と、そのあとの印（"(" か ":" か ""）。
+    例: `.task(id: x) {` → ("task", "(")、`action: {` → ("action", ":")、`ForEach(xs) {` → ("ForEach", "(")"""
+    j = pos - 1
+    while j >= 0 and code[j] in " \t\n":
+        j -= 1
+    mark = ""
+    if j >= 0 and code[j] == ")":
+        depth = 0
+        while j >= 0:
+            if code[j] == ")":
+                depth += 1
+            elif code[j] == "(":
+                depth -= 1
+                if depth == 0:
+                    break
+            j -= 1
+        j -= 1
+        mark = "("
+    elif j >= 0 and code[j] == ":":
+        j -= 1
+        mark = ":"
+    while j >= 0 and code[j] in " \t":
+        j -= 1
+    end = j + 1
+    while j >= 0 and (code[j].isalnum() or code[j] == "_"):
+        j -= 1
+    return code[j + 1:end], mark
+
+
+def _blank_range(code: str, a: int, b: int) -> str:
+    return code[:a] + "".join(c if c == "\n" else " " for c in code[a:b]) + code[b:]
+
+
+def view_body_reads(code: str, calls: tuple[str, ...] = BODY_DENY) -> list[tuple[int, str]]:
+    """画面の body（`var x: some View {`・`-> some View {`）の中で、ディスクを読む呼び出しをしている所 [(行, 呼び出し)]。
+    .task・.onAppear・Button の押したとき・Task などの、描くときには走らないクロージャの中は見ない。
+    code は lex の答え（文字列とコメントを消したもの）"""
+    found: list[tuple[int, str]] = []
+    opener = re.compile(r"(?:\bvar\s+\w+\s*:\s*some\s+View|->\s*some\s+View)\s*\{")
+    call = re.compile(r"(?<![\w])(" + "|".join(re.escape(c) for c in calls) + r")")
+    for m in opener.finditer(code):
+        start = m.end() - 1
+        end = _match(code, start)
+        if end < 0:
+            continue
+        body = code[:end]
+        for k in range(start + 1, end):
+            if body[k] != "{":
+                continue
+            name, mark = _before_brace(body, k)
+            if (mark == ":" and name in DEFERRED_LABELS) or (mark != ":" and name in DEFERRED_CALLS):
+                close = _match(body, k)
+                if close > 0:
+                    body = _blank_range(body, k, close + 1)
+        for hit in call.finditer(body, start + 1, end):
+            found.append((_line_of(code, hit.start()), hit.group(1)))
+    return sorted(set(found))
+
+
+def body_reads(code: str, text: str) -> list[tuple[int, str]]:
+    """view_body_reads のうち、その行かすぐ上の行に BODY_OK の印が無いもの（印はもとの文のコメントで探す）"""
+    lines = text.split("\n")
+    problems: list[tuple[int, str]] = []
+    for line, name in view_body_reads(code):
+        if any(BODY_OK in l for l in lines[max(0, line - 2):line]):
+            continue
+        problems.append((line, f"画面を描くたびに走る所で {name.split('(')[0]} を呼んでいます（ディスクを読む。"
+                               "裏に回るときの描き直しが 10 秒を超えると iOS に落とされる）。"
+                               f".task・.onAppear で @State に入れる。わざとなら、その行かすぐ上に「// {BODY_OK}: わけ」と書く"))
+    return problems
+
+
 def check_file(path: Path) -> list[tuple[int, str]]:
     text = path.read_text(encoding="utf-8-sig", errors="replace").replace("\r\n", "\n")
     code, problems = lex(text)
     if path.name in DEMO_NAMES:
         problems += long_closures(code, text)
+    problems += body_reads(code, text)
     return sorted(problems)
 
 

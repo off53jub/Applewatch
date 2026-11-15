@@ -205,6 +205,29 @@ extension Pipeline {
                 }
             }
         }
+        return sampleInfo(for: samples, byAudio: byAudio)
+    }
+
+    /// sampleInfo と同じ。1 日読むごとに譲る（すべての日を読むので、画面の .task からはこちら。2026-11-16）。
+    /// 途中で止められたら nil
+    func sampleInfoYielding(for samples: [SpeakerLabeler.Sample]) async -> [SpeakerLabeler.Sample: SampleInfo]? {
+        let audios = Set(samples.map(\.audio))
+        guard !audios.isEmpty else { return [:] }
+        var byAudio: [String: [(line: ConversationLog.Line, place: String?)]] = [:]
+        for day in recordedDays() {
+            for c in conversations(on: day) {
+                for line in c.lines where line.offset != nil {
+                    if let audio = line.audio, audios.contains(audio) { byAudio[audio, default: []].append((line, c.place)) }
+                }
+            }
+            await Task.yield()
+            if Task.isCancelled { return nil }
+        }
+        return sampleInfo(for: samples, byAudio: byAudio)
+    }
+
+    private func sampleInfo(for samples: [SpeakerLabeler.Sample],
+                            byAudio: [String: [(line: ConversationLog.Line, place: String?)]]) -> [SpeakerLabeler.Sample: SampleInfo] {
         var result: [SpeakerLabeler.Sample: SampleInfo] = [:]
         for sample in samples {
             let list = (byAudio[sample.audio] ?? []).sorted { ($0.line.offset ?? 0) < ($1.line.offset ?? 0) }
@@ -279,7 +302,18 @@ extension Pipeline {
     static let reviewKeptKey = "voiceReviewKept"
 
     func voiceReview() -> [ReviewItem] {
-        let infos = sampleInfo(for: people.flatMap(\.samples))
+        voiceReview(infos: sampleInfo(for: people.flatMap(\.samples)))
+    }
+
+    /// 見直したい声の数（下のタブと「直す」の数字）。すべての日を読むので、1 日読むごとに譲る。
+    /// 2026-11-16: 声のひとこまが変わるたび（区切りを聞き分けるたびに変わりうる）に、画面の .task が
+    /// すべての日を譲らずに読んでいて、そのあいだ画面が止まっていた。途中で止められたら nil
+    func voiceReviewCount() async -> Int? {
+        guard let infos = await sampleInfoYielding(for: people.flatMap(\.samples)) else { return nil }
+        return voiceReview(infos: infos).count
+    }
+
+    private func voiceReview(infos: [SpeakerLabeler.Sample: SampleInfo]) -> [ReviewItem] {
         let kept = Set(UserDefaults.standard.stringArray(forKey: Self.reviewKeptKey) ?? [])
         var result: [ReviewItem] = []
         for person in people {
@@ -302,33 +336,36 @@ extension Pipeline {
     /// 「名前を付けてほしい声」と「人物Nを整理」には出さない（家でテレビや YouTube を流していると、名前の無い声がたくさんできるため）。
     func broadcastLike() -> Set<String> {
         if Date.now.timeIntervalSince(Self.broadcastCache.at) < 60 { return Self.broadcastCache.ids }
+        let ids = broadcastIDs(recordedDays().prefix(14).flatMap { conversations(on: $0) })
+        Self.broadcastCache = (.now, ids)
+        return ids
+    }
+
+    /// broadcastLike の数え方（直近14日の会話を渡す）
+    private func broadcastIDs(_ talks: [ConversationLog.Conversation]) -> Set<String> {
         var total: [String: Int] = [:], tv: [String: Int] = [:], home: [String: Int] = [:]
-        for day in recordedDays().prefix(14) {
-            for c in conversations(on: day) {
-                let selfTimes = c.lines.filter { $0.speakerID == SpeakerLabeler.selfID }.map(\.time)
-                let atHome = Self.isHome(c.place)
-                for line in c.lines {
-                    // テレビの行に書き換えた行は、元の声の番号（heardSpeakerID）で数える
-                    guard let id = line.speakerID ?? line.heardSpeakerID, id != SpeakerLabeler.selfID else { continue }
-                    total[id, default: 0] += 1
-                    if atHome { home[id, default: 0] += 1 }
-                    let sound = line.sound ?? ""
-                    let media = line.media != nil || c.media != nil || sound.contains("テレビ") || sound.contains("音楽")
-                    let lonely = !selfTimes.contains { abs($0.timeIntervalSince(line.time)) <= 180 }
-                    if media || lonely { tv[id, default: 0] += 1 }
-                }
+        for c in talks {
+            let selfTimes = c.lines.filter { $0.speakerID == SpeakerLabeler.selfID }.map(\.time)
+            let atHome = Self.isHome(c.place)
+            for line in c.lines {
+                // テレビの行に書き換えた行は、元の声の番号（heardSpeakerID）で数える
+                guard let id = line.speakerID ?? line.heardSpeakerID, id != SpeakerLabeler.selfID else { continue }
+                total[id, default: 0] += 1
+                if atHome { home[id, default: 0] += 1 }
+                let sound = line.sound ?? ""
+                let media = line.media != nil || c.media != nil || sound.contains("テレビ") || sound.contains("音楽")
+                let lonely = !selfTimes.contains { abs($0.timeIntervalSince(line.time)) <= 180 }
+                if media || lonely { tv[id, default: 0] += 1 }
             }
         }
         let unnamed = Set(people.filter { !$0.isNamed && $0.hidden != true }.map(\.id))
         // テレビや YouTube はほとんど家で流すので、行の半分以上が家の声は早めに（3行以上・半分以上で）みなす
-        let ids = Set(total.filter { id, n in
+        return Set(total.filter { id, n in
             guard unnamed.contains(id) else { return false }
             let share = Double(tv[id] ?? 0) / Double(n)
             let mostlyHome = Double(home[id] ?? 0) / Double(n) >= 0.5
             return mostlyHome ? (n >= 3 && share >= 0.5) : (n >= 5 && share >= 0.7)
         }.map(\.key))
-        Self.broadcastCache = (.now, ids)
-        return ids
     }
 
     // MARK: - 大勢の場だけで聞いた声（2026-11-12）
@@ -344,11 +381,41 @@ extension Pipeline {
     /// 「名前を付けてほしい声」と「人物Nを整理」には数えず、別に出す（名前待ちが増えすぎていた。2026-11-11 は30秒以上話した名前の無い声22人のうち19人がこれ）。
     func crowdLike() -> Set<String> {
         if Date.now.timeIntervalSince(Self.crowdCache.at) < 60 { return Self.crowdCache.ids }
-        let convs = recordedDays().prefix(14).flatMap { conversations(on: $0) }
-        let unnamed = Set(people.filter { !$0.isNamed && $0.hidden != true }.map(\.id))
-        let ids = Self.crowdIDs(convs.map { $0.lines.compactMap(\.speakerID) }).intersection(unnamed)
+        let ids = crowdLikeIDs(recordedDays().prefix(14).flatMap { conversations(on: $0) })
         Self.crowdCache = (.now, ids)
         return ids
+    }
+
+    /// crowdLike の数え方（直近14日の会話を渡す）
+    private func crowdLikeIDs(_ convs: [ConversationLog.Conversation]) -> Set<String> {
+        let unnamed = Set(people.filter { !$0.isNamed && $0.hidden != true }.map(\.id))
+        return Self.crowdIDs(convs.map { $0.lines.compactMap(\.speakerID) }).intersection(unnamed)
+    }
+
+    // MARK: - 画面を描くときの、テレビ・動画らしい声と大勢の場の声（2026-11-16）
+
+    /// テレビ・動画らしい声と、大勢の場だけで聞いた声（覚えている答えを返すだけで、記録は読まない）。画面を描く所はこちらを使う。
+    /// 2026-11-16: 下のタブの「直す」の数字が、描き直しのたびに（1 分たっていれば）直近 14 日を 2 回読み直していた
+    ///（裏に回るときの描き直しが 10 秒を超えると、iOS にアプリを落とされる）。
+    /// 答えが 1 分より古ければ、裏で 1 日読むごとに譲りながら数え直し、終わったら画面を描き直させる（VoiceSkipBook）。
+    /// 初めの数え直しが終わるまでは、テレビ・大勢の場の声も数に入る
+    func skipVoicesForView() -> Set<String> {
+        let book = VoiceSkipBook.shared
+        _ = book.version  // 数え直しが終わったら描き直す
+        if Date.now.timeIntervalSince(min(Self.broadcastCache.at, Self.crowdCache.at)) >= 60 { book.refresh(self) }
+        return Self.broadcastCache.ids.union(Self.crowdCache.ids)
+    }
+
+    /// broadcastLike と crowdLike の答えを、1 日読むごとに譲りながら作り直す（14 日を 1 回だけ読む）
+    func refreshSkipVoices() async {
+        var talks: [ConversationLog.Conversation] = []
+        for day in recordedDays().prefix(14) {
+            talks += conversations(on: day)
+            await Task.yield()
+        }
+        Self.broadcastCache = (.now, broadcastIDs(talks))
+        await Task.yield()
+        Self.crowdCache = (.now, crowdLikeIDs(talks))
     }
 
     /// 会話ごとの話し手の番号の並びから、大勢の会話だけで聞いた番号を出す（自分は除く）
@@ -461,6 +528,26 @@ extension Pipeline {
             break
         }
         return key
+    }
+}
+
+/// テレビ・動画らしい声と大勢の場の声を、裏で数え直したかの印（2026-11-16。画面を描き直させるためだけ。Pipeline.skipVoicesForView）
+@MainActor
+@Observable
+final class VoiceSkipBook {
+    static let shared = VoiceSkipBook()
+
+    private(set) var version = 0
+    @ObservationIgnored private var task: Task<Void, Never>?
+
+    /// 数え直しを始める（もう数え直していれば何もしない）
+    func refresh(_ pipeline: Pipeline) {
+        guard task == nil else { return }
+        task = Task { [weak self] in
+            await pipeline.refreshSkipVoices()
+            self?.task = nil
+            self?.version += 1
+        }
     }
 }
 
