@@ -120,6 +120,9 @@ claude-config.json の "stopped"・"daily_caps" で用途ごとに止める（40
 会議モードのあいだ、区切りの文から「決まったこと・自分の宿題・聞き忘れ」を 1 分に 1 回まで更新（GET /meeting-live?since=・
 POST /meeting-live/state）・GET /coach・GET /tension（母艦の写し）・POST /health/hr（時計の心拍を分ごとに母艦へ）
     python v15checks_live.py  これを、一時フォルダと作り物の Claude で確かめる
+- 2026-11-15: 意味で探すの bge-m3 だけは、GPU に空きがあれば文字起こしのモデルと並べて GPU に（gpu.embed_options。
+  config.json の "embed_gpu"）。この PC の Ollama の優先度を「通常以下」に（priority.py。"ollama_priority"）。
+    python v16checks_ollama.py  これを、作り物の空きと作り物のプロセスで確かめる
 2026-11-15（強化案 53・54・55・61。中身は pages.py。features に "peoplepages"・"threads"・"placepages"・"decisions"）:
 GET /people-pages・/threads・/place-pages・/decisions（母艦の人・話題の糸・場所・決めごとのページ）と
 POST /decisions/answer（アプリで選んだ決めごとを母艦の inbox に 1 行。帳面に書くのは母艦）
@@ -173,6 +176,7 @@ import claude
 # 2026-11-13（施策 13・15）: 会話の直後の約束・記録に質問するを母艦まで
 import askmother
 import mothersearch  # 2026-11-15（強化案 42）: 母艦の文も意味で探す（semantic.db の別の表）
+import priority  # 2026-11-15: この PC の Ollama の優先度を「通常以下」に（中身は priority.py）
 import promises
 import livecoach  # 2026-11-15（強化案 50〜52）: 会議の相棒（その場版）・話し方コーチ・緊張した場面・心拍の分ごとの記録
 import quality  # 2026-11-13（施策 9・10・11）: 品質の記録・夜の流れ・同じ人かも・夜の読み直し（中身は quality.py ほか）
@@ -2480,9 +2484,9 @@ def start_v6(threads: int) -> None:
                   lambda p, r: extra_model("speaker", 1).embed(load_audio(p.read_bytes()), r), log)
     if App.use_semantic:
         try:
-            # bge-m3 も、GPU の文字起こしのモデルが載っているあいだは CPU だけで（options に num_gpu 0）
-            App.semantic = semantic.SemanticIndex(SEMANTIC_DB, semantic.OllamaEmbedder(LLM.url, options=ollama_options),
-                                                  log)
+            # bge-m3 は、GPU の文字起こしのモデルが載っていても、空きがあれば GPU に（2026-11-15。gpu.embed_options）
+            App.semantic = semantic.SemanticIndex(SEMANTIC_DB,
+                                                  semantic.OllamaEmbedder(LLM.url, options=embed_ollama_options), log)
             threading.Thread(target=App.semantic.available, kwargs={"force": True}, daemon=True).start()
             # 仕事のまとめ（ドライブの「仕事のまとめ.json」。読むだけ）も、変わったときだけ索引に置き直す（2026-11-10）
             App.semantic.start_digest_sync(lambda: mothership.read_digests(mothership.digest_file(load_config())))
@@ -2725,6 +2729,23 @@ def ollama_options() -> dict:
         else:
             log("この PC の Ollama は、GPU を使ってよい状態です（num_gpu を付けません）")
     return extra
+
+
+def embed_ollama_options() -> dict:
+    """意味で探すの bge-m3 に足す options（2026-11-15）。言語モデルと違い小さいので、GPU に文字起こしのモデルが
+    載っていても、空き（残しておく分を引いて）があれば GPU に置く（gpu.embed_options）"""
+    return gpu.embed_options(load_config())
+
+
+def embed_gpu_changed(on_gpu: bool) -> None:
+    """gpu.EMBED_CHANGED: bge-m3 を GPU に置くと決めた・CPU に戻した。GPU に決めたら、CPU に載っている bge-m3 を下ろす
+    （num_gpu を付けずに頼んでも、Ollama は CPU に載っているものを読み込み直さないため）"""
+    if on_gpu:
+        gone = gpu.Ollama(LLM.url, log).unload_where([semantic.EMBED_MODEL], on_gpu=False, wait=0)
+        log("GPU に空きがあるので、意味で探すのモデル（bge-m3）を GPU に置きます"
+            + (f"（CPU に載っていた {'・'.join(gone)} を下ろしました）" if gone else ""))
+    else:
+        log("GPU の空きが少ないので、意味で探すのモデル（bge-m3）を CPU だけに戻します")
 
 
 def lifelog_ollama_models() -> list[str]:
@@ -4046,6 +4067,9 @@ def main() -> None:
     if not args.fake_models:
         gpu.BEFORE_LOAD = ollama_make_room
         gpu.AFTER_NIGHT = ollama_after_night
+        gpu.EMBED_CHANGED = embed_gpu_changed  # 2026-11-15: bge-m3 だけは空きがあれば GPU に
+        # 2026-11-15: この PC の Ollama（llama-server も）の優先度を「通常以下」に（速さは削らず、ほかの仕事を先に通す）
+        priority.start(load_config, log)
 
     def factory() -> Ensemble:
         if args.fake_models:  # 版 7（ops）: 試すとき用の作り物のモデル
