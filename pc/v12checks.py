@@ -21,6 +21,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -428,6 +429,10 @@ def check_http(main) -> int:
             status, body, _ = client.call("GET", "/night-review")
             failed += say(status == 200 and body.get("available") is True and body["items"] == [], "GET /night-review")
             os.environ["LOCALAPPDATA"] = str(home.parent)
+            # 裏の作り直し（?refresh=1。2026-11-16 から話し手の見比べも書く）が終わってから名前を変える（Windows は開いている中を動かせない）
+            limit = time.time() + 20
+            while quality.State.refreshing and time.time() < limit:
+                time.sleep(0.05)
             (Path(folder) / "home").rename(Path(folder) / "LifeLogPC")
             status, body, _ = client.call("GET", "/speaker-doubts")
             failed += say(status == 200 and body.get("available") is True and [i["why"] for i in body["items"]] == ["night"],
