@@ -581,7 +581,7 @@ struct SamePersonSection: View {
             } header: {
                 Text("同じ人かも（\(total)）")
             } footer: {
-                Text("家の PC が、名前の無い声どうしを声の近さで組にしました（同じ日の組と、別の日にまたがる組）。名前のある人に近い声は「◯◯さんかも」と出します。▶︎で聞いて、同じ人なら「同じ人」を押すとまとめます（まとめた先の人の画面から戻せます）。押すまでは何も変えません。名前は自動では付けません。")
+                Text("家の PC が、名前の無い声どうしを声の近さで組にしました（同じ日の組と、別の日にまたがる組）。名前のある人に近い声は「◯◯さんかも」と出します。▶︎で聞いて、同じ人なら「同じ人」を押すとまとめます（まとめた先の人の画面から戻せます）。別の日にまたがる組で声がとても近いものは、押さなくても自動でまとめます（すべて見る、で止められます）。名前は自動では付けません。")
             }
             .onDisappear { player.stop() }
         }
@@ -592,11 +592,19 @@ struct SamePersonSection: View {
 struct SamePersonListView: View {
     @Environment(Pipeline.self) private var pipeline
     @State private var player = ClipPlayer()
+    @State private var autoMerge = SamePersonAuto.isOn
 
     var body: some View {
         let list: [SamePersonGroup] = pipeline.samePersonGroups
         let maybes: [SamePersonMaybe] = pipeline.samePersonMaybes
         List {
+            // 2026-11-16（強化案 71）
+            Section {
+                Toggle("別の日の同じ声は自動でまとめる", isOn: $autoMerge)
+                    .onChange(of: autoMerge) { _, on in SamePersonAuto.isOn = on }
+            } footer: {
+                Text("家の PC が別の日にまたがる組にした声のうち、とても近いもの（点 0.70 以上）を、1 時間に 1 回、5 組までまとめます。名前の無い人だけで、名前のある人・自分・手で直した声のある人には触りません。まとめた先の人の画面に「自動でまとめた」と出て、そこから戻せます。")
+            }
             if !maybes.isEmpty {
                 Section {
                     ForEach(maybes) { item in
