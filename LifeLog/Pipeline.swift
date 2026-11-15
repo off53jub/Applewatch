@@ -1562,6 +1562,8 @@ final class Pipeline {
         noteRecordingExperiment()
         // 家の PC に様子（1時間に1回）を送り、記録と直し（10分に1回）をやり取りする（PC の版 7 から。2026-11-07。PCDiag.swift）
         pcLinkTick()
+        // 家の PC の日をまたぐ組のうち、声がとても近い名前の無い人を自動でまとめる（1 時間に 1 回まで。2026-11-16。SamePersonAuto.swift）
+        Task { await autoMergeSamePerson() }
         // アプリを開いていれば、閉じたばかりの会話の話し手を PC の声のモデルでも見比べる（2026-11-06）
         if UIApplication.shared.applicationState == .active, homePC.shouldTry {
             Task { await crossCheckDaytime() }
