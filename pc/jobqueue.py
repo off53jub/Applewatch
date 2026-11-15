@@ -459,10 +459,19 @@ class JobQueue:
         audio = self.audio_path(name)
         if self.keep_audio is None or not audio.exists():
             return
-        try:
-            self.keep_audio(name, audio, dict(meta))
-        except Exception as error:  # noqa: BLE001 — 移せなくても、消す処理は続ける
-            self.log(f"後で受け取る文字起こし {name}: 音声を残せませんでした（消します）: {error!r}")
+        for attempt in range(3):
+            try:
+                self.keep_audio(name, audio, dict(meta))
+                return
+            except PermissionError as error:
+                # 2026-11-15: ちょうど音声を読んでいる最中（GET /jobs/<名前>/audio）は、Windows では動かせない。少し待ってやり直す
+                if attempt == 2:
+                    self.log(f"後で受け取る文字起こし {name}: 音声を残せませんでした（消します）: {error!r}")
+                    return
+                time.sleep(0.05)
+            except Exception as error:  # noqa: BLE001 — 移せなくても、消す処理は続ける
+                self.log(f"後で受け取る文字起こし {name}: 音声を残せませんでした（消します）: {error!r}")
+                return
 
     def _remove_files(self, name: str) -> None:
         for path in (self.meta_path(name), self.audio_path(name), self.result_path(name), self.draft_path(name)):
@@ -840,6 +849,7 @@ def _name_from(path: str) -> str:
 
 AUDIO_SUFFIX = "/audio"
 AUDIO_CHUNK = 256 * 1024
+AUDIO_MAX = 32 * 1024 * 1024  # これより大きい音声は渡さない（区切りは 8MB まで。全部読んでから送るので、上限を置く）
 
 
 def audio_name_from(path: str) -> str | None:
@@ -856,34 +866,28 @@ def http_get_audio(handler, queue: JobQueue, name: str) -> None:
     """2026-11-15: iPhone が PC から時計の音声を受け取る口。あれば 200・audio/mp4 で、音声をそのまま少しずつ送る。
     名前が決まりに合わない・知らない・音声がもう無いときは 404 {"error": "not found"}。"""
     source = queue.audio_for(name)
-    stream = None
+    body = None
     if source is not None:
         try:
-            stream = source.open("rb")
+            # 先に全部読んで、すぐ閉じる（1 つ 0.1〜8MB）。送っているあいだ開いたままだと、Windows ではそのファイルを動かせず、
+            # iPhone が仕事を消したとき（DELETE /jobs/<名前>）に音声を残す先へ移せなくなる
+            if source.stat().st_size <= AUDIO_MAX:
+                body = source.read_bytes()
         except OSError:
-            stream = None
-    if stream is None:
+            body = None
+    if not body:
         handler.send_json(404, {"error": "not found"})
         return
-    sent = 0
+    size = len(body)
     try:
-        with stream:
-            size = os.fstat(stream.fileno()).st_size
-            handler.send_response(200)
-            handler.send_header("Content-Type", "audio/mp4")
-            handler.send_header("Content-Length", str(size))
-            handler.end_headers()
-            while sent < size:
-                chunk = stream.read(min(AUDIO_CHUNK, size - sent))
-                if not chunk:
-                    break
-                handler.wfile.write(chunk)
-                sent += len(chunk)
-            handler.wfile.flush()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "audio/mp4")
+        handler.send_header("Content-Length", str(size))
+        handler.end_headers()
+        for start in range(0, size, AUDIO_CHUNK):
+            handler.wfile.write(body[start:start + AUDIO_CHUNK])
+        handler.wfile.flush()
     except OSError:  # 途中で相手が切れても、受け付けは続ける
-        handler.close_connection = True
-        return
-    if sent != size:  # 読んでいる途中でファイルが短くなった。長さが合わないので、接続を閉じて相手にやり直してもらう
         handler.close_connection = True
         return
     who = getattr(handler, "client_address", ("?",))[0]

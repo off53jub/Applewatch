@@ -164,40 +164,56 @@ def check_audio() -> int:
         failed += say(ok and h.close_connection and len(logged) == n_logged and len(counted) == n_counted,
                       "途中で相手が切れても落ちない（接続を閉じる・渡したことにしない）")
 
-        # 5. 大きいファイルを全部メモリーに読まない（1 回の読みは AUDIO_CHUNK まで）
+        # 5. 少しずつ送る（1 回 AUDIO_CHUNK まで）・送っているあいだ音声のファイルを開いたままにしない
+        #    （開いたままだと、Windows では iPhone が仕事を消したときに、音声を残す先へ動かせない）・大きすぎる音声は渡さない
         sizes: list[int] = []
-        real_open = Path.open
-        target = queue.audio_path(NAME).name
+        moved: list[bool] = []
+        h = FakeHandler()
+        real_write = h.wfile.write
+        source = queue.audio_path(NAME)
+        aside = source.with_name(source.name + ".moved")
 
-        class Spy:
-            def __init__(self, stream) -> None:
-                self.stream = stream
+        def spy_write(chunk) -> int:
+            sizes.append(len(chunk))
+            if not moved:  # 送っている最中に、音声を動かして戻せるか
+                try:
+                    os.replace(source, aside)
+                    os.replace(aside, source)
+                    moved.append(True)
+                except OSError:
+                    moved.append(False)
+            return real_write(chunk)
 
-            def read(self, n=-1):
-                sizes.append(n)
-                return self.stream.read(n)
-
-            def __getattr__(self, key):
-                return getattr(self.stream, key)
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return self.stream.__exit__(*exc)
-
-        def spy(self, mode="r", *a, **k):
-            stream = real_open(self, mode, *a, **k)
-            return Spy(stream) if "b" in mode and self.name == target else stream
-
-        Path.open = spy
+        h.wfile.write = spy_write
+        jobqueue.http_get(h, queue, f"/jobs/{NAME}/audio")
+        failed += say(h.wfile.getvalue() == data and sizes and all(0 < n <= jobqueue.AUDIO_CHUNK for n in sizes) and len(sizes) >= 9
+                      and moved == [True],
+                      f"少しずつ送る（{len(sizes)} 回・1 回 {jobqueue.AUDIO_CHUNK // 1024}KB まで）・送っているあいだも音声を動かせる（{moved}）")
+        old_max = jobqueue.AUDIO_MAX
+        jobqueue.AUDIO_MAX = 1024
         try:
             h = FakeHandler()
             jobqueue.http_get(h, queue, f"/jobs/{NAME}/audio")
         finally:
-            Path.open = real_open
-        failed += say(h.wfile.getvalue() == data and sizes and all(0 < n <= jobqueue.AUDIO_CHUNK for n in sizes) and len(sizes) >= 9,
-                      f"少しずつ送る（{len(sizes)} 回・1 回 {jobqueue.AUDIO_CHUNK // 1024}KB まで）")
+            jobqueue.AUDIO_MAX = old_max
+        failed += say(h.status == 404 and h.json == {"error": "not found"}, "大きすぎる音声は渡さない（404）")
+
+        # 5b. 音声を残す先へ移すとき、ちょうど読まれている最中（PermissionError）なら、少し待ってやり直す
+        tries: list[int] = []
+
+        def flaky(name: str, path: Path, meta: dict) -> None:
+            tries.append(1)
+            if len(tries) < 3:
+                raise PermissionError("作り物の掴み")
+
+        old_keep = queue.keep_audio
+        queue.keep_audio = flaky
+        n_logged = len(logged)
+        try:
+            queue._keep_audio(NAME, {})
+        finally:
+            queue.keep_audio = old_keep
+        failed += say(len(tries) == 3 and len(logged) == n_logged, f"移せないときは 3 回までやり直す（{len(tries)} 回・記録は増えない）")
 
         # 6. 渡した数を quality-daily.json に足す
         home = root / "home"
