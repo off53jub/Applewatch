@@ -23,6 +23,11 @@ iPhone は録音の区切りを1つずつ裏で送っておき、PC が文字に
 - 時計の外の道（watchroute.py の POST /w/jobs）から預かった仕事には "origin": "watch" を付ける。
   http_post(..., origin="watch") は、待ち合わせ（wait）をしない・8MB まで・名前は「年月日-時分秒…-w.m4a」だけ。
 - GET /jobs?origin=watch は、時計から預かった仕事だけを返す。GET /jobs・GET /jobs/<名前> は "origin" が付くだけで、ほかは同じ。
+
+2026-11-15: GET /jobs/<名前>/audio（features の "jobaudio"）。iPhone が PC から時計の音声を受け取る口。合言葉はほかの GET /jobs と同じ。
+  あれば 200・Content-Type audio/mp4・Content-Length・音声そのまま（256KB ずつ送る）。名前が決まりに合わない・知らない・音声がもう
+  無いときは 404 {"error": "not found"}。探す順は、仕事の置き場の音声（.audio）→ 残してある音声（records の audio/<日>/<名前>）。
+  渡したら記録に 1 行書き、quality-daily.json の audio_pulled を 1 足す。時計の外の道（/w/…）からは出さない。
 """
 
 from __future__ import annotations
@@ -191,6 +196,9 @@ class JobQueue:
         self.keep = keep
         # 版 7（records）: 音声を残す先。あれば、音声は消すときまで残して、ここに移してもらう
         self.keep_audio = keep_audio
+        # 2026-11-15: GET /jobs/<名前>/audio 用。残してある音声を名前から探す口（records の audio_file）と、渡したときに呼ぶ口
+        self.find_kept: Callable[[str], Path | None] | None = None
+        self.on_pulled: Callable[[str, int], None] | None = None
         self.jobs: dict[str, dict] = {}
         self.receiving: set[str] = set()
         self.lock = threading.Lock()
@@ -220,6 +228,22 @@ class JobQueue:
 
     def audio_path(self, name: str) -> Path:
         return self.base(name).with_suffix(".audio")
+
+    def audio_for(self, name: str) -> Path | None:
+        """渡せる音声のファイル。まず仕事の置き場（.audio）、無ければ残してある音声（keep_audio で移したもの）。無ければ None"""
+        if not valid_name(name):
+            return None
+        mine = self.audio_path(name)
+        if mine.is_file():
+            return mine
+        if self.find_kept is not None:
+            try:
+                kept = self.find_kept(name)
+            except Exception:  # noqa: BLE001 — 探せなければ「無い」
+                return None
+            if kept is not None and Path(kept).is_file():
+                return Path(kept)
+        return None
 
     def result_path(self, name: str) -> Path:
         return self.base(name).with_suffix(".result")
@@ -435,10 +459,19 @@ class JobQueue:
         audio = self.audio_path(name)
         if self.keep_audio is None or not audio.exists():
             return
-        try:
-            self.keep_audio(name, audio, dict(meta))
-        except Exception as error:  # noqa: BLE001 — 移せなくても、消す処理は続ける
-            self.log(f"後で受け取る文字起こし {name}: 音声を残せませんでした（消します）: {error!r}")
+        for attempt in range(3):
+            try:
+                self.keep_audio(name, audio, dict(meta))
+                return
+            except PermissionError as error:
+                # 2026-11-15: ちょうど音声を読んでいる最中（GET /jobs/<名前>/audio）は、Windows では動かせない。少し待ってやり直す
+                if attempt == 2:
+                    self.log(f"後で受け取る文字起こし {name}: 音声を残せませんでした（消します）: {error!r}")
+                    return
+                time.sleep(0.05)
+            except Exception as error:  # noqa: BLE001 — 移せなくても、消す処理は続ける
+                self.log(f"後で受け取る文字起こし {name}: 音声を残せませんでした（消します）: {error!r}")
+                return
 
     def _remove_files(self, name: str) -> None:
         for path in (self.meta_path(name), self.audio_path(name), self.result_path(name), self.draft_path(name)):
@@ -814,6 +847,58 @@ def _name_from(path: str) -> str:
     return unquote(path[len("/jobs/"):])
 
 
+AUDIO_SUFFIX = "/audio"
+AUDIO_CHUNK = 256 * 1024
+AUDIO_MAX = 32 * 1024 * 1024  # これより大きい音声は渡さない（区切りは 8MB まで。全部読んでから送るので、上限を置く）
+
+
+def audio_name_from(path: str) -> str | None:
+    """GET /jobs/<名前>/audio の名前（この形でなければ None。名前に / は入らない）"""
+    from urllib.parse import unquote
+
+    rest = path[len("/jobs/"):] if path.startswith("/jobs/") else ""
+    if not rest.endswith(AUDIO_SUFFIX):
+        return None
+    return unquote(rest[:-len(AUDIO_SUFFIX)])
+
+
+def http_get_audio(handler, queue: JobQueue, name: str) -> None:
+    """2026-11-15: iPhone が PC から時計の音声を受け取る口。あれば 200・audio/mp4 で、音声をそのまま少しずつ送る。
+    名前が決まりに合わない・知らない・音声がもう無いときは 404 {"error": "not found"}。"""
+    source = queue.audio_for(name)
+    body = None
+    if source is not None:
+        try:
+            # 先に全部読んで、すぐ閉じる（1 つ 0.1〜8MB）。送っているあいだ開いたままだと、Windows ではそのファイルを動かせず、
+            # iPhone が仕事を消したとき（DELETE /jobs/<名前>）に音声を残す先へ移せなくなる
+            if source.stat().st_size <= AUDIO_MAX:
+                body = source.read_bytes()
+        except OSError:
+            body = None
+    if not body:
+        handler.send_json(404, {"error": "not found"})
+        return
+    size = len(body)
+    try:
+        handler.send_response(200)
+        handler.send_header("Content-Type", "audio/mp4")
+        handler.send_header("Content-Length", str(size))
+        handler.end_headers()
+        for start in range(0, size, AUDIO_CHUNK):
+            handler.wfile.write(body[start:start + AUDIO_CHUNK])
+        handler.wfile.flush()
+    except OSError:  # 途中で相手が切れても、受け付けは続ける
+        handler.close_connection = True
+        return
+    who = getattr(handler, "client_address", ("?",))[0]
+    queue.log(f"{who} へ音声を渡しました {name}: {size / 1024 / 1024:.1f} MB")
+    if queue.on_pulled is not None:
+        try:
+            queue.on_pulled(name, size)
+        except Exception:  # noqa: BLE001 — 数えられなくても渡した事実は変わらない
+            pass
+
+
 def http_get(handler, queue: JobQueue | None, path: str, query_text: str = "") -> None:
     from urllib.parse import parse_qs
 
@@ -824,6 +909,10 @@ def http_get(handler, queue: JobQueue | None, path: str, query_text: str = "") -
         # 版 10: GET /jobs?origin=watch は、時計の外の道から預かった仕事だけ（新しい順）
         origin = (parse_qs(query_text).get("origin") or [None])[0]
         handler.send_json(200, {"jobs": queue.listing(origin=origin or None)})
+        return
+    audio = audio_name_from(path)
+    if audio is not None:  # 2026-11-15: GET /jobs/<名前>/audio
+        http_get_audio(handler, queue, audio)
         return
     name = _name_from(path)
     got = queue.get(name) if valid_name(name) else None

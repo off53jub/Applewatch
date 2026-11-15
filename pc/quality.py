@@ -3,6 +3,9 @@
 - HOME\\quality-daily.json（母艦の 12「精度の通信簿」が読む。共通の約束の形）:
   {"version": 1, "days": {"YYYY-MM-DD": {"judge_calls": int, "judge_agree_plaud": float|null,
    "night_review_items": int, "same_person_groups": int, "promise_alerts": int}}}
+  2026-11-15: 足していく数 "audio_pulled"（iPhone が PC から時計の音声を受け取った数。jobqueue.py）・"cpu_self_s"・
+  "cpu_ollama_s"（その日に LifeLog PC と Ollama が使った CPU の秒）・"yield_min"（PC を使っているので母艦の取り込みを譲った分。
+  load.py）。add_today で足す（読んでから足して書く。小数は 2 桁に丸める）。
   書くときは必ず読んでから、自分の項目だけを置き換える（ほかの担当の項目・知らない項目は残す）。60 日より古い日は消す。
 - 夜の流れ（01:00〜05:00 に1回。重い仕事をしてよい夜の枠の中）: 昨日の分について
   1. judge_calls（帳簿の asr-judge の回数）と judge_agree_plaud（judgecheck.py。昨日〜3日前を測り直す）
@@ -79,13 +82,21 @@ def read_daily(home: Path) -> dict:
     return data
 
 
-def update_day(home: Path, day: str, values: dict, now: datetime.date | None = None) -> dict:
-    """その日の項目を置き換える（読んでから書く。ほかの項目は残す）。書いたあとの全体を返す"""
+def update_day(home: Path, day: str, values: dict, now: datetime.date | None = None, add: bool = False) -> dict:
+    """その日の項目を置き換える（読んでから書く。ほかの項目は残す）。書いたあとの全体を返す。
+    add=True なら、置き換えずに今ある数へ足す（2026-11-15。audio_pulled・cpu_self_s など、1 日のあいだに増える数）"""
     with _lock:
         data = read_daily(home)
         days = data["days"]
         entry = days.get(day) if isinstance(days.get(day), dict) else {}
-        entry.update(values)
+        if add:
+            for key, value in values.items():
+                old = entry.get(key)
+                old = old if isinstance(old, (int, float)) and not isinstance(old, bool) else 0
+                total = old + value
+                entry[key] = round(total, 2) if isinstance(total, float) else total
+        else:
+            entry.update(values)
         days[day] = entry
         limit = ((now or datetime.date.today()) - datetime.timedelta(days=KEEP_DAYS)).isoformat()
         for old in [d for d in days if isinstance(d, str) and d < limit]:
@@ -97,6 +108,19 @@ def update_day(home: Path, day: str, values: dict, now: datetime.date | None = N
         part.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True), encoding="utf-8")
         os.replace(part, target)
         return data
+
+
+def add_today(values: dict, home: Path | None = None, now: datetime.datetime | None = None) -> bool:
+    """今日の分に数を足す（audio_pulled・cpu_self_s・cpu_ollama_s・yield_min）。置き場所が分からない・書けないときは False"""
+    target = home if home is not None else State.home
+    if target is None or not values:
+        return False
+    moment = now or datetime.datetime.now()
+    try:
+        update_day(Path(target), moment.date().isoformat(), values, now=moment.date(), add=True)
+    except OSError:
+        return False
+    return True
 
 
 # MARK: - 夜の流れ

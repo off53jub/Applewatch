@@ -194,6 +194,11 @@ jobs:
           python pc/v16checks_ollama.py > v16o.txt 2>&1 || { cat v16o.txt; grep '^NG' v16o.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v16o.txt | sed 's/^/::notice::v16checks_ollama の OK の数: /'
 
+      - name: 時計の音声の口・PC を使っているあいだの譲り・負荷の数え方を確かめる
+        run: |
+          python pc/v17checks_relay.py > v17.txt 2>&1 || { cat v17.txt; grep '^NG' v17.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v17.txt | sed 's/^/::notice::v17checks_relay の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py
@@ -256,7 +261,7 @@ jobs:
             --hidden-import trainer --hidden-import gpu --hidden-import v7checks_ops \
             --hidden-import v8checks --hidden-import v9checks --hidden-import lifelog_mcp \
             --hidden-import watchroute --hidden-import v10checks --hidden-import mothership --hidden-import appfeeds \
-            --hidden-import oneline --hidden-import askmother --hidden-import mothersearch --hidden-import priority --hidden-import settle --hidden-import pages \
+            --hidden-import oneline --hidden-import askmother --hidden-import mothersearch --hidden-import priority --hidden-import presence --hidden-import load --hidden-import settle --hidden-import pages \
             --hidden-import drafts \
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \

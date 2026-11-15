@@ -354,6 +354,19 @@ GPU のメモリーに余裕を作る（2026-11-07。8GB の GPU に large-v3 �
 ・この PC の Ollama（ollama.exe・llama-server.exe）の優先度を「通常以下」にします（2026-11-15。速さは削らず、PC で
   ほかの仕事があればそちらを先に通します）。config.json の "ollama_priority": "below_normal"（既定）・"idle"・"normal"（前と同じ）。
 ・確かめるとき:  python pc/v16checks_ollama.py（作り物の空きと作り物のプロセスで。本物の GPU・Ollama の優先度は変えません）
+・時計の音声を渡す口（2026-11-15。features に "jobaudio"。iPhone が PC から時計の音声を受け取るため）: GET /jobs/<名前>/audio。
+  合言葉はほかの GET /jobs と同じ。あれば 200・audio/mp4・音声そのまま（256KB ずつ送ります）。名前が決まりに合わない・知らない・
+  音声がもう無いときは 404 {"error": "not found"}。まず仕事の置き場の音声、無ければ残してある音声（audio/<日>/<名前>）を探します。
+  渡したら記録に「<相手> へ音声を渡しました <名前>: 1.2 MB」と 1 行書き、quality-daily.json の audio_pulled を 1 足します。
+  時計の外の道（/w/…）からは出しません。
+・PC を使っているあいだは、母艦の重い取り込み（mothersearch.py）を譲ります（2026-11-15。presence.py）。最後にキーボード・マウスを
+  触ってから 3 分以内は、重く回してよい時間（00:00〜05:00・08:30〜18:00）でも、時間の外と同じ軽いほうで進めます（触らなくなって
+  3 分で戻ります）。譲り始めたときに記録へ 1 行（1 時間に 1 回まで）。文字起こしは譲りません。config.json の
+  "yield_when_used": 秒（既定 180。30 より短くはしません）・false（または 0・"off"）で前と同じ。
+・PC の負荷を毎日数えます（2026-11-15。load.py。--fake-models のときは始めません）。1 分に 1 回、LifeLog PC 自身と Ollama が使った
+  CPU の秒と、譲っていた分数を、quality-daily.json のその日の所に cpu_self_s・cpu_ollama_s・yield_min として足します
+  （前と後を同じ数え方で比べるため。数えるだけで何も変えません）。config.json の "load_meter": false で止められます。
+・確かめるとき:  python pc/v17checks_relay.py（一時のフォルダ・作り物の音声・作り物の時刻とプロセスで。本物の HOME・Ollama には触りません）
 ・GPU に載せる前と後の空きを、記録（log.txt）に「GPU のメモリー（whisper を載せる前）: 空き … MB」のように書きます。
   動かすのに要る分と、残しておく分（既定 1024MB。config.json の "gpu_free_min_mb"）が無いときは、Whisper は CPU
   （large-v3-turbo）で動かし、kotoba・あなた向けは使わずに、空きができたら GPU の時間割が載せ直します。

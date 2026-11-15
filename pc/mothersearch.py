@@ -20,6 +20,8 @@
 - 置き直すのは、ファイルの更新時刻か大きさが変わったものだけ。文が同じまとまりは数の並びを作り直さない（hash で使い回す）。
   無くなったファイルのまとまりは消す。
 - 重い仕事をしてよい時間（00:00〜05:00 と 08:30〜18:00）は続けて置き、それ以外は TICK_IDLE 秒ごとに SMALL_BUDGET 個まで。
+  ただし、その時間でも PC を使っている（最後にキーボード・マウスを触ってから 3 分以内）あいだは、時間の外と同じ軽いほうにする
+  （2026-11-15。presence.py。config.json の "yield_when_used": false で前と同じ。文字起こしは譲らない）。
 - GPU の使い方は、渡された埋め込みの係（semantic.OllamaEmbedder の options）のまま（文字起こしのモデルが載っていれば CPU）。
 - 文の中身は記録（log.txt）に書かない（数と秒だけ）。母艦には何も書かない。
 - 探す: search(問い, k, sources, from, to) → [{"id", "source", "day", "time", "label", "path", "text", "score"}]。
@@ -43,6 +45,7 @@ from typing import Callable, Iterable
 
 import numpy as np
 
+import presence  # 2026-11-15: PC を使っているあいだは重い取り込みを譲る
 import semantic
 
 CHUNK_CHARS = 600           # 1 つのまとまりの長さの上限（文字）
@@ -57,6 +60,7 @@ SCAN_EVERY = 600.0          # ファイルの一覧を作り直す間（秒）
 FIRST_WAIT = 90.0           # 起動してから始めるまで
 K_MAX = 50
 HEAVY_WINDOWS = ((0, 0, 5, 0), (8, 30, 18, 0))   # (始め時, 分, 終わり時, 分)。終わりは含まない
+YIELD_LOG_EVERY = 3600.0    # 「譲っています」の記録は、1 時間に 1 回まで
 SOURCES = ("line", "plaud", "lifelog-pc", "digest", "weekly", "wishlist", "decisions", "profile", "people")
 STATE_FILES = {"wishlist": "WISHLIST.md", "decisions": "DECISIONS.md", "profile": "profile.md"}
 LABELS = {"line": "LINE", "plaud": "PLAUD", "lifelog-pc": "家の PC の会話のまとめ", "digest": "1日のまとめ",
@@ -280,7 +284,8 @@ def chunks_for(source: str, path: Path, text: str) -> list[dict]:
 
 class MotherIndex:
     def __init__(self, db_path: Path, embedder, base: Callable[[], Path], log: Callable[[str], None],
-                 ready: Callable[[], bool] | None = None, clock: Callable[[], datetime.datetime] | None = None) -> None:
+                 ready: Callable[[], bool] | None = None, clock: Callable[[], datetime.datetime] | None = None,
+                 config: Callable[[], dict] | None = None, idle: Callable[[], float | None] | None = None) -> None:
         self.path = Path(db_path)
         self.embedder = embedder
         self.model = getattr(embedder, "model", semantic.EMBED_MODEL)
@@ -288,6 +293,10 @@ class MotherIndex:
         self.log = log
         self.ready = ready or (lambda: True)
         self.clock = clock or datetime.datetime.now
+        # 2026-11-15: PC を使っているあいだは譲る（config は "yield_when_used" を読む。idle は最後に触ってからの秒）
+        self.config = config or (lambda: {})
+        self.idle = idle or presence.idle_seconds
+        self.yield_logged: datetime.datetime | None = None
         self.lock = threading.Lock()
         self._cache: dict | None = None
         self._pending: list[tuple[str, Path]] = []
@@ -314,6 +323,28 @@ class MotherIndex:
             raise
         finally:
             db.close()
+
+    def heavy(self, record: bool = True) -> bool:
+        """いま重く回してよいか。重い時間でも、PC を使っているあいだは False（軽いほう）。
+        譲り始めたとき（1 時間に 1 回まで）だけ、記録に 1 行書く"""
+        moment = self.clock()
+        if not heavy_now(moment):
+            return False
+        try:
+            config = self.config() or {}
+            idle = self.idle()
+            using = idle is not None and presence.in_use(config, idle)  # 読めなければ譲らない（前と同じ）
+        except Exception:  # noqa: BLE001 — 見られなければ前と同じ（譲らない）
+            return True
+        if not using:
+            return True
+        if record and (self.yield_logged is None or (moment - self.yield_logged).total_seconds() >= YIELD_LOG_EVERY
+                       or moment < self.yield_logged):
+            self.yield_logged = moment
+            after = presence.yield_after(config) or presence.DEFAULT_AFTER
+            self.log(f"PC を使っているあいだは、母艦の取り込みをゆっくりにします（触らなくなって {after / 60:g} 分で戻ります。"
+                     "config.json の \"yield_when_used\": false で前と同じ）")
+        return False
 
     # MARK: 何が変わったか
 
@@ -383,7 +414,7 @@ class MotherIndex:
         budget が None なら、いまの時刻で決める（重い時間は HEAVY_BUDGET、ほかは SMALL_BUDGET）。"""
         started = time.time()
         if budget is None:
-            budget = HEAVY_BUDGET if heavy_now(self.clock()) else SMALL_BUDGET
+            budget = HEAVY_BUDGET if self.heavy() else SMALL_BUDGET
         base = Path(self.base())
         if files is None:
             if not self._pending or time.time() - self._scanned > SCAN_EVERY:
@@ -424,7 +455,7 @@ class MotherIndex:
                         if result["files"]:
                             self.log(f"意味で探す（母艦）: {result['files']} ファイル・{result['chunks']} まとまり"
                                      f"（新しく {result['embedded']}）を置きました（{result['seconds']} 秒・残り {result['pending']}）")
-                        if result["pending"] and heavy_now(self.clock()):
+                        if result["pending"] and self.heavy(record=False):
                             wait = TICK_HEAVY
                 except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
                     self.log(f"意味で探す（母艦）: 置けませんでした: {type(error).__name__}")
@@ -495,7 +526,7 @@ class MotherIndex:
             files = int(db.execute("SELECT COUNT(*) FROM mother_files").fetchone()[0])
             by_source = {s: n for s, n in db.execute("SELECT source, COUNT(*) FROM mother_chunks GROUP BY source")}
         return {"chunks": chunks, "files": files, "by_source": by_source, "last": dict(self.last),
-                "heavy_now": heavy_now(self.clock())}
+                "heavy_now": self.heavy(record=False)}
 
 
 # lifelog_pc.py が始めたもの（askmother.py と /index/status が使う）。始めていなければ None
@@ -503,9 +534,9 @@ INDEX: MotherIndex | None = None
 
 
 def start(db_path: Path, embedder, base: Callable[[], Path], log: Callable[[str], None],
-          ready: Callable[[], bool] | None = None) -> MotherIndex:
+          ready: Callable[[], bool] | None = None, config: Callable[[], dict] | None = None) -> MotherIndex:
     global INDEX
-    INDEX = MotherIndex(db_path, embedder, base, log, ready)
+    INDEX = MotherIndex(db_path, embedder, base, log, ready, config=config)
     INDEX.start()
     return INDEX
 
