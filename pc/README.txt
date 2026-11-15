@@ -347,6 +347,13 @@ GPU のメモリーに余裕を作る（2026-11-07。8GB の GPU に large-v3 �
   GPU に載せる前に、LifeLog が使う Ollama のモデルが GPU にいれば下ろします（ほかのソフトのモデルには触りません）。
   夜の割り当てで下ろしているあいだは、今までどおり GPU を使います。config.json の "ollama_gpu" で変えられます:
   "auto"（既定）・"always"（いつも GPU を使ってよい。前と同じ）・"never"（いつも CPU だけ）。
+・意味で探すのモデル（bge-m3）だけは、GPU に文字起こしのモデルが載っていても、空き（残しておく分を引いて約 1.2GB 以上）が
+  あれば GPU に置きます（2026-11-15。CPU だけでは 1 まとまり約 1.2 秒・8 コア中 3 コア強を使っていたため）。いったん GPU に
+  置いたら、空きが残しておく分を割るまでは GPU のまま。文字起こしのモデルを載せる前・読み込み中は CPU に戻して決め直します。
+  言語モデル（qwen3:8b など）は今までどおり CPU だけ。config.json の "embed_gpu": false で前と同じにできます。
+・この PC の Ollama（ollama.exe・llama-server.exe）の優先度を「通常以下」にします（2026-11-15。速さは削らず、PC で
+  ほかの仕事があればそちらを先に通します）。config.json の "ollama_priority": "below_normal"（既定）・"idle"・"normal"（前と同じ）。
+・確かめるとき:  python pc/v16checks_ollama.py（作り物の空きと作り物のプロセスで。本物の GPU・Ollama の優先度は変えません）
 ・GPU に載せる前と後の空きを、記録（log.txt）に「GPU のメモリー（whisper を載せる前）: 空き … MB」のように書きます。
   動かすのに要る分と、残しておく分（既定 1024MB。config.json の "gpu_free_min_mb"）が無いときは、Whisper は CPU
   （large-v3-turbo）で動かし、kotoba・あなた向けは使わずに、空きができたら GPU の時間割が載せ直します。

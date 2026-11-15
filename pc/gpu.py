@@ -246,7 +246,8 @@ def note_change() -> None:
     if path is None:
         return
     state = asr_state()
-    key = (str(path), state["on"], tuple(state["names"]), tuple(state["loading"]))
+    embed = embed_on_gpu()
+    key = (str(path), state["on"], tuple(state["names"]), tuple(state["loading"]), embed)
     with _write_lock:
         if key == _written:
             return
@@ -254,7 +255,7 @@ def note_change() -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
             part = path.with_name(path.name + ".part")
             part.write_text(json.dumps({"asr_gpu": state["on"], "names": state["names"], "loading": state["loading"],
-                                        "pid": os.getpid(), "at": time.time()}), encoding="utf-8")
+                                        "embed_gpu": embed, "pid": os.getpid(), "at": time.time()}), encoding="utf-8")
             part.replace(path)
             _written = key
         except OSError:
@@ -298,6 +299,92 @@ def state_options(home: Path, config: dict | None) -> dict:
     return ollama_options(config, on_gpu=read_state(home).get("asr_gpu") is True)
 
 
+# MARK: - 意味で探すの小さなモデル（bge-m3）は、空きがあれば文字起こしのモデルと並べて GPU に置く（2026-11-15）
+# 11/15 の実測: whisper（large-v3・int8_float16）を載せたあとも GPU の空きは約 4.2GB。bge-m3 は CUDA で約 0.7GB
+# （重み約 580MB・計算の場所約 80MB）なのに、CPU だけで 1 まとまり約 1.2 秒・8 コア中 3 コア強を使っていた。
+# 大きな言語モデル（qwen3:8b など。約 5GB）は入らないので、今までどおり CPU だけ（ollama_options）。
+# 決め方: 今の空き − 残しておく分（gpu_free_min_mb）が EMBED_NEED_MB 以上なら GPU。いったん GPU に決めたら、空きが
+# 残しておく分を割るまでは GPU のまま（bge-m3 の分はもう空きから引かれているので、行ったり来たりしない）。
+# 文字起こしのモデルを読み込み中・載せる前（make_room）は CPU に戻して、決め直す。config.json の "embed_gpu": false で前と同じ。
+
+EMBED_NEED_MB = 1200            # bge-m3 を GPU に置くのに見込む分（実測 約 0.7GB に余りを足す）
+EMBED_CHECK_EVERY = 60.0        # 空きを見直す間（秒。埋め込みは 1 秒に 1 回ほど頼まれるので、毎回は見ない）
+_embed = {"at": 0.0, "gpu": False}
+_embed_lock = threading.Lock()
+# lifelog_pc.main() が入れる口: GPU に置くと決めたとき（True）・CPU に戻したとき（False）に呼ぶ。
+# CPU に載っている bge-m3 は、num_gpu を付けずに頼んでも読み込み直されないので、GPU に決めたら下ろしてもらう
+EMBED_CHANGED: Callable[[bool], None] | None = None
+
+
+def embed_gpu_enabled(config: dict | None) -> bool:
+    """config.json の "embed_gpu"（既定 true）。false なら、意味で探すのモデルも言語モデルと同じ決まり（前と同じ）"""
+    value = (config or {}).get("embed_gpu", True)
+    return not (value is False or (isinstance(value, str) and value.strip().lower() in ("false", "off", "never", "cpu")))
+
+
+def embed_on_gpu() -> bool:
+    """意味で探すのモデルを、文字起こしのモデルと並べて GPU に置くと決めているか"""
+    with _embed_lock:
+        return bool(_embed["gpu"])
+
+
+def reset_embed() -> None:
+    """GPU に置く決めを消す（次に頼まれたとき、空きを見て決め直す）"""
+    with _embed_lock:
+        was = _embed["gpu"]
+        _embed.update(at=0.0, gpu=False)
+    if was:
+        note_change()
+
+
+def embed_options(config: dict | None, on_gpu: bool | None = None, memory: dict | None = None,
+                  now: float | None = None, loading: bool | None = None) -> dict:
+    """意味で探すの小さなモデル（bge-m3）に足す options。ollama_options が CPU（{"num_gpu": 0}）と言うのが、
+    GPU に文字起こしのモデルがあるからだけなら、空きを見て GPU（{}）にしてよい。memory・now・loading は確かめ用"""
+    base = ollama_options(config, on_gpu=on_gpu)
+    if not base or ollama_gpu_mode(config) != "auto" or not embed_gpu_enabled(config):
+        return base
+    busy = bool(asr_state()["loading"]) if loading is None else loading
+    if busy:
+        reset_embed()
+        return base
+    now = time.time() if now is None else now
+    with _embed_lock:
+        if _embed["at"] and now - _embed["at"] < EMBED_CHECK_EVERY:
+            return {} if _embed["gpu"] else base
+        was = bool(_embed["gpu"])
+    seen = memory if memory is not None else gpu_memory()
+    spare = free_min_mb(config)
+    if not seen or not isinstance(seen.get("free"), int):
+        ok = False
+    elif was:
+        ok = seen["free"] >= spare
+    else:
+        ok = seen["free"] >= EMBED_NEED_MB + spare
+    with _embed_lock:
+        _embed.update(at=now, gpu=ok)
+    if ok != was:
+        note_change()
+        hook = EMBED_CHANGED
+        if hook is not None:
+            try:
+                hook(ok)
+            except Exception:  # noqa: BLE001 — 下ろせなくても、次に読み込むときに決まる
+                pass
+    return {} if ok else base
+
+
+def state_embed_options(home: Path, config: dict | None) -> dict:
+    """MCP サーバーが bge-m3 に頼むときの options の足し分（LifeLog PC が gpu-state.json に書いた決めに合わせる。
+    合わせないと、2 つのプロセスが違う num_gpu で頼み、Ollama が読み込み直しを繰り返す）"""
+    state = read_state(home)
+    base = ollama_options(config, on_gpu=state.get("asr_gpu") is True)
+    if base and ollama_gpu_mode(config) == "auto" and embed_gpu_enabled(config) and state.get("embed_gpu") is True \
+            and not state.get("loading"):
+        return {}
+    return base
+
+
 def ollama_text(config: dict | None) -> str:
     """見守りの画面に出す、この PC の Ollama の置き場所"""
     mode = ollama_gpu_mode(config)
@@ -309,12 +396,17 @@ def ollama_text(config: dict | None) -> str:
     if state["on"]:
         what = "・".join(state["names"]) + ("（読み込み中のものも）" if state["names"] and state["loading"] else "") \
             if state["names"] else "読み込み中のもの"
-        return f"CPU だけ（GPU に文字起こしのモデル {what} があるので、num_gpu 0 で頼みます）"
+        text = f"CPU だけ（GPU に文字起こしのモデル {what} があるので、num_gpu 0 で頼みます）"
+        if embed_on_gpu():
+            text += "。意味で探すのモデルだけは、空きがあるので GPU に置いています"
+        return text
     return "GPU を使ってよい（GPU に文字起こしのモデルが無いため）"
 
 
 def make_room() -> None:
-    """GPU に文字起こしのモデルを載せる前に呼ぶ（LifeLog が使う Ollama のモデルが GPU にいれば下ろす。口が無ければ何もしない）"""
+    """GPU に文字起こしのモデルを載せる前に呼ぶ（LifeLog が使う Ollama のモデルが GPU にいれば下ろす。口が無ければ何もしない）。
+    意味で探すのモデルを GPU に置く決めも消す（載せたあとの空きで決め直す）"""
+    reset_embed()
     hook = BEFORE_LOAD
     if hook is not None:
         try:
