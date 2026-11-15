@@ -37,6 +37,21 @@ final class NoiseLog {
         entries.append(Entry(id: name, time: time, watch: watch, floor: reading.floor, speech: reading.speech,
                              noisy: reading.isNoisy))
         entries = Array(entries.suffix(Self.limit))
+        // 2026-11-16: 区切りごとに 2000 件を書き直していた。記録には影響しない控えなので、saveDelay まとめて書く
+        guard saveTask == nil else { return }
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.saveDelay)
+            self?.saveNow()
+        }
+    }
+
+    private static let saveDelay: Duration = .seconds(120)
+    @ObservationIgnored private var saveTask: Task<Void, Never>?
+
+    /// まとめて書くのを待たずに書く（アプリが裏に回ったときにも呼ぶ）
+    func saveNow() {
+        saveTask?.cancel()
+        saveTask = nil
         guard let data = try? JSONEncoder().encode(entries) else { return }
         try? data.write(to: Self.url, options: .atomic)
     }

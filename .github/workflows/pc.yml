@@ -199,6 +199,12 @@ jobs:
           python pc/v17checks_relay.py > v17.txt 2>&1 || { cat v17.txt; grep '^NG' v17.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v17.txt | sed 's/^/::notice::v17checks_relay の OK の数: /'
 
+      # 2026-11-16: 話し手の見比べ（GET /speaker-check）を、一時フォルダと作り物の声の特徴で確かめる
+      - name: 話し手の見比べを確かめる
+        run: |
+          python pc/v18checks_spkcheck.py > v18.txt 2>&1 || { cat v18.txt; grep '^NG' v18.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v18.txt | sed 's/^/::notice::v18checks_spkcheck の OK の数: /'
+
       # 2026-11-16（強化案 75）: bge-m3 を 30 分載せておく（keep_alive）・/llm で待つのは iPhone より短く・
       #   時間切れで Ollama を使えないにしないのを、作り物の Ollama で確かめる
       - name: この PC の言語モデルの載せ方と待ち方を確かめる

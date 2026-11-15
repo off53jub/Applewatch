@@ -135,6 +135,9 @@ POST /decisions/answer（アプリで選んだ決めごとを母艦の inbox に
 HOME/voices に置き、日をまたぐ「同じ人かも」と「名前のある人かも」を GET /same-person の "across"・"maybe" に足す。
 GET /canonical?day=（母艦の 1 日の正本）
     python v15checks_voices.py  これを、一時フォルダと作り物の声の特徴で確かめる
+2026-11-16（中身は voices.py・quality.py。features に "spkcheck"）: GET /speaker-check。名前のある人と自分の行を、置き場所の
+声の特徴で見比べる（直近 7 日のその人の行の平均が物差し・余白 0.15）。名寄せのついでに作る。iPhone はこれを確認箱に出す
+    python v18checks_spkcheck.py  これを、一時フォルダと作り物の声の特徴で確かめる
 2026-11-16（強化案 75。docs/v19-pc-llm.md）: 意味で探すの bge-m3 を使い終わってから 30 分載せておく（"embed_keep_alive"。
 MCP も同じ）。/llm で Ollama を待つのは 175 秒まで（"llm_timeout_seconds"。iPhone は 180 秒でやめる）。時間切れのあとも
 Ollama を使えないにしない

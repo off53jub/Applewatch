@@ -205,10 +205,46 @@ extension Pipeline {
         return result
     }
 
+    /// 言葉ごとの、直近 days 日の行の数（misheardOccurrences と同じ数え方。1 日を 1 回だけ読み、日ごとに譲る）。
+    /// 2026-11-16: 一覧の画面が言葉ごとに 30 日分を読み直していて、裏に回るときの描き直しが 10 秒を超え、
+    /// iOS にアプリを落とされた（11/14 19:47・scene-update watchdog）。画面はこの数だけを使う
+    func misheardCounts(of words: [String], days: Int = 30) async -> [String: Int] {
+        let words = Array(Set(words.filter { !$0.isEmpty }))
+        guard !words.isEmpty else { return [:] }
+        var counts: [String: Int] = [:]
+        for day in recordedDays().prefix(days) {
+            for c in conversations(on: day) where c.media == nil {
+                for line in c.lines where line.media == nil && line.checked != true {
+                    for word in words where line.text.contains(word) { counts[word, default: 0] += 1 }
+                }
+            }
+            await Task.yield()
+        }
+        return counts
+    }
+
     /// その行の、いまの記録（時刻と文が同じもの。文がもう変わっていれば、時刻が同じもの）
     func currentLine(_ ref: MisheardBox.Ref) -> ConversationLog.Line? {
         let lines = conversations(on: ref.day).flatMap(\.lines)
-        return lines.first { $0.time == ref.time && $0.text == ref.text } ?? lines.first { $0.time == ref.time }
+        return Self.misheardLine(for: ref, in: lines)
+    }
+
+    /// currentLine をまとめて（1 日を 1 回だけ読み、日ごとに譲る）。
+    /// 2026-11-16: 一覧の画面が行ごとに、描き直しのたびにその日の記録を読み直していた（v19）。画面はこの答えだけを使う
+    func currentLines(_ refs: [MisheardBox.Ref]) async -> [MisheardBox.Ref: ConversationLog.Line] {
+        var result: [MisheardBox.Ref: ConversationLog.Line] = [:]
+        for (day, list) in Dictionary(grouping: refs, by: \.day) {
+            let lines = conversations(on: day).flatMap(\.lines)
+            for ref in list {
+                if let line = Self.misheardLine(for: ref, in: lines) { result[ref] = line }
+            }
+            await Task.yield()
+        }
+        return result
+    }
+
+    private static func misheardLine(for ref: MisheardBox.Ref, in lines: [ConversationLog.Line]) -> ConversationLog.Line? {
+        lines.first { $0.time == ref.time && $0.text == ref.text } ?? lines.first { $0.time == ref.time }
     }
 }
 
@@ -226,6 +262,10 @@ struct MisheardView: View {
     @State private var counts = (conversations: 0, days: 0)
     @State private var redoing = false
     @State private var redoNote: String?
+    /// 言葉ごとの直近 30 日の行の数（描くたびには数えない。2026-11-16）
+    @State private var everywhere: [String: Int] = [:]
+    /// 行ごとの、いまの記録（話し手・音声。描くたびには読まない。2026-11-16）
+    @State private var current: [MisheardBox.Ref: ConversationLog.Line] = [:]
 
     private static let time: DateFormatter = {
         let f = DateFormatter()
@@ -273,6 +313,8 @@ struct MisheardView: View {
         .navigationTitle("聞き間違いかも")
         .countsOpen("misheard")
         .onAppear { counts = pipeline.resummarizeCounts() }
+        .task(id: list.map(\.wrong)) { everywhere = await pipeline.misheardCounts(of: list.map(\.wrong)) }
+        .task(id: list.flatMap(\.refs)) { current = await pipeline.currentLines(list.flatMap(\.refs)) }
         .onDisappear { player.stop() }
         .alert("別の書き方に直す", isPresented: Binding(get: { other != nil }, set: { if !$0 { other = nil } })) {
             TextField("正しい書き方", text: $otherText)
@@ -288,7 +330,7 @@ struct MisheardView: View {
 
     @ViewBuilder
     private func suspectSection(_ suspect: MisheardBox.Suspect) -> some View {
-        let everywhere = pipeline.misheardOccurrences(of: suspect.wrong)
+        let everywhereCount = everywhere[suspect.wrong] ?? 0
         Section {
             ForEach(suspect.refs, id: \.self) { ref in lineRow(ref, wrong: suspect.wrong) }
             if let note = notes[suspect.id] {
@@ -300,8 +342,8 @@ struct MisheardView: View {
                     Button("「\(suspect.guess)」に直す（この \(suspect.refs.count) 行）") {
                         fix(suspect, to: suspect.guess, everywhere: false)
                     }
-                    if everywhere.count > suspect.refs.count {
-                        Button("「\(suspect.guess)」に直す（直近30日の「\(suspect.wrong)」\(everywhere.count) 行すべて）") {
+                    if everywhereCount > suspect.refs.count {
+                        Button("「\(suspect.guess)」に直す（直近30日の「\(suspect.wrong)」\(everywhereCount) 行すべて）") {
                             fix(suspect, to: suspect.guess, everywhere: true)
                         }
                     }
@@ -323,7 +365,7 @@ struct MisheardView: View {
 
     @ViewBuilder
     private func lineRow(_ ref: MisheardBox.Ref, wrong: String) -> some View {
-        let line = pipeline.currentLine(ref)
+        let line = current[ref]
         let key = "misheard-\(ref.time.timeIntervalSince1970)"
         let audio = line?.audio.flatMap { pipeline.archive.canPlay($0) ? $0 : nil }
         let label = HStack(alignment: .firstTextBaseline) {

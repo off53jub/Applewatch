@@ -32,9 +32,26 @@ enum Tally {
         let oldest = dayKey(date.addingTimeInterval(-35 * 86400))
         all = all.filter { $0.key >= oldest }
         cache = all
-        if let data = try? JSONEncoder().encode(all) { try? data.write(to: url, options: .atomic) }
+        // 2026-11-16: 数を足すたびに 35 日分を書き直していた（区切り・行ごとに何回も呼ばれる）。読むのはアプリの中の写しなので、
+        // ファイルには writeDelay 秒まとめて書く（落ちたら、失うのは数分の数だけ）
+        if !writePending {
+            writePending = true
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + writeDelay) { Tally.flush() }
+        }
         // 動いた証拠の数なら、初めての日を35日で消えない帳に残す（FeatureProof.swift）
         FeatureProof.noticed(name, at: date)
+    }
+
+    private static let writeDelay: TimeInterval = 120
+    nonisolated(unsafe) private static var writePending = false
+
+    /// まとめて書くのを待たずに書く（アプリが裏に回ったときにも呼ぶ）
+    static func flush() {
+        lock.lock()
+        defer { lock.unlock() }
+        writePending = false
+        guard let cache, let data = try? JSONEncoder().encode(cache) else { return }
+        try? data.write(to: url, options: .atomic)
     }
 
     /// 直近の何日か（今日を含む）の合計

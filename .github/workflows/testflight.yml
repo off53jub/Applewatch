@@ -176,6 +176,25 @@ jobs:
           rm -rf "$RUNNER_TEMP/ipa-lite/Payload/LifeLog.app/PlugIns" "$RUNNER_TEMP/ipa-lite/Payload/LifeLog.app/Watch/LifeLogWatch.app/PlugIns"
           (cd "$RUNNER_TEMP/ipa-lite" && zip -qry "$RUNNER_TEMP/ipa/LifeLog-unsigned-no-widgets.ipa" Payload)
 
+      # 2026-11-16: 落ち・書き込み過多の記録（MetricKit）はアプリの中を番地でしか持たないので、番地を関数名に直すための dSYM を残す
+      #   （中身は関数の名前と行の位置だけ。会話・鍵は入っていない）。前は残しておらず、組み立て直して調べた
+      - name: dSYM を残す
+        id: dsym
+        run: |
+          if [ -d "$RUNNER_TEMP/LifeLog.xcarchive/dSYMs" ]; then
+            (cd "$RUNNER_TEMP/LifeLog.xcarchive" && zip -qry "$RUNNER_TEMP/LifeLog-dSYMs-${{ github.run_number }}.zip" dSYMs)
+            for f in "$RUNNER_TEMP/LifeLog.xcarchive/dSYMs"/*.dSYM; do dwarfdump --uuid "$f" | sed 's/^/::notice::/'; done
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::dSYM がアーカイブにありません"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: steps.dsym.outputs.ok == 'true'
+        with:
+          name: LifeLog-dSYMs-${{ github.run_number }}
+          path: ${{ runner.temp }}/LifeLog-dSYMs-${{ github.run_number }}.zip
+          retention-days: 90
+
       - uses: actions/upload-artifact@v4
         with:
           name: LifeLog-unsigned-ipa

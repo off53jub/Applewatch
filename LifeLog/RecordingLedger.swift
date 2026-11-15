@@ -87,10 +87,26 @@ final class RecordingLedger {
         }
     }
 
+    // 2026-11-16: 区切りが届く・文字にする・様子が変わるたびに 14 日分を書き直していた（書き込み過多の 16%）。
+    // 中身はアプリの中の写しが正なので、ファイルには saveDelay まとめて書く（落ちたら数分の記録を失うだけ）
+    private static let saveDelay: Duration = .seconds(120)
+    @ObservationIgnored private var saveTask: Task<Void, Never>?
+
     private func save() {
         let old = Date.now.addingTimeInterval(-Double(Self.keepDays) * 24 * 3600)
         chunks.removeAll { $0.start < old }
         states.removeAll { $0.at < old }
+        guard saveTask == nil else { return }
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.saveDelay)
+            self?.saveNow()
+        }
+    }
+
+    /// まとめて書くのを待たずに書く（アプリが裏に回ったときにも呼ぶ）
+    func saveNow() {
+        saveTask?.cancel()
+        saveTask = nil
         guard let data = try? JSONEncoder().encode(Store(chunks: chunks, states: states)) else { return }
         try? data.write(to: Self.url, options: .atomic)
     }

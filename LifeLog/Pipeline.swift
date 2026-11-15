@@ -1465,6 +1465,18 @@ final class Pipeline {
     /// アプリを閉じて10分たったら、ライブを自動で切る（切り忘れで電池と無料枠を使わないように）
     func appMovedToBackground() {
         RunClock.movedToBackground()  // 裏にいた時間を数える（2026-11-07。RunClock.swift）
+        // まとめて書くのを待っている分を書いておく（2026-11-16。書き込み過多の直し）
+        ledger.saveNow()
+        conversations.saveTrashNow()
+        Latency.flush()
+        Task { await speakers.saveNow() }
+        // 2026-11-16（v19）: 時計の遅れ・騒がしさの控え、送った記録、効き目の数も。鍵で守るものは裏の糸で書く
+        watchDelays.saveNow()
+        noiseLog.saveNow()
+        DispatchQueue.global(qos: .utility).async {
+            CloudLog.flush()
+            Tally.flush()
+        }
         // 下書き（仮）を見に行くのは、アプリが前にあるときだけ（2026-11-07。Drafts.swift）
         stopDraftPolling()
         guard liveOn, liveAutoOff == nil else { return }
@@ -1562,6 +1574,8 @@ final class Pipeline {
         noteRecordingExperiment()
         // 家の PC に様子（1時間に1回）を送り、記録と直し（10分に1回）をやり取りする（PC の版 7 から。2026-11-07。PCDiag.swift）
         pcLinkTick()
+        // 家の PC の日をまたぐ組のうち、声がとても近い名前の無い人を自動でまとめる（1 時間に 1 回まで。2026-11-16。SamePersonAuto.swift）
+        Task { await autoMergeSamePerson() }
         // アプリを開いていれば、閉じたばかりの会話の話し手を PC の声のモデルでも見比べる（2026-11-06）
         if UIApplication.shared.applicationState == .active, homePC.shouldTry {
             Task { await crossCheckDaytime() }
@@ -1740,8 +1754,13 @@ final class Pipeline {
         // Wi-Fi なら音声をドライブに上げ、古い手元の音声を片付ける
         await archive.uploadPending()
         backupPending = archive.pendingCount
-        // 検索の索引（書き換わった日だけ）と、登録の毎日の控えと、動き具合の診断
-        refreshSearchIndex()
+        // 検索の索引（書き換わった日だけ）と、登録の毎日の控えと、動き具合の診断。
+        // 2026-11-16（v19）: 区切りのたびに今日の行を全部入れ直していたので、ここからは searchIndexEvery に 1 回まで
+        //（探すときは、探す前にいつも入れ直す。AskViews.swift）
+        if Date.now.timeIntervalSince(searchIndexRefreshed) >= Self.searchIndexEvery {
+            searchIndexRefreshed = .now
+            refreshSearchIndex()
+        }
         await backups.runIfDue(signedIn: email != nil)
         // 夜に充電していれば、名前の無い声を1日1回整理する（控えができてから。iPhone だけ。2026-11-09）
         if UIDevice.current.userInterfaceIdiom != .pad { await tidyUnnamedVoicesIfDue() }
@@ -2418,6 +2437,10 @@ final class Pipeline {
 
     // MARK: - 検索の索引
 
+    /// 区切りの処理のあとに索引を入れ直した時刻（入れ直しは多くても searchIndexEvery に 1 回。2026-11-16）
+    @ObservationIgnored private var searchIndexRefreshed: Date = .distantPast
+    private static let searchIndexEvery: TimeInterval = 15 * 60
+
     /// 書き換わった日だけ、検索の索引を入れ直す（話した人・文・直す前の文）。入れ直した日の数を返す。
     @discardableResult
     func refreshSearchIndex() -> Int {
@@ -2447,6 +2470,7 @@ final class Pipeline {
     /// 議事録を作った会話に、そのドキュメントの名前を記す
     func setScene(_ scene: String, start: Date, day: String) { conversations.setScene(scene, start: start, day: day) }
     func markSpeakerDoubt(_ other: String, time: Date, day: String) { conversations.markSpeakerDoubt(other, time: time, day: day) }
+    func markSpeakerDoubts(_ marks: [(other: String, time: Date)], day: String) { conversations.markSpeakerDoubts(marks, day: day) }
     /// その日の記録を最後に書き換えた時刻（意味で探す索引の入れ直しに使う。2026-11-07）
     func dayModified(_ day: String) -> Date? { conversations.modified(day) }
 

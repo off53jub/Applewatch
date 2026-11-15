@@ -367,6 +367,11 @@ GPU のメモリーに余裕を作る（2026-11-07。8GB の GPU に large-v3 �
   CPU の秒と、譲っていた分数を、quality-daily.json のその日の所に cpu_self_s・cpu_ollama_s・yield_min として足します
   （前と後を同じ数え方で比べるため。数えるだけで何も変えません）。config.json の "load_meter": false で止められます。
 ・確かめるとき:  python pc/v17checks_relay.py（一時のフォルダ・作り物の音声・作り物の時刻とプロセスで。本物の HOME・Ollama には触りません）
+・話し手の見比べ（2026-11-16。voices.py。features の "spkcheck"）: 名寄せのたびに、名前のある人と自分の行の声を、直近 7 日の
+  その人の行の平均（同じ音声の行を除く）と比べ、ほかの人のほうが 0.15 以上近い行を HOME/same-person/speaker-check.json に置き、
+  GET /speaker-check で iPhone に渡します。測り直さない（置き場所の声の特徴だけ）・記録は変えない・文と名前は書きません。
+  記録には「話し手の見比べ: 日 6・見た行 1875・疑い 15」のように数だけを書きます。
+  確かめるとき:  python pc/v18checks_spkcheck.py（一時のフォルダ・作り物の声の特徴で）
 ・GPU に載せる前と後の空きを、記録（log.txt）に「GPU のメモリー（whisper を載せる前）: 空き … MB」のように書きます。
   動かすのに要る分と、残しておく分（既定 1024MB。config.json の "gpu_free_min_mb"）が無いときは、Whisper は CPU
   （large-v3-turbo）で動かし、kotoba・あなた向けは使わずに、空きができたら GPU の時間割が載せ直します。
