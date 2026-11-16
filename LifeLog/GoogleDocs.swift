@@ -92,7 +92,16 @@ final class GoogleDocs {
     /// referenced segment, 2266」が出ていた。終わりの位置（4403）を読んでから消すまでのあいだに、同じドキュメントの
     /// 書き直しがもう1つ走って中身を短くしていた（答えるたびに書き直しを始めるので、続けて答えると重なる）。
     /// そこで、同じドキュメントの書き直しは1つずつ順に行い、それでも位置が合わなければ、読み直して1回だけやり直す。
-    func overwrite(_ paragraphs: [(text: String, style: String?)], name: String) async throws {
+    ///
+    /// 2026-11-16（強化案 83）: 前に書いた中身と同じなら書かない（skipIfSame。印は名前ごとに覚える）。
+    func overwrite(_ paragraphs: [(text: String, style: String?)], name: String, skipIfSame: Bool = true) async throws {
+        let stampKey = "driveStamp-doc-" + name
+        let stamp = DriveStamp.digest(paragraphs)
+        // 同じ名前の書き直しが途中なら比べない（途中の分が違う中身で終わるかもしれない）
+        if skipIfSame, overwriting[name] == nil, defaults.string(forKey: stampKey) == stamp {
+            Tally.add("drive.skipSame")
+            return
+        }
         let previous = overwriting[name]
         let task = Task<Void, Error> { [weak self] in
             // 前の書き直しが終わるまで待つ（うまくいかなくても待つだけ）
@@ -103,6 +112,7 @@ final class GoogleDocs {
         overwriting[name] = task
         defer { if overwriting[name] == task { overwriting[name] = nil } }
         try await task.value
+        defaults.set(stamp, forKey: stampKey)
     }
 
     /// 書き直している途中のドキュメント（名前ごと）
@@ -439,7 +449,20 @@ final class GoogleDocs {
 
     /// 同期のファイルを書く。id があれば中身を置き換え、無ければ（または消えていれば）作る。書いたファイルの id を返す。
     @discardableResult
+    /// 2026-11-16（強化案 83）: 同じファイル（id）に、前に書いたのと同じ中身なら書かない。
     func uploadSync(_ data: Data, name: String, id: String?) async throws -> String? {
+        let stampKey = "driveStamp-sync-" + name
+        let stamp = DriveStamp.digest(data)
+        if let id, defaults.string(forKey: stampKey) == id + "|" + stamp {
+            Tally.add("drive.skipSame")
+            return id
+        }
+        let written = try await uploadSyncNow(data, name: name, id: id)
+        if let written { defaults.set(written + "|" + stamp, forKey: stampKey) }
+        return written
+    }
+
+    private func uploadSyncNow(_ data: Data, name: String, id: String?) async throws -> String? {
         if let id {
             var req = try await authorized("PATCH", "https://www.googleapis.com/upload/drive/v3/files/\(id)?uploadType=media&fields=id")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -667,9 +690,42 @@ final class GoogleDocs {
     }
 
     private func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        // 429 を受けたあとは、止めている時間が過ぎるまで書き込みを送らない（読むのは送る。2026-11-16。強化案 83）
+        let isWrite = (req.httpMethod ?? "GET") != "GET"
+        if isWrite, Self.backoff.blocked(at: .now), let until = Self.backoff.until {
+            Tally.add("drive.blocked")
+            throw GoogleError.backoff(until: until)
+        }
         let result = try await URLSession.shared.data(for: req)
+        if let http = result.1 as? HTTPURLResponse {
+            if DriveRetry.isRateLimited(http.statusCode, String(data: result.0, encoding: .utf8) ?? "") {
+                Tally.add("drive.429")
+                Self.backoff.rateLimited(retryAfter: DriveRetry.retryAfter(http.value(forHTTPHeaderField: "Retry-After"), now: .now),
+                                         at: .now)
+                Self.saveBackoff()
+            } else if isWrite, (200..<300).contains(http.statusCode), Self.backoff.strikes > 0 {
+                Self.backoff.succeeded()
+                Self.saveBackoff()
+            }
+        }
         return try Self.checked(result)
     }
+
+    // MARK: - 429 のあとの止め（2026-11-16。強化案 83。DriveWrites.swift）
+
+    private static let backoffKey = "driveBackoff"
+    private static var backoff: DriveBackoff = {
+        guard let data = UserDefaults.standard.data(forKey: backoffKey),
+              let value = try? JSONDecoder().decode(DriveBackoff.self, from: data) else { return DriveBackoff() }
+        return value
+    }()
+
+    private static func saveBackoff() {
+        if let data = try? JSONEncoder().encode(backoff) { UserDefaults.standard.set(data, forKey: backoffKey) }
+    }
+
+    /// 書き込みを止めている残りの秒（止めていなければ 0）
+    static var backoffRemaining: TimeInterval { backoff.remaining(at: .now) }
 
     private static func checked(_ result: (Data, URLResponse)) throws -> (Data, HTTPURLResponse) {
         let (data, response) = result
@@ -685,12 +741,15 @@ enum GoogleError: LocalizedError {
     case notSignedIn
     case http(Int, String)
     case unexpected(String)
+    /// 429 を受けたので、until まで書き込みを止めている（送っていない）
+    case backoff(until: Date)
 
     var errorDescription: String? {
         switch self {
         case .notSignedIn: "Google にログインしていません"
         case .http(let code, let body): "Google API エラー \(code): \(body.prefix(200))"
         case .unexpected(let message): message
+        case .backoff(let until): "ドライブの書き込みが多すぎたので、\(Int(max(0, until.timeIntervalSinceNow))) 秒休んでいます"
         }
     }
 }

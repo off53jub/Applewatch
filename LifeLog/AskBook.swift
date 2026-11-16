@@ -438,8 +438,20 @@ extension Pipeline {
     }
 
     /// ドライブの「わかったこと帳」と、同期フォルダの「わかったこと帳.json」（PC が読む）に写す。変わっていなければ書かない。
+    /// 2026-11-16（強化案 83）: 答える・直すたびにすぐ書いていたのを、150 秒まとめてから1回にする（DriveWrites.swift）。
     func writeAskBook() async {
-        guard email != nil, UIDevice.current.userInterfaceIdiom != .pad else { return }
+        guard email != nil, UIDevice.current.userInterfaceIdiom != .pad,
+              UserDefaults.standard.string(forKey: Self.askBookHashKey) != askBookStamp() else { return }
+        driveWrites.schedule("askBook") { [weak self] in await self?.writeAskBookNow() ?? true }
+    }
+
+    private func askBookStamp() -> String {
+        "\(asks.facts.count)|\(asks.questions.filter { $0.state == .answered }.count)|\(asks.version)"
+    }
+
+    /// 書けたか、やり直さなくてよければ true
+    private func writeAskBookNow() async -> Bool {
+        guard email != nil else { return true }
         struct Copy: Codable {
             let facts: [AskBook.Fact]
             let questions: [AskBook.Question]
@@ -447,9 +459,9 @@ extension Pipeline {
         let answered = asks.questions.filter { $0.state == .answered }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let json = try? encoder.encode(Copy(facts: asks.facts, questions: answered)) else { return }
-        let stamp = "\(asks.facts.count)|\(answered.count)|\(asks.version)"
-        guard UserDefaults.standard.string(forKey: Self.askBookHashKey) != stamp else { return }
+        guard let json = try? encoder.encode(Copy(facts: asks.facts, questions: answered)) else { return true }
+        let stamp = askBookStamp()
+        guard UserDefaults.standard.string(forKey: Self.askBookHashKey) != stamp else { return true }
         var p: [(text: String, style: String?)] = [("わかったこと帳", "HEADING_1"),
                                                   ("アプリの「AI からの質問」に答えたことです。アプリが自動で書き直します（ここを直してもアプリには戻りません）。", nil)]
         p.append(("わかったこと（\(asks.facts.count) 件）", "HEADING_2"))
@@ -457,8 +469,9 @@ extension Pipeline {
         do {
             try await writeAskBookFiles(p, json: json)
             UserDefaults.standard.set(stamp, forKey: Self.askBookHashKey)
+            return true
         } catch {
-            diagnostics.problem("わかったこと帳をドライブに書けませんでした: \(error.localizedDescription)")
+            return driveWriteFailed(error, what: "わかったこと帳")
         }
     }
 }

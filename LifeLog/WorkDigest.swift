@@ -678,20 +678,34 @@ extension Pipeline {
     }
 
     /// 変わっていたら、ドライブの「仕事のまとめ」と同期フォルダの「仕事のまとめ.json」に写す（iPhone だけ。頼まれごと帳と同じ）
+    /// 2026-11-16（強化案 83）: 150 秒まとめてから処理の外で書く（DriveWrites.swift。頼まれごと帳と同じ）
     func writeWorkDigests() async {
-        guard email != nil, UIDevice.current.userInterfaceIdiom != .pad else { return }
+        guard email != nil, UIDevice.current.userInterfaceIdiom != .pad,
+              UserDefaults.standard.string(forKey: Self.workDigestHashKey) != workDigestStamp() else { return }
+        driveWrites.schedule("workDigest") { [weak self] in await self?.writeWorkDigestsNow() ?? true }
+    }
+
+    private func workDigestStamp() -> String {
+        let entries = workDigests.sorted
+        let latest: Double = entries.map(\.addedAt).max()?.timeIntervalSince1970 ?? 0
+        return "\(entries.count)|\(latest)"
+    }
+
+    /// 書けたか、やり直さなくてよければ true
+    private func writeWorkDigestsNow() async -> Bool {
+        guard email != nil else { return true }
         let entries = workDigests.sorted
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let json = try? encoder.encode(entries) else { return }
-        let latest: Double = entries.map(\.addedAt).max()?.timeIntervalSince1970 ?? 0
-        let stamp = "\(entries.count)|\(latest)"
-        guard UserDefaults.standard.string(forKey: Self.workDigestHashKey) != stamp else { return }
+        guard let json = try? encoder.encode(entries) else { return true }
+        let stamp = workDigestStamp()
+        guard UserDefaults.standard.string(forKey: Self.workDigestHashKey) != stamp else { return true }
         do {
             try await writeWorkDigestFiles(Self.workDigestParagraphs(workDigests.byDay), json: json)
             UserDefaults.standard.set(stamp, forKey: Self.workDigestHashKey)
+            return true
         } catch {
-            diagnostics.problem("仕事のまとめをドライブに書けませんでした: \(error.localizedDescription)")
+            return driveWriteFailed(error, what: "仕事のまとめ")
         }
     }
 
