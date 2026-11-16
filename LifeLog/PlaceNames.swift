@@ -242,18 +242,3 @@ final class PlaceNameBook {
         MothershipOutbox.enqueue(path: "place-names", body: body, now: now)
     }
 }
-
-// MARK: - 会話の見出しの場所を直す
-
-extension Pipeline {
-    /// 会話の見出しの場所の名前を直す。直した名前は、その会話の始まりの位置で覚える（位置が 7 日より前で残っていなければ、見出しだけ直す）
-    func renameConversationPlace(first: Date, starts: [Date], day: String, to name: String) async {
-        guard let cleaned = PlaceNameRules.clean(name) else { return }
-        if let point = places.fixPoint(at: first) {
-            PlaceNameBook.shared.fix(name: cleaned, latitude: point.latitude, longitude: point.longitude, source: "conversation")
-        } else {
-            Tally.add("placename.nopoint")
-        }
-        await conversations.setPlace(cleaned, starts: starts, day: day)
-    }
-}

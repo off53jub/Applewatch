@@ -88,10 +88,10 @@ enum FeatureProof {
         Feature(name: "精度の通信簿", pr: 57, keys: ["screen.accuracy"], pc: "accuracy"),
         Feature(name: "あまり開かれていない画面", pr: 57, keys: ["screen.unused"], pc: "unused"),
         // 2026-11-16 の施策（PlaceNames.swift・PlaceAssist.swift・Places.swift。番号は母艦の docs/system-proposal-2026-11-13.md の「追記 7」）
-        Feature(name: "着いたとき 1 回だけ細かく測る", pr: 0, keys: ["place.arrival.fix"]),
-        Feature(name: "場所の名前を本人が直す", pr: 0, keys: ["placename.fixed"], pc: "placenames"),
-        Feature(name: "30 分いたら手首でたずねる", pr: 0, keys: ["placeask.scheduled", "placeask.answered"]),
-        Feature(name: "着いたら、その場所のやることを知らせる", pr: 0, keys: ["placeremind.shown"]),
+        Feature(name: "着いたとき 1 回だけ細かく測る", pr: 75, keys: ["place.arrival.fix"]),
+        Feature(name: "場所の名前を本人が直す", pr: 75, keys: ["placename.fixed"], pc: "placenames"),
+        Feature(name: "30 分いたら手首でたずねる", pr: 75, keys: ["placeask.scheduled", "placeask.answered"]),
+        Feature(name: "着いたら、その場所のやることを知らせる", pr: 75, keys: ["placeremind.shown"]),
     ]
 
     /// 画面の一覧。畳む候補を探すのに使う（見せるだけで、何も止めない）

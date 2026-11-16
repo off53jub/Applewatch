@@ -3634,6 +3634,18 @@ final class Pipeline {
 
     /// その時刻に使う言葉の組。登録した場所にいればその場所で、分からなければ時刻（平日8〜19時は職場）で決める。
     /// 会話を前の会話とつなぐ（本人が押したとき）。つないだ間の長さを区切りの学びに残す（2026-11-06）
+    /// 会話の見出しの場所の名前を直す。直した名前は、その会話の始まりの位置で覚える（位置は 7 日分しか残らないので、
+    /// それより前の会話は見出しだけ直す。2026-11-16。強化案 89。PlaceNames.swift）
+    func renameConversationPlace(first: Date, starts: [Date], day: String, to name: String) async {
+        guard let cleaned = PlaceNameRules.clean(name) else { return }
+        if let point = places.fixPoint(at: first) {
+            PlaceNameBook.shared.fix(name: cleaned, latitude: point.latitude, longitude: point.longitude, source: "conversation")
+        } else {
+            Tally.add("placename.nopoint")
+        }
+        await conversations.setPlace(cleaned, starts: starts, day: day)
+    }
+
     func joinConversation(start: Date, day: String) async {
         guard let gap = await conversations.joinWithPrevious(start: start, day: day) else { return }
         ConversationGap.record(joined: true, gap: gap)
