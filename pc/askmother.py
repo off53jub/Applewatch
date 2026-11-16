@@ -41,8 +41,10 @@ import time
 from pathlib import Path
 from typing import Callable, Iterable
 
+import audioclip  # 2026-11-16（強化案 130）: 答えの出どころから元の音声へ
 import claude
 import mothersearch
+import motherquery  # 2026-11-16（強化案 129）: 場所・年表・約束・ページを絞って引く
 import mothership
 
 POSTS = ("/ask-mothership",)
@@ -67,14 +69,20 @@ SOURCES = ("limitless", "plaud", "app", "line", "claude", "digest",
 LABELS = {"limitless": "録音（Limitless）", "plaud": "PLAUD", "plaud-whisper": "PLAUD", "app": "アプリの記録",
           "line": "LINE", "claude": "Claude との会話", "digest": "1日のまとめ", "calendar": "予定", "health": "体調",
           "photos": "写真", "location": "場所", "work-digest": "仕事のまとめ", "money": "お金",
+          "lookup": "母艦の一覧（場所・年表・約束・ページ）",
           **{k: v for k, v in mothersearch.LABELS.items() if k not in ("line", "plaud", "digest")}}
 # 2026-11-15（強化案 42・48）: 意味で探す
 SEMANTIC_K = 12                 # 会話・まとめから意味で取る数
-SEMANTIC_SOURCES = ("line", "plaud", "lifelog-pc", "digest", "weekly")
+SEMANTIC_SOURCES = ("line", "plaud", "lifelog-pc", "digest", "weekly", "timeline", "calendar", "photo-notes")
 TOPIC_K = 6                     # 人・欲しい物・決めごと・本人のことから取る数
 SEMANTIC_SNIPPET_MAX = 400
-TOPICS = ("person", "wish", "decision", "self")
-TOPIC_SOURCES = {"person": ("people", "profile"), "wish": ("wishlist",), "decision": ("decisions",), "self": ("profile",)}
+TOPICS = ("person", "wish", "decision", "self", "place")
+TOPIC_SOURCES = {"person": ("people", "profile"), "wish": ("wishlist",), "decision": ("decisions",), "self": ("profile",),
+                 "place": ("places", "places-index")}
+# 2026-11-16（強化案 129）: 探し方の Claude が頼める「絞って引く」道具（母艦のファイルを読むだけ。motherquery.py）
+LOOKUPS = ("where_at", "day_timeline", "by_place", "promises", "person_page", "place_page")
+LOOKUP_MAX = 3
+LOOKUP_ROWS = 24
 TOPIC_FILES = {"wishlist": "state/WISHLIST.md", "decisions": "state/DECISIONS.md", "profile": "state/profile.md"}
 # 試すとき（v14checks_search）は、ここを作り物に替える。None なら mothersearch.INDEX（lifelog_pc.py が始めたもの）
 SEMANTIC: Callable | None = None
@@ -103,7 +111,10 @@ PLAN_SYSTEM = (
     "- お金（買い物・支払い・使った額）の質問なら money を true にし、money_words にお店や品物の言葉を入れます"
     "（言葉が無ければ空）。\n"
     "- topics は、質問が次のどれについてか（当てはまるものだけ。無ければ空）: person（特定の人のこと・人との関係）・"
-    "wish（欲しい物・買いたい物）・decision（決めたこと・方針）・self（本人の好み・暮らし・体のこと）。\n"
+    "wish（欲しい物・買いたい物）・decision（決めたこと・方針）・self（本人の好み・暮らし・体のこと）・place（場所・行った所）。\n"
+    "- lookups は、言葉では探しにくい質問に使う絞り込みの道具（0〜3 個。要らなければ空）。tool は where_at（day と time で、その時どこにいたか）・"
+    "day_timeline（day の 1 日の年表）・by_place（name の場所にいた日。from・to で期間）・promises（name を含む約束・宿題。name が空なら全部）・"
+    "person_page（name の人のページ）・place_page（name の場所のページ）。使わない項目は空文字にします。\n"
     "- 答えは JSON だけです。"
 )
 PLAN_SCHEMA = {
@@ -118,8 +129,14 @@ PLAN_SCHEMA = {
         "money": {"type": "boolean"},
         "money_words": {"type": "array", "items": {"type": "string"}},
         "topics": {"type": "array", "items": {"type": "string", "enum": list(TOPICS)}},
+        "lookups": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"tool": {"type": "string", "enum": list(LOOKUPS)}, "name": {"type": "string"},
+                           "day": {"type": "string"}, "time": {"type": "string"},
+                           "from": {"type": "string"}, "to": {"type": "string"}},
+            "required": ["tool", "name", "day", "time", "from", "to"], "additionalProperties": False}},
     },
-    "required": ["queries", "money", "money_words", "topics"], "additionalProperties": False,
+    "required": ["queries", "money", "money_words", "topics", "lookups"], "additionalProperties": False,
 }
 ANSWER_SYSTEM = (
     "あなたは、本人の記録から見つかった抜き出しだけをもとに、質問に日本語で答える係です。\n"
@@ -132,6 +149,7 @@ ANSWER_SYSTEM = (
     "- source が wishlist（欲しい物リスト）・decisions（決めごと）・profile（本人のこと）・people（人のノート）のものは、"
     "今の状態をまとめた覚え書きで、day はファイルを直した日です（その日に起きたことではありません）。\n"
     "- 話し手の名前は推定で、間違っていることがあります。\n"
+    "- source が lookup のものは、母艦の一覧（滞在・年表・約束・人や場所のページ）から読み出した行です。\n"
     "- 答えは 600 文字まで。used は答えに使った抜き出しの番号、found は質問に答えられる抜き出しがあったか。\n"
     "- 答えは JSON だけです。"
 )
@@ -229,6 +247,68 @@ def parse_topics(data) -> list[str]:
     if not isinstance(data, dict) or not isinstance(data.get("topics"), list):
         return []
     return [t for t in dict.fromkeys(data["topics"]) if t in TOPICS]
+
+
+def parse_lookups(data, today: datetime.date) -> list[dict]:
+    """探し方の答えの lookups を確かめる（知らない道具・おかしな日付は捨てる。LOOKUP_MAX 個まで）"""
+    out: list[dict] = []
+    for item in (data.get("lookups") if isinstance(data, dict) else None) or []:
+        if not isinstance(item, dict) or item.get("tool") not in LOOKUPS:
+            continue
+        entry = {"tool": item["tool"], "name": re.sub(r"\s+", " ", str(item.get("name") or "")).strip()[:40],
+                 "day": valid_day(item.get("day")) or "", "time": str(item.get("time") or "").strip()[:5],
+                 "from": valid_day(item.get("from")) or "", "to": valid_day(item.get("to")) or ""}
+        tool = entry["tool"]
+        if tool in ("where_at", "day_timeline") and not entry["day"]:
+            continue
+        if tool == "where_at" and not re.fullmatch(r"\d{1,2}:\d{2}", entry["time"]):
+            continue
+        if tool in ("by_place", "person_page", "place_page") and not entry["name"]:
+            continue
+        if entry not in out:
+            out.append(entry)
+        if len(out) >= LOOKUP_MAX:
+            break
+    return out
+
+
+def run_lookups(base: Path, lookups: list[dict], include_conversations: bool = False) -> list[dict]:
+    """lookups を母艦のファイルから読み、抜き出しの形（source は lookup）にする。読めなければ空"""
+    out: list[dict] = []
+
+    def add(day: str, moment: str, text: str, path: str = "") -> None:
+        text = str(text or "").strip()
+        if text:
+            out.append({"day": day or "", "time": moment or "", "source": "lookup", "text": text, "context": [],
+                        "path": path, "limit": SEMANTIC_SNIPPET_MAX})
+
+    for q in lookups:
+        try:
+            tool = q["tool"]
+            if tool == "where_at":
+                got = motherquery.where_at(base, q["day"], q["time"])
+                for s in got["here"] or [x for x in (got.get("before"), got.get("after")) if x]:
+                    add(q["day"], s["time"], f"{q['time']} ごろの滞在の記録: {s.get('place') or s['text']}"
+                        f"（{s['time']}〜{s.get('end', '')}）")
+            elif tool == "day_timeline":
+                got = motherquery.day_timeline(base, q["day"], include_conversations=include_conversations, limit=LOOKUP_ROWS)
+                for r in got["rows"]:
+                    add(q["day"], r["time"], f"[{r['lane']}] {r.get('place', '')} {r['text']}".replace("  ", " "))
+            elif tool == "by_place":
+                got = motherquery.by_place(base, q["name"], q["from"] or None, q["to"] or None, limit=LOOKUP_ROWS)
+                for r in got["hits"]:
+                    add(r["day"], r["time"], f"{r.get('place') or r['text']}（{r['time']}〜{r.get('end', '')}）")
+            elif tool == "promises":
+                got = motherquery.promises(base, q["name"] or None, limit=LOOKUP_ROWS)
+                for item in got["items"]:
+                    add("", "", f"約束・宿題: {item}", "state/TODO.md")
+            elif tool in ("person_page", "place_page"):
+                got = (motherquery.person_page if tool == "person_page" else motherquery.place_page)(base, q["name"])
+                if got.get("found"):
+                    add("", "", got["text"][:SEMANTIC_SNIPPET_MAX], ("people/" if tool == "person_page" else "places/") + got["name"] + ".md")
+        except (ValueError, OSError, KeyError):
+            continue
+    return out[:SNIPPETS]
 
 
 def explicit_range(data) -> tuple[str | None, str | None]:
@@ -427,6 +507,8 @@ def topic_sections(base: Path, topics: list[str], words: list[str]) -> list[dict
     files: list[tuple[str, Path]] = [(s, base / TOPIC_FILES[s]) for s in sorted(sources) if s in TOPIC_FILES]
     if "people" in sources and (base / "people").is_dir():
         files += [("people", p) for p in sorted((base / "people").glob("*.md"))]
+    if "places" in sources and (base / "places").is_dir():
+        files += [("places", p) for p in sorted((base / "places").glob("*.md"))]
     out: list[dict] = []
     for source, path in files:
         try:
@@ -481,7 +563,8 @@ class AskError(Exception):
 
 
 def ask(question: str, config: dict, log: Callable[[str], None] | None = None,
-        today: datetime.date | None = None, clock: Callable[[], float] = time.monotonic) -> dict:
+        today: datetime.date | None = None, clock: Callable[[], float] = time.monotonic,
+        store=None) -> dict:
     started = clock()
 
     def left() -> float:
@@ -495,6 +578,7 @@ def ask(question: str, config: dict, log: Callable[[str], None] | None = None,
                       timeout=min(PLAN_TIMEOUT, max(1.0, left())), log=log)
     plan = parse_plan(got.get("data"), day)
     topics = parse_topics(got.get("data"))
+    lookups = parse_lookups(got.get("data"), day)
     sem_from, sem_to = explicit_range(got.get("data"))
     search = semantic_search()
     groups: list[list[dict]] = []
@@ -525,6 +609,9 @@ def ask(question: str, config: dict, log: Callable[[str], None] | None = None,
         # 意味の索引が使えないときは、探し方の言葉を含む節だけ
         words = list(dict.fromkeys(w for q in plan["queries"] for w in q["words"]))
         topical = topic_sections(mothership.home(config), topics, words)
+    if lookups:
+        # 絞って引いた行（場所・年表・約束・ページ）は、人・欲しい物・決めごとと同じ先頭の組に入れる
+        topical = list(topical) + run_lookups(mothership.home(config), lookups, include_conversations=False)
     groups = dedupe(groups, [meaning, topical])
     if plan["money"]:
         frm = min([q["from"] for q in plan["queries"]] or [(day - datetime.timedelta(days=DEFAULT_DAYS)).isoformat()])
@@ -540,7 +627,7 @@ def ask(question: str, config: dict, log: Callable[[str], None] | None = None,
     semantic_keys = {(h["day"], h["text"][:80]) for h in meaning + topical if h.get("semantic")}
     semantic_used = sum(1 for s in snippets if (s["day"], s["text"][:80]) in semantic_keys)
     searched = {"queries": len(plan["queries"]) + (1 if plan["money"] else 0), "snippets": len(snippets),
-                "by_source": by_source, "semantic": semantic_used, "topics": topics}
+                "by_source": by_source, "semantic": semantic_used, "topics": topics, "lookups": len(lookups)}
     if not snippets:
         return {"available": True, "found": False, "answer": NOT_FOUND, "sources": [], "searched": searched,
                 "seconds": round(clock() - started, 1)}
@@ -557,6 +644,15 @@ def ask(question: str, config: dict, log: Callable[[str], None] | None = None,
     sources = [{"n": s["n"], "day": s["day"], "time": s["time"], "source": s["source"],
                 "label": LABELS.get(s["source"], s["source"]), "text": s["text"][:160],
                 **({"path": s["path"]} if s.get("path") else {})} for s in chosen]
+    # 2026-11-16（強化案 130）: 会話の出どころには、元の音声の所（PC に残っていれば）を付ける
+    if store is not None:
+        for entry in sources:
+            try:
+                found = audioclip.locate(store, entry["day"], entry["time"], entry["text"], entry["source"])
+            except Exception:  # noqa: BLE001 — 音声を探せなくても、答えは返す
+                found = None
+            if found:
+                entry["audio"] = found
     return {"available": True, "found": found, "answer": answer or NOT_FOUND, "sources": sources,
             "searched": searched, "seconds": round(clock() - started, 1)}
 
@@ -579,7 +675,7 @@ def parse_request(data: bytes) -> str:
     return question.strip()
 
 
-def http_post(handler, config: dict, log: Callable[[str], None]) -> None:
+def http_post(handler, config: dict, log: Callable[[str], None], store=None) -> None:
     """POST /ask-mothership（合言葉は lifelog_pc.py が確かめてから呼ぶ）"""
     try:
         length = int(handler.headers.get("Content-Length") or 0)
@@ -596,7 +692,7 @@ def http_post(handler, config: dict, log: Callable[[str], None]) -> None:
         handler.send_json(400, {"error": str(error)})
         return
     try:
-        reply = ask(question, config, log)
+        reply = ask(question, config, log, store=store)
     except claude.ClaudeError as error:
         log(f"{handler.client_address[0]} から /ask-mothership: Claude に頼めませんでした（{error.status}）")
         handler.send_json(error.status, {k: (claude.scrub(v) if isinstance(v, str) else v) for k, v in error.body.items()})

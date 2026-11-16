@@ -13,6 +13,14 @@
 - get_conversation    1つの会話の中身（行ごとの時刻・話し手・文）
 - search_digest       仕事のまとめ（iPhone がドライブの「仕事のまとめ.json」に書くもの）の行を、言葉で探す
 - get_digest          1日の仕事のまとめを、見出しごとに読む
+- search_place        場所の名前（一部でよい）で、その場所にいた日・時間（母艦の1日の年表の位置の行）      2026-11-16
+- where_at            その日のその時刻（HH:MM）にいた所                                                    2026-11-16
+- day_timeline        1日の年表（位置・予定・支払い・写真・LINE の件数・PC など）。会話の行は含めない        2026-11-16
+- list_promises       約束・宿題（母艦の state/TODO.md の open の行。言葉でしぼれる）                      2026-11-16
+- get_person_page     人のページ（母艦の people/<名前>.md。まとめのノート）                                2026-11-16
+- get_place_page      場所のページ（母艦の places/<名前>.md）                                              2026-11-16
+  （この 6 つは母艦（config.json の lifelog_home。ふだん D:\\Lifelog）を読むだけ。--exclude-work のときは、年表の会話の行・
+   人と場所のページ・約束は出さない）
   （search_text・search_meaning も、include_digest（既定 true）なら digest_hits に仕事のまとめの行を別に付ける。
    hits の形は変えない。仕事のまとめは職場の話なので、--exclude-work のときは出さない。ファイルは読むだけ）
 
@@ -38,6 +46,7 @@ from pathlib import Path
 
 import gpu
 import mothership
+import motherquery  # 2026-11-16（強化案 129）: 場所・年表・約束・人と場所のページ（母艦を読むだけ）
 import records
 import semantic
 
@@ -319,6 +328,38 @@ TOOLS = [
      "description": "1日の仕事のまとめを、見出し（決まったこと・自分の宿題など）ごとに読む。",
      "inputSchema": {"type": "object", "required": ["day"], "properties": {
          "day": {"type": "string", "description": "日（YYYY-MM-DD）"}}}},
+    {"name": "search_place",
+     "description": "場所の名前（一部でよい）で、その場所にいた日と時間を探す（母艦の1日の年表の「位置」の行。新しい日から）。"
+                    "座標は返さない。",
+     "inputSchema": {"type": "object", "required": ["name"], "properties": {
+         "name": {"type": "string", "description": "場所の名前（2 文字以上）"},
+         "from": {"type": "string"}, "to": {"type": "string"},
+         "limit": {"type": "integer", "description": f"出す数（{LIMIT_MAX} まで。既定 {LIMIT_DEFAULT}）"}}}},
+    {"name": "where_at",
+     "description": "その日のその時刻にどこにいたか（滞在の記録。無ければ直前と直後の滞在）。",
+     "inputSchema": {"type": "object", "required": ["day", "time"], "properties": {
+         "day": {"type": "string", "description": "日（YYYY-MM-DD）"},
+         "time": {"type": "string", "description": "時刻（HH:MM。この PC の時刻）"}}}},
+    {"name": "day_timeline",
+     "description": "1日の年表（時刻・種類・文・場所・金額）。種類は 位置・予定・決済・写真・LINE・PC・閲覧・天気・体調。"
+                    "会話の行は含めない（会話は list_conversations・get_conversation で）。",
+     "inputSchema": {"type": "object", "required": ["day"], "properties": {
+         "day": {"type": "string", "description": "日（YYYY-MM-DD）"},
+         "lanes": {"type": "array", "items": {"type": "string"}, "description": "出す種類（無ければ全部）"},
+         "limit": {"type": "integer", "description": f"出す行の数（{LIMIT_MAX} まで。既定 {LIMIT_DEFAULT}）"}}}},
+    {"name": "list_promises",
+     "description": "約束・宿題（母艦の TODO の open の行）。who に言葉（人の名前など）を入れると、それを含む行だけ。",
+     "inputSchema": {"type": "object", "properties": {
+         "who": {"type": "string", "description": "しぼる言葉"},
+         "limit": {"type": "integer", "description": f"出す数（{LIMIT_MAX} まで。既定 {LIMIT_DEFAULT}）"}}}},
+    {"name": "get_person_page",
+     "description": "人のページ（母艦の people/<名前>.md。いまの様子などのまとめ）。名前の一部でよい。複数に当たれば候補を返す。",
+     "inputSchema": {"type": "object", "required": ["name"], "properties": {
+         "name": {"type": "string", "description": "人の名前"}}}},
+    {"name": "get_place_page",
+     "description": "場所のページ（母艦の places/<名前>.md。立ち寄りの表など）。名前の一部でよい。",
+     "inputSchema": {"type": "object", "required": ["name"], "properties": {
+         "name": {"type": "string", "description": "場所の名前"}}}},
 ]
 for _tool in TOOLS:
     _tool["annotations"] = {"readOnlyHint": True, "openWorldHint": False}
@@ -338,7 +379,9 @@ class Tools:
         method = {"list_conversations": self.list_conversations, "search_text": self.search_text,
                   "search_meaning": self.search_meaning, "conversations_with": self.conversations_with,
                   "get_conversation": self.get_conversation, "search_digest": self.search_digest,
-                  "get_digest": self.get_digest}.get(name)
+                  "get_digest": self.get_digest, "search_place": self.search_place, "where_at": self.where_at,
+                  "day_timeline": self.day_timeline, "list_promises": self.list_promises,
+                  "get_person_page": self.get_person_page, "get_place_page": self.get_place_page}.get(name)
         if method is None:
             raise LookupError(f"知らない道具です: {name}")
         return method(args)
@@ -391,6 +434,47 @@ class Tools:
         if more:
             out["more"] = True
         return out
+
+    # MARK: 場所・年表・約束・ページ（母艦を読むだけ。2026-11-16 強化案 129）
+
+    def _mother(self) -> Path:
+        return mothership.home(self.config)
+
+    def search_place(self, args: dict) -> dict:
+        start, end = _range(args)
+        return motherquery.by_place(self._mother(), _text(args, "name", required=True), start, end,
+                                    _count(args, "limit", LIMIT_DEFAULT, LIMIT_MAX))
+
+    def where_at(self, args: dict) -> dict:
+        day = _day(args, "day")
+        if day is None:
+            raise ValueError("day がありません")
+        return motherquery.where_at(self._mother(), day, _text(args, "time", required=True, limit=5))
+
+    def day_timeline(self, args: dict) -> dict:
+        day = _day(args, "day")
+        if day is None:
+            raise ValueError("day がありません")
+        lanes = [x for x in args.get("lanes") or [] if isinstance(x, str)][:10]
+        return motherquery.day_timeline(self._mother(), day, lanes, include_conversations=False,
+                                        limit=_count(args, "limit", LIMIT_DEFAULT, LIMIT_MAX))
+
+    def list_promises(self, args: dict) -> dict:
+        if not INCLUDE_WORK:
+            return {"items": [], "count": 0, "message": "約束には職場の話も混ざるので、この起動（--exclude-work）では出せません"}
+        return motherquery.promises(self._mother(), _text(args, "who"), _count(args, "limit", LIMIT_DEFAULT, LIMIT_MAX))
+
+    def _page(self, args: dict, person: bool) -> dict:
+        if not INCLUDE_WORK:
+            return {"found": False, "message": "ページには職場の話も混ざるので、この起動（--exclude-work）では出せません"}
+        name = _text(args, "name", required=True)
+        return (motherquery.person_page if person else motherquery.place_page)(self._mother(), name)
+
+    def get_person_page(self, args: dict) -> dict:
+        return self._page(args, True)
+
+    def get_place_page(self, args: dict) -> dict:
+        return self._page(args, False)
 
     def get_digest(self, args: dict) -> dict:
         day = _day(args, "day")

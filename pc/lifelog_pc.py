@@ -187,6 +187,9 @@ import claude
 # 2026-11-13（施策 13・15）: 会話の直後の約束・記録に質問するを母艦まで
 import askmother
 import mothersearch  # 2026-11-15（強化案 42）: 母艦の文も意味で探す（semantic.db の別の表）
+import audioclip  # 2026-11-16（強化案 130）: 答えの出どころから元の音声の所へ（GET /audio-clip）
+import selective  # 2026-11-16（強化案 132）: 迷った区間だけ Whisper に回す（設定 "whisper_scope": "doubt"。既定は全部）
+import hintpolicy  # 2026-11-16（99・131）: 聞き取りのヒントの渡し方（kotoba には渡さない・地名を足す。中身は hintpolicy.py）
 import priority  # 2026-11-15: この PC の Ollama の優先度を「通常以下」に（中身は priority.py）
 import load  # 2026-11-15: PC の負荷（CPU の秒・譲った分）を毎日数える（中身は load.py）
 import promises
@@ -763,7 +766,8 @@ class WhisperEngine:
                   prompt: str | None) -> list[tuple[str, list | None]]:
         """区間ごとの (文, 言葉ごとの時刻)。時刻が出せなければ None。"""
         # ヒント（名前・専門用語）は先頭ほど効くので、前の区切りの文より先に置く
-        initial = "、".join(hints[:40])
+        # 2026-11-16（131）: モデルごと・設定ごとに渡すヒントを決める（kotoba は渡さない。hintpolicy.py）
+        initial = "、".join(hintpolicy.engine_hints(self.name, hints, load_config()))
         if prompt:
             initial = (initial + "。" if initial else "") + prompt[-120:]
         out: list[tuple[str, list | None]] = []
@@ -1302,8 +1306,14 @@ class Ensemble:
         source = audio
         if CLEAN_AUDIO:
             audio = clean_audio(audio, segments)
+        # 2026-11-16（強化案 132）: "whisper_scope": "doubt" のときだけ、Whisper は速いモデル（haas・reazon）が迷った区間にだけかける
+        # （速いモデルが 1 つも無ければ、今までどおり全部）。既定（"all"）は前と同じ
+        slow = []
+        if selective.scope(load_config()) == "doubt" and any(e.name in selective.FAST_ENGINES for e in engines):
+            slow = [e for e in engines if e.name in selective.SLOW_ENGINES]
         # 版 8: いつもの票を先に始める（雑音を除くのを待たずに、速いモデルが書き始められる。答えは前と同じ）
-        jobs = {e.name: self.pool.submit(self._run, e, audio, segments, hints or [], prompt) for e in engines}
+        jobs = {e.name: self.pool.submit(self._run, e, audio, segments, hints or [], prompt)
+                for e in engines if e not in slow}
         denoised = None
         if enhance and any(isinstance(e, Engine) for e in engines):
             try:
@@ -1342,6 +1352,11 @@ class Ensemble:
         for name in jobs:
             collect(name)
         results = {name: results[name] for name in jobs if results.get(name) is not None}  # 前と同じ並び
+        for e in slow:
+            try:
+                results[e.name] = self._run_doubtful(e, audio, segments, results, hints or [], prompt, stats)
+            except Exception as error:  # noqa: BLE001 — 迷った所の Whisper が動かなくても、速いモデルだけで決める
+                log(f"{e.name} で文字にできませんでした（迷った区間）: {error!r}")
         if not results:
             raise RuntimeError("どのモデルでも文字にできませんでした")
         rows: list[tuple[dict[str, str], dict]] = []
@@ -1353,6 +1368,34 @@ class Ensemble:
                 log(f"モデルの組の近さを測れませんでした: {error!r}")
         return lines
 
+    def _run_doubtful(self, engine, audio: np.ndarray, segments: list[tuple[float, float]], results: dict, hints, prompt,
+                      stats: dict | None) -> list:
+        """速いモデルが迷った区間（selective.doubtful）だけ engine にかける。ほかの区間は None（その票は無し）。
+        速いモデルが 1 つも書けなかったときは全部の区間にかける"""
+        fast = {n: r for n, r in results.items() if n in selective.FAST_ENGINES}
+        pick: list[int] = []
+        reasons: dict[str, int] = {}
+        for i, (start, end) in enumerate(segments):
+            if not fast:
+                pick.append(i)
+                continue
+            texts = {n: (r[i][0] if i < len(r) else "") for n, r in fast.items()}
+            why = selective.doubtful(texts, end - start, similarity)
+            if why:
+                pick.append(i)
+                reasons[why] = reasons.get(why, 0) + 1
+        got = self._run(engine, audio, [segments[i] for i in pick], hints, prompt) if pick else []
+        full: list = [None] * len(segments)
+        for k, i in enumerate(pick):
+            full[i] = got[k] if k < len(got) else ("", None)
+        voiced = sum(e - s0 for s0, e in segments) or 1.0
+        picked_seconds = sum(segments[i][1] - segments[i][0] for i in pick)
+        if stats is not None:
+            stats["whisper_scope"] = {"doubt_lines": len(pick), "lines": len(segments),
+                                      "seconds_share": round(picked_seconds / voiced, 3), "reasons": reasons}
+        log(f"  迷った区間だけ {engine.name} に回しました: {len(pick)}/{len(segments)} 区間（声の {picked_seconds / voiced:.0%}）")
+        return full
+
     @staticmethod
     def _lines(results: dict[str, list[tuple[str, list | None]]], segments: list[tuple[float, float]],
                weights: dict[str, float] | None, votes: bool, extra_from: int | None,
@@ -1360,7 +1403,9 @@ class Ensemble:
         """モデルごとの区間の文から、区間ごとに多数決した行（rows に区間ごとの票と近さを足す）"""
         lines = []
         for i, (start, end) in enumerate(segments):
-            hypotheses = {name: got[i][0] if i < len(got) else "" for name, got in results.items()}
+            # 迷った所だけ回す設定（132）では、回さなかった区間の票は None（その区間では票を数えない）
+            hypotheses = {name: (got[i][0] if i < len(got) else "") for name, got in results.items()
+                          if not (i < len(got) and got[i] is None)}
             known: dict = {}
             picked = vote(hypotheses, weights, known)
             rows.append((hypotheses, known))
@@ -2158,6 +2203,7 @@ def features(engines: list | None = None) -> list[str]:
     if claude.available():
         found.append("claude")
     found.extend(promises.features() + askmother.features(load_config()))  # 2026-11-13（施策 13・15）
+    found.append("audioclip")  # 2026-11-16（強化案 130）: GET /audio-clip
     # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）
     if "vad" in _extras:
         found.append("silero")
@@ -2289,6 +2335,16 @@ def transcribe_reply(engine: Ensemble, audio: np.ndarray, segments: list[tuple[f
     return reply, {"audio_seconds": round(duration, 2), "voiced_seconds": round(voiced, 2), "lines": len(lines)}
 
 
+def place_hints_for(name: str, params: dict) -> tuple[list[str], int]:
+    """仕事のヒント（アプリから届いた登録語）に、地名を足したもの。足した数も返す"""
+    hints = list(params.get("hints") or [])
+    config = load_config()
+    if not hintpolicy.place_hints_on(config):
+        return hints, 0
+    extra = [params["place"]] if isinstance(params.get("place"), str) else None
+    return hintpolicy.augment(hints, hintpolicy.epoch_of(name), mothership.home(config), HOME, config, extra)
+
+
 def find_voice(audio: np.ndarray, threads: int = 1) -> list[tuple[float, float]]:
     """音声全体の、声のある区間（Silero VAD で探し、使えなければ音の大きさで探す。vad=union と同じ決まり）"""
     return find_extra(audio, [], threads)
@@ -2306,7 +2362,9 @@ def run_job(path: Path, params: dict, name: str, draft=None) -> tuple[dict, dict
         enhance = bool(params.get("noisy"))
     # 同じ仕事を文字にしている最中に2回止まった（jobqueue が cpu_only を付ける）。GPU のモデルを使わない
     cpu_only = bool(params.get("cpu_only"))
-    reply, numbers = transcribe_reply(Handler.engine, audio, segments, list(params.get("hints") or []), None,
+    # 2026-11-16（99）: 設定でオンのときだけ、その時間・その日の地名をヒントの先頭に足す（既定はオフ）
+    hints, _placed = place_hints_for(name, params)
+    reply, numbers = transcribe_reply(Handler.engine, audio, segments, hints, None,
                                       parse_weights(params.get("weights")), bool(enhance), False,
                                       f"後で受け取る文字起こし {name}: " + ("（CPU のモデルだけ）" if cpu_only else ""), "job",
                                       started, on_draft=draft, cpu_only=cpu_only)
@@ -2899,13 +2957,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path not in ("/hello", "/train-status", "/jobs", "/index/status", "/watch-route", "/claude/usage") \
                 and path not in mothership.GETS and path not in promises.GETS and path not in livecoach.GETS \
-                and not path.startswith("/jobs/"):
+                and path not in audioclip.GETS and not path.startswith("/jobs/"):
             self.send_json(404, {"error": "not found"})
             return
         if not self.authorized():
             return
         if path in promises.GETS:  # 2026-11-13（施策 13）: 会話のあとの約束
             promises.http_get(self)
+            return
+        if path in audioclip.GETS:  # 2026-11-16（強化案 130）: 答えの出どころの音声の一部（無ければ 404）
+            audioclip.http_get(self, url.query, App.records, log)
             return
         if path in livecoach.GETS:  # 2026-11-15（強化案 50〜52）: 会議の相棒・話し方コーチ・緊張した場面
             livecoach.http_get(self, path, url.query, mothership.home(load_config()))
@@ -2989,7 +3050,7 @@ class Handler(BaseHTTPRequestHandler):
                 if url.path in promises.POSTS:
                     promises.http_post(self, log)
                 else:
-                    askmother.http_post(self, load_config(), log)
+                    askmother.http_post(self, load_config(), log, App.records)
             return
         if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample", "/llm", "/jobs", "/claude") \
                 and url.path not in semantic.POSTS and url.path not in ops.POSTS \
