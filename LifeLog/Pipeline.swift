@@ -1521,6 +1521,7 @@ final class Pipeline {
         // 入れた施策の様子・Claude の費用・正しさの抜き取り（30分に1回まで）・見えた知らせの数・家の PC の外からの見張り・
         // 録り方の実験のその日の組（2026-11-15。強化案 36〜38・41・44・47。SettleFeeds.swift・NoticeGate.swift・PCSilence.swift）
         Task { await SettleBook.shared.refresh(homePC) }
+        Task { await CheckupBook.shared.refresh(homePC) }  // 1日1分の答え合わせ・夜の繋がり探し（30分に1回まで。2026-11-16。強化案 136・137。Checkups.swift）
         Task { await PagesBook.shared.refresh(homePC) }  // 人・話題の糸・場所・決めごとのページ（30分に1回まで。2026-11-15。強化案 53〜55・61。PagesFeeds.swift）
         Task { await NoticeGate.scanDelivered() }
         Task { await checkPCSilence() }

@@ -180,6 +180,7 @@ private struct TodayView: View {
                 // (b) 次の予定の前に（3時間以内に始まる予定があるときだけ）
                 PrepCardSection()
                 PromisesSection()  // 会話のあとの約束（2026-11-13。Promises.swift。無いときは何も出さない）
+                CheckupsSection()  // 1日1分の答え合わせ（2026-11-16。強化案 136。Checkups.swift。問があるときだけ）
                 RepliesSection()  // 返事・メールの下書き（2026-11-15。強化案 58。DraftActions.swift。無いときは何も出さない）
                 // (c) 夜の10秒（20時から翌朝まで、まだ答えていない日だけ）
                 NightMoodSection()
@@ -710,6 +711,14 @@ private struct PlacesPage: View {
                 }
             } footer: {
                 Text("職場にした場所では、職場の人の声と職場の言葉で照らし合わせます。")
+            }
+            Section {
+                // 1 日の道のりと行った所を地図で（2026-11-16。強化案 103。PlaceMapViews.swift）
+                NavigationLink {
+                    PlaceMapView()
+                } label: {
+                    Label("地図で見る", systemImage: "map")
+                }
             }
             PlacePagesSection()  // 行った場所のページ（2026-11-15。強化案 55。PagesFeeds.swift。写しがあるときだけ）
             Section {

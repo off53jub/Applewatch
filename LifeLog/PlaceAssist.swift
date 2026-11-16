@@ -174,7 +174,30 @@ final class PlaceAssist {
             }
         } else {
             cancelAskIfLeft(here)
+            // 30 分以上いて、知らない所なら、名前なしの所に足す（週に 1 回まとめて聞く。強化案 90。Checkups.swift）
+            let accuracy: Double = max(raw.accuracy, 0)
+            UnnamedStayBook.shared.record(arrival: raw.arrival, departure: raw.departure, latitude: raw.latitude,
+                                          longitude: raw.longitude, accuracy: accuracy, known: isKnown(here, accuracy: accuracy))
         }
+    }
+
+    /// 知っている場所か（登録した場所・直した名前・本人が決めた立ち寄り）
+    func isKnownPlace(latitude: Double, longitude: Double, accuracy: Double) -> Bool {
+        isKnown(CLLocation(latitude: latitude, longitude: longitude), accuracy: accuracy)
+    }
+
+    /// 名前の候補（前に直した名前・近くの施設・地名。3 つまで）。名前なしの所をまとめて聞くときにも使う
+    func candidates(for here: CLLocation, arrival: Date) async -> [String] {
+        guard let pipeline else { return [] }
+        var shop: [String] = []
+        if let v = pipeline.shopVisits.visits.last(where: { $0.location.distance(from: here) < 150 && abs($0.arrival.timeIntervalSince(arrival)) < 3600 }) {
+            shop = v.candidates.compactMap { $0.name }
+        }
+        let fixed: [String] = PlaceNameBook.shared.names(near: here)
+        let nearby: [String] = await nearbyNames(here)
+        var area: String? = pipeline.places.cachedAreaName(near: here)
+        if area == nil { area = await pipeline.places.areaNameFor(here) }
+        return PlaceAssistRules.candidates(fixed: fixed, shop: shop, nearby: nearby, area: area)
     }
 
     private func moved(to location: CLLocation) {
@@ -231,19 +254,11 @@ final class PlaceAssist {
     }
 
     private func askLater(arrival: Date, here: CLLocation, accuracy: Double) async {
-        guard let pipeline else { return }
+        guard pipeline != nil else { return }
         let known: Bool = isKnown(here, accuracy: accuracy)
         guard PlaceAssistRules.shouldAsk(on: PlaceAssistRules.askOn, known: known, meeting: MeetingMode.active != nil,
                                          askedToday: savedCount("ask")) else { return }
-        var shop: [String] = []
-        if let v = pipeline.shopVisits.visits.last(where: { $0.location.distance(from: here) < 150 && abs($0.arrival.timeIntervalSince(arrival)) < 3600 }) {
-            shop = v.candidates.compactMap { $0.name }
-        }
-        let fixed: [String] = PlaceNameBook.shared.names(near: here)
-        let nearby: [String] = await nearbyNames(here)
-        var area: String? = pipeline.places.cachedAreaName(near: here)
-        if area == nil { area = await pipeline.places.areaNameFor(here) }
-        let list: [String] = PlaceAssistRules.candidates(fixed: fixed, shop: shop, nearby: nearby, area: area)
+        let list: [String] = await candidates(for: here, arrival: arrival)
         guard !list.isEmpty else { return }
 
         let center = UNUserNotificationCenter.current()

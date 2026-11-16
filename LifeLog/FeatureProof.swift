@@ -92,6 +92,9 @@ enum FeatureProof {
         Feature(name: "場所の名前を本人が直す", pr: 75, keys: ["placename.fixed"], pc: "placenames"),
         Feature(name: "30 分いたら手首でたずねる", pr: 75, keys: ["placeask.scheduled", "placeask.answered"]),
         Feature(name: "着いたら、その場所のやることを知らせる", pr: 75, keys: ["placeremind.shown"]),
+        Feature(name: "1日1分の答え合わせ", pr: 77, keys: ["checkup.answered", "checkup.skipped"], pc: "checkups"),
+        Feature(name: "名前のない所を週1回まとめて聞く", pr: 77, keys: ["unnamed.named", "unnamed.dismissed", "screen.unnamedPlaces"]),
+        Feature(name: "地図の画面", pr: 77, keys: ["screen.placeMap", "screen.moment"]),
     ]
 
     /// 画面の一覧。畳む候補を探すのに使う（見せるだけで、何も止めない）
@@ -123,6 +126,10 @@ enum FeatureProof {
         // 2026-11-13（施策 17。今日・記録・設定にも計器を足し、新しい画面も数える）
         Screen(key: "today", name: "今日"),
         Screen(key: "recordsDays", name: "記録（日ごと）"),
+        // 2026-11-16（強化案 103・136・90）
+        Screen(key: "checkups", name: "1日1分の答え合わせ"),
+        Screen(key: "unnamedPlaces", name: "名前のない所"),
+        Screen(key: "placeMap", name: "地図"),
         Screen(key: "dayView", name: "1日の記録"),
         Screen(key: "settings", name: "設定と点検"),
         Screen(key: "detailedSettings", name: "くわしい設定"),
