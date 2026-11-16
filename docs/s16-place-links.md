@@ -53,7 +53,6 @@
 
 ## 94 Wi-Fi の名前で屋内を見分ける
 
-<<<<<<< HEAD
 - 権限 `com.apple.developer.networking.wifi-info`（Access WiFi Information）を `project.yml` の entitlements に足した。署名は TestFlight の有料の登録のチーム
   （会社のチームではない）。CI の署名つきアーカイブが通ることで確かめる。通らなければこの 1 行と WifiHint を外して戻す。
 - `WifiHint`: 着いたとき・大きく動いたときに、いまつながっている Wi-Fi の名前を取り（`NEHotspotNetwork.fetchCurrent`。位置の許可が要る）、
@@ -61,16 +60,6 @@
 - 名前を直した・答えたとき、20 分以内に取れた hash を `PlaceNameFix.wifi` として一緒に覚え、同じ hash につながったら、その名前を「知っている場所」「候補」に使う。
 - 母艦へ: `POST /place-names` に `wifi`（hash。あるときだけ）。塩は端末ごとなので、母艦では同じ端末の中の比べにだけ使える。
 - 設定「Wi-Fi の名前を手がかりにする」（初めはオン）で切れる。数: `wifi.captured`・`wifi.none`。裏で取れるかは実機で確かめる。
-=======
-- 要るもの: Access WiFi Information の権限（`com.apple.developer.networking.wifi-info`）と位置の許可。
-- このリポジトリの署名は、GitHub Actions の `testflight.yml` が `-allowProvisioningUpdates` と App Store Connect の API キーで、
-  チーム ID（`APPLE_TEAM_ID`）の自動署名をしている。チーム ID の中身はコードにもリポジトリの設定にも無く、どのチームかを確かめられない
-  （会社のチームでないことも、個人の無料のチームかどうかも、ここからは見えない）。
-- 無料の個人チーム（Personal Team）では、この権限は付けられない（Apple の「対応する権限」の表では有料の登録が要る）。
-  いまの README の説明どおり有料の登録なら付けられるが、付けた版が署名で失敗すると、TestFlight に送られず署名なしの IPA だけになる
-  （`testflight.yml` の「署名つきで作れなかったので」の枝）。裏で取れるかも実機で試さないと分からない。
-- 確かめられないまま入れて配布の流れを止めるのは避け、作らなかった。本人が、どのチームで署名しているか（有料か）を教えてくれれば、
-  `project.yml` の entitlements に 1 行足して、名前でなく hash だけを場所の手がかりにする形で作れる。
 
 ---
 
@@ -130,4 +119,3 @@
 
 「次の予定の前に」に、同じ題の予定の「場所」（カレンダー。無ければ最初の予定の場所）・前にそこへ行った日と回数（場所のページに合うものが 1 つのとき）・
 「道のりを地図アプリで開く」（押したときだけ、行き先の文字を地図アプリに渡す）。予定に場所が無ければ何も出さない。
->>>>>>> 8fee272 (docs: 答え合わせ・地図・行き来・会う前の行き先の形)
