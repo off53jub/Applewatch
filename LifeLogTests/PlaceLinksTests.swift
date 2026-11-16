@@ -81,6 +81,30 @@ final class PlaceLinksTests: XCTestCase {
         XCTAssertNil(PlaceNameRules.body(name: "  ", latitude: 1, longitude: 2, placeID: nil, source: "app", at: t0))
     }
 
+    func testWifiHashIsStableAndHidesName() throws {
+        let a = try XCTUnwrap(WifiHint.hash(ssid: " 見本のWi-Fi ", salt: "s1"))
+        XCTAssertEqual(a, WifiHint.hash(ssid: "見本のWi-Fi", salt: "s1"))
+        XCTAssertNotEqual(a, WifiHint.hash(ssid: "見本のWi-Fi", salt: "s2"))
+        XCTAssertNotEqual(a, WifiHint.hash(ssid: "別のWi-Fi", salt: "s1"))
+        XCTAssertEqual(a.count, 16)
+        XCTAssertFalse(a.contains("見本"))
+        XCTAssertNil(WifiHint.hash(ssid: "  ", salt: "s1"))
+    }
+
+    func testWifiFreshness() {
+        XCTAssertTrue(WifiHint.isFresh(t0, now: t0.addingTimeInterval(600)))
+        XCTAssertFalse(WifiHint.isFresh(t0, now: t0.addingTimeInterval(1300)))
+        XCTAssertFalse(WifiHint.isFresh(t0, now: t0.addingTimeInterval(-5)))
+    }
+
+    func testBodyCarriesWifiHashOnlyWhenPresent() throws {
+        let with = try XCTUnwrap(PlaceNameRules.body(name: "見本", latitude: nil, longitude: nil, placeID: nil, source: "app", at: t0,
+                                                      wifi: "0123456789abcdef"))
+        XCTAssertEqual(try JSONDecoder().decode(PlaceNameRules.Body.self, from: with).wifi, "0123456789abcdef")
+        let without = try XCTUnwrap(PlaceNameRules.body(name: "見本", latitude: nil, longitude: nil, placeID: nil, source: "app", at: t0))
+        XCTAssertNil(try JSONDecoder().decode(PlaceNameRules.Body.self, from: without).wifi)
+    }
+
     func testOutboxPathNeedsPlaceNamesFeature() {
         XCTAssertEqual(MothershipOutbox.feature(for: "place-names"), "placenames")
     }
