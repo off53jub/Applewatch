@@ -54,6 +54,8 @@ targets:
         aps-environment: development
         com.apple.security.application-groups: [group.com.off53jub.lifelog]
         com.apple.developer.usernotifications.time-sensitive: true
+        # Wi-Fi の名前（hash にして使う）で屋内を見分ける（2026-11-16。強化案 94。WifiHint.swift）
+        com.apple.developer.networking.wifi-info: true
     info:
       path: LifeLog/Info.plist
       properties:

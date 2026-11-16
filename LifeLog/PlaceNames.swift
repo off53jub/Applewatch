@@ -20,6 +20,8 @@ struct PlaceNameFix: Codable, Equatable, Identifiable {
     var at: Date = .now
     /// どこで直したか（conversation・page・registered・watch・visit・checkup）
     var source: String = "app"
+    /// そのときつながっていた Wi-Fi の hash（名前そのものではない。強化案 94。WifiHint.swift。省ける）
+    var wifi: String? = nil
 
     var location: CLLocation { CLLocation(latitude: latitude, longitude: longitude) }
 }
@@ -108,6 +110,8 @@ enum PlaceNameRules {
         let from: String
         let day: String
         let at: String
+        /// Wi-Fi の名前の hash（あるときだけ。強化案 94）
+        let wifi: String?
     }
 
     static let sources: Set<String> = ["conversation", "page", "registered", "watch", "visit", "checkup", "app"]
@@ -117,7 +121,7 @@ enum PlaceNameRules {
 
     /// POST /place-names の中身。名前が空なら nil。位置の無いもの（場所のページ）は lat・lon を付けない
     static func body(name: String, latitude: Double?, longitude: Double?, placeID: String?, source: String, at: Date,
-                     timeZone: TimeZone = .current) -> Data? {
+                     wifi: String? = nil, timeZone: TimeZone = .current) -> Data? {
         guard let cleaned = clean(name) else { return nil }
         var lat: Double?
         var lon: Double?
@@ -128,7 +132,7 @@ enum PlaceNameRules {
         let pl: String? = (placeID?.isEmpty == false) ? placeID : nil
         let from: String = sources.contains(source) ? source : "app"
         let body = Body(name: cleaned, lat: lat, lon: lon, pl: pl, from: from, day: PCJSON.dayString(at),
-                        at: MothershipOutbox.isoString(at, timeZone: timeZone))
+                        at: MothershipOutbox.isoString(at, timeZone: timeZone), wifi: (wifi?.isEmpty == false) ? wifi : nil)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return try? encoder.encode(body)
@@ -202,11 +206,13 @@ final class PlaceNameBook {
     @discardableResult
     func fix(name: String, latitude: Double, longitude: Double, placeID: String? = nil, source: String, now: Date = .now) -> Bool {
         guard loaded, let cleaned = PlaceNameRules.clean(name) else { return false }
-        let fix = PlaceNameFix(name: cleaned, latitude: latitude, longitude: longitude, placeID: placeID, at: now, source: source)
+        let wifi: String? = WifiHint.recent(now: now)
+        var fix = PlaceNameFix(name: cleaned, latitude: latitude, longitude: longitude, placeID: placeID, at: now, source: source)
+        fix.wifi = wifi
         fixes = PlaceNameRules.adding(fixes, fix)
         if let placeID, !placeID.isEmpty { pageNames[placeID] = cleaned }
         save()
-        send(name: cleaned, latitude: latitude, longitude: longitude, placeID: placeID, source: source, now: now)
+        send(name: cleaned, latitude: latitude, longitude: longitude, placeID: placeID, source: source, wifi: wifi, now: now)
         Tally.add("placename.fixed")
         Tally.add("placename.fixed." + (PlaceNameRules.sources.contains(source) ? source : "app"))
         return true
@@ -236,9 +242,15 @@ final class PlaceNameBook {
         save()
     }
 
-    private func send(name: String, latitude: Double?, longitude: Double?, placeID: String?, source: String, now: Date) {
+    /// 同じ Wi-Fi（hash）で直した名前（新しいもの）。無ければ nil
+    func name(forWifi hash: String) -> String? {
+        fixes.last(where: { $0.wifi == hash })?.name
+    }
+
+    private func send(name: String, latitude: Double?, longitude: Double?, placeID: String?, source: String, wifi: String? = nil,
+                      now: Date) {
         guard let body = PlaceNameRules.body(name: name, latitude: latitude, longitude: longitude, placeID: placeID,
-                                             source: source, at: now) else { return }
+                                             source: source, at: now, wifi: wifi) else { return }
         MothershipOutbox.enqueue(path: "place-names", body: body, now: now)
     }
 }

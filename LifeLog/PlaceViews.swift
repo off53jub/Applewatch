@@ -15,6 +15,7 @@ struct PlacesView: View {
     @AppStorage(PlaceLog.arrivalKey) private var arrivalOn = true
     @AppStorage(PlaceAssistRules.askKey) private var askOn = true
     @AppStorage(PlaceAssistRules.remindKey) private var remindOn = true
+    @AppStorage(WifiHint.key) private var wifiOn = true
 
     var body: some View {
         let places = pipeline.places
@@ -33,10 +34,11 @@ struct PlacesView: View {
                 Toggle("着いたとき、1 回だけ細かく測る", isOn: $arrivalOn)
                 Toggle("30 分いたら、手首で名前をたずねる", isOn: $askOn)
                 Toggle("着いたら、その場所のやることを知らせる", isOn: $remindOn)
+                Toggle("Wi-Fi の名前を手がかりにする", isOn: $wifiOn)
             } header: {
                 Text("着いたとき")
             } footer: {
-                Text("お店などに立ち寄ったときの知らせで、iPhone が起きたときだけ位置を測ります（続けて測らないので、電池への影響は小さいです）。たずねる知らせは、自宅・職場・名前の決まった場所では出さず、会議のあいだも出しません。1 日に 3 回までです。")
+                Text("お店などに立ち寄ったときの知らせで、iPhone が起きたときだけ位置を測ります（続けて測らないので、電池への影響は小さいです）。たずねる知らせは、自宅・職場・名前の決まった場所では出さず、会議のあいだも出しません。1 日に 3 回までです。\n\nWi-Fi の名前は、端末の中で暗号のような文字に変えてから使います（名前そのものは残さず、外にも出しません）。同じ Wi-Fi につながったとき、前に名前を付けた所だと分かります。")
             }
             Section {
                 ForEach(places.places) { place in

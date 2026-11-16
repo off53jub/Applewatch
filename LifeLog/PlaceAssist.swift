@@ -167,8 +167,11 @@ final class PlaceAssist {
         if raw.departure == .distantFuture {
             let arrival: Date = raw.arrival == .distantPast ? .now : raw.arrival
             let accuracy: Double = max(raw.accuracy, 0)
-            remindIfNeeded(near: here, accuracy: accuracy)
-            Task { await askLater(arrival: arrival, here: here, accuracy: accuracy) }
+            Task {
+                await WifiHint.capture()
+                remindIfNeeded(near: here, accuracy: accuracy)
+                await askLater(arrival: arrival, here: here, accuracy: accuracy)
+            }
         } else {
             cancelAskIfLeft(here)
         }
@@ -176,6 +179,7 @@ final class PlaceAssist {
 
     private func moved(to location: CLLocation) {
         cancelAskIfLeft(location)
+        Task { await WifiHint.capture() }
         remindIfNeeded(near: location, accuracy: max(location.horizontalAccuracy, 0))
     }
 
@@ -187,6 +191,8 @@ final class PlaceAssist {
         var out: [String] = []
         if let place = pipeline.places.registeredPlace(near: here, accuracy: accuracy) { out.append(place.name) }
         out.append(contentsOf: PlaceNameBook.shared.names(near: here))
+        // 同じ Wi-Fi（hash）で前に名前を付けた所（強化案 94。WifiHint.swift）
+        if let hash = WifiHint.recent(), let name = PlaceNameBook.shared.name(forWifi: hash), !out.contains(name) { out.append(name) }
         for v in pipeline.shopVisits.visits where v.state == .confirmed && v.location.distance(from: here) < 100 {
             if let name = v.confirmedName, !out.contains(name) { out.append(name) }
         }
