@@ -92,9 +92,9 @@ enum FeatureProof {
         Feature(name: "場所の名前を本人が直す", pr: 75, keys: ["placename.fixed"], pc: "placenames"),
         Feature(name: "30 分いたら手首でたずねる", pr: 75, keys: ["placeask.scheduled", "placeask.answered"]),
         Feature(name: "着いたら、その場所のやることを知らせる", pr: 75, keys: ["placeremind.shown"]),
-        Feature(name: "1日1分の答え合わせ", pr: 76, keys: ["checkup.answered", "checkup.skipped"], pc: "checkups"),
-        Feature(name: "名前のない所を週1回まとめて聞く", pr: 76, keys: ["unnamed.named", "unnamed.dismissed", "screen.unnamedPlaces"]),
-        Feature(name: "地図の画面", pr: 76, keys: ["screen.placeMap", "screen.moment"]),
+        Feature(name: "1日1分の答え合わせ", pr: 77, keys: ["checkup.answered", "checkup.skipped"], pc: "checkups"),
+        Feature(name: "名前のない所を週1回まとめて聞く", pr: 77, keys: ["unnamed.named", "unnamed.dismissed", "screen.unnamedPlaces"]),
+        Feature(name: "地図の画面", pr: 77, keys: ["screen.placeMap", "screen.moment"]),
     ]
 
     /// 画面の一覧。畳む候補を探すのに使う（見せるだけで、何も止めない）
