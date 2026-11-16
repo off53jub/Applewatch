@@ -35,6 +35,7 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         didSet {
             UserDefaults.standard.set(isOn, forKey: "places")
             if isOn { start() } else { manager.stopMonitoringSignificantLocationChanges() }
+            refreshVisitMonitoring(askAuthorization: false)
         }
     }
     private(set) var places: [Place] = []
@@ -43,12 +44,18 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored var onChange: (() -> Void)?
     /// しばらくいた所（立ち寄り）の知らせ。「行ったお店」がオンのときだけ受け取る（2026-11-08。ShopVisits.swift）
     @ObservationIgnored var onVisit: ((RawVisit) -> Void)?
+    /// 立ち寄りの「着いた」「出た」の知らせ。「行ったお店」の設定に関係なく受ける（2026-11-16。強化案 88・91・104。PlaceAssist.swift）
+    @ObservationIgnored var onVisitEvent: ((RawVisit) -> Void)?
+    /// 大きく動いて新しい位置が届いたとき（2026-11-16。PlaceAssist.swift）
+    @ObservationIgnored var onSample: ((CLLocation) -> Void)?
 
     @ObservationIgnored private let manager = CLLocationManager()
     @ObservationIgnored private var samples: [Sample] = []
     @ObservationIgnored private var waiting: [CheckedContinuation<CLLocation?, Never>] = []
     /// 地名の問い合わせを減らすため、100 m 四方ごとに覚えておく
     @ObservationIgnored private var names: [String: String] = [:]
+    /// 着いたときの細かい測りの返事を待っている（強化案 88）
+    @ObservationIgnored private var arrivalFixPending = false
 
     private static let samplesURL = URL.applicationSupportDirectory.appendingPathComponent("locations.json")
     /// 端末間の同期用の、登録と削除の時刻（場所の一覧とは別に保存する）
@@ -73,19 +80,47 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         }
         // 位置の変化でアプリが起こされたときも、ここで受け取りを続ける
         if isOn { start() }
-        if UserDefaults.standard.bool(forKey: ShopVisitBook.onKey) { manager.startMonitoringVisits() }
+        refreshVisitMonitoring(askAuthorization: false)
     }
 
-    /// 立ち寄りの知らせを受け取る・やめる（電池はほとんど使わない。「常に」の許可が要る）
+    // MARK: - 立ち寄り（着いた・出た）
+
+    /// 着いたとき、1回だけ細かく測る（初めはオン。設定で切れる。強化案 88）
+    nonisolated static let arrivalKey = "arrivalMeasure"
+    nonisolated static var arrivalOn: Bool { UserDefaults.standard.object(forKey: arrivalKey) as? Bool ?? true }
+
+    /// 立ち寄りの知らせがいるか。「行ったお店」がオンか、位置を残していて、着いたときの測り・30 分の「ここは？」・着いたら知らせるのどれかがオン
+    nonisolated static func wantsVisits(shopOn: Bool, locationOn: Bool, arrival: Bool, ask: Bool, remind: Bool) -> Bool {
+        shopOn || (locationOn && (arrival || ask || remind))
+    }
+
+    /// 立ち寄りの知らせを受け取る・やめる（電池はほとんど使わない。「常に」の許可が要る）。「行ったお店」の設定から呼ばれる
     func setVisits(_ on: Bool) {
-        guard on else {
+        refreshVisitMonitoring(askAuthorization: on)
+    }
+
+    /// 設定が変わったら呼ぶ。いまの設定で、立ち寄りの知らせを受けるかを決め直す
+    func refreshVisitMonitoring(askAuthorization: Bool = true) {
+        let defaults = UserDefaults.standard
+        let want: Bool = Self.wantsVisits(shopOn: defaults.bool(forKey: ShopVisitBook.onKey), locationOn: isOn,
+                                          arrival: Self.arrivalOn, ask: PlaceAssistRules.askOn,
+                                          remind: PlaceAssistRules.remindOn)
+        guard want else {
             manager.stopMonitoringVisits()
             return
         }
-        if manager.authorizationStatus == .notDetermined || manager.authorizationStatus == .authorizedWhenInUse {
+        if askAuthorization, manager.authorizationStatus == .notDetermined || manager.authorizationStatus == .authorizedWhenInUse {
             manager.requestAlwaysAuthorization()
         }
         manager.startMonitoringVisits()
+    }
+
+    /// 着いた直後に、1回だけ高い精度で測る（電池への配慮: 立ち寄りの知らせで起きたときだけ。続けて測らない）
+    func measureOnArrival() {
+        guard isOn, Self.arrivalOn, !arrivalFixPending else { return }
+        arrivalFixPending = true
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.requestLocation()
     }
 
     private func start() {
@@ -102,6 +137,8 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         // 位置の精度が悪い（150m より粗い）か、30分より離れた位置しか無いときは「たぶん〇〇」（2026-11-06）
         let unsure = Self.isUnsure(accuracy: sample.accuracy, age: abs(time.timeIntervalSince(sample.time)))
         var name = registered(near: sample.location, accuracy: sample.accuracy)?.name
+        // 本人が直した名前（2026-11-16。強化案 89）
+        if name == nil { name = PlaceNameBook.shared.name(near: sample.location, accuracy: sample.accuracy) }
         if name == nil { name = await areaName(for: sample.location) }
         return name.map { unsure ? "たぶん" + $0 : $0 }
     }
@@ -110,6 +147,7 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     func quickName(at time: Date) -> String? {
         guard isOn, let sample = sample(at: time) else { return nil }
         if let place = registered(near: sample.location, accuracy: sample.accuracy) { return place.name }
+        if let fixed = PlaceNameBook.shared.name(near: sample.location, accuracy: sample.accuracy) { return fixed }
         let key = String(format: "%.3f,%.3f", sample.location.coordinate.latitude, sample.location.coordinate.longitude)
         return names[key]
     }
@@ -118,6 +156,7 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     func knownName(latitude: Double, longitude: Double, accuracy: Double) -> String? {
         let location = CLLocation(latitude: latitude, longitude: longitude)
         if let place = registered(near: location, accuracy: accuracy) { return place.name }
+        if let fixed = PlaceNameBook.shared.name(near: location, accuracy: accuracy) { return fixed }
         return names[String(format: "%.3f,%.3f", latitude, longitude)]
     }
 
@@ -149,6 +188,27 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     private func sample(at time: Date) -> Sample? {
         samples.last(where: { $0.time <= time.addingTimeInterval(60) })
             ?? samples.first(where: { $0.time.timeIntervalSince(time) < 1800 })
+    }
+
+    /// その時刻の位置（無ければ nil）。名前を直すときに、直した名前を位置で覚えるのに使う（2026-11-16。強化案 89）
+    func fixPoint(at time: Date) -> (latitude: Double, longitude: Double, accuracy: Double)? {
+        guard let s = sample(at: time) else { return nil }
+        return (s.latitude, s.longitude, s.accuracy)
+    }
+
+    /// 登録した場所のうち、その位置にあるもの（2026-11-16）
+    func registeredPlace(near location: CLLocation, accuracy: Double) -> Place? {
+        registered(near: location, accuracy: accuracy)
+    }
+
+    /// 通信せずに分かる、その位置の自動の地名（前に調べたもの）
+    func cachedAreaName(near location: CLLocation) -> String? {
+        names[String(format: "%.3f,%.3f", location.coordinate.latitude, location.coordinate.longitude)]
+    }
+
+    /// 「〇〇駅近く」「〇〇付近」を調べる（通信する。1か所ごとに覚えておく）
+    func areaNameFor(_ location: CLLocation) async -> String? {
+        await areaName(for: location)
     }
 
     /// その時刻に職場にいたか。職場を登録していない・位置が分からないときは nil。
@@ -217,6 +277,19 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         places[i].isWork = isWork
         times.added[id.uuidString] = .now
         savePlaces()
+    }
+
+    /// 登録した場所の名前を直す（端末間の同期にも載る。直した名前は位置でも覚え、母艦にも送る。強化案 89）
+    @discardableResult
+    func rename(_ id: UUID, to name: String) -> Bool {
+        guard let i = places.firstIndex(where: { $0.id == id }), let cleaned = PlaceNameRules.clean(name) else { return false }
+        guard places[i].name != cleaned else { return true }
+        places[i].name = cleaned
+        times.added[id.uuidString] = .now
+        savePlaces()
+        PlaceNameBook.shared.fix(name: cleaned, latitude: places[i].latitude, longitude: places[i].longitude, source: "registered")
+        onChange?()
+        return true
     }
 
     func setPause(_ id: UUID, _ pauses: Bool) {
@@ -311,12 +384,28 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     private func received(_ location: CLLocation?) {
         for continuation in waiting { continuation.resume(returning: location) }
         waiting = []
-        guard let location, location.horizontalAccuracy >= 0 else { return }
+        // 着いたときの細かい測りの返事か（測った数を数える。電池の差は、この数の多い日と少ない日を比べて見る。強化案 88）
+        let isArrival = arrivalFixPending
+        arrivalFixPending = false
+        guard let location, location.horizontalAccuracy >= 0 else {
+            if isArrival { Tally.add("place.arrival.fail") }
+            return
+        }
+        if isArrival {
+            Tally.add("place.arrival.fix")
+            Tally.add(location.horizontalAccuracy <= 50 ? "place.arrival.fine" : "place.arrival.coarse")
+        }
         let sample = Sample(time: location.timestamp, latitude: location.coordinate.latitude,
                             longitude: location.coordinate.longitude, accuracy: location.horizontalAccuracy)
-        // ほとんど動いていなければ、新しい点は足さない
+        // ほとんど動いていなければ、新しい点は足さない（着いたときの測りのほうが細かければ、前の点と置き換える）
         if let last = samples.last, last.location.distance(from: location) < 50,
-           sample.time.timeIntervalSince(last.time) < 3600 { return }
+           sample.time.timeIntervalSince(last.time) < 3600 {
+            if isArrival, sample.accuracy < last.accuracy {
+                samples[samples.count - 1] = sample
+                if let data = try? JSONEncoder().encode(samples) { try? data.write(to: Self.samplesURL, options: .atomic) }
+            }
+            return
+        }
         samples.append(sample)
         samples.sort { $0.time < $1.time }
         // 1週間より前の位置は消す（まだ文字起こししていない分にも足りる長さ）
@@ -327,6 +416,7 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         if let data = try? JSONEncoder().encode(samples) {
             try? data.write(to: Self.samplesURL, options: .atomic)
         }
+        onSample?(location)
         onChange?()
     }
 
@@ -338,7 +428,12 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
         let raw = RawVisit(arrival: visit.arrivalDate, departure: visit.departureDate, latitude: visit.coordinate.latitude,
                            longitude: visit.coordinate.longitude, accuracy: visit.horizontalAccuracy)
-        Task { @MainActor in self.onVisit?(raw) }
+        Task { @MainActor in
+            self.onVisit?(raw)
+            // 着いた（出た時刻がまだ無い）ときだけ、1回細かく測る。そのあとに 30 分の「ここは？」・着いたら知らせるが続く
+            if raw.departure == .distantFuture { self.measureOnArrival() }
+            self.onVisitEvent?(raw)
+        }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {

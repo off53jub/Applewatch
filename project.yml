@@ -82,7 +82,7 @@ targets:
         NSMicrophoneUsageDescription: 会話を録音して文字起こしするためにマイクを使います。
         NSSpeechRecognitionUsageDescription: 録音した音声を端末内で文字起こしします。
         NSLocationWhenInUseUsageDescription: どこで話したかを、文字起こしの見出しに添えるために使います。
-        NSLocationAlwaysAndWhenInUseUsageDescription: 画面を閉じて録音しているあいだも、どこで話したかを見出しに添えるために使います。大きく移動したときと、「行ったお店」をオンにしたときはお店などに立ち寄ったときだけ記録します。
+        NSLocationAlwaysAndWhenInUseUsageDescription: 画面を閉じて録音しているあいだも、どこで話したかを見出しに添えるために使います。大きく移動したときと、お店などに立ち寄ったときだけ記録します。着いたときに 1 回だけ細かく測ったり、30 分いた所の名前をたずねたり、その場所でやることを知らせたりするのにも使います（どれも設定で切れます）。
         ITSAppUsesNonExemptEncryption: false
         NSCalendarsFullAccessUsageDescription: 会話の時間の予定を、見出しと聞き取りのヒントに使います。自分で「予定に仮登録」を押したときは、その予定を入れます。
         NSCalendarsWriteOnlyAccessUsageDescription: 約束やタスクを、自分で「予定に仮登録」を押したときだけ、カレンダーに入れるために使います。

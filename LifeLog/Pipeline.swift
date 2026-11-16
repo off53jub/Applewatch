@@ -300,6 +300,7 @@ final class Pipeline {
         conversations.placeName = { [weak self] time in await self?.places.name(at: time) }
         places.onChange = { [weak self] in self?.updateHold() }
         shopVisits.attach(self)
+        PlaceAssist.shared.attach(self)  // 着いたとき・30 分いたとき（2026-11-16。強化案 88・91・104）
         conversations.eventInfo = { [weak self] start, end in
             guard let event = self?.calendar.events(from: start, to: end).first, !event.title.isEmpty else { return nil }
             let detail = event.title + (event.location.map { "（場所: \($0)）" } ?? "")

@@ -164,6 +164,8 @@ extension Pipeline {
         receiver.sendSettings(skipSilence: skipSilence, held: recordingHeld, meeting: on)
         // 会議の相棒（その場版）: 家の PC に始まり・終わりを伝え、Live Activity と時計に出す（2026-11-15。MeetingLive.swift）
         MeetingLiveBook.shared.meetingChanged(on, pipeline: self)
+        // 会議モード中は「ここは？」を出さない（まだ出していないものは取り消す。2026-11-16。PlaceAssist.swift）
+        if on { PlaceAssist.shared.meetingStarted() }
         if !on { processQueue() }
     }
 

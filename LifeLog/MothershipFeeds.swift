@@ -631,6 +631,8 @@ enum MothershipOutbox {
         case "mood": return "mood"
         case "app-usage": return "appusage"
         case "decisions/answer": return "decisions"  // 決めごとの答え（2026-11-15。強化案 61。PagesFeeds.swift）
+        case "place-names": return "placenames"  // 本人が直した場所の名前（2026-11-16。強化案 89。PlaceNames.swift）
+        case "checkups/answer": return "checkups"  // 1日1分の答え合わせの答え（2026-11-16。強化案 136。Checkups.swift）
         default: return path
         }
     }
