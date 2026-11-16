@@ -160,6 +160,7 @@ extension Pipeline {
         add("設定", "家の PC", homePC.isConfigured ? (homePC.lastResult.isEmpty ? "設定済み" : homePC.lastResult) : "使わない")
         add("設定", "待機モード", onOff(standbyOn))
         add("設定", "音がしないあいだは書かない", onOff(skipSilence))
+        add("設定", "時計で声の無い区切りは送らない", onOff(dropNoVoice))
         add("設定", "iPhone と iPad の同期", onOff(sync.isOn))
         if sync.isOn {
             // 版が古い端末があると、新しい版で足した項目が同期で抜けやすい（手元の値で埋めて守るが、入れ直すのがいちばん）
@@ -241,6 +242,7 @@ extension Pipeline {
             var text = "まだ送っていない \(pending) 個" + (moving.map { "（うち送っている途中 \($0) 個）" } ?? "") + "・返事待ち \(kept) 個"
             if let cut = detail["watchLastCut"] as? Double { text += "・最後に区切った " + Self.when(Date(timeIntervalSince1970: cut)) }
             if detail["watchHeld"] as? Bool == true { text += "・休む場所にいると思っている" }
+            if let dropped = detail["watchNoVoiceDropped"] as? Int { text += "・声が無いので捨てた \(dropped) 個（今日）" }
             add("時計", "時計に残っている区切り", text, pending + kept <= ChunkCutter.scaled(4))
         }
         // 時計の区切りの長さ（電池が少ないので自動で5分にしているか。2026-11-07。WatchPresence.swift）

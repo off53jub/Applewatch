@@ -127,6 +127,11 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// 最後に iPhone を起こした時刻（2026-11-06）
     private var lastWake = Date.distantPast
     private var resting: Date?
+    /// 最後に iPhone への受け渡しが終わった時刻（列が動いているかを見る。2026-11-16）
+    private var lastFinished: Date?
+    /// 受け渡しが終わった知らせ（didFinish）より先に「受け取った」が届いた区切り。
+    /// 知らせのあとで控えに移すと、もう返事が来ないまま残るので、移さずに消す（2026-11-16）
+    private var ackedEarly = Set<String>()
 
     /// 静かで書くのを休んでいるなら、休み始めた時刻。iPhone は、それより前の区切りが届いていれば待たない。
     var restingSince: Date? {
@@ -192,6 +197,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         }
         let lastCut = UserDefaults.standard.double(forKey: Self.lastCutKey)
         if lastCut > 0 { out["lastCut"] = lastCut }
+        // 声らしい音が無いので捨てた区切りの数（今日。2026-11-16。VoiceGate）
+        out["noVoiceDropped"] = VoiceGate.droppedToday()
         // 家の PC の外の道（Funnel。2026-11-07）: 使えるか・直近24時間に外の道で送れた数・合言葉が違うと言われたか
         out["pcPublic"] = WatchPC.hasPublicRoute
         // 直接送るがオンになっているか（iPhone が食い違いを見つけたら送り直す。2026-11-08）
@@ -325,6 +332,11 @@ final class WatchSender: NSObject, WCSessionDelegate {
         }
         // 送り直した控えは、もう控えの中にある
         guard !isInSentDir(url) else { return }
+        // 「受け取った」が先に届いていれば、控えに移さずに消す（2026-11-16）
+        if lock.withLock({ ackedEarly.remove(url.lastPathComponent) != nil }) {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
         let dest = Self.sentDir.appendingPathComponent(url.lastPathComponent)
         try? FileManager.default.removeItem(at: dest)
         guard (try? FileManager.default.moveItem(at: url, to: dest)) != nil else {
@@ -341,7 +353,16 @@ final class WatchSender: NSObject, WCSessionDelegate {
 
     /// iPhone が受け取ったので、控えを消す
     private func acknowledged(_ name: String) {
-        try? FileManager.default.removeItem(at: Self.sentDir.appendingPathComponent(name))
+        let kept = Self.sentDir.appendingPathComponent(name)
+        // 控えにまだ無く、送っている途中（まだ「送っていない」フォルダにある）なら、終わった知らせのあとで消す（2026-11-16）
+        if !FileManager.default.fileExists(atPath: kept.path),
+           FileManager.default.fileExists(atPath: Self.pendingDir.appendingPathComponent(name).path) {
+            lock.withLock {
+                if ackedEarly.count > 500 { ackedEarly.removeAll() }
+                ackedEarly.insert(name)
+            }
+        }
+        try? FileManager.default.removeItem(at: kept)
         lock.withLock {
             var sentAt = UserDefaults.standard.dictionary(forKey: Self.sentAtKey) as? [String: Double] ?? [:]
             var resent = UserDefaults.standard.dictionary(forKey: Self.resentKey) as? [String: Int] ?? [:]
@@ -388,8 +409,14 @@ final class WatchSender: NSObject, WCSessionDelegate {
     func resendUnacknowledged() {
         guard Self.phoneAcks, WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
         let transfers = WCSession.default.outstandingFileTransfers
-        // 受け渡しの列が混んでいれば、送り直しは待つ（新しい区切りを先に通す。2026-11-09）
-        guard transfers.count < Self.resendQueueLimit else { return }
+        // 受け渡しの列が混んでいれば、送り直しは待つ（新しい区切りを先に通す。2026-11-09）。
+        // ただし、列に残り続けている古いもの（終わらない受け渡し）は、列が動いているあいだは数えない（2026-11-16。
+        // 前は列がいつも 10 個以上で、送り直しが一度も動かなかった。WatchDelivery.resendAllowed）
+        let queued = transfers.map { transfer -> Date? in
+            (transfer.file.metadata?[WatchDelivery.sentKey] as? Double).map { Date(timeIntervalSince1970: $0) }
+        }
+        guard WatchDelivery.resendAllowed(queued: queued, limit: Self.resendQueueLimit,
+                                          lastFinished: lock.withLock { lastFinished }, now: .now) else { return }
         let outstanding = Set(transfers.map { $0.file.fileURL.lastPathComponent })
         var budget = Self.resendPerPass
         let stored = lock.withLock {
@@ -406,7 +433,11 @@ final class WatchSender: NSObject, WCSessionDelegate {
             guard !outstanding.contains(name) else { continue }
             let count = counts[name] ?? 0
             let sent = sentAt[name].map { Date(timeIntervalSince1970: $0) } ?? .distantPast
-            guard now.timeIntervalSince(sent) >= (count < Self.maxResends ? Self.resendAfter : Self.slowResendAfter) else { continue }
+            // 3日より古い控えは送り直さない（iPhone が覚えているのは4日。それより古いと、文字にし直してしまう。2026-11-16）
+            guard WatchDelivery.resendDue(sentAgo: now.timeIntervalSince(sent), count: count,
+                                          cutAge: Self.cutTime(url).map { now.timeIntervalSince($0) },
+                                          resendAfter: Self.resendAfter, maxResends: Self.maxResends,
+                                          slowResendAfter: Self.slowResendAfter) else { continue }
             counts[name] = count + 1
             sentAt[name] = now.timeIntervalSince1970
             budget -= 1
@@ -451,7 +482,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         resendUnacknowledged()
     }
 
-    /// 古い控え（3日より前）と、300MB を超えた分（古いものから）を消す
+    /// 古い控え（7日より前。keepSentFor。2026-11-07 に3日から7日へ）と、300MB を超えた分（古いものから）を消す。
+    /// 日付は区切りを書き終えた時刻（控えに移しても変わらない）。送り終わって控えに移すたびに呼ぶ
     private func pruneSent() {
         let files = sentFiles().map { url -> (url: URL, date: Date, size: Int) in
             let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
@@ -628,7 +660,10 @@ final class WatchSender: NSObject, WCSessionDelegate {
     }
 
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
-        if error == nil { keepSent(fileTransfer.file.fileURL) }
+        if error == nil {
+            lock.withLock { lastFinished = .now }
+            keepSent(fileTransfer.file.fileURL)
+        }
         onChange?()
     }
 

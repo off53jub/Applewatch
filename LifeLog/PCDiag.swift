@@ -558,6 +558,8 @@ extension Pipeline {
         // 家の PC に届いていて iPhone が PC から受け取るのを待っている数・送らずに済んだ数（2026-11-15。強化案 64。PCRelay.swift）
         if let held = state.relayHeld { detail["watchRelayHeld"] = held }
         if let done = state.relayDone { detail["watchRelayDone"] = done }
+        // 声らしい音が無いので時計が捨てた区切りの数（今日。2026-11-16。VoiceGate）
+        if let dropped = state.noVoiceDropped { detail["watchNoVoiceDropped"] = dropped }
         UserDefaults.standard.set(detail, forKey: PCDiag.watchDetailKey)
     }
 

@@ -102,6 +102,8 @@ struct ChunkCutter {
         context[batterySaverKey] = batterySaverOn
         // 録り方の実験のオンオフと1日目（2026-11-15）
         RecordingExperiment.addSettings(to: &context)
+        // 時計で声の無い区切りを送らないか（2026-11-16。VoiceGate）
+        VoiceGate.addSettings(to: &context)
     }
 
     /// 時計が iPhone から届いた設定を読む（区切りの長さと「電池が少ないときは5分に」。次の区切りから効く）
@@ -111,6 +113,7 @@ struct ChunkCutter {
         }
         if let on = context[batterySaverKey] as? Bool { batterySaverOn = on }
         RecordingExperiment.readSettings(context)
+        VoiceGate.readSettings(context)
     }
 
     /// 静かな瞬間をこれだけ待つ

@@ -89,6 +89,13 @@ final class Pipeline {
             receiver.sendSettings(skipSilence: skipSilence, held: recordingHeld)
         }
     }
+    /// 時計で、声らしい音の無い区切りは送らない（初めはオン。時計の次の区切りから効く。2026-11-16。VoiceGate）
+    var dropNoVoice = VoiceGate.enabled {
+        didSet {
+            VoiceGate.enabled = dropNoVoice
+            receiver.sendSettings(skipSilence: skipSilence, held: recordingHeld)
+        }
+    }
     /// 区切りの長さ（短め=2分まで／ふつう=5分まで。初めは短め。iPhone と時計の次の区切りから効く。2026-11-07）
     var chunkLength = ChunkCutter.length {
         didSet {
