@@ -6,7 +6,8 @@
 地名の出どころ（母艦 = mothership.home。ふだんは D:\\Lifelog）:
   1. state/places-index.json（母艦の場所の担当が作る台帳。形はゆるく読む:
        {"places": [...]} か {"items": [...]} か 配列。1 件は name（または canonical）・aliases/names（別名）・
-       reading（よみ）・kind・sure/confidence・visits を持てる。無い項目は飛ばす）
+       reading（よみ）・kind・tier・days/visits・last_seen を持てる。無い項目は飛ばす。kind が mentioned・tier が none の
+       「話に出ただけの地名」は使わない（ノイズが多い。2026-11-16 の実データ）。2026-11-16 に場所の担当が作った形に合わせた）
   2. 無ければ state/places_for_app.json（items: name・sure・visit_days・last_day）
   3. digests/timeline/<日>.json の「位置」の行（place）= その日いた所（時刻つき）
   4. archive/calendar/YYYY/MM/DD.md の「場所:」= 予定の場所
@@ -114,15 +115,16 @@ def load_places(base: Path) -> list[dict]:
                 if not isinstance(row, dict):
                     continue
                 name = clean_name(row.get("name") or row.get("canonical") or "")
-                if not name:
+                # 話に出ただけの地名（kind mentioned・tier none）は、行った所の証拠ではなくノイズが多いので使わない
+                if not name or row.get("kind") == "mentioned" or row.get("tier") == "none":
                     continue
                 aliases = row.get("aliases") or row.get("names") or []
                 names = [name] + [a for a in (clean_name(x) for x in aliases if isinstance(x, str)) if a and a != name]
-                visits = row.get("visit_days") if row.get("visit_days") is not None else row.get("visits")
+                visits = row.get("visit_days") if row.get("visit_days") is not None else (row.get("days") if row.get("days") is not None else row.get("visits"))
                 out.append({"name": name, "names": names, "reading": str(row.get("reading") or row.get("yomi") or ""),
-                            "kind": str(row.get("kind") or ""), "sure": bool(row.get("sure", row.get("confidence", 0) in (1, True))),
+                            "kind": str(row.get("kind") or ""), "tier": str(row.get("tier") or ""), "sure": bool(row.get("sure", row.get("confidence", 0) in (1, True))),
                             "visits": int(visits) if isinstance(visits, (int, float)) and not isinstance(visits, bool) else 0,
-                            "last_day": str(row.get("last_day") or "")})
+                            "last_day": str(row.get("last_day") or row.get("last_seen") or "")})
             if out:
                 break
         return out
@@ -272,6 +274,10 @@ def known_names(base: Path, day: str, home: Path | None = None) -> list[dict]:
         for r in record_places(home, day):
             add(r["place"], "record")
     for p in load_places(base):
+        # アプリの推測（tier maybe の店など）は聞き間違いの照らし先にしない（推測が外れていると、ふつうの語を地名に直す候補が出る）。
+        # 確かな名前（登録・本人の答え・証拠）と、駅・町の名前だけ。聞き取りのヒント（words_at）は推測の名前も使う
+        if not (p["tier"] in ("registered", "user", "evidence") or p["kind"] in ("station", "town") or (not p["tier"] and p["sure"])):
+            continue
         for n in p["names"]:
             add(n, "ledger", p["reading"] if n == p["name"] else "")
     return list(seen.values())

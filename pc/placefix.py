@@ -6,8 +6,10 @@
 
 決まり:
 - 読みは pykakasi（この PC がもう使っているもの）。無ければ何も出さない。
-- 候補は、文の中の続いた語（トークンの並び 2〜12 文字）を、名前の読みと比べる。読みの近さ（difflib）が SIMILAR 以上・
-  最初か最後の読みが同じ・名前がすでにその文に書かれていない・読みが完全に同じなら漢字違い（候補にする）。
+- 候補は、文の中の続いた語（トークンの並び 2〜12 文字）を、名前の読みと比べる。読みが同じ（漢字違い。名前の読みが 3 字以上）か、
+  読みの違いが少しだけ（名前の読みが 6 字以上で 1〜2 字。edits）で、最初か最後の読みが同じ。語が名前の一部・名前が語の一部
+  （東京と東京都）、名前がすでにその文に書かれている、別名ですでに書けている、ときは出さない。
+  （2026-11-16 の実データで、読みの近さだけでは短い名前がふつうの語に当たりすぎた。docs/s16-pc-place-search-2026-11-16.md）
 - 1 日の上限 DAY_MAX。同じ（行・語）は 1 つ。記録（log.txt）には数だけ（文・名前は書かない）。
 - 地名の辞書の名前は多いので、読みの 2 文字の並び（bigram）の索引で絞ってから比べる。
 """
@@ -22,7 +24,9 @@ from pathlib import Path
 
 import placehints
 
-SIMILAR = 0.80
+SIMILAR = 0.80                 # find() の引数として残している（いまは edits で決める）
+SAME_READING_MIN = 3           # 読みが同じ（漢字違い）で出せる、名前の読みの最短
+NEAR_READING_MIN = 6           # 読みが少し違う語まで出せる、名前の読みの最短（5 字の名前は延長・身長のようなふつうの語に当たりすぎた）
 WRONG_MIN, WRONG_MAX = 2, 12
 NAME_READING_MIN = 3
 DAY_MAX = 100
@@ -95,8 +99,30 @@ class NameIndex:
         return out
 
 
+def edits(a: str, b: str) -> int:
+    """読みの違い（1 字の入れ替え・足す・抜くを 1 と数える）"""
+    prev = list(range(len(b) + 1))
+    for i, x in enumerate(a, 1):
+        cur = [i]
+        for j, y in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x != y)))
+        prev = cur
+    return prev[-1]
+
+
+def allowed_edits(length: int) -> int:
+    """読みの長さごとの、許す違いの数（短い名前は同じ読みだけ。ふつうの語と取り違えやすいので）"""
+    if length < SAME_READING_MIN:
+        return -1
+    if length < NEAR_READING_MIN:
+        return 0
+    return 1 if length <= 8 else 2
+
+
 def find(text: str, index: NameIndex, similar: float = SIMILAR) -> list[dict]:
-    """1 つの文から [{"wrong", "guess", "score", "origin"}]。名前ごとに一番近い 1 つだけ"""
+    """1 つの文から [{"wrong", "guess", "score", "origin"}]。名前ごとに一番近い 1 つだけ。
+    読みが同じ（漢字違い）か、読みの違いが少しだけ（allowed_edits）の語。語が名前の一部・名前が語の一部（東京と東京都）は出さない。
+    すでに知っている名前（別名）で書けていれば、その名前は出さない"""
     toks = tokens(text)
     if not toks or not index.items:
         return []
@@ -106,23 +132,31 @@ def find(text: str, index: NameIndex, similar: float = SIMILAR) -> list[dict]:
         name, reading = item["name"], item["reading"]
         if name in text:
             continue
+        limit = allowed_edits(len(reading))
+        if limit < 0:
+            continue
         best, resolved = None, False
         for i in range(len(toks)):
             surface = seg = ""
             for j in range(i, len(toks)):
                 surface += toks[j][0]
                 seg += toks[j][1]
-                if len(surface) > WRONG_MAX or len(seg) > len(reading) + 1:
+                if len(surface) > WRONG_MAX or len(seg) > len(reading) + limit:
                     break
-                if len(seg) < len(reading) - 1 or len(surface) < WRONG_MIN:
+                if len(seg) < len(reading) - limit or len(surface) < WRONG_MIN:
                     continue
                 if seg[:1] != reading[:1] and seg[-1:] != reading[-1:]:
                     continue
-                score = difflib.SequenceMatcher(None, seg, reading, autojunk=False).ratio()
-                if score >= similar and surface in index.known:
+                gap = edits(seg, reading)
+                if gap > limit:
+                    continue
+                if surface in index.known:
                     best, resolved = None, True     # すでに知っている名前（別名）で書けている
                     break
-                if score >= similar and surface != name and (best is None or score > best[0]):
+                if surface == name or surface in name or name in surface:
+                    continue
+                score = 1.0 - gap / max(len(reading), 1)
+                if best is None or score > best[0]:
                     best = (score, surface)
             if resolved:
                 break
