@@ -1229,7 +1229,8 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
     /// 知らせの名前から、開いているあいだの出し方を決める（期限の1時間前の知らせも出す。2026-11-10）
     static func options(for identifier: String) -> UNNotificationPresentationOptions {
         shownWhileOpen.contains(identifier) || identifier.hasPrefix(NoticeActions.duePrefix)
-            || identifier.hasPrefix(AppFeeds.noticePrefix) ? [.banner, .list, .sound] : []
+            || identifier.hasPrefix(AppFeeds.noticePrefix) || identifier.hasPrefix(PlaceAssistRules.remindPrefix)
+            ? [.banner, .list, .sound] : []
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
@@ -1255,6 +1256,18 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let request = response.notification.request
         let content = request.content
+        // 30 分いたら「ここは？」のボタン（候補の名前を位置で覚える。2026-11-16。強化案 91。PlaceAssist.swift）
+        if content.categoryIdentifier == PlaceAssistRules.askCategory {
+            let actionID: String = response.actionIdentifier
+            let candidates: [String] = content.userInfo["cands"] as? [String] ?? []
+            let lat: Double? = content.userInfo["lat"] as? Double
+            let lon: Double? = content.userInfo["lon"] as? Double
+            Task { @MainActor in
+                PlaceAssist.shared.answered(actionID: actionID, candidates: candidates, latitude: lat, longitude: lon)
+                completionHandler()
+            }
+            return
+        }
         // 押された知らせも、見えた知らせとして数える（同じものは1回だけ。2026-11-15。NoticeGate.swift）
         NoticeGate.noteShown(identifier: request.identifier, category: content.categoryIdentifier, date: response.notification.date)
         // カテゴリの無い知らせも、知らせそのものを押したときは画面を開く（2026-11-12。NoticeRoute.route）

@@ -1343,6 +1343,33 @@ final class ConversationLog {
     /// その日のドキュメントに直しを当てる。前に当てられなかった直しがあれば、それを先に当てる
     /// （名前を2回直したとき、順に当てないと合わない）。当てられなければ覚えておき、error が空なら入れる。
     /// 前の日で失敗していれば（error がある）、この日は送らずに覚えるだけにする。
+    /// 会話の見出しの場所の名前を、本人が直したものにする（アプリの記録とドキュメントの見出し。2026-11-16。強化案 89）。
+    /// 直した会話の数を返す。ドキュメントの見出しが見つからなくても、アプリの記録は直す
+    @discardableResult
+    func setPlace(_ name: String, starts: [Date], day: String) async -> Int {
+        var fixes: [(find: String, replace: String)] = []
+        var targets: [Date] = []
+        for c in load(day).conversations where starts.contains(c.start) && c.place != name {
+            var updated = c
+            updated.place = name
+            let old: String = Self.headingText(c)
+            let new: String = Self.headingText(updated)
+            if old != new { fixes.append((find: old, replace: new)) }
+            targets.append(c.start)
+        }
+        guard !targets.isEmpty else { return 0 }
+        if !fixes.isEmpty { try? await docs.replaceAll(fixes, day: day) }
+        // 書いているあいだに記録が変わっていてもよいように、読み直してから置き換える
+        var log = load(day)
+        var changed = 0
+        for i in log.conversations.indices where targets.contains(log.conversations[i].start) {
+            log.conversations[i].place = name
+            changed += 1
+        }
+        if changed > 0 { save(log, day: day) }
+        return changed
+    }
+
     private func fixDoc(_ fixes: [(find: String, replace: String)], day: String, error: inout Error?) async {
         let new = fixes.map { DocFix(find: $0.find, replace: $0.replace) }
         if error != nil {

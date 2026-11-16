@@ -218,6 +218,9 @@ struct ConversationsView: View {
     @State private var fixing: Fix?
     @State private var addingWord: WordTarget?
     @State private var editing: WordTarget?
+    /// 見出しの場所の名前を直している会話のまとまり（2026-11-16。強化案 89）
+    @State private var renamingPlace: [ConversationLog.Conversation]?
+    @State private var placeText = ""
     /// 会話ごとの、その時間に撮った写真（始まりの時刻ごと。iPhone の中で探すだけで保存しない。2026-11-07。DayPhotos.swift）
     @State private var photos: [Date: [DayPhoto]] = [:]
     @Environment(\.displayScale) private var displayScale
@@ -320,6 +323,13 @@ struct ConversationsView: View {
                     }
                 } header: {
                     Text(heading(for: group))
+                        .contextMenu {
+                            Button("場所の名前を変える", systemImage: "mappin.and.ellipse") {
+                                placeText = (group.compactMap(\.place).first ?? "")
+                                    .replacingOccurrences(of: "たぶん", with: "")
+                                renamingPlace = group
+                            }
+                        }
                 }
             }
             // 最初の会話より前の年表の行（新しい順）
@@ -337,6 +347,23 @@ struct ConversationsView: View {
             photos = await DayPhotos.load(conversations.map { (start: $0.start, end: $0.end) }, scale: displayScale)
         }
         .onDisappear { player.stop() }
+        .alert("場所の名前を変える", isPresented: Binding(get: { renamingPlace != nil }, set: { if !$0 { renamingPlace = nil } })) {
+            TextField("新しい名前", text: $placeText)
+            Button("変える") {
+                let group = renamingPlace ?? []
+                renamingPlace = nil
+                guard let first = group.first?.start else { return }
+                let starts: [Date] = group.map { $0.start }
+                let text: String = placeText
+                Task {
+                    await pipeline.renameConversationPlace(first: first, starts: starts, day: day, to: text)
+                    conversations = load()
+                }
+            }
+            Button("キャンセル", role: .cancel) { renamingPlace = nil }
+        } message: {
+            Text("見出しの場所を直します。同じ所で次から、この名前を使います。")
+        }
         .sheet(item: $addingWord) { AddWordView(line: $0.line) }
         .sheet(item: $editing) { target in
             EditLineView(line: target.line) { conversations = load() }

@@ -1050,7 +1050,7 @@ struct PlacePagesView: View {
                     PlacePageView(place: place)
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(place.name + (place.sure ? "" : "（たぶん）"))
+                        Text(PlaceNameBook.shared.shown(pageID: place.id, original: place.name) + (place.sure ? "" : "（たぶん）"))
                         Text(PagesFeeds.placeLine(place) + "・最後 " + AppFeeds.monthDay(place.last_day))
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -1065,6 +1065,11 @@ struct PlacePagesView: View {
 
 struct PlacePageView: View {
     let place: PlacePage
+    /// 名前を直している（2026-11-16。強化案 89。直した名前は場所の番号で覚えて、母艦にも送る）
+    @State private var renaming = false
+    @State private var nameText = ""
+
+    private var shownName: String { PlaceNameBook.shared.shown(pageID: place.id, original: place.name) }
 
     var body: some View {
         List {
@@ -1089,8 +1094,23 @@ struct PlacePageView: View {
                 }
             }
         }
-        .navigationTitle(place.name)
+        .navigationTitle(shownName)
         .countsOpen("placePage")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("名前を変える", systemImage: "pencil") {
+                    nameText = shownName
+                    renaming = true
+                }
+            }
+        }
+        .alert("場所の名前を変える", isPresented: $renaming) {
+            TextField("新しい名前", text: $nameText)
+            Button("変える") { _ = PlaceNameBook.shared.fixPage(id: place.id, name: nameText) }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("直した名前は、母艦にも伝えます。")
+        }
     }
 }
 

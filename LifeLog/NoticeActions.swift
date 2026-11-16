@@ -52,6 +52,8 @@ enum NoticeActions {
             UNNotificationCategory(identifier: digestCategory, actions: [], intentIdentifiers: [], options: []),
             // 会話のあとの約束（家の PC から届く。2026-11-13。Promises.swift）
             PromiseRules.notificationCategory(),
+            // 30 分いたら「ここは？」（ボタンは候補の名前。2026-11-16。強化案 91。PlaceAssist.swift）
+            PlaceAssistRules.askNotificationCategory(),
         ]
     }
 
@@ -182,6 +184,8 @@ enum NoticeRoute: Identifiable, Equatable {
     static func route(identifier id: String, title: String, body: String) -> NoticeRoute? {
         if id.hasPrefix("tasks-") || id == NoticePresenter.taskFoundID { return .tab(.tasks) }
         if id.hasPrefix("brief-") { return .note(title: title, body: body) }
+        // 着いたら知らせる（2026-11-16。強化案 104。PlaceAssist.swift）
+        if id.hasPrefix(PlaceAssistRules.remindPrefix) { return .tab(.tasks) }
         if id.hasPrefix(AppFeeds.noticePrefix) || id.hasPrefix("signExpiry-") { return .tab(.today) }
         if id.hasPrefix(ProposalRules.noticePrefix) { return .screen(.proposals) }
         switch id {
