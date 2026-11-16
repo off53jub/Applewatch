@@ -146,6 +146,8 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         var relayDone: Int? = nil
         /// 時計で、止めるボタンを押さずに録音していた（録音しているつもり）か
         var wanted: Bool? = nil
+        /// 時計が今日、声らしい音が無いので捨てた区切りの数（新しい時計のアプリだけ。2026-11-16。VoiceGate）
+        var noVoiceDropped: Int? = nil
 
         /// 時計の中に残っている区切り（まだ送っていない＋返事待ち）。どちらも分からなければ nil
         var leftOnWatch: Int? {
@@ -278,6 +280,7 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         state.wanted = context["wanted"] as? Bool
         state.relayHeld = context["relayHeld"] as? Int
         state.relayDone = context["relayDone"] as? Int
+        state.noVoiceDropped = context["noVoiceDropped"] as? Int
         let snapshot = state
         Task { @MainActor in
             if let lowPower { self.onWatchLowPower?(lowPower) }

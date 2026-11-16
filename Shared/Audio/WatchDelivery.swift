@@ -330,6 +330,43 @@ enum WatchDelivery {
         return formatter(watchZone).string(from: date) + tail + ".m4a"
     }
 
+    // MARK: - 返事待ちの控えを送り直すか（2026-11-16。docs/v20-watch-silence.md）
+    //
+    // 11/12〜11/16 の自己点検（421 回）では、時計の「送っている途中」（outstandingFileTransfers）がいつも 10 個以上あった。
+    // 送り直しは「列が 10 個より少ないときだけ」だったので一度も動かず、iPhone の「全部送り直して」も空振りして、
+    // 返事待ちの控え（kept）は 1300 個ほどのまま 4 日減らなかった（300MB の上限に張りついている、と見ている。
+    // 時計の区切りは 1 個 220KB ほどなので、300MB でちょうど 1300 個ほど）。
+    // 列に残り続けるもの（送り始めてから staleTransferAge より古い）は、列が動いているあいだは混み具合に数えない。
+
+    /// 受け渡しの列のうち、送り始めてからこれより古いものは「止まっている」とみなす
+    static let staleTransferAge: TimeInterval = 30 * 60
+    /// 最後に受け渡しが終わってからこれだけのあいだは「列は動いている」とみなす
+    static let queueMovingWithin: TimeInterval = 10 * 60
+    /// これより古い区切りは送り直さない。iPhone が「もう受け取った」と覚えているのは 4 日（Storage.rememberReceived）なので、
+    /// それより古いものを送り直すと、受け取り済みでも新しい区切りとして文字にし直してしまう
+    static let resendMaxAge: TimeInterval = 3 * 86400
+
+    /// いま返事待ちの控えを送り直してよいか。queued は受け渡しの列にあるものの、送り始めた時刻（控えの sentAt。読めなければ nil）。
+    /// limit は列の上限、lastFinished は最後に受け渡しが終わった（成功した）時刻
+    static func resendAllowed(queued: [Date?], limit: Int, lastFinished: Date?, now: Date) -> Bool {
+        if queued.count < limit { return true }
+        // 列が動いていなければ（iPhone が受け取っていない）、送り直しても列が長くなるだけ
+        guard let lastFinished, now.timeIntervalSince(lastFinished) < queueMovingWithin else { return false }
+        let fresh = queued.filter { sent in
+            guard let sent else { return false }
+            return now.timeIntervalSince(sent) < staleTransferAge
+        }.count
+        return fresh < limit
+    }
+
+    /// この控えを送り直す時か。sentAgo は最後に送って（送り直して）からの秒、count は送り直した回数、
+    /// cutAge は区切ってからの秒（分からなければ nil）。決まりは WatchSender の resendAfter・maxResends・slowResendAfter と同じ
+    static func resendDue(sentAgo: TimeInterval, count: Int, cutAge: TimeInterval?,
+                          resendAfter: TimeInterval, maxResends: Int, slowResendAfter: TimeInterval) -> Bool {
+        if let cutAge, cutAge > resendMaxAge { return false }
+        return sentAgo >= (count < maxResends ? resendAfter : slowResendAfter)
+    }
+
     /// POST /jobs に付ける query（iPhone の送りと同じ形。待ち合わせ wait=1 は付けない＝答えは iPhone が受け取る）
     static func jobQuery(name: String, chunkStart: Date?, chunkEnd: Date?, sent: Date,
                          hints: String?, weights: String?) -> [URLQueryItem] {

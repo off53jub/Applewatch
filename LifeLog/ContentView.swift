@@ -938,6 +938,10 @@ private struct DetailedSettingsView: View {
                     Toggle("音がしないあいだは書かない", isOn: Binding(
                         get: { pipeline.skipSilence },
                         set: { pipeline.skipSilence = $0 }))
+                    // 時計の区切りのうち、物音だけで声らしい音の無いものは送らない（2026-11-16。VoiceGate）
+                    Toggle("時計で声の無い区切りは送らない", isOn: Binding(
+                        get: { pipeline.dropNoVoice },
+                        set: { pipeline.dropNoVoice = $0 }))
                     Picker("区切りの長さ", selection: Binding(
                         get: { pipeline.chunkLength },
                         set: { pipeline.chunkLength = $0 })) {

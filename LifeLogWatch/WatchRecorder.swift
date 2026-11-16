@@ -75,8 +75,8 @@ final class WatchRecorder: NSObject {
         sender.onAlert = { [weak self] text in
             Task { @MainActor in self?.alert(text) }
         }
-        writer.setOnCut { [weak self] url, peak, error in
-            Task { @MainActor in self?.cut(url, peakDB: peak, error: error) }
+        writer.setOnCut { [weak self] url, peak, voice, error in
+            Task { @MainActor in self?.cut(url, peakDB: peak, voiceFrames: voice, error: error) }
         }
         // 静かで休んでいるあいだも、録音が続いていることを iPhone に知らせ、見張りの通知を延ばす
         writer.setOnRestTick { [weak self] in
@@ -275,12 +275,12 @@ final class WatchRecorder: NSObject {
     /// 録音を止めるときに、いまの区切りを閉じて送る。
     private func finishChunk() {
         guard let chunk = writer.close() else { return }
-        deliver(chunk.url, peakDB: chunk.peakDB)
+        deliver(chunk.url, peakDB: chunk.peakDB, voiceFrames: chunk.voiceFrames)
     }
 
     /// 書いている糸が、静かなところで区切りを切り替えた。
-    private func cut(_ url: URL, peakDB: Float, error: Error?) {
-        deliver(url, peakDB: peakDB)
+    private func cut(_ url: URL, peakDB: Float, voiceFrames: Int, error: Error?) {
+        deliver(url, peakDB: peakDB, voiceFrames: voiceFrames)
         armWatchdog()
         if let error, isRecording {
             stopWithAlert("録音を続けられませんでした: \(error.localizedDescription)")
@@ -288,11 +288,15 @@ final class WatchRecorder: NSObject {
     }
 
     /// 書き終わった区切りを送る（ほぼ無音なら捨てる）。
-    private func deliver(_ url: URL, peakDB: Float) {
+    /// 声らしい音が無い区切りも捨てる（設定「声の無い区切りは送らない」。会議モードのあいだは捨てない。2026-11-16。VoiceGate）
+    private func deliver(_ url: URL, peakDB: Float, voiceFrames: Int) {
         // 区切った時刻を残す（無音で捨てる区切りも。iPhone が「録音が本当に続いているか」を見分ける。2026-11-07）
         sender.noteCut()
         if peakDB < -50 {
             try? FileManager.default.removeItem(at: url)
+        } else if VoiceGate.shouldDrop(tonalFrames: voiceFrames, enabled: VoiceGate.enabled, meeting: meetingOn) {
+            try? FileManager.default.removeItem(at: url)
+            VoiceGate.noteDropped()
         } else {
             sender.deliver(url)
         }
@@ -465,6 +469,8 @@ final class ChunkWriter: @unchecked Sendable {
     private var converter: AVAudioConverter?
     private var cutter = ChunkCutter()
     private var gate = SilenceGate()
+    /// 区切りの中の声らしい音を数える（2026-11-16）
+    private var voice = VoiceGate()
     /// 静かで休んでいるか
     private var resting = false
     private var restingSince: Date?
@@ -473,8 +479,9 @@ final class ChunkWriter: @unchecked Sendable {
     private var preRoll: [AVAudioPCMBuffer] = []
     /// 書いている区切りを知らせる相手（書いている途中のファイルを送らないように）
     private let sender: WatchSender
-    /// 区切りを切り替えたら呼ぶ。終わった区切り、その中のいちばん大きな音（dB）、次を開けなかったときのエラー
-    private var onCut: (@Sendable (URL, Float, Error?) -> Void)?
+    /// 区切りを切り替えたら呼ぶ。終わった区切り、その中のいちばん大きな音（dB）、声らしいこまの数（VoiceGate）、
+    /// 次を開けなかったときのエラー
+    private var onCut: (@Sendable (URL, Float, Int, Error?) -> Void)?
     /// 休んでいるあいだ、ときどき呼ぶ（録音が続いていることを知らせる）
     private var onRestTick: (@Sendable () -> Void)?
 
@@ -482,7 +489,7 @@ final class ChunkWriter: @unchecked Sendable {
         self.sender = sender
     }
 
-    func setOnCut(_ onCut: (@Sendable (URL, Float, Error?) -> Void)?) {
+    func setOnCut(_ onCut: (@Sendable (URL, Float, Int, Error?) -> Void)?) {
         lock.withLock { self.onCut = onCut }
     }
 
@@ -515,6 +522,7 @@ final class ChunkWriter: @unchecked Sendable {
             peak = 0
             cutter.reset()
             gate.reset()
+            voice.reset()
             resting = false
             restingSince = nil
             preRoll.removeAll()
@@ -559,6 +567,7 @@ final class ChunkWriter: @unchecked Sendable {
             return
         }
         for i in 0..<frames { peak = max(peak, abs(samples[i])) }
+        voice.feed(samples, count: frames)
         try? file?.write(from: out)
         if step == .rest {
             rest()
@@ -571,6 +580,8 @@ final class ChunkWriter: @unchecked Sendable {
     private func rest() {
         guard let finished = url else { return }
         let peakDB = 20 * log10(max(peak, 1e-8))
+        let voiced = voice.tonalFrames
+        voice.reset()
         file = nil
         url = nil
         resting = true
@@ -583,7 +594,7 @@ final class ChunkWriter: @unchecked Sendable {
         sender.recording = nil
         sender.restingSince = since
         let callback = onCut
-        DispatchQueue.main.async { callback?(finished, peakDB, nil) }
+        DispatchQueue.main.async { callback?(finished, peakDB, voiced, nil) }
     }
 
     /// 音がしたので、溜めておいた直前の音から次の区切りを書き始める（鍵をかけたまま呼ぶ）。
@@ -604,10 +615,12 @@ final class ChunkWriter: @unchecked Sendable {
         sender.restingSince = nil
         peak = 0
         cutter.reset()
+        voice.reset()
         for piece in preRoll {
             if let samples = piece.floatChannelData?[0] {
                 for i in 0..<Int(piece.frameLength) { peak = max(peak, abs(samples[i])) }
                 _ = cutter.feed(samples, count: Int(piece.frameLength), rate: Self.format.sampleRate)
+                voice.feed(samples, count: Int(piece.frameLength))
             }
             try? file?.write(from: piece)
         }
@@ -621,6 +634,8 @@ final class ChunkWriter: @unchecked Sendable {
     private func cutHere() {
         guard let finished = url else { return }
         let peakDB = 20 * log10(max(peak, 1e-8))
+        let voiced = voice.tonalFrames
+        voice.reset()
         // AVAudioFile は手放したときに書き終わる
         file = nil
         url = nil
@@ -639,14 +654,16 @@ final class ChunkWriter: @unchecked Sendable {
         cutter.reset()
         let callback = onCut
         let error = failure
-        DispatchQueue.main.async { callback?(finished, peakDB, error) }
+        DispatchQueue.main.async { callback?(finished, peakDB, voiced, error) }
     }
 
-    /// 今のファイルを閉じて、その場所と一番大きかった音（dB）を返す。休んでいたら nil。
-    func close() -> (url: URL, peakDB: Float)? {
+    /// 今のファイルを閉じて、その場所と一番大きかった音（dB）と声らしいこまの数を返す。休んでいたら nil。
+    func close() -> (url: URL, peakDB: Float, voiceFrames: Int)? {
         lock.lock()
         let closing = url
         let peakDB = 20 * log10(max(peak, 1e-8))
+        let voiced = voice.tonalFrames
+        voice.reset()
         file = nil
         url = nil
         resting = false
@@ -656,6 +673,6 @@ final class ChunkWriter: @unchecked Sendable {
         sender.recording = nil
         sender.restingSince = nil
         guard let closing else { return nil }
-        return (url: closing, peakDB: peakDB)
+        return (url: closing, peakDB: peakDB, voiceFrames: voiced)
     }
 }
