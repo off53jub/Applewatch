@@ -13,6 +13,13 @@ import SwiftUI
 
 // MARK: - 読んだ形
 
+/// ほかのページへの行き来の 1 件（2026-11-16。強化案 139・123）。母艦の番号（人 pe_・場所 pl_）が届いていれば id に入る。
+/// 無ければ名前の文字で引く。どの項目も省ける（前の写しには無い）
+struct PageRef: Codable, Equatable {
+    var id: String? = nil
+    var name: String
+}
+
 struct PageDated: Codable, Equatable {
     var text: String
     var day: String? = nil
@@ -57,6 +64,8 @@ struct PersonPage: Codable, Equatable, Identifiable {
     var next_why: String = ""
     var upcoming: PageUpcoming? = nil
     var updated: String? = nil
+    /// この人とよく行く場所（母艦が番号つきで渡したとき。2026-11-16。強化案 139）
+    var places: [PageRef]? = nil
 }
 
 struct PeoplePagesFeed: Codable, Equatable {
@@ -78,6 +87,9 @@ struct ThreadPage: Codable, Equatable, Identifiable {
     var last_day: String
     /// machine・claude
     var source: String = "machine"
+    /// 話に出てくる人・場所（母艦が渡したときだけ。省ける。2026-11-16。強化案 123）
+    var people: [PageRef]? = nil
+    var places: [PageRef]? = nil
 }
 
 struct ThreadsFeed: Codable, Equatable {
@@ -105,6 +117,8 @@ struct PlacePage: Codable, Equatable, Identifiable {
     var spent: Int? = nil
     var with: [String] = []
     var recent: [PlaceVisit] = []
+    /// 「誰と」の番号つきの形（母艦が渡したとき。省ける。2026-11-16。強化案 139）
+    var people: [PageRef]? = nil
 }
 
 struct PlacePagesFeed: Codable, Equatable {
@@ -152,6 +166,11 @@ enum PagesFeeds {
     static let dueDays = 3
     static let promiseSources: [String] = ["line", "talk", "task", "todo"]
 
+    private struct RawRef: Decodable {
+        var id: String?
+        var name: String?
+    }
+
     private struct RawDated: Decodable {
         var text: String?
         var day: String?
@@ -193,6 +212,7 @@ enum PagesFeeds {
         var next_why: String?
         var upcoming: LossyRow<RawUpcoming>?
         var updated: String?
+        var places: [LossyRow<RawRef>]?
     }
 
     private struct RawPeopleFeed: Decodable {
@@ -211,6 +231,8 @@ enum PagesFeeds {
         var next: String?
         var days: [LossyRow<String>]?
         var source: String?
+        var people: [LossyRow<RawRef>]?
+        var places: [LossyRow<RawRef>]?
     }
 
     private struct RawThreadsFeed: Decodable {
@@ -237,6 +259,7 @@ enum PagesFeeds {
         var spent: Int?
         var with: [LossyRow<String>]?
         var recent: [LossyRow<RawVisit>]?
+        var people: [LossyRow<RawRef>]?
     }
 
     private struct RawPlacesFeed: Decodable {
@@ -365,10 +388,57 @@ enum PagesFeeds {
                 page.upcoming = PageUpcoming(day: d, time: time, title: title)
             }
             page.updated = day(r.updated)
+            page.places = refs(r.places)
             items.append(page)
             if items.count >= peopleLimit { break }
         }
         return PeoplePagesFeed(generated_at: raw.generated_at, items: items)
+    }
+
+    /// 行き来の相手の並び（名前が読めないものは落とす。空なら nil）
+    private static func refs(_ rows: [LossyRow<RawRef>]?, limit: Int = 8) -> [PageRef]? {
+        var out: [PageRef] = []
+        for row in rows ?? [] {
+            guard let v = row.value, let name = MothershipFeeds.cut(v.name, 40) else { continue }
+            var ref = PageRef(name: name)
+            if let rid = v.id, HomeFeeds.isID(rid) { ref.id = rid }
+            out.append(ref)
+            if out.count >= limit { break }
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    /// 行き来の相手が、そのページか。番号が両方にあれば番号で、無ければ名前の文字で
+    static func refMatches(_ refs: [PageRef]?, id: String, name: String) -> Bool {
+        for ref in refs ?? [] {
+            if let rid = ref.id {
+                if rid == id { return true }
+            } else if !nameKey(ref.name).isEmpty, nameKey(ref.name) == nameKey(name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 場所のページの立ち寄りの時間（日と "HH:MM–HH:MM" から）。読めなければ nil
+    static func visitSpan(day: String, time: String, calendar: Calendar = .current) -> (from: Date, to: Date)? {
+        guard HomeFeeds.isDay(day), isSpan(time) else { return nil }
+        let dayParts: [Substring] = day.split(separator: "-")
+        guard dayParts.count == 3, let y = Int(dayParts[0]), let m = Int(dayParts[1]), let d = Int(dayParts[2]),
+              let base = calendar.date(from: DateComponents(year: y, month: m, day: d)) else { return nil }
+        let times: [Substring] = time.split(separator: "–")
+        guard times.count == 2 else { return nil }
+        var clocks: [Date] = []
+        for t in times {
+            let hm: [Substring] = t.split(separator: ":")
+            guard hm.count == 2, let h = Int(hm[0]), let mi = Int(hm[1]),
+                  let date = calendar.date(byAdding: .minute, value: h * 60 + mi, to: base) else { return nil }
+            clocks.append(date)
+        }
+        var end: Date = clocks[1]
+        // 日をまたぐ立ち寄り（終わりが始まりより前）は、翌日の時刻として読む
+        if end < clocks[0] { end = end.addingTimeInterval(86400) }
+        return (clocks[0], end)
     }
 
     /// 空白を除いた形（「見本 花子」と「見本花子」を同じにする）
@@ -436,7 +506,8 @@ enum PagesFeeds {
             let source: String = r.source == "claude" ? "claude" : "machine"
             items.append(ThreadPage(id: tid, title: title, kind: kind, status: status, decided: dated(r.decided, 100, 8),
                                     open: dated(r.open, 100, 8), next: MothershipFeeds.cut(r.next, 100) ?? "",
-                                    days: Array(days.prefix(30)), last_day: last, source: source))
+                                    days: Array(days.prefix(30)), last_day: last, source: source,
+                                    people: refs(r.people), places: refs(r.places)))
             if items.count >= threadLimit { break }
         }
         items.sort { $0.last_day > $1.last_day }
@@ -468,6 +539,7 @@ enum PagesFeeds {
             var page = PlacePage(id: pid, name: name, sure: r.sure == true, visit_days: days, visits: visits, last_day: last)
             if let spent = r.spent, spent >= 0 { page.spent = spent }
             page.with = strings(r.with, 20, 6)
+            page.people = refs(r.people)
             for v in r.recent ?? [] {
                 guard let x = v.value, let d = day(x.day), isSpan(x.time), let time = x.time else { continue }
                 var amount: Int?
@@ -676,6 +748,47 @@ final class PagesBook {
         PagesFeeds.page(named: name, in: people)
     }
 
+    // MARK: ページどうしの行き来（2026-11-16。強化案 139）
+
+    /// 行き来の相手の人のページ（番号があれば番号で。無ければ名前の文字で、合う人が 1 人のときだけ）
+    func person(ref: PageRef) -> PersonPage? {
+        if let id = ref.id, let hit = people.first(where: { $0.id == id }) { return hit }
+        return PagesFeeds.page(named: ref.name, in: people)
+    }
+
+    /// 行き来の相手の場所のページ（番号があれば番号で。無ければ名前の文字が同じ場所が 1 つのときだけ）
+    func place(ref: PageRef) -> PlacePage? {
+        if let id = ref.id, let hit = places.first(where: { $0.id == id }) { return hit }
+        let key: String = PagesFeeds.nameKey(ref.name)
+        guard !key.isEmpty else { return nil }
+        let hits: [PlacePage] = places.filter { PagesFeeds.nameKey($0.name) == key }
+        return hits.count == 1 ? hits[0] : nil
+    }
+
+    /// その人とよく行く場所（人のページの places か、場所のページの「誰と」から。新しく行った順）
+    func placesWith(_ person: PersonPage) -> [PlacePage] {
+        var out: [PlacePage] = []
+        for ref in person.places ?? [] {
+            if let hit = place(ref: ref), !out.contains(where: { $0.id == hit.id }) { out.append(hit) }
+        }
+        for place in places where !out.contains(where: { $0.id == place.id }) {
+            let seen: Bool = PagesFeeds.refMatches(place.people, id: person.id, name: person.name)
+                || place.with.contains { PagesFeeds.nameKey($0) == PagesFeeds.nameKey(person.name) }
+            if seen { out.append(place) }
+        }
+        return out
+    }
+
+    /// その人が出てくる話題の糸
+    func threads(with person: PersonPage) -> [ThreadPage] {
+        self.threads.filter { PagesFeeds.refMatches($0.people, id: person.id, name: person.name) }
+    }
+
+    /// その場所が出てくる話題の糸
+    func threads(at place: PlacePage) -> [ThreadPage] {
+        self.threads.filter { PagesFeeds.refMatches($0.places, id: place.id, name: place.name) }
+    }
+
     /// まだ選んでいない決めごと
     var openDecisions: [DecisionItem] {
         var out: [DecisionItem] = []
@@ -824,6 +937,7 @@ struct PersonPageView: View {
                     Text("人物ノートと自分のプロファイルに書いてあることだけです（会話から推し量っていません）。")
                 }
             }
+            PersonLinksSection(page: page)
             Section("やりとり") {
                 Text(PagesFeeds.countsLine(page))
                 if let last = page.last_line {
@@ -1001,6 +1115,7 @@ struct ThreadDetailView: View {
                     ForEach(Array(thread.decided.enumerated()), id: \.offset) { _, item in PageDatedRow(item: item) }
                 }
             }
+            ThreadLinksSection(thread: thread)
             Section {
                 Text(PagesFeeds.daysLine(thread.days, limit: 10))
             } header: {
@@ -1076,14 +1191,12 @@ struct PlacePageView: View {
             Section {
                 Text(PagesFeeds.placeLine(place))
                 LabeledContent("最後に行った日", value: AppFeeds.monthDay(place.last_day))
-                if !place.with.isEmpty {
-                    LabeledContent("誰と", value: place.with.joined(separator: "、"))
-                }
             } footer: {
                 if !place.sure {
                     Text("名前は位置からの推測（「たぶん」）です。同じ時間の支払いの店名で確かめられていません。")
                 }
             }
+            PlaceLinksSection(place: place)
             if !place.recent.isEmpty {
                 Section {
                     ForEach(Array(place.recent.enumerated()), id: \.offset) { _, visit in PlaceVisitRow(visit: visit) }
@@ -1118,6 +1231,19 @@ struct PlaceVisitRow: View {
     let visit: PlaceVisit
 
     var body: some View {
+        if let span = PagesFeeds.visitSpan(day: visit.day, time: visit.time) {
+            // その時の会話・支払い・写真へ（2026-11-16。強化案 139）
+            NavigationLink {
+                MomentView(from: span.from, to: span.to, title: AppFeeds.monthDay(visit.day) + " " + visit.time)
+            } label: {
+                content
+            }
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline) {
                 Text(AppFeeds.monthDay(visit.day) + " " + visit.time).font(.subheadline.monospacedDigit())
@@ -1272,6 +1398,128 @@ struct DecisionDueRows: View {
                 Label("決めごと「" + item.title + "」" + PagesFeeds.deadlineLabel(item.deadline, today: today),
                       systemImage: "signpost.right.and.left")
                     .foregroundStyle(.orange)
+            }
+        }
+    }
+}
+
+
+// MARK: - 行き来（2026-11-16。強化案 139・123）
+
+/// 人のページの「よく行く場所」「出てくる話題の糸」（あるときだけ）
+struct PersonLinksSection: View {
+    let page: PersonPage
+
+    var body: some View {
+        let book = PagesBook.shared
+        let places: [PlacePage] = book.placesWith(page)
+        let threads: [ThreadPage] = book.threads(with: page)
+        if !places.isEmpty {
+            Section("よく行く場所") {
+                ForEach(places) { place in
+                    NavigationLink {
+                        PlacePageView(place: place)
+                    } label: {
+                        Label(PlaceNameBook.shared.shown(pageID: place.id, original: place.name), systemImage: "mappin.and.ellipse")
+                    }
+                }
+            }
+        }
+        if !threads.isEmpty {
+            Section("出てくる話題の糸") {
+                ForEach(threads) { thread in
+                    NavigationLink {
+                        ThreadDetailView(thread: thread)
+                    } label: {
+                        Label(thread.title, systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 場所のページの「誰と」（人のページへ）と「出てくる話題の糸」
+struct PlaceLinksSection: View {
+    let place: PlacePage
+
+    /// 番号つきの「誰と」があればそれ。無ければ名前の文字
+    private var refs: [PageRef] {
+        if let people = place.people, !people.isEmpty { return people }
+        var out: [PageRef] = []
+        for name in place.with { out.append(PageRef(name: name)) }
+        return out
+    }
+
+    var body: some View {
+        let book = PagesBook.shared
+        let refs: [PageRef] = self.refs
+        let threads: [ThreadPage] = book.threads(at: place)
+        if !refs.isEmpty {
+            Section("誰と") {
+                ForEach(Array(refs.enumerated()), id: \.offset) { _, ref in
+                    if let page = book.person(ref: ref) {
+                        NavigationLink {
+                            PersonPageView(page: page)
+                        } label: {
+                            Label(ref.name, systemImage: "person.text.rectangle")
+                        }
+                    } else {
+                        Text(ref.name)
+                    }
+                }
+            }
+        }
+        if !threads.isEmpty {
+            Section("出てくる話題の糸") {
+                ForEach(threads) { thread in
+                    NavigationLink {
+                        ThreadDetailView(thread: thread)
+                    } label: {
+                        Label(thread.title, systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 話題の糸の「人」「場所」（母艦が渡したときだけ。省ける項目。強化案 123）
+struct ThreadLinksSection: View {
+    let thread: ThreadPage
+
+    var body: some View {
+        let book = PagesBook.shared
+        let people: [PageRef] = thread.people ?? []
+        let places: [PageRef] = thread.places ?? []
+        if !people.isEmpty {
+            Section("人") {
+                ForEach(Array(people.enumerated()), id: \.offset) { _, ref in
+                    if let page = book.person(ref: ref) {
+                        NavigationLink {
+                            PersonPageView(page: page)
+                        } label: {
+                            Label(ref.name, systemImage: "person.text.rectangle")
+                        }
+                    } else {
+                        Text(ref.name)
+                    }
+                }
+            }
+        }
+        if !places.isEmpty {
+            Section("場所") {
+                ForEach(Array(places.enumerated()), id: \.offset) { _, ref in
+                    if let page = book.place(ref: ref) {
+                        NavigationLink {
+                            PlacePageView(place: page)
+                        } label: {
+                            Label(ref.name, systemImage: "mappin.and.ellipse")
+                        }
+                    } else {
+                        Text(ref.name)
+                    }
+                }
             }
         }
     }

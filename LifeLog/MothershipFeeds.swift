@@ -1379,6 +1379,7 @@ struct PrepCardSection: View {
             Section {
                 PrepCard(item: item)
                 PrepPeopleLinks(names: item.people)  // 相手の人のページ（2026-11-15。強化案 53。PagesFeeds.swift）
+                PrepWhereRows(item: item)  // 行き先と、前にそこへ行った日（2026-11-16。強化案 138。PrepWhere.swift）
             } header: {
                 Text("次の予定の前に")
             }
