@@ -267,20 +267,49 @@ def prune(home: Path, now: float | None = None) -> None:
 
 def run_day(home: Path, store, day: str, log: Callable[[str], None], call=None) -> int | None:
     """夜の流れから呼ぶ。候補の数を返す（使わない設定・鍵が無い・記録が無いときは None）"""
-    if not settings()["on"]:
-        return None
-    if call is None and claude.load_key() is None:
-        return None
     parsed = store.day(day) if store is not None else None
     if parsed is None:
         return None
-    built = review_day(day, parsed, call=call, log=log)
+    use_claude = settings()["on"] and (call is not None or claude.load_key() is not None)
+    # 2026-11-16（強化案 100）: 地名の聞き間違いは、Claude を使わず読み（かな）で照らす（母艦の場所の一覧が無ければ何も出ない）
+    places = place_candidates(home, day, parsed)
+    if not use_claude and not places:
+        return None
+    if use_claude:
+        built = review_day(day, parsed, call=call, log=log)
+    else:
+        built = {"version": 1, "day": day, "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+                 "lines": len(day_lines(parsed)), "parts": 0, "read": 0, "calls": 0, "usd": 0.0, "dropped": 0,
+                 "stopped": None, "misheard": [], "speaker": []}
+    have = {(m["line_time"], m["wrong"]) for m in built["misheard"]}
+    built["place_fix"] = 0
+    for item in places:
+        if (item["line_time"], item["wrong"]) not in have:
+            built["misheard"].append(item)
+            built["place_fix"] += 1
     save_day(home, built)
     prune(home)
     log(f"夜の読み直し（{day}）: {built['lines']} 行のうち {built['read']} 行を {built['calls']} 回で読み、"
-        f"聞き間違い {len(built['misheard'])}・話し手 {len(built['speaker'])}（捨てた {built['dropped']}）、"
+        f"聞き間違い {len(built['misheard'])}（うち地名 {built['place_fix']}）・話し手 {len(built['speaker'])}（捨てた {built['dropped']}）、"
         f"${built['usd']:.3f}" + (f"。止めた理由: {built['stopped']}" if built["stopped"] else ""))
     return len(built["misheard"]) + len(built["speaker"])
+
+
+def place_candidates(home: Path, day: str, parsed: dict) -> list[dict]:
+    """地名の聞き間違いの候補（placefix.py）。config.json の "place_fix": false で止める。何があっても空で返す"""
+    try:
+        config = json.loads((Path(home) / "config.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        config = {}
+    if not isinstance(config, dict) or config.get("place_fix") is False:
+        return []
+    try:
+        import mothership
+        import placefix
+
+        return placefix.for_day(day, day_lines(parsed), mothership.home(config), Path(home))
+    except Exception:  # noqa: BLE001 — 地名の候補が作れなくても、夜の読み直しは続ける
+        return []
 
 
 # MARK: - 読む

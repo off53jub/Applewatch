@@ -212,6 +212,13 @@ jobs:
           python pc/v19checks_llm.py > v19.txt 2>&1 || { cat v19.txt; grep '^NG' v19.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v19.txt | sed 's/^/::notice::v19checks_llm の OK の数: /'
 
+      # 2026-11-16（強化案 85・99・100・128〜132）: 地名のヒント・地名の聞き間違い・場所と年表の意味の索引・場所で引く道具・
+      #   答えから音声へ・迷った区間だけ Whisper に回す、を作り物の母艦と一時フォルダで確かめる
+      - name: 地名・場所で探す・迷った所だけ Whisper を確かめる
+        run: |
+          python pc/v20checks_place.py > v20.txt 2>&1 || { cat v20.txt; grep '^NG' v20.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v20.txt | sed 's/^/::notice::v20checks_place の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py

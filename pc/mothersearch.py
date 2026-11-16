@@ -45,6 +45,7 @@ from typing import Callable, Iterable
 
 import numpy as np
 
+import mothersearch_extra  # 2026-11-16（強化案 128）: 場所・予定・支払い・写真の読み取りも
 import presence  # 2026-11-15: PC を使っているあいだは重い取り込みを譲る
 import semantic
 
@@ -61,11 +62,12 @@ FIRST_WAIT = 90.0           # 起動してから始めるまで
 K_MAX = 50
 HEAVY_WINDOWS = ((0, 0, 5, 0), (8, 30, 18, 0))   # (始め時, 分, 終わり時, 分)。終わりは含まない
 YIELD_LOG_EVERY = 3600.0    # 「譲っています」の記録は、1 時間に 1 回まで
-SOURCES = ("line", "plaud", "lifelog-pc", "digest", "weekly", "wishlist", "decisions", "profile", "people")
+SOURCES = ("line", "plaud", "lifelog-pc", "digest", "weekly", "wishlist", "decisions", "profile", "people",
+           *mothersearch_extra.SOURCES)
 STATE_FILES = {"wishlist": "WISHLIST.md", "decisions": "DECISIONS.md", "profile": "profile.md"}
 LABELS = {"line": "LINE", "plaud": "PLAUD", "lifelog-pc": "家の PC の会話のまとめ", "digest": "1日のまとめ",
           "weekly": "週のまとめ", "wishlist": "欲しい物リスト", "decisions": "決めごと", "profile": "本人のこと",
-          "people": "人のノート"}
+          "people": "人のノート", **mothersearch_extra.LABELS}
 
 DAY_PATH = re.compile(r"^(\d{4})/(\d{2})/(\d{2})(?:_.*)?\.md$")
 DIGEST_NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})\.md$")
@@ -131,6 +133,7 @@ def discover(base: Path, days: set[str] | None = None, with_state: bool = True) 
         for f in sorted(people.glob("*.md")) if people.is_dir() else []:
             if f.is_file():
                 found.append(("people", f))
+    found += mothersearch_extra.discover(base, days, with_state)
     return found
 
 
@@ -144,6 +147,9 @@ def day_of(source: str, base: Path, path: Path, mtime: float | None = None) -> s
             return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
     if source == "digest":
         return path.name[:10]
+    extra = mothersearch_extra.day_of(source, base, path)
+    if extra:
+        return extra
     if source == "weekly":
         m = WEEK_NAME.match(path.name)
         if m:
@@ -276,6 +282,14 @@ def chunks_for(source: str, path: Path, text: str) -> list[dict]:
         return chunk_plaud(text, title[:LABEL_MAX])
     if source == "people":
         return chunk_markdown(text, prefix=path.stem[:20])
+    if source == "timeline":
+        return _pack(mothersearch_extra.chunk_timeline(text))
+    if source == "places-index":
+        return _pack(mothersearch_extra.chunk_places_index(text))
+    if source == "places":
+        return chunk_markdown(text, prefix=path.stem[:20])
+    if source in ("calendar", "photo-notes"):
+        return chunk_markdown(text) if mothersearch_extra.day_text_ok(source, text) else []
     return chunk_markdown(text)
 
 
@@ -496,7 +510,7 @@ class MotherIndex:
             if wanted:
                 mask &= np.isin(cache["sources"], wanted)
             # 日の無いもの（state・people）は期間でしぼらない
-            dated = ~np.isin(cache["sources"], ["wishlist", "decisions", "profile", "people"])
+            dated = ~np.isin(cache["sources"], ["wishlist", "decisions", "profile", "people", *mothersearch_extra.UNDATED])
             if frm:
                 mask &= ~dated | np.array([d >= frm for d in cache["days"]], dtype=bool)
             if to:
