@@ -10,6 +10,7 @@
 - mothersearch: 年表（位置・予定・決済・写真だけ・座標は消す・会話は読まない）・予定・写真の読み取り・場所のノート・台帳を置ける
 - motherquery / MCP: 場所で引く・その時どこにいたか・1日の年表（会話は出さない）・約束・人と場所のページ。--exclude-work では人と場所のページを出さない
 - askmother: lookups の読み方と引き方・答えの出どころに音声の所を付ける（残っていなければ「もう無い」）
+- placelinks: 場所の名前直し・答え合わせの列・夜の繋がり候補・答えを母艦の inbox に 1 行足す（足すだけ・重ねない・人を勝手にまとめない）／駅の GeoJSON の辞書
 - selective: 迷った区間の決まり・Ensemble が設定 "doubt" のときだけ迷った区間にだけ Whisper をかける（既定は全部）
 """
 
@@ -89,9 +90,13 @@ def check_placehints(base: Path) -> int:
                   f"その時間にいた所 → 予定の場所 → よく行く所の順（{words}）")
     failed += say(len(placehints.words_at(base, when, limit=2)) == 2 and "自宅" not in words, "数の上限・自宅は入れない")
     empty = Path(tempfile.mkdtemp())
+    real_dir = placehints.GAZETTEER_DIR
+    placehints.GAZETTEER_DIR = Path(tempfile.mkdtemp())   # この PC に本物の辞書があっても、辞書が無い場合を確かめる
     placehints.clear_cache()
     failed += say(placehints.words_at(empty, when) == [] and placehints.known_names(empty, DAY) == []
                   and placehints.gazetteer_names() == [], "母艦に何も無ければ空（今のまま動く）・辞書が無くても動く")
+    placehints.GAZETTEER_DIR = real_dir
+    placehints.clear_cache()
     known = placehints.known_names(base, DAY)
     failed += say({k["origin"] for k in known} >= {"stay", "calendar", "ledger"}, f"聞き間違い用の名前の出どころ（{sorted({k['origin'] for k in known})}）")
     return failed
@@ -434,6 +439,122 @@ def check_ensemble() -> int:
     return failed
 
 
+def check_placelinks() -> int:
+    import placelinks as pl
+    import placehints
+
+    failed = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "m"
+        (base / "state").mkdir(parents=True)
+        (base / "digests" / "events").mkdir(parents=True)
+        # 母艦に何も無いとき（inbox も無い）は空の列
+        failed += say(pl.checkups(base) == {"available": False, "generated_at": "", "items": []}
+                      and pl.link_candidates(base)["items"] == [], "ファイルが無ければ空の列")
+        (base / "state" / "place_quiz_for_app.json").write_text(json.dumps({"generated_at": "2026-11-16T20:00:00+09:00", "items": [
+            {"id": "pq_20261115_1020", "day": "2026-11-15", "start": "10:20", "end": "11:05", "minutes": 45, "lat": 35.1, "lon": 139.7,
+             "current": {"tier": "none", "label": "x"}, "where": "どこか", "candidates": [{"name": "見本の店", "source": "payment"},
+                                                                                    {"name": "見本の駅", "source": "x"}],
+             "question": "ここはどこですか？"}]}, ensure_ascii=False), encoding="utf-8")
+        (base / "state" / "name_candidates.json").write_text(json.dumps({"candidates": [
+            {"id": "nc_0123abcd", "kind": "line_sender", "raw": "見本さん", "count": 12,
+             "suggest": [{"pe": "pe_0001", "name": "見本 太郎", "score": 0.8}, {"pe": "pe_0002", "name": "見本 次郎", "score": 0.7}]},
+            {"id": "nc_badbad00", "kind": "x", "raw": "候補なし", "count": 1, "suggest": []}]}, ensure_ascii=False), encoding="utf-8")
+        (base / "state" / "link_night_candidates.json").write_text(json.dumps({"version": 1, "days": {"2026-11-15": {"at": "2026-11-16T01:00:00",
+            "candidates": [{"a": "ev_aaaaaaaaaa", "b": "ev_bbbbbbbbbb", "kinds": "talk-todo", "why": "同じ買い物", "conf": 0.62, "status": "candidate"},
+                           {"a": "ev_cccccccccc", "b": "ev_dddddddddd", "why": "切られた", "conf": 0.9, "status": "cut"}]}}}), encoding="utf-8")
+        (base / "digests" / "events" / "2026-11-15.jsonl").write_text(
+            json.dumps({"id": "ev_aaaaaaaaaa", "title": "見本の会話"}, ensure_ascii=False) + "\n"
+            + json.dumps({"id": "ev_bbbbbbbbbb", "title": "見本の TODO"}, ensure_ascii=False) + "\n", encoding="utf-8")
+        got = pl.checkups(base)
+        kinds = {i["id"]: i for i in got["items"]}
+        q, person = kinds["pq_20261115_1020"], kinds["nc_0123abcd"]
+        failed += say(got["available"] and set(kinds) == {"pq_20261115_1020", "nc_0123abcd"} and q["kind"] == "place_unnamed"
+                      and [o["id"] for o in q["options"]] == ["c0", "c1", "not_place"] and q["text"] is True and q["day"] == "2026-11-15"
+                      and all(len(i["options"]) <= 4 and all(pl.OPTION_ID.match(o["id"]) for o in i["options"]) for i in got["items"]),
+                      "GET /checkups: 場所の問と人の問をアプリの列の形に（選べる答えの無い人の候補は出さない）")
+        failed += say([o["id"] for o in person["options"]] == ["pe_0001", "pe_0002", "none"] and person["text"] is False,
+                      "人の問の選べる答えは候補と「どれでもない」")
+        link = pl.link_candidates(base)
+        failed += say(len(link["items"]) == 1 and link["items"][0]["id"] == "lk:ev_aaaaaaaaaa:ev_bbbbbbbbbb" and link["items"][0]["source"] == "night"
+                      and "見本の会話" in link["items"][0]["title"] and [o["id"] for o in link["items"][0]["options"]] == ["yes", "no"],
+                      "GET /link-candidates: 夜の繋がり候補（切られたものは出さない・題は出来事の表から）")
+        # 答える（場所）
+        r1 = pl.checkup_answer(base, json.dumps({"id": "pq_20261115_1020", "kind": "place_unnamed", "value": "c1", "text": None}).encode())
+        row = json.loads((base / "inbox" / "place_answers.jsonl").read_text(encoding="utf-8").splitlines()[0])
+        failed += say(r1["recorded"] == "place_answers.jsonl" and row["name"] == "見本の駅" and row["choice"] == "candidate" and row["start"] == "10:20"
+                      and row["day"] == "2026-11-15" and row["id"] == "pq_20261115_1020", "場所の答え（候補）は答え合わせの答えの形で 1 行足す")
+        again = pl.checkup_answer(base, json.dumps({"id": "pq_20261115_1020", "kind": "place", "value": "not_place"}).encode())
+        failed += say(again.get("duplicate") and len((base / "inbox" / "place_answers.jsonl").read_text(encoding="utf-8").splitlines()) == 1,
+                      "同じ問の 2 回目は足さない")
+        failed += say(all(i["id"] != "pq_20261115_1020" for i in pl.checkups(base)["items"]), "答えた問は次の GET から外れる")
+        for body, status in (({"id": "pq_20261115_1020", "kind": "misheard", "value": "yes"}, 422), ({"id": "x", "kind": "place", "value": "yes"}, 400),
+                             ({"id": "pq_20261201_0000", "kind": "place", "value": "c0"}, 409), ({"id": "pq_20261201_0000", "kind": "place", "value": "text"}, 400)):
+            try:
+                pl.checkup_answer(base, json.dumps(body).encode())
+                failed += say(False, f"決まりに合わない答えは断る {status}")
+            except pl.Bad as error:
+                failed += say(error.status == status, f"決まりに合わない答えは断る（{error.status}・期待 {status}）")
+        failed += say(pl.checkup_answer(base, json.dumps({"id": "x", "kind": "place", "value": "skip"}).encode())["recorded"] == "skipped"
+                      and not (base / "inbox" / "name_answers.jsonl").exists(), "「あとで」は何も書かない")
+        # 人・繋がり
+        pl.checkup_answer(base, json.dumps({"id": "nc_0123abcd", "kind": "person", "value": "pe_0002"}).encode())
+        pl.checkup_answer(base, json.dumps({"id": "lk:ev_aaaaaaaaaa:ev_bbbbbbbbbb", "kind": "link", "value": "no"}).encode())
+        names = [json.loads(x) for x in (base / "inbox" / "name_answers.jsonl").read_text(encoding="utf-8").splitlines()]
+        feeds = [json.loads(x) for x in (base / "inbox" / "link_feedback.jsonl").read_text(encoding="utf-8").splitlines()]
+        failed += say(names[0]["verdict"] == "yes" and names[0]["pe"] == "pe_0002" and feeds[0]["a"] == "ev_aaaaaaaaaa"
+                      and feeds[0]["b"] == "ev_bbbbbbbbbb" and feeds[0]["verdict"] == "cut" and feeds[0]["by"] == "app",
+                      "人の答えは name_answers.jsonl・繋がりの答えは link_feedback.jsonl（cut／sure）")
+        failed += say(not (base / "people-index.md").exists() and not (base / "state" / "link_feedback.json").exists(),
+                      "人を勝手にまとめない・state/ には書かない")
+        failed += say(pl.link_candidates(base)["items"] == [] and pl.checkups(base)["items"] == [], "答えた問は出さない")
+        # /place-names: 位置が答え合わせの問に当たれば、その問の番号と始まり
+        (base / "state" / "place_quiz_for_app.json").write_text(json.dumps({"items": [
+            {"id": "pq_20261116_0900", "day": "2026-11-16", "start": "09:00", "lat": 35.1, "lon": 139.7, "candidates": []}]}), encoding="utf-8")
+        a = pl.place_name(base, json.dumps({"name": "見本の店", "lat": 35.10001, "lon": 139.70001, "pl": None, "from": "conversation",
+                                            "day": "2026-11-16", "at": "2026-11-16T10:20:30+09:00"}).encode())
+        b = pl.place_name(base, json.dumps({"name": "見本の店", "lat": None, "lon": None, "pl": "pl_xxx", "from": "page",
+                                            "at": "2026-11-16T10:20:30+09:00"}).encode())
+        c = pl.place_name(base, json.dumps({"name": "見本の店", "lat": 35.10001, "lon": 139.70001, "from": "conversation",
+                                            "day": "2026-11-16"}).encode())
+        rows = [json.loads(x) for x in (base / "inbox" / "place_answers.jsonl").read_text(encoding="utf-8").splitlines()]
+        failed += say(a["matched"] and a["id"] == "pq_20261116_0900" and rows[-2]["start"] == "09:00" and rows[-2]["choice"] == "typed"
+                      and rows[-2]["lat"] == 35.10001, "位置が同じ日の問に近ければ、その問の番号と始まりの時刻で足す")
+        failed += say(not b["matched"] and b["id"].startswith("pn_") and rows[-1]["pl"] == "pl_xxx" and rows[-1]["day"] == "2026-11-16"
+                      and rows[-1]["start"] == "10:20" and "lat" not in rows[-1], "場所のページの名前直し（pl だけ）は pl を付けて足す")
+        failed += say(c.get("duplicate") is True and len(rows) == 3, "同じ直しは重ねて足さない")
+        for body in ({"name": ""}, {"name": "a", "lat": 35.1}, {"name": "a", "pl": "xx"}, {"name": "a", "lat": 999, "lon": 1}, {"name": "a", "day": "昨日"}):
+            try:
+                pl.place_name(base, json.dumps(body).encode())
+                failed += say(False, f"決まりに合わない名前直しは断る {body}")
+            except pl.Bad:
+                failed += say(True, "決まりに合わない名前直しは断る")
+        text = (base / "inbox" / "place_answers.jsonl").read_bytes()
+        failed += say(text.endswith(b"\n") and text.count(b"\n") == len(rows), "1 行ずつ・改行で終わる")
+        (base / "inbox" / "place_answers.jsonl").write_bytes(text.rstrip(b"\n"))
+        pl.place_name(base, json.dumps({"name": "別の店", "from": "page", "pl": "pl_yyy"}).encode())
+        failed += say(all(json.loads(x) for x in (base / "inbox" / "place_answers.jsonl").read_text(encoding="utf-8").splitlines()),
+                      "最後が改行で終わっていなくても、前の行を壊さずに足す")
+    failed += say(pl.features() == ["placenames", "checkups", "linkfind"], "features")
+    # 駅の GeoJSON も辞書として読める
+    folder = Path(tempfile.mkdtemp())
+    (folder / "stations").mkdir()
+    (folder / "stations" / "N02.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"N02_005": "見本の浜"}, "geometry": None},
+        {"type": "Feature", "properties": {"N02_005": "見本の浜"}, "geometry": None},
+        {"type": "Feature", "properties": {"N02_005": "うみ駅"}, "geometry": None}]}, ensure_ascii=False), encoding="utf-8")
+    saved = placehints.GAZETTEER_DIR
+    placehints.GAZETTEER_DIR = folder
+    placehints.clear_cache()
+    try:
+        names = [g["name"] for g in placehints.gazetteer_names()]
+        failed += say(sorted(names) == ["うみ駅", "見本の浜駅"], f"駅の GeoJSON（stations/ の下）を辞書として読む（{names}）")
+    finally:
+        placehints.GAZETTEER_DIR = saved
+        placehints.clear_cache()
+    return failed
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp) / "mother"
@@ -441,7 +562,7 @@ def main() -> int:
         home.mkdir()
         make_mother(base)
         failed = check_placehints(base) + check_hintpolicy(base) + check_mothersearch(base) + check_motherquery(base) \
-            + check_ask(base, home) + check_placefix(base, home) + check_selective() + check_ensemble()
+            + check_ask(base, home) + check_placefix(base, home) + check_selective() + check_ensemble() + check_placelinks()
     print("ぜんぶ OK" if not failed else f"NG が {failed} 個")
     return 1 if failed else 0
 

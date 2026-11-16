@@ -73,3 +73,39 @@ haas が何も書かなかった区間は、Whisper だけが書いた行を vot
 - 地名の辞書（国の公開データ・OpenStreetMap）の入手と利用条件の確認（ダウンロードは未実施）。置き場所は `%LOCALAPPDATA%\LifeLogPC\gazetteer\*.tsv`
 - `"place_hints"`・`"whisper_hints"`・`"whisper_scope"` の既定をどうするか（§3・§5 の数で）
 - 音声の保存期間（130 は、無ければ「もう無い」と返すだけ）
+
+## 8. アプリとつなぐ口（`placelinks.py`。強化案 89・90・136・137）
+
+アプリの `docs/s16-place-links.md` が求める口を、PC に作った。母艦は**読むか、inbox/ の下に 1 行足すだけ**（`state/`・`archive/`・`people-index.md` は書かない）。
+認証は今の GET/POST と同じ（`authorized()`）。読んで確かめてから足し、決まりに合わなければ何も書かずに 400（種類が違えば 422・問が見つからなければ 409）。
+features: `placenames`・`checkups`・`linkfind`。
+
+| 口 | 母艦のどこを | 返す・足す |
+|---|---|---|
+| `POST /place-names` | `inbox/place_answers.jsonl` に足す | 下の「名前直しの変換」 |
+| `GET /checkups` | `state/place_quiz_for_app.json`・`state/name_candidates.json` を読む | アプリの列（下）。もう答えた問（inbox に答えがある）は出さない |
+| `GET /link-candidates` | `state/link_night_candidates.json`（直近 3 日）と `digests/events/<日>.jsonl`（題）を読む | 同じ列で `kind: "link"`・`source: "night"`。切られた組・もう答えた組は出さない |
+| `POST /checkups/answer` | 場所 → `inbox/place_answers.jsonl`／人 → `inbox/name_answers.jsonl`／繋がり → `inbox/link_feedback.jsonl` | 同じ問の 2 回目は足さない（`duplicate: true`） |
+
+**列の形**（`GET /checkups`・`GET /link-candidates`）: `{"available", "generated_at", "items": [{"id", "kind", "title", "detail", "weight", "day", "pl", "pe", "text", "options": [{"id", "label"}], "source"?}]}`。ファイルが無ければ `{"available": false, "items": []}`。
+- 場所の問: `id` は母艦の `pq_YYYYMMDD_HHMM`。`kind` は現在の段が none なら `place_unnamed`、そうでなければ `place`。`options` は候補 `c0`〜`c2`（母艦の `candidates` の順）と `not_place`（場所ではない）。`text: true`。`weight` は分数の半分（最大 1000）。
+- 人の問: `id` は `nc_…`。`options` は候補の人の番号 `pe_…`（3 人まで）と `none`（どれでもない）。選べる候補が無い問は出さない（アプリが答えられないので）。`weight` は件数。
+- 繋がりの問: `id` は `lk:<ev_a>:<ev_b>`（順不同）。`options` は `yes`・`no`。題は出来事の表の題（先頭 40 字ほど）をそれぞれ 24 字まで。
+
+**答えの変換**:
+- 場所の答え → 母艦の答え合わせの答えの形 `{id, day, start("HH:MM"), name, choice(candidate|typed|not_place), at}`（`from: "checkup"` を足す。`value` が `c0` なら候補の 1 番目の名前で `candidate`・`text` なら文字で `typed`・`not_place` は名前を空にして `not_place`）。`skip`（あとで）は何も書かない。
+- 人の答え → `inbox/name_answers.jsonl`: `{"id", "verdict": "yes"|"no", "pe", "at", "by": "app"}`（母艦の `state/name_answers.json` の items と同じ形。`none` は `no`・`pe` は null）。**母艦は読んで people-index に反映するかを自分で決める（PC は書かない）**。
+- 繋がりの答え → `inbox/link_feedback.jsonl`: `{"a", "b", "verdict": "sure"|"cut", "at", "by": "app"}`（母艦の `state/link_feedback.json` の items と同じ形。`yes` が sure・`no` が cut）。**この jsonl を `state/link_feedback.json` に取り込むのは母艦側の仕事**（新しいファイルの名前: `inbox/name_answers.jsonl`・`inbox/link_feedback.jsonl`）。
+
+**名前直しの変換**（`POST /place-names` の本文 → 答え合わせの答えの形）:
+- アプリの本文 `{name, lat, lon, pl, from, day, at}` のうち、`name` だけが必須。`lat`・`lon` は両方か両方なし。
+- 母艦の答え合わせの材料に、**同じ日で 150 m 以内**の問があれば、その問の `id`・`start` を使う（母艦が同じ滞在に戻せる）。なければ `id` は `pn_` ＋ 10 文字の hash、`start` は `at` の時刻（HH:MM）。
+- 足す 1 行: `{id, day, start, name, choice: "typed", at(PC が受けた時刻), from(conversation|page|registered|watch|visit|checkup|app)}` に、あれば `lat`・`lon`（5 桁）・`pl` を足す。
+- 場所のページの直し（`pl` だけ・`lat`/`lon` なし）は、母艦の `apply_answers` が日・時刻で滞在に戻せない。**`pl` の欄を見て台帳の名前を「確か」にするのは母艦側の仕事**（PC は欄を付けて足すだけ）。
+
+## 9. 地名の辞書: 駅の GeoJSON も読む
+
+`%LOCALAPPDATA%\LifeLogPC\gazetteer\` の `*.tsv`（名前 TAB よみ TAB 種類）に加えて、母艦の `scripts/gazetteer.py` と同じ国土数値情報 N02 の駅の GeoJSON（`stations\*.geojson` か直下の `*.geojson`）も読む。
+駅名（N02_005。重なりをまとめて 8,504 駅）に「駅」を付けた名前にして、読み（かな）は PC が pykakasi で作る。
+辞書の名前は数が多いので、聞き間違いの候補は**読みが同じで漢字が違う語**（名前と 1 字は同じ字がある）だけにした
+（読みが近いだけだと、全国の駅では「正直→少路駅」のようにふつうの語に当たりすぎた。11/3〜16 の候補は辞書を入れても 14 件のまま）。

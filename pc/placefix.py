@@ -135,6 +135,9 @@ def find(text: str, index: NameIndex, similar: float = SIMILAR) -> list[dict]:
         limit = allowed_edits(len(reading))
         if limit < 0:
             continue
+        gazetteer = item["origin"] == "gazetteer"
+        if gazetteer:
+            limit = 0      # 辞書（全国の駅など数が多い）は、読みが同じで漢字が違う語だけ。読みが近いだけだと、ふつうの語に当たりすぎる
         best, resolved = None, False
         for i in range(len(toks)):
             surface = seg = ""
@@ -155,6 +158,8 @@ def find(text: str, index: NameIndex, similar: float = SIMILAR) -> list[dict]:
                     break
                 if surface == name or surface in name or name in surface:
                     continue
+                if gazetteer and not (set(surface) & set(name.rstrip("駅"))):
+                    continue   # 辞書の名前とは、1 字も同じ字が無い語（有益と由宇駅など）は出さない
                 score = 1.0 - gap / max(len(reading), 1)
                 if best is None or score > best[0]:
                     best = (score, surface)

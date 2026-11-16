@@ -12,7 +12,8 @@
   3. digests/timeline/<日>.json の「位置」の行（place）= その日いた所（時刻つき）
   4. archive/calendar/YYYY/MM/DD.md の「場所:」= 予定の場所
   5. この PC の records/<日>.json の会話の place（アプリが付けた、その時間にいた所）
-  6. 地名の辞書（任意。HOME/gazetteer/*.tsv。1 行 = 名前<TAB>よみ（かな）<TAB>種類。無くてよい。ダウンロードはしない）
+  6. 地名の辞書（任意。HOME/gazetteer/*.tsv＝名前<TAB>よみ（かな）<TAB>種類、と 駅の GeoJSON＝国土数値情報 N02 の
+     HOME/gazetteer/stations/*.geojson（母艦の scripts/gazetteer.py と同じファイル。駅名に「駅」を付けた名前にする）。無くてよい。ダウンロードはしない）
 
 使い方:
   words_at(base, epoch)  その時刻にいた所・最寄り駅・今日の予定の場所・よく行く所の名前（近い順・数に上限）
@@ -286,11 +287,31 @@ def known_names(base: Path, day: str, home: Path | None = None) -> list[dict]:
 # MARK: - 地名の辞書（任意。ダウンロードはしない）
 
 
+def _geojson_stations(path: Path) -> list[dict]:
+    """国土数値情報 鉄道（N02）の駅の GeoJSON。駅名 N02_005 に「駅」を付けた名前（よみは無いので読み手が作る）"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return []
+    out, seen = [], set()
+    for feature in (data.get("features") if isinstance(data, dict) else None) or []:
+        props = feature.get("properties") if isinstance(feature, dict) else None
+        raw = str((props or {}).get("N02_005") or "").strip()
+        name = clean_name(raw if raw.endswith("駅") else raw + "駅") if raw else ""
+        if name and name not in seen:
+            seen.add(name)
+            out.append({"name": name, "reading": "", "kind": "station"})
+    return out
+
+
 def gazetteer_names() -> list[dict]:
-    """HOME/gazetteer/*.tsv の [{"name", "reading", "kind"}]。フォルダが無ければ空（今のまま動く）"""
+    """HOME/gazetteer/ の [{"name", "reading", "kind"}]。*.tsv（名前 TAB よみ TAB 種類）と、駅の GeoJSON（stations/ の下でも直下でも）。
+    フォルダが無ければ空（今のまま動く）"""
     def load() -> list[dict]:
         out = []
         try:
+            for geo in sorted(set(GAZETTEER_DIR.glob("*.geojson")) | set(GAZETTEER_DIR.glob("stations/*.geojson"))):
+                out += _geojson_stations(geo)
             files = sorted(GAZETTEER_DIR.glob("*.tsv"))
         except OSError:
             return []

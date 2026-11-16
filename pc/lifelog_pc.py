@@ -188,6 +188,7 @@ import claude
 import askmother
 import mothersearch  # 2026-11-15（強化案 42）: 母艦の文も意味で探す（semantic.db の別の表）
 import audioclip  # 2026-11-16（強化案 130）: 答えの出どころから元の音声の所へ（GET /audio-clip）
+import placelinks  # 2026-11-16（89・90・136・137）: 場所の名前直し・答え合わせ・夜の繋がり候補の口（母艦の inbox に足すだけ）
 import selective  # 2026-11-16（強化案 132）: 迷った区間だけ Whisper に回す（設定 "whisper_scope": "doubt"。既定は全部）
 import hintpolicy  # 2026-11-16（99・131）: 聞き取りのヒントの渡し方（kotoba には渡さない・地名を足す。中身は hintpolicy.py）
 import priority  # 2026-11-15: この PC の Ollama の優先度を「通常以下」に（中身は priority.py）
@@ -2204,6 +2205,7 @@ def features(engines: list | None = None) -> list[str]:
         found.append("claude")
     found.extend(promises.features() + askmother.features(load_config()))  # 2026-11-13（施策 13・15）
     found.append("audioclip")  # 2026-11-16（強化案 130）: GET /audio-clip
+    found.extend(placelinks.features())  # 2026-11-16: placenames・checkups・linkfind
     # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）
     if "vad" in _extras:
         found.append("silero")
@@ -2957,13 +2959,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path not in ("/hello", "/train-status", "/jobs", "/index/status", "/watch-route", "/claude/usage") \
                 and path not in mothership.GETS and path not in promises.GETS and path not in livecoach.GETS \
-                and path not in audioclip.GETS and not path.startswith("/jobs/"):
+                and path not in audioclip.GETS and path not in placelinks.GETS and not path.startswith("/jobs/"):
             self.send_json(404, {"error": "not found"})
             return
         if not self.authorized():
             return
         if path in promises.GETS:  # 2026-11-13（施策 13）: 会話のあとの約束
             promises.http_get(self)
+            return
+        if path in placelinks.GETS:  # 2026-11-16: GET /checkups・/link-candidates（母艦のファイルを読むだけ）
+            placelinks.http_get(self, path, load_config(), log)
             return
         if path in audioclip.GETS:  # 2026-11-16（強化案 130）: 答えの出どころの音声の一部（無ければ 404）
             audioclip.http_get(self, url.query, App.records, log)
@@ -3044,6 +3049,10 @@ class Handler(BaseHTTPRequestHandler):
         if url.path in livecoach.POSTS:  # 2026-11-15（強化案 50・52）: 会議モードの様子・心拍の分ごとの記録
             if self.authorized():
                 livecoach.http_post(self, url.path, mothership.home(load_config()), log)
+            return
+        if url.path in placelinks.POSTS:  # 2026-11-16: POST /place-names・/checkups/answer（母艦の inbox に 1 行足すだけ）
+            if self.authorized():
+                placelinks.http_post(self, url.path, load_config(), log)
             return
         if url.path in promises.POSTS or url.path in askmother.POSTS:  # 2026-11-13（施策 13・15）
             if self.authorized():
