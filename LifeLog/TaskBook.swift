@@ -1113,21 +1113,34 @@ extension Pipeline {
         }
     }
 
-    /// 帳が変わっていたら、ドライブの「頼まれごと帳」と同期フォルダの「頼まれごと帳.json」に写す
+    /// 帳が変わっていたら、ドライブの「頼まれごと帳」と同期フォルダの「頼まれごと帳.json」に写す。
+    /// 2026-11-16（強化案 83）: 区切りの処理の中ですぐ書かず、150 秒まとめてから処理の外で書く（DriveWrites.swift）。
+    /// 処理が iOS に止められて cancelled になり、次の処理でまた書こうとして止められる、を繰り返していたため。
     func writeTaskBook() async {
-        guard email != nil else { return }
+        guard email != nil, UserDefaults.standard.string(forKey: Self.taskBookHashKey) != taskBookStamp() else { return }
+        driveWrites.schedule("taskBook") { [weak self] in await self?.writeTaskBookNow() ?? true }
+    }
+
+    /// 件数と最後に変えた時刻が前に写したときと同じなら書かない（期限の「あと何日」は日が変わったら書き直す）
+    private func taskBookStamp() -> String {
+        "\(tasks.items.count)|\(tasks.items.map(\.updated).max()?.timeIntervalSince1970 ?? 0)|"
+            + TaskBook.dayFormat.string(from: .now)
+    }
+
+    /// 書けたか、やり直さなくてよければ true
+    private func writeTaskBookNow() async -> Bool {
+        guard email != nil else { return true }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let json = try? encoder.encode(tasks.items) else { return }
-        // 件数と最後に変えた時刻が前に写したときと同じなら書かない（期限の「あと何日」は日が変わったら書き直す）
-        let stamp = "\(tasks.items.count)|\(tasks.items.map(\.updated).max()?.timeIntervalSince1970 ?? 0)|"
-            + TaskBook.dayFormat.string(from: .now)
-        guard UserDefaults.standard.string(forKey: Self.taskBookHashKey) != stamp else { return }
+        guard let json = try? encoder.encode(tasks.items) else { return true }
+        let stamp = taskBookStamp()
+        guard UserDefaults.standard.string(forKey: Self.taskBookHashKey) != stamp else { return true }
         do {
             try await writeTaskBookFiles(taskParagraphs(), json: json)
             UserDefaults.standard.set(stamp, forKey: Self.taskBookHashKey)
+            return true
         } catch {
-            diagnostics.problem("頼まれごと帳をドライブに書けませんでした: \(error.localizedDescription)")
+            return driveWriteFailed(error, what: "頼まれごと帳")
         }
     }
 

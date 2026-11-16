@@ -1368,7 +1368,8 @@ final class ConversationLog {
         // 待っているあいだに、同じ日の直しが足されたかもしれないので、読み直して合わせる
         var pending = pendingDocFixes()
         pending[day] = DocFixQueue.after(tried: tried, snapshot: snapshot?.fixes ?? [], now: pending[day],
-                                         failed: failure != nil, failures: snapshot?.failures ?? 0)
+                                         failed: failure != nil, failures: snapshot?.failures ?? 0,
+                                         countFailure: failure.map { DriveRetry.kind($0) == .error } ?? true)
         savePendingDocFixes(pending)
         return failure
     }

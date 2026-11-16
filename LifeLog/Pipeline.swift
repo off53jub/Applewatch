@@ -234,6 +234,8 @@ final class Pipeline {
     private(set) var watchLowPower: Bool?
     /// 録音の帳簿（抜けの地図・数の照合・毎朝の点検・電池の先回り。2026-11-06）
     let ledger = RecordingLedger()
+    /// 帳のドライブへの書き込みを 150 秒まとめる（2026-11-16。強化案 83。DriveWrites.swift）
+    let driveWrites = DriveWriteCoalescer()
     /// 会議モード（いま会議中なら、その会議。2026-11-06）
     var meeting: MeetingMode.Session? = MeetingMode.active
     /// 初めての人の印と、名乗った声（名前を付けるのは本人。2026-11-06）
@@ -1110,7 +1112,7 @@ final class Pipeline {
             placeIndexBuilt = .distantPast
             recordsVersion += 1
         }
-        if let error = result.docError, !error.isCancellation {
+        if let error = result.docError, DriveRetry.kind(error) == .error {
             message = "ドキュメントの行を直せませんでした（あとでやり直します）: \(error.localizedDescription)"
         }
         return result.count
@@ -1316,7 +1318,8 @@ final class Pipeline {
                          where match: (ConversationLog.Line) -> Bool) async {
         guard let name = await speakers.name(of: id) else { return }
         let result = await conversations.relabel(to: id, name: name, renaming: renaming, where: match)
-        if let error = result.docError, !error.isCancellation {
+        // cancelled・通信が切れた・429 は、直しを覚えてあとでやり直すので、出さない（2026-11-16。強化案 83）
+        if let error = result.docError, DriveRetry.kind(error) == .error {
             message = "ドキュメントの名前を直せませんでした（あとでやり直します）: \(error.localizedDescription)"
         }
         people = await speakers.people()
@@ -1470,6 +1473,8 @@ final class Pipeline {
         conversations.saveTrashNow()
         Latency.flush()
         Task { await speakers.saveNow() }
+        // 帳のドライブへの書き込みも、待たずに書く（2026-11-16。強化案 83。DriveWrites.swift）
+        flushDriveWrites()
         // 2026-11-16（v19）: 時計の遅れ・騒がしさの控え、送った記録、効き目の数も。鍵で守るものは裏の糸で書く
         watchDelays.saveNow()
         noiseLog.saveNow()
@@ -1805,7 +1810,7 @@ final class Pipeline {
                     try await docs.uploadIfMissing(data, name: HealthExport.fileName(day.day), folder: HealthExport.folderName)
                 } catch {
                     // iOS に止められただけ（cancelled）なら、エラーにしない。次の機会に続きから書く
-                    if !error.isCancellation {
+                    if DriveRetry.kind(error) == .error {
                         diagnostics.problem("ヘルスケアをドライブに書けませんでした: \(error.localizedDescription)")
                     }
                     break
@@ -1841,7 +1846,7 @@ final class Pipeline {
                 do {
                     try await docs.uploadIfMissing(data, name: LocationExport.fileName(key), folder: LocationExport.folderName)
                 } catch {
-                    if !error.isCancellation {
+                    if DriveRetry.kind(error) == .error {
                         diagnostics.problem("位置をドライブに書けませんでした: \(error.localizedDescription)")
                     }
                     break
@@ -2262,7 +2267,7 @@ final class Pipeline {
             let stamp = DriveGuide.stamp(paragraphs)
             guard force || UserDefaults.standard.string(forKey: key) != stamp else { continue }
             do {
-                try await docs.overwrite(paragraphs, name: name)
+                try await docs.overwrite(paragraphs, name: name, skipIfSame: !force)
                 UserDefaults.standard.set(stamp, forKey: key)
             } catch {
                 // 通信できないときは5分ほどしてやり直す
@@ -2957,7 +2962,7 @@ final class Pipeline {
             do {
                 try await conversations.append(batch, text: lines.map { $0 + "\n" }.joined(), day: day)
             } catch {
-                if !error.isCancellation {
+                if DriveRetry.kind(error) == .error {
                     message = "ドキュメントに書けませんでした（あとで再試行します）: \(error.localizedDescription)"
                 }
                 return false

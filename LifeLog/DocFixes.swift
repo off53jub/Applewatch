@@ -19,12 +19,14 @@ struct DocFixQueue: Codable, Equatable {
     /// - tried: 当てようとした直し（snapshot のあとに、そのとき新しく足した分）
     /// - snapshot: 当て始めたときに覚えていた直し
     /// - now: 当て終わって読み直した、覚えている直し（待っているあいだに足された分があれば、snapshot のうしろに付いている）
-    static func after(tried: [DocFix], snapshot: [DocFix], now: DocFixQueue?, failed: Bool, failures: Int) -> DocFixQueue? {
+    /// - countFailure: 失敗を数えるか（cancelled・通信が切れた・429 は数えない。あとでやり直すだけ。2026-11-16。強化案 83）
+    static func after(tried: [DocFix], snapshot: [DocFix], now: DocFixQueue?, failed: Bool, failures: Int,
+                      countFailure: Bool = true) -> DocFixQueue? {
         let current = now?.fixes ?? []
         let added = current.starts(with: snapshot) ? Array(current.dropFirst(snapshot.count))
             : current.filter { !snapshot.contains($0) }
         if failed {
-            let count = failures + 1
+            let count = countFailure ? failures + 1 : failures
             guard count < giveUp else { return added.isEmpty ? nil : DocFixQueue(fixes: added) }
             return DocFixQueue(fixes: tried + added.filter { !tried.contains($0) }, failures: count)
         }
