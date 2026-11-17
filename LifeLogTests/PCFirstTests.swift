@@ -197,4 +197,16 @@ final class PCFirstTests: XCTestCase {
         XCTAssertNil(PushWake.job(from: ["lifelog": ["kind": "job", "job": ""]]))
         XCTAssertNil(PushWake.job(from: [:]))
     }
+
+    // MARK: - もう一度取りに行くか（2026-11-18）
+
+    func testAgainWhileRecordingInBackground() {
+        // 開いているあいだは、入れきれなかったときだけ（もとから1分ごとに見ている）
+        XCTAssertTrue(PCFirst.again(active: true, recording: false, more: true))
+        XCTAssertFalse(PCFirst.again(active: true, recording: true, more: false))
+        // 裏で iPhone も録音しているあいだは、いつも1分後にもう一度
+        XCTAssertTrue(PCFirst.again(active: false, recording: true, more: false))
+        // 裏で録音していなければ、今までどおり続けない（iOS に起こされたときだけ）
+        XCTAssertFalse(PCFirst.again(active: false, recording: false, more: true))
+    }
 }

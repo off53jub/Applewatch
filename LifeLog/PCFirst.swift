@@ -20,6 +20,12 @@ enum PCFirst {
 
     /// PC に聞く間（これより短い間では聞かない）
     static let interval: TimeInterval = 60
+
+    /// 少ししてからもう一度取りに行くか（開いていて入れきれなかった・裏で録音している。2026-11-18）
+    static func again(active: Bool, recording: Bool, more: Bool) -> Bool {
+        active ? more : recording
+    }
+
     /// これより古い区切りは入れない（iPhone と時計の行の重なりを覚えている長さ。Merger と同じ2日）
     static let maxAge: TimeInterval = 2 * 86400
     /// 1回に入れる数
@@ -203,8 +209,12 @@ extension Pipeline {
         // 時計の区切りの音声も、時計からではなく家の PC から受け取る（PC が "jobaudio" を持つとき。2026-11-15。強化案 64。PCRelay.swift）。
         // 上で「音声を待つ」と決めた区切り（職場・寝ている時間）は、ここで音声が届くので、同じ取り込みの回で記録に入る
         let moreAudio = await pullRelayAudio(jobs)
-        // 1回で入れきれなかったら（音声を受け取りきれなかったときも）、アプリを開いているあいだは少ししてからもう一度
-        if names.count >= PCFirst.perPass || moreAudio, UIApplication.shared.applicationState == .active, state.again == nil {
+        // 1回で入れきれなかったら（音声を受け取りきれなかったときも）、アプリを開いているあいだは少ししてからもう一度。
+        // iPhone でも録音しているあいだは、アプリが裏で動き続けているので、閉じていても1分ごとに取りに行く
+        // （前は iPhone の区切り＝5分ごとだけ。時計の区切りが iPhone に届くまで、ふつう 2〜6 分・遅いと何時間もかかっていた。2026-11-18）
+        let more = names.count >= PCFirst.perPass || moreAudio
+        let active = UIApplication.shared.applicationState == .active
+        if PCFirst.again(active: active, recording: isRecording, more: more), state.again == nil {
             state.again = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(PCFirst.interval + 1))
                 PCFirstState.shared.again = nil
