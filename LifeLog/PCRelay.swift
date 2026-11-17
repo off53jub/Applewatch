@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import UIKit
 
 /// 時計の区切りの音声を、時計からではなく家の PC から受け取る（2026-11-15。強化案 64）。
 ///
@@ -24,6 +25,8 @@ enum PCRelay {
 
     /// 1回に受け取る数（裏で起こされたときの短い時間でも終わるように）
     static let perPass = 8
+    /// アプリを開いているあいだに1回で受け取る数（1分ごとに続ける。たまった分を早く受け取る。2026-11-18）
+    static let perPassActive = 40
     /// 受け取れなかった区切りは、これだけは試さない
     static let retryAfter: TimeInterval = 15 * 60
 
@@ -75,6 +78,14 @@ extension Pipeline {
                        onWiFi: archive.isOnWiFi, online: archive.isOnline, cellular: homePC.relayCellular)
     }
 
+    /// いまのつながり方によらず、時計の音声を家の PC から受け取る準備があるか（設定がオン・PC が対応・家の PC を使える）。
+    /// 時計は、このあいだ PC に届いた区切りを長く待つ（Wi-Fi に戻ったとき・アプリを開いたときに受け取る。2026-11-18）
+    func relaySetUp() -> Bool {
+        PCRelay.usable(on: homePC.watchRelay, supported: PCRelay.supported,
+                       pcReady: homePC.isConfigured && homePC.watchDirect && HomePC.acceptsJobs,
+                       onWiFi: true, online: true, cellular: false)
+    }
+
     /// つながり方や設定が変わって「受け取れる・受け取れない」が変わったら、10分を待たずに時計に知らせ直す
     func refreshWatchRelay() {
         guard homePC.isConfigured, homePC.watchDirect else { return }
@@ -97,8 +108,9 @@ extension Pipeline {
         // もう受け取った名前は、覚えと手元のファイルを1回だけ読んで見る（候補は千を超えることがある）
         let received = Storage.receivedNames()
         let onDisk = Set((Storage.pendingChunks() + Storage.keptAudio()).map { $0.lastPathComponent })
+        let limit = UIApplication.shared.applicationState == .active ? PCRelay.perPassActive : PCRelay.perPass
         let names = PCRelay.pick(listed + first, have: { received.contains($0) || onDisk.contains($0) },
-                                 failed: state.failed, now: now)
+                                 failed: state.failed, now: now, limit: limit)
         for name in names {
             if Task.isCancelled { break }
             guard let data = await homePC.jobAudio(name, cellular: homePC.relayCellular) else {
@@ -120,7 +132,7 @@ extension Pipeline {
                 Tally.add(PCRelay.brokenKey)
             }
         }
-        return names.count >= PCRelay.perPass
+        return names.count >= limit
     }
 
     /// 家の PC から受け取った音声を、時計から届いたときと同じ流れに入れる。開けない音声は入れない（時計からの受け渡しに任せる）

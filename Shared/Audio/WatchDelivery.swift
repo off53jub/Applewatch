@@ -307,15 +307,41 @@ enum WatchDelivery {
     /// 時計が、PC に届いた区切りを iPhone に送らずに待つ長さ
     static let relayWait: TimeInterval = 20 * 60
 
+    // 2026-11-18: 20分では足りなかった。iPhone が寝ている夜は PC から 1 時間に 2〜11 個しか受け取らず、待ち切れなかった区切りが
+    // Apple に絞られた受け渡しに回って、時計に「iPhone に送っていない録音」が 300 個ほどたまった（家でも外でも）。
+    // PC はもう音声を持っていて、文字も PC から先に記録に入っているので、iPhone が「受け取る準備はある」（いまは Wi-Fi でなくても）
+    // と言っているあいだは、PC に届いた区切りを長く待つ（iPhone は Wi-Fi に戻ったとき・アプリを開いたときにまとめて受け取る）。
+
+    /// applicationContext（iPhone → 時計）: iPhone が、時計の音声を家の PC から受け取る準備がある（設定がオン・PC が対応）。
+    /// いま受け取れるか（relayKey）とは別。古い iPhone のアプリは送らない＝今までどおり 20 分だけ待つ
+    static let relayLaterKey = "pcRelayLater"
+    /// 準備があるときに待つ長さ（時計が「PC に届いた」を覚えている 24 時間と、iPhone が受け取る 2 日より短く）
+    static let relayLongWait: TimeInterval = 20 * 3600
+    /// 長く待つ区切りの数の上限（時計の空きを使い切らない。超えた古いものから今までどおり iPhone に送る）
+    static let relayHoldMax = 900
+
     /// 時計が、この区切りを iPhone に送るのを待つか。
     /// relay は iPhone が「PC から受け取れる」と言っているか。sentToPC は PC に届いた時刻。sendingToPC はいま PC に送っている途中か。
     /// PC に送れなかった（sentToPC が無く、送っている途中でもない）区切りは待たない
-    static func relayHold(relay: Bool, sentToPC: Date?, sendingToPC: Bool, now: Date) -> Bool {
-        guard relay else { return false }
+    /// later は iPhone が「受け取る準備がある」と言っているか（そのときは relayLongWait まで待つ。いま受け取れなくても待つ）
+    static func relayHold(relay: Bool, later: Bool = false, sentToPC: Date?, sendingToPC: Bool, now: Date) -> Bool {
+        guard relay || later else { return false }
         if sendingToPC { return true }
         guard let sentToPC else { return false }
         let waited = now.timeIntervalSince(sentToPC)
-        return waited >= 0 && waited < relayWait
+        return waited >= 0 && waited < (later ? relayLongWait : relayWait)
+    }
+
+    /// 待つ区切りの名前（relayHold に当たるもののうち、PC に届いたのが新しい順に relayHoldMax 個まで。
+    /// 送っている途中のものはいつも待つ）
+    static func relayHeld(_ files: [(name: String, sentToPC: Date?, sending: Bool)], relay: Bool, later: Bool,
+                          now: Date, max: Int = relayHoldMax) -> Set<String> {
+        let hits = files.filter { relayHold(relay: relay, later: later, sentToPC: $0.sentToPC, sendingToPC: $0.sending, now: now) }
+        let sending = hits.filter(\.sending).map(\.name)
+        let sent = hits.filter { !$0.sending }
+            .sorted { ($0.sentToPC ?? .distantPast, $0.name) > ($1.sentToPC ?? .distantPast, $1.name) }
+            .prefix(Swift.max(0, max - sending.count)).map(\.name)
+        return Set(sending + sent)
     }
 
     /// iPhone で付く名前から、時計のファイルの名前（phoneName の逆。「-w」を外し、時計の時間帯に直す）。

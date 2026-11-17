@@ -16,6 +16,8 @@ final class WatchRecorder: NSObject {
     private(set) var message = ""
     /// iPhone にまだ送れていない区切りの数
     private(set) var unsent = 0
+    /// 家の PC に届いていて、iPhone が PC から受け取るのを待っている区切りの数（unsent には入れない。2026-11-18）
+    private(set) var relayWaiting = 0
     /// iPhone とのつながり（画面に出す一文）
     private(set) var link = ""
     /// 時計が低電力モードか（送るのを15分ごとにまとめる）
@@ -311,6 +313,7 @@ final class WatchRecorder: NSObject {
     /// 送れていない区切りの数とつながりを出し直す。溜まりすぎたら知らせる。
     func refreshStatus() {
         unsent = sender.unsentCount()
+        relayWaiting = sender.relayHeldCount()
         link = sender.linkText()
         lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
         updateBatterySaver()

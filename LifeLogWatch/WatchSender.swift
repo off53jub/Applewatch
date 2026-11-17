@@ -183,9 +183,9 @@ final class WatchSender: NSObject, WCSessionDelegate {
         // 家の PC に届いていて、iPhone が PC から受け取るのを待っている区切りは「まだ送っていない」に数えない
         // （わざと待っているので。別に relayHeld として知らせる。2026-11-15。強化案 64）
         let unsent = unsentFiles().map(\.lastPathComponent)
-        let relay = WatchPC.relayOn
+        let relay = WatchPC.relayOn || WatchPC.relayLater
         let now = Date.now
-        let waiting = relay ? unsent.filter { isHeldForRelay($0, now: now) }.count : 0
+        let waiting = relay ? heldForRelay(unsent, now: now).count : 0
         var out: [String: Any] = ["kept": sentFiles().count, "unsent": unsent.count - waiting, "held": SilenceGate.held,
                                   "wanted": UserDefaults.standard.bool(forKey: Self.wantedKey)]
         if relay {
@@ -377,9 +377,14 @@ final class WatchSender: NSObject, WCSessionDelegate {
 
     /// 家の PC に届いていて（送っている途中で）、iPhone が PC から受け取るのを待っている区切りか。
     /// startedNow は、いま PC に送り始めたところか
-    private func isHeldForRelay(_ name: String, startedNow: Bool = false, now: Date = .now) -> Bool {
-        WatchDelivery.relayHold(relay: WatchPC.relayOn, sentToPC: WatchPC.sentAt(name),
-                                sendingToPC: startedNow || pc.isSending(name), now: now)
+    /// iPhone に送らずに待つ区切り（PC に届いたもの・送っている途中のもの。数の上限つき。WatchDelivery.relayHeld）。
+    /// started は、いま PC に送り始めた区切り
+    private func heldForRelay(_ names: [String], started: String? = nil, now: Date = .now) -> Set<String> {
+        let relay = WatchPC.relayOn, later = WatchPC.relayLater
+        guard relay || later else { return [] }
+        let sent = WatchPC.sentTimes()
+        let files = names.map { (name: $0, sentToPC: sent[$0], sending: $0 == started || pc.isSending($0)) }
+        return WatchDelivery.relayHeld(files, relay: relay, later: later, now: now)
     }
 
     /// iPhone が家の PC から音声を受け取ったので、時計の中の同じ区切りを消す（まだ送っていないものも、返事待ちの控えも）。
@@ -554,7 +559,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
 
-    func send(_ url: URL) {
+    /// held は、まとめて送るときに先に数えた「待つ区切り」（無ければここで数える）
+    func send(_ url: URL, held: Set<String>? = nil) {
         let active = WCSession.default.activationState == .activated
         if active, WCSession.default.outstandingFileTransfers.contains(where: { $0.file.fileURL == url }) { return }
         let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
@@ -565,7 +571,9 @@ final class WatchSender: NSObject, WCSessionDelegate {
         // 家の PC に届いた（送っている途中の）区切りは、iPhone が PC から受け取るのを少し待つ（2026-11-15。強化案 64）。
         // 「受け取った」（gotPC）が来れば、iPhone には送らずに済む。来なければ、待つ時間が過ぎたあとの次の見回り
         // （区切るたびの heartbeat → resendPending）で、今までどおり iPhone に送る。PC に送れなかった区切りは待たない
-        if isHeldForRelay(url.lastPathComponent, startedNow: direct) { return }
+        let name = url.lastPathComponent
+        if (WatchPC.relayOn || WatchPC.relayLater) && direct { return }
+        if (held ?? heldForRelay(unsentFiles().map(\.lastPathComponent), now: .now)).contains(name) { return }
         // 名前の時刻は時計の時間帯。iPhone が自分の時間帯に直せるよう、時間帯も送る（2026-11-06）。
         // 区切った時刻と送り始めた時刻も添える（iPhone が「時計で待った」と「受け渡し」を分けて測る。2026-11-07）
         WCSession.default.transferFile(url, metadata: WatchDelivery.metadata(
@@ -577,13 +585,15 @@ final class WatchSender: NSObject, WCSessionDelegate {
     func resendPending() {
         let outstanding: Set<String> = WCSession.default.activationState == .activated
             ? Set(WCSession.default.outstandingFileTransfers.map { $0.file.fileURL.lastPathComponent }) : []
-        for url in unsentFiles() where !outstanding.contains(url.lastPathComponent) {
+        let files = unsentFiles()
+        let held = heldForRelay(files.map(\.lastPathComponent))
+        for url in files where !outstanding.contains(url.lastPathComponent) {
             // 書いている途中でアプリが終わった区切りは開けない（iPhone でも読めない）ので消す
             guard (try? AVAudioFile(forReading: url)) != nil else {
                 try? FileManager.default.removeItem(at: url)
                 continue
             }
-            send(url)
+            send(url, held: held)
         }
     }
 
@@ -597,7 +607,14 @@ final class WatchSender: NSObject, WCSessionDelegate {
         return urls.filter { $0.pathExtension == "m4a" && $0.lastPathComponent != current }
     }
 
-    func unsentCount() -> Int { unsentFiles().count }
+    /// まだ送っていない区切りの数（家の PC に届いていて iPhone が PC から受け取るのを待っているものは除く。2026-11-18）
+    func unsentCount() -> Int {
+        let names = unsentFiles().map(\.lastPathComponent)
+        return names.count - heldForRelay(names).count
+    }
+
+    /// 家の PC に届いていて、iPhone が PC から受け取るのを待っている区切りの数（2026-11-18）
+    func relayHeldCount() -> Int { heldForRelay(unsentFiles().map(\.lastPathComponent)).count }
 
     /// iPhone とのつながりを、画面に出せる一文にする。
     func linkText() -> String {
