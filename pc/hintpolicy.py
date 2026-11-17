@@ -4,10 +4,13 @@
 - kotoba はヒントを渡すとほとんど書かない（ランダム 300 行で、ヒントあり 1,449 字／なし 3,800 字）。→ kotoba には**いつも渡さない**。
 - whisper は、今のヒント（40 語）で haas より 24% 多く書き、合った割合は低い（0.515 対 0.631）。
   ヒントの数を変えたときの合い方は docs の表（asrmeasure.py の score）。
+- 2026-11-17〜18 の夜に 4,787 行で測り直した: whisper だけの F は、渡さない 0.512・先頭 10 語 0.424・今の 40 語 0.431・
+  先頭 10 語＋地名 0.414（渡すほうがどれも 95% の幅で下）。haas との多数決のあとはどれも 0.505 前後で差が無い
+  （地名だけ -0.0014 と少し下）。→ whisper の既定は**渡さない**、地名は**足さない**（2026-11-18 本人の決定）。
 
 config.json の設定（無ければ既定）:
-  "whisper_hints": "current" | "none" | "top10"   whisper（と あなた向け）に渡すヒント。既定は docs の測定で決めた値
-  "place_hints": false                              その時間・その日の地名をヒントに足す（既定はオフ。測ってからオンにする）
+  "whisper_hints": "current" | "none" | "top10"   whisper（と あなた向け）に渡すヒント。既定は "none"（docs §5）
+  "place_hints": false                              その時間・その日の地名をヒントに足す（既定はオフ。測ったら少し下がった）
 haas のヒント（hotwords）はここでは変えない（CPU のモデルで、登録した言葉を足し引きするだけ）。
 """
 
@@ -17,7 +20,7 @@ from pathlib import Path
 
 import placehints
 
-WHISPER_HINTS_DEFAULT = "current"     # 2026-11-16 の測り直し（131）の結果で決める。docs/s16-pc-place-search-2026-11-16.md
+WHISPER_HINTS_DEFAULT = "none"        # 2026-11-18 本人の決定。測り直し（131）の結果: docs/s16-pc-place-search-2026-11-16.md §5
 WHISPER_HINT_MODES = ("current", "none", "top10")
 CURRENT_MAX = 40
 TOP_N = 10
