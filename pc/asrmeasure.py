@@ -255,6 +255,8 @@ def cmd_run(args) -> int:
             if not heavy_ok(now + datetime.timedelta(minutes=5)) or (stop <= now.hour * 60 + now.minute < 8 * 60 + 30):
                 print("stop_at_window", flush=True)
                 break
+            if not (HOME / "jobs" / (job + ".json")).exists() or not (HOME / "jobs" / (job + ".audio")).exists():
+                continue  # 録音が消された分は測れない（スコアは両方そろった行だけで比べる）
             meta = json.loads((HOME / "jobs" / (job + ".json")).read_text(encoding="utf-8"))
             begin = jc.chunk_epoch(str(meta.get("id") or ""))
             audio = load_audio((HOME / "jobs" / (job + ".audio")).read_bytes())

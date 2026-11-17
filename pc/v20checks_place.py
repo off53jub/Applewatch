@@ -108,8 +108,9 @@ def check_hintpolicy(base: Path) -> int:
     failed = 0
     hints = [f"語{i}" for i in range(50)]
     failed += say(hintpolicy.engine_hints("kotoba", hints, {"whisper_hints": "current"}) == [], "kotoba にはヒントを渡さない")
-    failed += say(len(hintpolicy.engine_hints("whisper", hints, {})) == 40
-                  and hintpolicy.WHISPER_HINTS_DEFAULT in hintpolicy.WHISPER_HINT_MODES, "既定の渡し方は決まっている")
+    failed += say(hintpolicy.engine_hints("whisper", hints, {}) == []
+                  and len(hintpolicy.engine_hints("whisper", hints, {"whisper_hints": "current"})) == 40
+                  and hintpolicy.WHISPER_HINTS_DEFAULT == "none", "既定は渡さない（2026-11-18 の測り直し）・current は 40 語")
     failed += say(hintpolicy.engine_hints("whisper", hints, {"whisper_hints": "none"}) == []
                   and hintpolicy.engine_hints("whisper", hints, {"whisper_hints": "top10"}) == hints[:10]
                   and len(hintpolicy.engine_hints("whisper", hints, {"whisper_hints": "おかしい"})) == len(
