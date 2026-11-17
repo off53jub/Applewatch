@@ -102,10 +102,23 @@ final class WatchPC: @unchecked Sendable {
         if let zone = context[WatchDelivery.phoneZoneKey] as? String { defaults.set(zone, forKey: WatchDelivery.phoneZoneKey) }
         // iPhone が、時計の音声を家の PC から受け取れるか（2026-11-15。強化案 64。古い iPhone のアプリは送らない＝オフのまま）
         if let relay = context[WatchDelivery.relayKey] as? Bool { defaults.set(relay, forKey: WatchDelivery.relayKey) }
+        // 受け取る準備があるか（いまは受け取れなくても。2026-11-18。無ければ古い iPhone のアプリ＝オフ）
+        if context[WatchDelivery.relayKey] != nil {
+            defaults.set(context[WatchDelivery.relayLaterKey] as? Bool ?? false, forKey: WatchDelivery.relayLaterKey)
+        }
     }
 
     /// iPhone が「音声は家の PC から受け取れる」と言っているか（2026-11-15。強化案 64）
     static var relayOn: Bool { UserDefaults.standard.bool(forKey: WatchDelivery.relayKey) }
+
+    /// iPhone が「受け取る準備がある」と言っているか（2026-11-18）
+    static var relayLater: Bool { UserDefaults.standard.bool(forKey: WatchDelivery.relayLaterKey) }
+
+    /// PC に届いた区切りと時刻（直近1日の分。まとめて見るとき用に、1回だけ読む。2026-11-18）
+    static func sentTimes() -> [String: Date] {
+        let list = UserDefaults.standard.dictionary(forKey: sentKey) as? [String: Double] ?? [:]
+        return list.mapValues { Date(timeIntervalSince1970: $0) }
+    }
 
     /// その区切りが PC に届いた時刻（直近1日の分。届いていなければ nil）
     static func sentAt(_ fileName: String) -> Date? {

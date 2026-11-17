@@ -186,15 +186,19 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     /// 直接送るか・聞き取りのヒント・多数決の重みを、設定と一緒に送る（変わったときだけ。force なら変わっていなくても送る）
     /// relay は、いま iPhone が時計の音声を家の PC から受け取れるか（時計は、PC に届いた区切りを iPhone に送らずに少し待つ。
     /// 2026-11-15。強化案 64。PCRelay.swift）
-    func sendWatchPCContext(direct: Bool, hints: String, weights: String?, relay: Bool = false, force: Bool = false) {
+    /// later は、いま受け取れなくても受け取る準備がある（設定がオン・PC が対応）か。時計は、そのあいだ PC に届いた区切りを長く待つ（2026-11-18）
+    func sendWatchPCContext(direct: Bool, hints: String, weights: String?, relay: Bool = false, later: Bool = false,
+                            force: Bool = false) {
         var next = lastSettings
         next[WatchDelivery.directKey] = direct
         next[WatchDelivery.hintsKey] = hints
         next[WatchDelivery.weightsKey] = weights ?? ""
         next[WatchDelivery.phoneZoneKey] = TimeZone.current.identifier
         next[WatchDelivery.relayKey] = relay
+        next[WatchDelivery.relayLaterKey] = later
         let changed = (lastSettings[WatchDelivery.directKey] as? Bool) != direct
             || (lastSettings[WatchDelivery.relayKey] as? Bool) != relay
+            || (lastSettings[WatchDelivery.relayLaterKey] as? Bool) != later
             || (lastSettings[WatchDelivery.hintsKey] as? String) != hints
             || (lastSettings[WatchDelivery.weightsKey] as? String) != (weights ?? "")
             || (lastSettings[WatchDelivery.phoneZoneKey] as? String) != TimeZone.current.identifier

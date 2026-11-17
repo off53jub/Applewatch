@@ -358,7 +358,7 @@ extension Pipeline {
         let relay = on && relayUsableNow()
         state.sentRelay = relay
         receiver.sendWatchPCContext(direct: on, hints: words.joined(separator: "\n"), weights: weights, relay: relay,
-                                    force: resend)
+                                    later: on && relaySetUp(), force: resend)
     }
 
     /// 時計の区切りが届いたとき、PC に送る（今までどおり）。時計が PC にも直接送っていたら、先に PC の答えを見て、

@@ -185,6 +185,11 @@ private struct RecordPage: View {
                         Text("iPhone に送っていない録音 \(recorder.unsent) 個")
                             .foregroundStyle(recorder.unsent >= ChunkCutter.scaled(4) ? .orange : .secondary)
                     }
+                    // 家の PC に届いていて、iPhone が PC から受け取るのを待っている（失われない。2026-11-18）
+                    if recorder.relayWaiting > 0 {
+                        Text("家の PC に届いた録音 \(recorder.relayWaiting) 個（iPhone は PC から受け取ります）")
+                            .foregroundStyle(.secondary)
+                    }
                     if recorder.lowPower {
                         Text("低電力モード: 15分ほどごとにまとめて送ります")
                     }
@@ -404,6 +409,9 @@ private struct StatusPage: View {
                 Text("時計から送っていない録音 \(recorder.unsent) 個")
                     .font(.caption2)
                     .foregroundStyle(recorder.unsent >= ChunkCutter.scaled(4) ? .orange : .primary)
+                if recorder.relayWaiting > 0 {
+                    Text("家の PC に届いて iPhone の受け取り待ち \(recorder.relayWaiting) 個").font(.caption2)
+                }
                 if let status = board.info?.status {
                     if let pending = status.pending {
                         Text("iPhone の文字起こし待ち \(pending) 件").font(.caption2)

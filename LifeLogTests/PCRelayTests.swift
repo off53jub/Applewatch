@@ -35,6 +35,37 @@ final class PCRelayTests: XCTestCase {
         XCTAssertFalse(WatchDelivery.relayHold(relay: true, sentToPC: now.addingTimeInterval(120), sendingToPC: false, now: now))
     }
 
+    // MARK: - 受け取る準備があるあいだは長く待つ（2026-11-18）
+
+    func testLongHoldWhenPhoneIsReadyEvenIfNotOnWiFi() {
+        let sent = now.addingTimeInterval(-(WatchDelivery.relayWait + 60))
+        // いま受け取れない（Wi-Fi でない）けれど準備はある: 20分を過ぎても待つ
+        XCTAssertTrue(WatchDelivery.relayHold(relay: false, later: true, sentToPC: sent, sendingToPC: false, now: now))
+        XCTAssertTrue(WatchDelivery.relayHold(relay: true, later: true, sentToPC: sent, sendingToPC: false, now: now))
+        // 準備が無い（古い iPhone のアプリ）なら、今までどおり 20 分で iPhone に送る
+        XCTAssertFalse(WatchDelivery.relayHold(relay: true, sentToPC: sent, sendingToPC: false, now: now))
+        // 長く待つのも relayLongWait まで（時計が「PC に届いた」を覚えている 24 時間より短い）
+        XCTAssertLessThan(WatchDelivery.relayLongWait, 86400)
+        let tooOld = now.addingTimeInterval(-WatchDelivery.relayLongWait)
+        XCTAssertFalse(WatchDelivery.relayHold(relay: true, later: true, sentToPC: tooOld, sendingToPC: false, now: now))
+        // PC に送れなかった区切りは待たない
+        XCTAssertFalse(WatchDelivery.relayHold(relay: false, later: true, sentToPC: nil, sendingToPC: false, now: now))
+    }
+
+    func testHeldKeepsTheNewestUpToTheCap() {
+        let files: [(name: String, sentToPC: Date?, sending: Bool)] = [
+            ("a", now.addingTimeInterval(-300), false),
+            ("b", now.addingTimeInterval(-200), false),
+            ("c", now.addingTimeInterval(-100), false),
+            ("d", nil, true),
+            ("e", nil, false),
+        ]
+        // 上限 3: 送っている途中（d）はいつも待ち、残りは PC に届いたのが新しい順（c・b）。a と e は iPhone に送る
+        XCTAssertEqual(WatchDelivery.relayHeld(files, relay: false, later: true, now: now, max: 3), ["d", "c", "b"])
+        // 準備が無く、いま受け取れもしなければ待たない
+        XCTAssertEqual(WatchDelivery.relayHeld(files, relay: false, later: false, now: now), [])
+    }
+
     // MARK: - 名前（iPhone で付く名前 → 時計の名前）
 
     func testWatchNameIsTheReverseOfPhoneName() {
