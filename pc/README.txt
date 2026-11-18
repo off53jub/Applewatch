@@ -640,3 +640,24 @@ iPhone のタスクの「母艦のやること」に、母艦（D:\Lifelog）の
 ・提案の kind に "wish"（欲しい物）。精度の通信簿の週に省ける "check_right"（合っていた割合）。
 ・どれも log.txt には数だけを書きます（施策の名前・主張の文は書きません）。
 ・確かめ: python v14checks_settle.py（一時フォルダと作り物の Claude で）
+
+■ 自分を知ってもらう分（2026-11-19。s18 の 45・47・63・69〜73・78。中身は knowme.py ほか。docs\s18-know-me-pc.md）
+・30 分ごとに見回ります。重い所（声の高さ・自分の声の置き場所の音声）は 00:00〜05:00・08:30〜18:00 だけ、1 回 120 秒まで。
+  config.json の "knowme": false で全部止めます。"knowme_mother_copy": false で母艦への写しだけ止めます。
+・声の調子（voicetone.py）: 会話ごとの話す速さ・間・返事の間・笑い・騒がしさ・声の高さを %LOCALAPPDATA%\LifeLogPC\voice-tone\ と
+  voice-tone-daily.json・voice-tone-partners.json に置き、母艦の inbox\voice-tone\ に写します。騒がしい会話には「信用が低い」の印
+  （trust "low"・tier_cap "tentative"）。毎日の気分の見立て（見立て（仮））は、前の日々の自分と、母艦の睡眠・安静の心拍と比べます。
+  GET /voice-tone?day=。features "voicetone"
+・本音メモ（honne.py）: 時計に一人で話した会話を、Claude（安い Haiku → 自信が低いものだけ Sonnet。llmroute.py）で
+  本音・覚え書き・作業・そのほかに分けます。用途 "honne"・"honne.review"、1 日の上限は各 $0.10（仮。claude-config.json の
+  daily_caps か、config.json の "llm_route_caps" で替えられます）。GET /honne?days=7。features "honne"
+・声で直す（voicefix.py）: POST /voice-fix {"text", "at", "target_id"?} … 「違う、〇〇さん」「〇〇じゃなくて△△」を読み解き、
+  今までの「PC から直す」と同じ直しにします（記録にある名前だけ。決まらなければ {"status": "ask"}）。features "voicefix"
+・声の見本の候補（voicesamples.py）: 本人の ○（聞いて直すの「合っている」・話し手の直し・POST /conversation-ok）の行から、
+  よく会う人の声の見本の候補を GET /voice-samples で返します（足すのはアプリ。名前は変えません）。features "voicesamples"
+・自分の声の取り直し（selfvoice.py）: GET /self-voice … 手順・読む文と、静か・騒がしいの場面ごとの近さ。features "selfvoice"
+・聞き取りの後の辞書（asrlearn.py）: 本人が直した言葉から「聞き違い → 正しい書き方」の組を作り（knowme\asr-learned.json・
+  母艦 inbox\asr-learned\）、何度も直して残りも少ない組だけ新しい行に当てます。"asr_learned_apply": false で当てるのを止めます。
+・PLAUD と食い違った行（plauddoubt.py）: 母艦の misheard_pairs.json の行を「聞いて直す」に「PLAUD と食い違う」で出します。
+  GET /plaud-doubts。features "plauddoubt"
+・どれも log.txt には数だけを書きます。確かめ: python v21checks_knowme.py（一時フォルダと作り物の Claude で）

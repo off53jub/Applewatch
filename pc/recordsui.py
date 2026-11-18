@@ -504,7 +504,8 @@ def render_line(line: dict, edits: list[dict], job: str | None, missing: bool, l
 
 # MARK: - 版 9: 聞いて直す
 
-REASONS = {"low": "確からしさが低い", "votes": "モデルの票が食い違う", "speaker": "話し手に「？」"}
+REASONS = {"low": "確からしさが低い", "votes": "モデルの票が食い違う", "speaker": "話し手に「？」",
+           "plaud": "PLAUD と食い違う", "dict": "本人が前に直した言葉"}  # 2026-11-19（s18 の 72・73）
 
 
 def render_review(store: records.RecordStore, personal: dict | None = None) -> str:
