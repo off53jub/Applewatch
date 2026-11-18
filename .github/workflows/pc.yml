@@ -219,6 +219,13 @@ jobs:
           python pc/v20checks_place.py > v20.txt 2>&1 || { cat v20.txt; grep '^NG' v20.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v20.txt | sed 's/^/::notice::v20checks_place の OK の数: /'
 
+      # 2026-11-19（s18 の 45・47・63・69〜73・78）: 声の調子・本音メモ・声で直す・安い AI→高い AI・声の見本の候補・
+      #   自分の声の取り直し・聞き取りの後の辞書・PLAUD と食い違う行を、一時フォルダと作り物の Claude で確かめる
+      - name: 自分を知ってもらう分を確かめる
+        run: |
+          python pc/v21checks_knowme.py > v21.txt 2>&1 || { cat v21.txt; grep '^NG' v21.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v21.txt | sed 's/^/::notice::v21checks_knowme の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py
