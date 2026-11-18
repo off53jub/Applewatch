@@ -95,8 +95,8 @@ final class KnowMeTests: XCTestCase {
         let picked = KnowMeRules.weekHypotheses(week: "2026-W47", local: KnowLocal(), fetched: hs) { $0 == "h-1" }
         XCTAssertEqual(picked.map(\.id), ["h-2", "h-3", "h-4"])
         XCTAssertEqual(KnowMeRules.weekKey(at(2026, 11, 19, 9), calendar: tokyo), "2026-W47")
-        XCTAssertEqual(KnowMeRules.weekKey(at(2026, 11, 23, 9), calendar: tokyo), "2026-W47", "日曜はまだ同じ週")
-        XCTAssertEqual(KnowMeRules.weekKey(at(2026, 11, 24, 9), calendar: tokyo), "2026-W48")
+        XCTAssertEqual(KnowMeRules.weekKey(at(2026, 11, 22, 9), calendar: tokyo), "2026-W47", "日曜はまだ同じ週")
+        XCTAssertEqual(KnowMeRules.weekKey(at(2026, 11, 23, 9), calendar: tokyo), "2026-W48", "月曜から次の週")
     }
 
     func testMorningWindow() {
