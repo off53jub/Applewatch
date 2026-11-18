@@ -184,6 +184,8 @@ private struct TodayView: View {
                 RepliesSection()  // 返事・メールの下書き（2026-11-15。強化案 58。DraftActions.swift。無いときは何も出さない）
                 // (c) 夜の10秒（20時から翌朝まで、まだ答えていない日だけ）
                 NightMoodSection()
+                // 朝の気分の 1 タップ・今日の問い（2026-11-19。s18。KnowMeViews.swift。あるときだけ）
+                KnowMeTodaySection()
                 // (d) 困ったことがあるときだけ
                 alerts()
                 PCFeatureNotice()

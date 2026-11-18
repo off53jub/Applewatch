@@ -252,7 +252,10 @@ final class AppFeedsBook {
     }
 
     /// 見せる候補（点の高い順）
-    var visibleCandidates: [SelfCandidate] { AppFeeds.visible(candidates, hidden: hidden) }
+    /// 自信の段が auto（黙って入れる）のものは聞かない（2026-11-19。s18 の 61。KnowMe.swift）
+    var visibleCandidates: [SelfCandidate] {
+        AppFeeds.visible(candidates, hidden: hidden).filter { KnowMeBook.shared.shouldAsk("self_candidates", $0.id) }
+    }
     var staleItems: [FreshItem] { freshness.filter(\.stale) }
 
     /// 今日の10件の id（その日はじめて見たときに選んで覚える。2026-11-13）

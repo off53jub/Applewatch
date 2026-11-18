@@ -116,6 +116,8 @@ private struct NothingYet: View {
 
 private struct RecordPage: View {
     @Environment(WatchRecorder.self) private var recorder
+    /// 「違う、〇〇さん」（押すと音声入力。2026-11-19。s18）
+    @State private var fix = ""
 
     var body: some View {
         ScrollView {
@@ -156,6 +158,13 @@ private struct RecordPage: View {
                         .tint(recorder.meetingOn ? .orange : nil)
                     }
                 }
+                // 声で直す（「違う、〇〇さん」。押すと話して入れられる。2026-11-19。s18）
+                TextField("違う、〇〇さん", text: $fix)
+                    .font(.caption2)
+                    .onSubmit {
+                        recorder.voiceFix(fix)
+                        fix = ""
+                    }
                 // さっき何て言った？（iPhone の記録の直近の3行。2026-11-06）
                 Button {
                     recorder.askRecent()

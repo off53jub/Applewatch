@@ -938,6 +938,8 @@ struct PersonPageView: View {
                 }
             }
             PersonLinksSection(page: page)
+            // この人とどうなりたいか（2026-11-19。s18。KnowMeViews.swift）
+            PersonGoalSection(name: page.name, pe: page.id)
             Section("やりとり") {
                 Text(PagesFeeds.countsLine(page))
                 if let last = page.last_line {

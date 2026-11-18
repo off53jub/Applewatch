@@ -55,8 +55,11 @@ GETS = ("/todo", "/card", "/vocab", "/good", *appfeeds.READERS, *oneline.GETS, *
         *canonical.GETS)
 import drafts  # noqa: E402  返事の下書き・時間の家計簿（2026-11-15。強化案 58・60。GET /replies・/time-ledger）
 GETS = (*GETS, *drafts.READERS)
+import knowme  # noqa: E402  s18 自分を知ってもらう（2026-11-19。GET /know/*・POST /know/*・/mood/tap）
+GETS = (*GETS, *knowme.READERS)
 # POST /proposals/answer（母艦からの提案への答え。2026-11-13。中身は appfeeds.py）
-POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback", *appfeeds.POSTS, *oneline.POSTS, *pages.POSTS)
+POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback", *appfeeds.POSTS, *oneline.POSTS, *pages.POSTS,
+         *knowme.POSTS)
 BODY_LIMIT = 16 * 1024
 # 支払いの記録を母艦へ（2026-11-11）
 TAPS_FILE = Path("inbox") / "card-taps" / "card-taps.json"
@@ -437,6 +440,9 @@ def http_get(handler, config: dict) -> None:
     if path in pages.READERS:  # GET /people-pages・/threads・/place-pages・/decisions（2026-11-15）
         handler.send_json(200, pages.READERS[path](home(config)))
         return
+    if path in knowme.READERS:  # GET /know/*（2026-11-19。s18。knowme.py）
+        handler.send_json(200, knowme.READERS[path](home(config)))
+        return
     if path in canonical.GETS:  # GET /canonical?day=（2026-11-15。強化案 57）
         canonical.http_get(handler, home(config))
         return
@@ -532,6 +538,9 @@ def http_post(handler, config: dict, data: bytes, log: Callable[[str], None]) ->
         return
     if urlparse(handler.path).path in appfeeds.POSTS:
         appfeeds.POSTS[urlparse(handler.path).path](handler, home(config), data, log)
+        return
+    if urlparse(handler.path).path in knowme.POSTS:  # POST /know/*・/mood/tap（2026-11-19。s18。knowme.py）
+        knowme.POSTS[urlparse(handler.path).path](handler, home(config), data, log)
         return
     if urlparse(handler.path).path in pages.POSTS:  # POST /decisions/answer（2026-11-15。強化案 61）
         pages.POSTS[urlparse(handler.path).path](handler, home(config), data, log)

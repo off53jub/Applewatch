@@ -272,6 +272,8 @@ struct ConversationsView: View {
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
+                        // 「実はこう思ってた」の一言（2026-11-19。s18。KnowMeViews.swift）
+                        if conversation.closed { ConversationNoteRow(day: day, start: conversation.start) }
                         // その会話の時間（と前後5分）に撮った写真（許可があるときだけ。押すと大きく見る。2026-11-07。DayPhotos.swift）
                         if let shots = photos[conversation.start], !shots.isEmpty {
                             ConversationPhotoStrip(photos: shots)

@@ -2198,6 +2198,7 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(livecoach.features())
     # GET /people-pages・/threads・/place-pages・/decisions と POST /decisions/answer（2026-11-15。強化案 53・54・55・61。pages.py）
     found.extend(mothership.pages.FEATURES)
+    found.extend(mothership.knowme.FEATURES)  # s18 自分を知ってもらう（2026-11-19。knowme.py）
     # GET /canonical?day=（2026-11-15。強化案 57。canonical.py）
     found.extend(mothership.canonical.features())
     # POST /claude・GET /claude/usage（鍵があり、今月の上限に届いていないときだけ。2026-11-13）

@@ -80,6 +80,14 @@ struct LifeLogApp: App {
         }
         // ロック画面・コントロールセンター・アクションボタンからの操作を受け取る
         LifeLogActions.handler = { action in await pipeline.handle(action) }
+        // 自分を知る（2026-11-19。s18。KnowMe.swift）: 通知のボタンから答えを送る・録音を始める。職場と自宅の見張り
+        KnowMeBook.shared.pc = pipeline.homePC
+        KnowMeBook.shared.feeds = pipeline.mothershipFeeds
+        KnowMeBook.shared.startRecording = { await pipeline.handle(.startRecording) }
+        if !Self.testing && !Self.demo {
+            KnowGeo.shared.start(pipeline)
+            KnowMeBook.scheduleWeeklyTalk()
+        }
         // Siri・ショートカットから記録を聞く（2026-11-06）
         Recall.recent = { pipeline.recentWords() }
         Recall.lastTalk = { pipeline.lastTalk(with: $0) }

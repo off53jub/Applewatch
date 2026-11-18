@@ -1268,6 +1268,17 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
             }
             return
         }
+        // 自分を知る「はい・いいえ」・職場の「録音を始める」（2026-11-19。s18。KnowMe.swift。時計に出た通知のボタンもここに来る）
+        if content.categoryIdentifier == KnowMeRules.category || content.categoryIdentifier == KnowMeRules.geoCategory,
+           response.actionIdentifier != UNNotificationDefaultActionIdentifier {
+            let actionID: String = response.actionIdentifier
+            let info: [AnyHashable: Any] = content.userInfo
+            Task { @MainActor in
+                await KnowMeBook.shared.noticeAnswered(actionID: actionID, userInfo: info)
+                completionHandler()
+            }
+            return
+        }
         // 押された知らせも、見えた知らせとして数える（同じものは1回だけ。2026-11-15。NoticeGate.swift）
         NoticeGate.noteShown(identifier: request.identifier, category: content.categoryIdentifier, date: response.notification.date)
         // カテゴリの無い知らせも、知らせそのものを押したときは画面を開く（2026-11-12。NoticeRoute.route）
