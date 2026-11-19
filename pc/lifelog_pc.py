@@ -195,6 +195,7 @@ import priority  # 2026-11-15: この PC の Ollama の優先度を「通常以�
 import load  # 2026-11-15: PC の負荷（CPU の秒・譲った分）を毎日数える（中身は load.py）
 import promises
 import livecoach  # 2026-11-15（強化案 50〜52）: 会議の相棒（その場版）・話し方コーチ・緊張した場面・心拍の分ごとの記録
+import knowme  # 2026-11-19（s18 の 45・47・63・69〜73・78）: 自分を知ってもらう分（中身は knowme.py ほか）
 import quality  # 2026-11-13（施策 9・10・11）: 品質の記録・夜の流れ・同じ人かも・夜の読み直し（中身は quality.py ほか）
 
 VERSION = 10
@@ -2207,6 +2208,7 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(promises.features() + askmother.features(load_config()))  # 2026-11-13（施策 13・15）
     found.append("audioclip")  # 2026-11-16（強化案 130）: GET /audio-clip
     found.extend(placelinks.features())  # 2026-11-16: placenames・checkups・linkfind
+    found.extend(knowme.features())  # 2026-11-19（s18）: voicetone・honne・voicefix・voicesamples・selfvoice・plauddoubt
     # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）
     if "vad" in _extras:
         found.append("silero")
@@ -2559,6 +2561,11 @@ def start_v6(threads: int) -> None:
     # 2026-11-13（施策 9・10・11）: 夜の流れ（品質の記録・同じ人かも・夜の読み直し。quality.py）
     quality.start(HOME, App.records, App.jobs, lambda: mothership.home(load_config()),
                   lambda p, r: extra_model("speaker", 1).embed(load_audio(p.read_bytes()), r), log)
+    try:  # 2026-11-19（s18）: 自分を知ってもらう分の見回り（knowme.py）
+        knowme.start(HOME, App.records, lambda: mothership.home(load_config()), load_config, load_audio,
+                     lambda p, r: extra_model("speaker", 1).embed(load_audio(p.read_bytes()), r), log)
+    except Exception as error:  # noqa: BLE001
+        log(f"自分を知る見回りを始められませんでした: {type(error).__name__}")
     if App.use_semantic:
         try:
             # bge-m3 は、GPU の文字起こしのモデルが載っていても、空きがあれば GPU に（2026-11-15。gpu.embed_options）。
@@ -2954,6 +2961,10 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/dash/ops/"):  # 版 7（ops）: TestFlight の報告の詳しい画面・鍵を入れる画面
             ops.dash_get(self, url)
             return
+        if path in knowme.GETS:  # 2026-11-19（s18）: 声の調子・本音メモ・声の見本の候補ほか（中身は knowme.py）
+            if self.authorized():
+                knowme.http_get(self, path, url.query)
+            return
         if path in quality.GETS:  # 2026-11-13: GET /same-person・/night-review（中身は quality.py）
             if self.authorized():
                 quality.http_get(self, url)
@@ -3046,6 +3057,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path.startswith("/dash/ops/"):  # 版 7（ops）: 見守りの画面のボタン（鍵を入れる・テスト通知など）
             ops.dash_post(self, url)
+            return
+        if url.path in knowme.POSTS:  # 2026-11-19（s18 の 63・70）: POST /voice-fix・/conversation-ok
+            if self.authorized():
+                knowme.http_post(self, url.path, log)
             return
         if url.path in livecoach.POSTS:  # 2026-11-15（強化案 50・52）: 会議モードの様子・心拍の分ごとの記録
             if self.authorized():

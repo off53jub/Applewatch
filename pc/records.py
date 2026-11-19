@@ -580,6 +580,9 @@ class RecordStore:
         self.edits = EditStore(self.home / "edits.db")
         # 版 9: 材料を作る仕組み（lifelog_pc.py が入れる。(音声のファイル, 始まり, 終わり, 文, 出どころ) → (材料の数, 足したか)）
         self.sampler: Callable[[Path, float, float, str, dict], tuple[int, bool]] | None = None
+        # 2026-11-19（s18 の 72・73。knowme.py が入れる）: 「聞いて直す」に足す理由と、聞かない行。
+        # (日, その日の記録) → ({行の時刻: [理由]}, {聞かない行の時刻})。無ければ今までどおり
+        self.extra_doubts: Callable[[str, dict], tuple[dict[int, list[str]], set[int]]] | None = None
 
     # MARK: 置く
 
@@ -852,6 +855,12 @@ class RecordStore:
             if parsed is None:
                 continue
             names = parsed["audio_names"]
+            extra, quiet = {}, set()
+            if self.extra_doubts is not None:
+                try:
+                    extra, quiet = self.extra_doubts(day, parsed)
+                except Exception:  # noqa: BLE001 — 足しの理由が作れなくても、今までの並びは出す
+                    extra, quiet = {}, set()
             counts: dict[int, int] = {}
             for c in parsed["conversations"]:
                 for line in c["lines"]:
@@ -862,6 +871,10 @@ class RecordStore:
                 lines = c["lines"]
                 for i, line in enumerate(lines):
                     reasons = doubt_reasons(line, unsure)
+                    if line["time"] in quiet and set(reasons) <= {"low", "votes"}:
+                        reasons = []
+                    if extra.get(line["time"]) and not line.get("checked") and line.get("media") is None:
+                        reasons = reasons + [r for r in extra[line["time"]] if r not in reasons]
                     if not reasons or counts.get(line["time"], 0) > 1:
                         continue
                     key = (day, line["time"])
