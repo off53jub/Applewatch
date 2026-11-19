@@ -173,3 +173,47 @@ def http_post(handler, home: Path, store, log: Callable[[str], None]) -> None:
         pass
     log(f"声で直す: {result['status']}（{result.get('kind') or '-'}）")
     handler.send_json(200, result)
+
+
+INBOX = Path("inbox") / "voice_fixes.jsonl"     # アプリ（A）の POST /know/voice-fix が母艦に足す行（knowapp.py）
+DONE_FILE = Path("knowme") / "voice-fix-inbox.json"
+
+
+def drain_inbox(home: Path, mother: Path | None, store, log: Callable[[str], None]) -> int:
+    """2026-11-19: 時計の「違う、〇〇さん」はアプリが母艦の inbox に置く。まだ当てていない行を読み解いて直す。
+    当てた行は said_at と言葉の組で覚える（同じ行を二度当てない）。返り値は当てようとした行の数。"""
+    if mother is None or store is None:
+        return 0
+    path = Path(mother) / INBOX
+    if not path.exists():
+        return 0
+    done_path = Path(home) / DONE_FILE
+    try:
+        done = set(json.loads(done_path.read_text(encoding="utf-8")).get("done", []))
+    except (OSError, ValueError):
+        done = set()
+    count = 0
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or not isinstance(row.get("text"), str):
+            continue
+        key = f"{row.get('said_at')}|{row['text']}"
+        if key in done:
+            continue
+        near = row.get("near") if isinstance(row.get("near"), dict) else {}
+        body = {"text": row["text"], "at": row.get("said_at"), "target_id": near.get("line_time")}
+        result = handle(store, body)
+        try:
+            note(home, body, result)
+        except OSError:
+            pass
+        log(f"声で直す（時計から）: {result['status']}（{result.get('kind') or '-'}）")
+        done.add(key)
+        count += 1
+    if count:
+        done_path.parent.mkdir(parents=True, exist_ok=True)
+        done_path.write_text(json.dumps({"done": sorted(done)[-2000:]}, ensure_ascii=False), encoding="utf-8")
+    return count

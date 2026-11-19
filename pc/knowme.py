@@ -102,6 +102,7 @@ def tick(now: datetime.datetime | None = None) -> dict:
                                             HEAVY_BUDGET_S if heavy else 0.0, mother_copy=copy)),
         ("honne", lambda: honne.run(State.home, State.store, base, config, State.log, _days(2, today), mother_copy=copy)),
         ("asrlearn", lambda: asrlearn.run(State.home, State.store, base, config, State.log, mother_copy=copy)),
+        ("voicefix", lambda: voicefix.drain_inbox(State.home, base, State.store, State.log)),  # 時計から（母艦の inbox）
         ("voicesamples", lambda: voicesamples.build(State.home, State.store, today)),
         ("selfvoice", lambda: selfvoice.build(State.home, State.store, State.embed, today, heavy=heavy)),
     )
