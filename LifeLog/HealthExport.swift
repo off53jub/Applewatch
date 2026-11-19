@@ -26,6 +26,20 @@ enum HealthExport {
         var heartAverage: Double?
         var resting: Double?
         var sleep: Sleep?
+        /// 動いたエネルギー（kcal）・エクササイズの分・立った分（2026-11-19。s18 の 48。母艦の Process-HealthInbox.ps1 が読む名前で書く）
+        var activeKcal: Double? = nil
+        var exerciseMinutes: Double? = nil
+        var standMinutes: Double? = nil
+        /// ワークアウト（始まりがその日のもの）
+        var workouts: [Workout] = []
+
+        struct Workout: Equatable {
+            var name: String
+            var start: Date
+            var end: Date
+            var kcal: Double?
+            var km: Double?
+        }
 
         struct Sleep: Equatable {
             var start: Date
@@ -42,6 +56,7 @@ enum HealthExport {
 
         var isEmpty: Bool {
             (steps ?? 0) == 0 && heartMin == nil && heartMax == nil && heartAverage == nil && resting == nil && sleep == nil
+                && (activeKcal ?? 0) == 0 && (exerciseMinutes ?? 0) == 0 && (standMinutes ?? 0) == 0 && workouts.isEmpty
         }
     }
 
@@ -93,7 +108,25 @@ enum HealthExport {
             if let inBed = s.inBed { entry["inBed"] = hours(inBed) }
             metrics.append(["name": "sleep_analysis", "units": "hr", "data": [entry]])
         }
-        let object: [String: Any] = ["source": "LifeLog", "day": d.day, "data": ["metrics": metrics, "workouts": [Any]()]]
+        if let v = d.activeKcal, v > 0 {
+            metrics.append(["name": "active_energy", "units": "kcal", "data": [["date": date, "qty": rounded(v)]]])
+        }
+        if let v = d.exerciseMinutes, v > 0 {
+            metrics.append(["name": "apple_exercise_time", "units": "min", "data": [["date": date, "qty": rounded(v)]]])
+        }
+        if let v = d.standMinutes, v > 0 {
+            metrics.append(["name": "apple_stand_time", "units": "min", "data": [["date": date, "qty": rounded(v)]]])
+        }
+        var workouts: [[String: Any]] = []
+        for w in d.workouts {
+            // duration は時間（母艦の Process-HealthInbox.ps1 が 60 を掛けて分にする）
+            var entry: [String: Any] = ["name": w.name, "start": stamp(w.start, calendar: calendar), "end": stamp(w.end, calendar: calendar),
+                                        "duration": hours(max(0, w.end.timeIntervalSince(w.start)))]
+            if let kcal = w.kcal, kcal > 0 { entry["activeEnergy"] = ["qty": rounded(kcal), "units": "kcal"] }
+            if let km = w.km, km > 0 { entry["distance"] = ["qty": (km * 100).rounded() / 100, "units": "km"] }
+            workouts.append(entry)
+        }
+        let object: [String: Any] = ["source": "LifeLog", "day": d.day, "data": ["metrics": metrics, "workouts": workouts]]
         return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 

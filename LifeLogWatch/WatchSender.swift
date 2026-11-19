@@ -249,6 +249,9 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// 「初めての人と話している」の印を iPhone に送る（その前後の知らない声を、確かめ待ちに出す）
     func newPerson(_ time: Date) { queueInfo(["newPerson": time.timeIntervalSince1970]) }
 
+    /// 「違う、〇〇さん」（2026-11-19。s18）。iPhone が離れていても、つながったときに届く
+    func voiceFix(_ text: String, at time: Date) { queueInfo(["voiceFix": text, "at": time.timeIntervalSince1970]) }
+
     /// iPhone に「さっき何て言った？」と聞く（iPhone が近くにあるときだけ）
     func askRecent(_ done: @escaping @Sendable (String) -> Void) {
         guard WCSession.default.activationState == .activated, WCSession.default.isReachable else {

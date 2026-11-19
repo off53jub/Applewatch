@@ -20,6 +20,8 @@ extension Pipeline {
             ("同じ人かも", samePersonGroups.count + samePersonMaybes.count),
             // 正しさの抜き取り（2026-11-15。強化案 41。SettleFeeds.swift。まだ答えていない日の1つ）
             ("合ってる？", pendingCheckCount),
+            // 自分を知る（2026-11-19。s18。KnowMe.swift。今日の問い・今週の見立て・抜き打ちのまだの数）
+            ("自分を知る", knowMeCount),
             ("見直したい声", reviewCount),
             ("名前を付けてほしい声", namelessVoiceCount),
             ("割れやすい言葉", splitWordCandidates().count),
@@ -144,6 +146,8 @@ struct FixView: View {
             SamePersonSection()
             // 合ってる？（家の PC から1日1つ。2026-11-15。強化案 41。SettleFeeds.swift）
             CheckClaimSection()
+            // 自分を知る（2026-11-19。s18。KnowMeViews.swift）
+            KnowMeFixSection()
             if reviewCount > 0 || unnamedToday > 0 {
                 Section("見直したい声（\(reviewCount)）") {
                     if reviewCount > 0 { NavigationLink("声を聞いて直す") { VoiceReviewView() } }
@@ -235,6 +239,7 @@ struct FixView: View {
             await SamePersonBook.shared.refresh(pipeline.homePC)
             await NightReviewBook.shared.refresh(pipeline)
             await SettleBook.shared.refresh(pipeline.homePC)
+            await KnowMeBook.shared.refresh(pipeline.homePC)
         }
         .refreshable {
             await SamePersonBook.shared.refresh(pipeline.homePC, force: true)

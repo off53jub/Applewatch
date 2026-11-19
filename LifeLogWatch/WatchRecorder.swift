@@ -374,6 +374,15 @@ final class WatchRecorder: NSObject {
         message = "\(Date.now.formatted(date: .omitted, time: .shortened)) 初めての人の印を付けました"
     }
 
+    /// 「違う、〇〇さん」（話者や名前の直しを声で。2026-11-19。s18）。言葉はそのまま iPhone へ（解釈は家の PC）
+    func voiceFix(_ text: String) {
+        let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !said.isEmpty else { return }
+        sender.voiceFix(String(said.prefix(200)), at: .now)
+        WKInterfaceDevice.current().play(.success)
+        message = "「" + String(said.prefix(20)) + "」を iPhone に送りました"
+    }
+
     /// 会議モードを始める・終える（iPhone が予定の参加者と議題をヒントにし、終わったらすぐまとめる）
     func toggleMeeting() {
         meetingOn.toggle()

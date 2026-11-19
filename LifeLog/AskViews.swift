@@ -305,6 +305,7 @@ struct AskView: View {
             }
             if let motherAnswer {
                 MothershipAnswerSections(question: asked, answer: motherAnswer)
+                Section { WhyWrongRow(target: "mother", head: String(motherAnswer.answer.prefix(120)), question: asked) }
             }
             if let answer {
                 Section {
@@ -324,6 +325,8 @@ struct AskView: View {
                     .buttonStyle(.borderless)
                     .padding(.top, 4)
                 }
+                // 違う、なぜなら（2026-11-19。s18。KnowMeViews.swift）
+                Section { WhyWrongRow(target: "ask", head: String(answer.text.prefix(120)), question: asked) }
                 if answer.sources.isEmpty && answer.digestUsed.isEmpty && motherUsable && !working {
                     // iPhone の記録で見つからなかったときは、母艦からも探せる（2026-11-13。AskMothership.swift）
                     Section {

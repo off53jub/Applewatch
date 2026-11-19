@@ -436,6 +436,7 @@ final class Pipeline {
             processQueue()
         }
         receiver.onMark = { [weak self] time in self?.addMark(at: time) }
+        receiver.onVoiceFix = { [weak self] text, at in self?.receiveVoiceFix(text, at: at) }  // 2026-11-19（s18。KnowMe.swift）
         receiver.onWatchResting = { [weak self] since in
             guard let self, since != watchRestingSince else { return }
             watchRestingSince = since
@@ -1802,6 +1803,8 @@ final class Pipeline {
     /// iPhone だけ。止まっていた日の分も、1回に少しずつ書く。2026-11-08
     func exportHealthIfDue(now: Date = .now) async {
         guard email != nil, health.enabled, health.available, UIDevice.current.userInterfaceIdiom != .pad else { return }
+        // 運動の種類を足した版（2026-11-19。s18 の 48）: 前に許可した人に、足した種類だけを 1 回聞く（開いているときだけ）
+        await health.askNewReadsIfNeeded()
         var done = Set(UserDefaults.standard.stringArray(forKey: HealthExport.doneKey) ?? [])
         let due = HealthExport.dueDays(now: now, done: done)
         guard !due.isEmpty else { return }

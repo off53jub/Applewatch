@@ -46,7 +46,7 @@ enum NoticeActions {
         let done = UNNotificationAction(identifier: Action.done.rawValue, title: "済み", options: [])
         let hour = UNNotificationAction(identifier: Action.hour.rawValue, title: "1時間後にもう一度", options: [])
         let tomorrow = UNNotificationAction(identifier: Action.tomorrow.rawValue, title: "明日に", options: [])
-        return [
+        let base: Set<UNNotificationCategory> = [
             UNNotificationCategory(identifier: foundCategory, actions: [keep, reject, later], intentIdentifiers: [], options: []),
             UNNotificationCategory(identifier: dueCategory, actions: [done, hour, tomorrow], intentIdentifiers: [], options: []),
             UNNotificationCategory(identifier: digestCategory, actions: [], intentIdentifiers: [], options: []),
@@ -55,6 +55,8 @@ enum NoticeActions {
             // 30 分いたら「ここは？」（ボタンは候補の名前。2026-11-16。強化案 91。PlaceAssist.swift）
             PlaceAssistRules.askNotificationCategory(),
         ]
+        // 自分を知る「はい・いいえ」と、職場に着いたときの「録音を始める」（2026-11-19。s18。KnowMe.swift）
+        return base.union(KnowMeRules.notificationCategories())
     }
 
     /// 押されたボタンの名前から、動きを決める（知らせそのものを押したときは open。分からないものは nil）
@@ -188,6 +190,8 @@ enum NoticeRoute: Identifiable, Equatable {
         if id.hasPrefix(PlaceAssistRules.remindPrefix) { return .tab(.tasks) }
         if id.hasPrefix(AppFeeds.noticePrefix) || id.hasPrefix("signExpiry-") { return .tab(.today) }
         if id.hasPrefix(ProposalRules.noticePrefix) { return .screen(.proposals) }
+        // 自分を知る（2026-11-19。s18。KnowMe.swift）は「直す」の「自分を知る」から
+        if id.hasPrefix(KnowMeRules.noticePrefix) { return .tab(.fix) }
         switch id {
         case MorningBrief.noticeID, "watch-silent", "phone-stopped", "watch-battery", "stall",
              "watch-open-after-update", "watch-not-recording":

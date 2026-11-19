@@ -144,6 +144,8 @@ enum FeatureProof {
         // 2026-11-15（強化案 36・37）
         Screen(key: "rollout", name: "入れた施策の様子"),
         Screen(key: "claudeCosts", name: "Claude の費用"),
+        // 2026-11-19（s18。KnowMe.swift）
+        Screen(key: "knowMe", name: "自分を知る"),
     ]
 
     static func screenKey(_ s: Screen) -> String { "screen." + s.key }

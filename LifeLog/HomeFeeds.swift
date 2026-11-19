@@ -732,7 +732,12 @@ final class HomeFeedsBook {
         return plaudFill.map(\.day).filter { !have.contains($0) }.sorted(by: >)
     }
 
-    var visibleDoubts: [SpeakerDoubt] { HomeFeeds.visibleDoubts(doubts, hidden: hiddenDoubts) }
+    /// 自信の段が auto（黙って入れる）のものは聞かない（2026-11-19。s18 の 61。KnowMe.swift）
+    var visibleDoubts: [SpeakerDoubt] {
+        HomeFeeds.visibleDoubts(doubts, hidden: hiddenDoubts).filter {
+            KnowMeBook.shared.shouldAsk("speaker_doubts", $0.day + "|" + $0.conversation_start + "|" + $0.line_time)
+        }
+    }
 
     /// 「違う」・直し済み。もう出さない
     func hideDoubt(_ id: String) {

@@ -621,6 +621,8 @@ enum MothershipOutbox {
         "same_person": ["merged", "different"], "promise": ["added", "ignored"], "bulk": ["ok"],
         // 正しさの抜き取り「合ってる？」（2026-11-15。強化案 41。SettleFeeds.swift）
         "check": ["right", "wrong", "unsure"],
+        // 見立ての ○×（1）・抜き打ち検査（81）（2026-11-19。s18。KnowMe.swift）
+        "hypothesis": ["right", "wrong", "unsure"], "spot": ["right", "wrong", "unsure"],
     ]
     static let appEvents: [String] = ["open", "close", "focus_on", "focus_off"]
 
@@ -633,6 +635,9 @@ enum MothershipOutbox {
         case "decisions/answer": return "decisions"  // 決めごとの答え（2026-11-15。強化案 61。PagesFeeds.swift）
         case "place-names": return "placenames"  // 本人が直した場所の名前（2026-11-16。強化案 89。PlaceNames.swift）
         case "checkups/answer": return "checkups"  // 1日1分の答え合わせの答え（2026-11-16。強化案 136。Checkups.swift）
+        // 自分を知ってもらう（2026-11-19。s18。KnowMe.swift）
+        case "know/answer", "know/recheck", "know/note", "know/person-goal", "know/why-wrong", "know/mark", "know/voice-fix",
+             "mood/tap": return KnowMeRules.feature
         default: return path
         }
     }

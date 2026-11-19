@@ -610,7 +610,9 @@ FEEDBACK = {"today_three": ("done", "skipped"), "brief": ("read",), "weekly": ("
             "prep": ("useful", "not_useful"), "brief_compare": ("codex", "claude"), "night_review": ("kept", "dropped"),
             "same_person": ("merged", "different"), "promise": ("added", "ignored"), "bulk": ("ok",),
             # 正しさの抜き取りの答え（2026-11-15。強化案 41。GET /checks の id）
-            "check": ("right", "wrong", "unsure")}
+            "check": ("right", "wrong", "unsure"),
+            # 見立ての ○×（1）・黙って入れたものの抜き打ち（81）（2026-11-19。s18。knowapp.py）
+            "hypothesis": ("right", "wrong", "unsure"), "spot": ("right", "wrong", "unsure")}
 APP_EVENTS = ("open", "close", "focus_on", "focus_off")
 _inbox_lock = threading.Lock()
 

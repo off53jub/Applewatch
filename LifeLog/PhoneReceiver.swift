@@ -26,6 +26,8 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     var onNewPerson: (@MainActor (Date) -> Void)?
     /// 時計で会議モードを始めた・終えた
     var onMeeting: (@MainActor (Bool) -> Void)?
+    /// 時計で「違う、〇〇さん」と言った（言った言葉と時刻。2026-11-19。s18。KnowMe.swift）
+    var onVoiceFix: (@MainActor (String, Date) -> Void)?
     /// 時計から「さっき何て言った？」と聞かれた（答えの文を返す）
     var onAsk: (@MainActor (String) -> String)?
     /// 時計で頼まれごとの「済み」が押された（頼まれごとの id。2026-11-07）
@@ -307,6 +309,9 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         }
         if let on = userInfo["meeting"] as? Bool {
             Task { @MainActor in self.onMeeting?(on) }
+        }
+        if let text = userInfo["voiceFix"] as? String, let at = userInfo["at"] as? Double {
+            Task { @MainActor in self.onVoiceFix?(text, Date(timeIntervalSince1970: at)) }
         }
     }
 

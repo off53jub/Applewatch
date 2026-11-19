@@ -219,6 +219,12 @@ jobs:
           python pc/v20checks_place.py > v20.txt 2>&1 || { cat v20.txt; grep '^NG' v20.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v20.txt | sed 's/^/::notice::v20checks_place の OK の数: /'
 
+      # 2026-11-19（s18 自分を知ってもらう。docs/s18-know-me.md）: 見立て・1 日 1 問・抜き打ち・自信の段の写しを読む口と、
+      #   アプリの答えを母艦の inbox に 1 行足す口を、作り物の母艦と一時フォルダで確かめる
+      - name: 自分を知ってもらう口（見立て・1 日 1 問・答え）を確かめる
+        run: |
+          python pc/v22checks_knowapp.py > v22.txt 2>&1 || { cat v22.txt; grep '^NG' v22.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v22.txt | sed 's/^/::notice::v22checks_knowapp の OK の数: /'
       # 2026-11-19（s18 の 45・47・63・69〜73・78）: 声の調子・本音メモ・声で直す・安い AI→高い AI・声の見本の候補・
       #   自分の声の取り直し・聞き取りの後の辞書・PLAUD と食い違う行を、一時フォルダと作り物の Claude で確かめる
       - name: 自分を知ってもらう分を確かめる
@@ -289,7 +295,7 @@ jobs:
             --hidden-import v8checks --hidden-import v9checks --hidden-import lifelog_mcp \
             --hidden-import watchroute --hidden-import v10checks --hidden-import mothership --hidden-import appfeeds \
             --hidden-import oneline --hidden-import askmother --hidden-import mothersearch --hidden-import priority --hidden-import presence --hidden-import load --hidden-import settle --hidden-import pages \
-            --hidden-import drafts \
+            --hidden-import drafts --hidden-import knowapp \
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \
             --hidden-import claude --hidden-import v11checks \

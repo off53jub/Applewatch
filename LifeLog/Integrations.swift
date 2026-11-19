@@ -4,6 +4,7 @@ import EventKit
 import Foundation
 import HealthKit
 import Observation
+import UIKit
 
 /// カレンダーの予定。会話の見出し、聞き取りのヒント（予定名・参加者・場所）、職場かどうかの判断、
 /// 1日の「過ごし方」の区切りに使う。iPhone のカレンダーに入っているものはすべて読める
@@ -275,7 +276,25 @@ final class HealthLink {
 
     private static let reads: Set<HKObjectType> = [
         HKCategoryType(.sleepAnalysis), HKQuantityType(.heartRate), HKQuantityType(.restingHeartRate), HKQuantityType(.stepCount),
+        // 運動（2026-11-19。s18 の 48）: 動いたエネルギー・エクササイズ・立った時間・ワークアウト・歩いた距離
+        HKQuantityType(.activeEnergyBurned), HKQuantityType(.appleExerciseTime), HKQuantityType(.appleStandTime),
+        HKQuantityType(.distanceWalkingRunning), HKObjectType.workoutType(),
     ]
+    /// 読む種類を足したら上げる（前に許可した人にも、足した種類だけをもう一度聞く。2026-11-19）
+    static let readsVersion = 2
+    static let readsVersionKey = "healthReadsVersion"
+
+    /// 前の版で許可した人に、足した種類だけを 1 回聞く（アプリを開いているときだけ。聞いたら版を覚える）
+    func askNewReadsIfNeeded() async {
+        guard enabled, available, UserDefaults.standard.integer(forKey: Self.readsVersionKey) < Self.readsVersion,
+              UIApplication.shared.applicationState == .active else { return }
+        do {
+            try await store.requestAuthorization(toShare: [], read: Self.reads)
+            UserDefaults.standard.set(Self.readsVersion, forKey: Self.readsVersionKey)
+        } catch {
+            note = "運動の記録の許可を聞けませんでした: \(error.localizedDescription)"
+        }
+    }
 
     func requestAccess() async {
         guard available else {
@@ -285,6 +304,7 @@ final class HealthLink {
         do {
             try await store.requestAuthorization(toShare: [], read: Self.reads)
             enabled = true
+            UserDefaults.standard.set(Self.readsVersion, forKey: Self.readsVersionKey)
             note = "許可を聞きました（読む許可は、iPhone の「ヘルスケア」アプリの「共有」で確かめられます）。"
         } catch {
             note = "ヘルスケアを使えませんでした（この入れ方では使えないことがあります。TestFlight で入れると使えます）: \(error.localizedDescription)"
@@ -361,7 +381,50 @@ final class HealthLink {
         let samples = await categorySamples(.sleepAnalysis, from: nightFrom, to: nightTo)
         day.sleep = Self.sleep(samples.map { (source: $0.sourceRevision.source.bundleIdentifier, value: $0.value,
                                               start: $0.startDate, end: $0.endDate) }, from: nightFrom, to: nightTo)
+        // 運動（2026-11-19。s18 の 48。許可が無ければ空のまま）
+        day.activeKcal = await statistics(.activeEnergyBurned, from: dayStart, to: dayEnd, options: .cumulativeSum)?
+            .sumQuantity()?.doubleValue(for: .kilocalorie())
+        day.exerciseMinutes = await statistics(.appleExerciseTime, from: dayStart, to: dayEnd, options: .cumulativeSum)?
+            .sumQuantity()?.doubleValue(for: .minute())
+        day.standMinutes = await statistics(.appleStandTime, from: dayStart, to: dayEnd, options: .cumulativeSum)?
+            .sumQuantity()?.doubleValue(for: .minute())
+        day.workouts = await workouts(from: dayStart, to: dayEnd)
         return day
+    }
+
+    /// 始まりがその日のワークアウト（種類の名前・時間・エネルギー・距離）
+    private func workouts(from start: Date, to end: Date) async -> [HealthExport.Day.Workout] {
+        let found: [HKWorkout] = await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+            let query = HKSampleQuery(sampleType: HKObjectType.workoutType(), predicate: predicate, limit: 50,
+                                      sortDescriptors: nil) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKWorkout]) ?? [])
+            }
+            store.execute(query)
+        }
+        var out: [HealthExport.Day.Workout] = []
+        for w in found.sorted(by: { $0.startDate < $1.startDate }) {
+            let kcal: Double? = w.statistics(for: HKQuantityType(.activeEnergyBurned))?.sumQuantity()?.doubleValue(for: .kilocalorie())
+            let meters: Double? = w.statistics(for: HKQuantityType(.distanceWalkingRunning))?.sumQuantity()?.doubleValue(for: .meter())
+            out.append(HealthExport.Day.Workout(name: Self.workoutName(w.workoutActivityType), start: w.startDate, end: w.endDate,
+                                                kcal: kcal, km: meters.map { $0 / 1000 }))
+        }
+        return out
+    }
+
+    nonisolated static func workoutName(_ type: HKWorkoutActivityType) -> String {
+        switch type {
+        case .walking: "ウォーキング"
+        case .running: "ランニング"
+        case .cycling: "サイクリング"
+        case .swimming: "水泳"
+        case .hiking: "ハイキング"
+        case .traditionalStrengthTraining, .functionalStrengthTraining: "筋トレ"
+        case .yoga: "ヨガ"
+        case .highIntensityIntervalTraining: "HIIT"
+        case .socialDance, .cardioDance: "ダンス"
+        default: "運動"
+        }
     }
 
     /// 睡眠の記録から、一晩の睡眠をまとめる。時計と iPhone の両方が書くと重なるので、
