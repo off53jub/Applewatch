@@ -297,6 +297,17 @@ def check_voicefix(store) -> int:
                   "target_id の行の言葉を直す")
     got = voicefix.handle(store, {"text": "違う、甲さん", "at": iso(DAY, 23, 59, 0)})
     failed += say(got["status"] == "no_target", "近くに行が無ければ直さない")
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        mother, home = Path(tmp) / "mother", Path(tmp) / "home"
+        (mother / "inbox").mkdir(parents=True)
+        row = {"text": "違う、乙さん", "said_at": at, "by": "watch", "near": {"line_time": iso(DAY, 10, 0, 9)}}
+        (mother / voicefix.INBOX).write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        before = len(store.edits.pending(0))
+        first = voicefix.drain_inbox(home, mother, store, lambda _t: None)
+        second = voicefix.drain_inbox(home, mother, store, lambda _t: None)
+        failed += say(first == 1 and second == 0 and len(store.edits.pending(0)) >= before,
+                      "時計からの「違う、〇〇さん」（母艦の inbox）を 1 回だけ当てる")
     return failed
 
 
