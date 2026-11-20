@@ -195,6 +195,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if WCSession.default.activationState == .activated {
             out["outstanding"] = WCSession.default.outstandingFileTransfers.count
         }
+        let unstuck = UserDefaults.standard.integer(forKey: Self.unstuckKey)
+        if unstuck > 0 { out["unstuck"] = unstuck }
         let lastCut = UserDefaults.standard.double(forKey: Self.lastCutKey)
         if lastCut > 0 { out["lastCut"] = lastCut }
         // 声らしい音が無いので捨てた区切りの数（今日。2026-11-16。VoiceGate）
@@ -240,6 +242,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
     func heartbeat() {
         publish()
         // 送れずに残っている区切りを送る（つながる前に区切った・低電力モードで溜めた・低電力モードを切った。2026-11-07）
+        unstickTransfers()
         flushIfDue()
         resendUnacknowledged()
         // 録音中・まだ届いていない区切りがあるときは、iPhone のアプリを起こしておく
@@ -583,6 +586,41 @@ final class WatchSender: NSObject, WCSessionDelegate {
             zone: .current, cut: Self.cutTime(url), sent: .now, lowPower: lowPower,
             viaPC: direct || WatchPC.wasSent(url.lastPathComponent)))
     }
+
+    /// 受け渡しの列に止まったままの区切りを取り消す（2026-11-20。WatchDelivery.stuckTransfers）。
+    /// 取り消した区切りは「まだ送っていない」に残るので、次の resendPending が送り直す。
+    /// 古すぎて家の PC には届いているものだけは、送り直さずに控えへ移す（控えは 7 日で消える）
+    func unstickTransfers(now: Date = .now) {
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
+        let transfers = WCSession.default.outstandingFileTransfers
+        let queued = transfers.map { transfer -> (name: String, sent: Date?, cut: Date?) in
+            let name = transfer.file.fileURL.lastPathComponent
+            let sent = (transfer.file.metadata?[WatchDelivery.sentKey] as? Double).map { Date(timeIntervalSince1970: $0) }
+            return (name, sent, Self.cutTime(transfer.file.fileURL))
+        }
+        let stuck = Set(WatchDelivery.stuckTransfers(queued, now: now))
+        guard !stuck.isEmpty else { return }
+        let current = recording?.lastPathComponent
+        for transfer in transfers where stuck.contains(transfer.file.fileURL.lastPathComponent) {
+            transfer.cancel()
+        }
+        for name in stuck where name != current {
+            let url = Self.pendingDir.appendingPathComponent(name)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            let cutAge = Self.cutTime(url).map { now.timeIntervalSince($0) }
+            if WatchDelivery.retireInsteadOfResend(cutAge: cutAge, sentToPC: WatchPC.wasSent(name)) {
+                keepSent(url)
+            }
+        }
+        lock.withLock {
+            let total = UserDefaults.standard.integer(forKey: Self.unstuckKey) + stuck.count
+            UserDefaults.standard.set(total, forKey: Self.unstuckKey)
+        }
+        onChange?()
+    }
+
+    /// 取り消した受け渡しの数（これまでの合計。様子に出す）
+    private static let unstuckKey = "unstuckTransfers"
 
     /// 前回送れなかった区切りを送り直す。書き込み中のファイルと、送っている途中のファイルは送らない。
     func resendPending() {
