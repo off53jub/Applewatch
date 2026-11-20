@@ -560,6 +560,8 @@ extension Pipeline {
         if let done = state.relayDone { detail["watchRelayDone"] = done }
         // 声らしい音が無いので時計が捨てた区切りの数（今日。2026-11-16。VoiceGate）
         if let dropped = state.noVoiceDropped { detail["watchNoVoiceDropped"] = dropped }
+        // 受け渡しの列に止まっていて、時計が取り消した区切りの数（これまでの合計。2026-11-20）
+        if let unstuck = state.unstuck { detail["watchUnstuck"] = unstuck }
         UserDefaults.standard.set(detail, forKey: PCDiag.watchDetailKey)
     }
 

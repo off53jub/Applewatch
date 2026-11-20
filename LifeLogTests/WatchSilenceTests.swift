@@ -190,4 +190,36 @@ final class WatchSilenceTests: XCTestCase {
         XCTAssertTrue(due(6 * 3600, 5, nil))
         XCTAssertLessThan(WatchDelivery.resendMaxAge, 4 * 86400)
     }
+
+    // MARK: - 終わらない受け渡しを取り消す（2026-11-20）
+
+    func testStuckTransfersPicksOnlyOldOnesOldestFirst() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let h: TimeInterval = 3600
+        let queued: [(name: String, sent: Date?, cut: Date?)] = [
+            ("a.m4a", now.addingTimeInterval(-1 * h), nil),        // 新しい: 取り消さない
+            ("b.m4a", now.addingTimeInterval(-30 * h), nil),       // 古い
+            ("c.m4a", now.addingTimeInterval(-7 * h), nil),        // 古い
+            ("d.m4a", nil, now.addingTimeInterval(-50 * h)),       // 送り始めが読めない → 区切った時刻で見る
+            ("e.m4a", nil, nil),                                   // どちらも無い: 取り消さない
+        ]
+        XCTAssertEqual(WatchDelivery.stuckTransfers(queued, now: now), ["d.m4a", "b.m4a", "c.m4a"])
+        XCTAssertEqual(WatchDelivery.stuckTransfers(queued, now: now, max: 2), ["d.m4a", "b.m4a"])
+        XCTAssertEqual(WatchDelivery.stuckTransfers(queued, now: now, max: 0), [])
+        XCTAssertEqual(WatchDelivery.stuckTransfers([], now: now), [])
+    }
+
+    func testStuckTransferRuleIsSlowerThanResend() {
+        // 送り直し（30 分）や「止まっている」の見なし（30 分）より長く待ってから取り消す
+        XCTAssertGreaterThan(WatchDelivery.stuckTransferAge, WatchDelivery.staleTransferAge)
+        XCTAssertGreaterThan(WatchDelivery.unstickPerPass, 0)
+    }
+
+    func testRetireOnlyWhenTooOldAndOnPC() {
+        let old = WatchDelivery.resendMaxAge + 3600
+        XCTAssertTrue(WatchDelivery.retireInsteadOfResend(cutAge: old, sentToPC: true))
+        XCTAssertFalse(WatchDelivery.retireInsteadOfResend(cutAge: old, sentToPC: false))   // PC に無ければ送り直す
+        XCTAssertFalse(WatchDelivery.retireInsteadOfResend(cutAge: 3600, sentToPC: true))   // 新しければ送り直す
+        XCTAssertFalse(WatchDelivery.retireInsteadOfResend(cutAge: nil, sentToPC: true))
+    }
 }

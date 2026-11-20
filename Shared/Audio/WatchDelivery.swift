@@ -385,6 +385,36 @@ enum WatchDelivery {
         return fresh < limit
     }
 
+    // MARK: - 終わらない受け渡しを取り消す（2026-11-20。docs/v23-watch-stuck-transfers.md）
+    //
+    // 11/18 5:49 から 2 日半、時計の「まだ送っていない」が 302 個のまま減らなかった。どれも受け渡しの列
+    // （outstandingFileTransfers）に入ったまま終わらず、resendPending は「送っている途中」なので送り直さなかった。
+    // 新しい区切りは届いていたので、列が丸ごと止まっていたのではない。止まった受け渡しを取り消して送り直す。
+
+    /// 受け渡しを始めてからこれだけたっても終わらないものは、止まっているとみなして取り消す（仮）
+    static let stuckTransferAge: TimeInterval = 6 * 3600
+    /// 1 回の見回りで取り消す数の上限（仮。送り直しが新しい区切りの前に並びすぎないように）
+    static let unstickPerPass = 30
+
+    /// 取り消す受け渡しの名前（古い順に max 個まで）。started は送り始めた時刻（読めなければ区切った時刻、どちらも無ければ取り消さない）
+    static func stuckTransfers(_ queued: [(name: String, sent: Date?, cut: Date?)], now: Date,
+                               age: TimeInterval = stuckTransferAge, max: Int = unstickPerPass) -> [String] {
+        queued.compactMap { item -> (name: String, started: Date)? in
+            guard let started = item.sent ?? item.cut, now.timeIntervalSince(started) >= age else { return nil }
+            return (item.name, started)
+        }
+        .sorted { ($0.started, $0.name) < ($1.started, $1.name) }
+        .prefix(Swift.max(0, max))
+        .map(\.name)
+    }
+
+    /// 取り消したあと、iPhone に送り直さずに控えへ移すか。古すぎて（resendMaxAge より前）iPhone に送ると文字にし直してしまうが、
+    /// 家の PC には届いている区切りだけ（PC に無いものは、古くても送り直す。失わないほうを選ぶ）
+    static func retireInsteadOfResend(cutAge: TimeInterval?, sentToPC: Bool) -> Bool {
+        guard let cutAge else { return false }
+        return sentToPC && cutAge > resendMaxAge
+    }
+
     /// この控えを送り直す時か。sentAgo は最後に送って（送り直して）からの秒、count は送り直した回数、
     /// cutAge は区切ってからの秒（分からなければ nil）。決まりは WatchSender の resendAfter・maxResends・slowResendAfter と同じ
     static func resendDue(sentAgo: TimeInterval, count: Int, cutAge: TimeInterval?,
