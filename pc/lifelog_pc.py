@@ -2200,6 +2200,7 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(livecoach.features())
     # GET /people-pages・/threads・/place-pages・/decisions と POST /decisions/answer（2026-11-15。強化案 53・54・55・61。pages.py）
     found.extend(mothership.pages.FEATURES)
+    found.extend(mothership.s20feeds.FEATURES)  # s20: reviewq・featcheck・devchecks・interview・holidaytags（s20feeds.py）
     found.extend(mothership.knowapp.FEATURES)  # s18 自分を知ってもらう（2026-11-19。knowapp.py）
     # GET /canonical?day=（2026-11-15。強化案 57。canonical.py）
     found.extend(mothership.canonical.features())

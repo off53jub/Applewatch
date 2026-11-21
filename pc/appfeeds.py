@@ -631,6 +631,8 @@ def parse_feedback(data: bytes) -> dict:
     """POST /feedback の中身。おかしければ ValueError"""
     body = _json_body(data)
     kind = body.get("kind")
+    if kind == "review":  # s20: 確かめ待ちの答え {"kind":"review","id","answer","at"}（母艦の Build-ReviewQueue.py が読む）
+        return parse_review(body)
     if not isinstance(kind, str) or kind not in FEEDBACK:
         raise ValueError("kind は " + "・".join(FEEDBACK) + " のどれかです")
     if body.get("value") not in FEEDBACK[kind]:
@@ -640,6 +642,25 @@ def parse_feedback(data: bytes) -> dict:
     if _day(body.get("day")) is None:
         raise ValueError("day は YYYY-MM-DD です")
     return {"kind": kind, "id": body["id"], "value": body["value"], "day": body["day"]}
+
+
+REVIEW_ANSWER = 200
+
+
+def parse_review(body: dict) -> dict:
+    """POST /feedback の kind "review"（s20 の確かめ待ち）。answer は yes・no・unsure・あとで・選んだ文字・入力した文（200 字まで）"""
+    if _id(body.get("id")) is None:
+        raise ValueError("id は英数字と _ . : - で 64 文字までです")
+    answer = body.get("answer")
+    if not isinstance(answer, str) or not _text(answer, REVIEW_ANSWER) or len(answer) > REVIEW_ANSWER:
+        raise ValueError(f"answer は 1〜{REVIEW_ANSWER} 文字の文です")
+    at = body.get("at")
+    if at is not None and _iso(at) is None:
+        raise ValueError("at は ISO 8601 の日時です")
+    row = {"kind": "review", "id": body["id"], "answer": _text(answer, REVIEW_ANSWER)}
+    if at:
+        row["sent_at"] = at
+    return row
 
 
 def _score(value, name: str) -> int:
@@ -710,7 +731,7 @@ def _http_inbox(handler, base: Path, data: bytes, log, parse, rel: Path, label: 
 
 def http_post_feedback(handler, base: Path, data: bytes, log) -> None:
     _http_inbox(handler, base, data, log, parse_feedback, FEEDBACK_FILE, "使われ方の記録", True,
-                lambda r: f"{r['kind']} {r['value']}")
+                lambda r: f"{r['kind']} {r.get('value', '答え')}")
 
 
 def http_post_mood(handler, base: Path, data: bytes, log) -> None:

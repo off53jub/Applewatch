@@ -560,9 +560,72 @@ def check_line() -> int:
     return failed
 
 
+def check_s20feeds() -> int:
+    """s20 のアプリの新しい画面が読む道（s20feeds.py）と、確かめ待ちの答え（POST /feedback の kind review）"""
+    import appfeeds
+    import mothership
+    import s20feeds
+    failed = 0
+    base = TMP / "s20feeds"
+    gone = all(not s20feeds.READERS[p](base).get("available", True) for p in ("/review-queue", "/feature-check", "/device-checks"))
+    failed += say(gone and s20feeds.read_holiday_tags(base).get("available") is False,
+                  "s20 道: 母艦に写しが無ければ available false")
+    (base / "state" / "audit").mkdir(parents=True, exist_ok=True)
+    (base / "state" / "holiday").mkdir(parents=True, exist_ok=True)
+    (base / "reports").mkdir(parents=True, exist_ok=True)
+    (base / "state" / "review_queue_for_app.json").write_text(json.dumps({"version": 1, "items": [
+        {"id": "a1", "kind": "ramen", "question": "q", "answer": "yesno", "evidence": []}, {"id": "bad id!", "question": "x"}, "x"],
+        "stats": {"open": 1}}), encoding="utf-8")
+    (base / "state" / "holiday" / "tags.json").write_text(json.dumps({"_meta": {}, "2026-11-21": [{"tag": "外食"}]}), encoding="utf-8")
+    (base / "reports" / "interview-sheet.html").write_text("<!doctype html><p>甲</p>", encoding="utf-8")
+    q = s20feeds.read_review(base)
+    failed += say(q["available"] and [i["id"] for i in q["items"]] == ["a1"] and q["stats"]["open"] == 1,
+                  "s20 道: 確かめ待ちの列を返す（形の違う行は落とす）")
+    failed += say(s20feeds.read_holiday_tags(base) == {"2026-11-21": [{"tag": "外食"}]}, "s20 道: 休日の札は日付の行だけ")
+
+    class Html(Fake):
+        def __init__(self) -> None:
+            super().__init__()
+            self.wfile, self.head = io.BytesIO(), []
+
+        def send_response(self, status) -> None:
+            self.sent = (status, None)
+
+        def send_header(self, k, v) -> None:
+            self.head.append((k, v))
+
+        def end_headers(self) -> None:
+            pass
+    h = Html()
+    s20feeds.http_get(h, base, "/interview-sheet")
+    failed += say(h.sent[0] == 200 and ("Content-Type", "text/html; charset=utf-8") in h.head and "甲" in h.wfile.getvalue().decode("utf-8"),
+                  "s20 道: 面談の 1 枚は html をそのまま返す")
+    paths = set(s20feeds.GETS) | set(s20feeds.POSTS)
+    failed += say(paths <= set(mothership.GETS) | set(mothership.POSTS) and set(s20feeds.FEATURES) == {"reviewq", "featcheck", "devchecks", "interview", "holidaytags"},
+                  "s20 道: 母艦の道の表に載り、features の名前がアプリと同じ")
+    logs: list[str] = []
+    f = Fake({"id": "fc-1", "keep": False, "at": "2026-11-21T10:00:00+09:00"})
+    s20feeds.http_post_feature_answer(f, base, f.rfile.getvalue(), logs.append)
+    row = json.loads((base / s20feeds.FEATURE_ANSWERS).read_text(encoding="utf-8").splitlines()[-1])
+    failed += say(f.sent[0] == 200 and row == {"id": "fc-1", "keep": False, "at": "2026-11-21T10:00:00+09:00"},
+                  "s20 道: 検品表の答えを inbox/feature_answers.jsonl に {id, keep, at}")
+    bad = Fake({"id": "fc-1", "keep": "yes"})
+    s20feeds.http_post_feature_answer(bad, base, bad.rfile.getvalue(), logs.append)
+    failed += say(bad.sent[0] == 400, "s20 道: keep が true・false でなければ 400")
+    r = Fake({"kind": "review", "id": "a1", "answer": "あとで", "at": "2026-11-21T10:00:00+09:00"})
+    appfeeds.http_post_feedback(r, base, r.rfile.getvalue(), logs.append)
+    row = json.loads((base / appfeeds.FEEDBACK_FILE).read_text(encoding="utf-8").splitlines()[-1])
+    failed += say(r.sent[0] == 200 and row["kind"] == "review" and row["id"] == "a1" and row["answer"] == "あとで" and row.get("at"),
+                  "s20 道: 確かめ待ちの答え（kind review）を inbox/app_feedback.jsonl に {kind, id, answer, at}")
+    old = Fake({"kind": "review", "id": "a1"})
+    appfeeds.http_post_feedback(old, base, old.rfile.getvalue(), logs.append)
+    failed += say(old.sent[0] == 400 and "あとで" not in " ".join(logs), "s20 道: answer が無ければ 400・答えの中身は記録に書かない")
+    return failed
+
+
 def main() -> int:
     failed = 0
-    for check in (check_split_and_self, check_knowapp, check_forget, check_line):
+    for check in (check_split_and_self, check_knowapp, check_forget, check_line, check_s20feeds):
         failed += check()
     print("ぜんぶ OK" if not failed else f"NG の数: {failed}", flush=True)
     return failed
