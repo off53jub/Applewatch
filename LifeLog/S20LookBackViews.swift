@@ -305,7 +305,10 @@ struct HTMLFileView: UIViewRepresentable {
         view.isOpaque = true
         view.backgroundColor = .white
         view.scrollView.backgroundColor = .white
-        view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        // 文として読み込む（ファイルの道で読むと、シミュレーターで白いままのことがあった。2026-11-21）
+        if let html = try? String(contentsOf: url, encoding: .utf8) {
+            view.loadHTMLString(html, baseURL: nil)
+        }
         return view
     }
 

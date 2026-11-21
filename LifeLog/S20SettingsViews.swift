@@ -258,7 +258,8 @@ struct CompanionCardView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, LL.Space.xl)
-                    .background(LL.bg, in: RoundedRectangle(cornerRadius: LL.Radius.card))
+                    .background(LL.surface, in: RoundedRectangle(cornerRadius: LL.Radius.card))
+                    .overlay(RoundedRectangle(cornerRadius: LL.Radius.card).strokeBorder(LL.accent.opacity(0.5), lineWidth: LL.Stroke.thin))
                 }
                 .buttonStyle(.plain)
                 .listRowBackground(Color.clear)
