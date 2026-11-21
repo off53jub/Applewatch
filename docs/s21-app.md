@@ -104,7 +104,8 @@ iPhone の帳（覚えておくもの・数えるもの）は `LifeLog/S21Book.s
 
 ### 速1 待ち合わせ（POST /jobs?wait=1）が 50 件中 1 件の理由（iPhone の分。一部）
 - 調べたこと（仮説）: iPhone が wait=1 を付けるのは「PC が対応している」と「送っている途中が 3 つより少ない」ときだけ。時計の区切りは、時計から家の PC に直接届いて（/w/jobs は待ち合わせをしない）、iPhone は音声を PC から受け取る（強化案 64）ので、iPhone から POST /jobs をしない区切りが多い。さらに PC の待ちの中央値が 42.8 分で、待ち合わせの上限 25 分より長いので、付けても時間切れになりやすい。どちらも iPhone の条件だけでは直らない（PC の受け付けと待ちは P）。
-- 何をしたか: 付けたか・付けなかったわけを tally の `jobs.wait.on`・`jobs.wait.busy`・`jobs.wait.noFeature` に数え、自己点検の「処理」に 7 日の数を出す。条件そのものは変えていない（同時に待たせる数を増やすと、新しい区切りを送り始められなくなる心配が前からあるため）。
+- 条件（「送っている途中が 3 つ以上なら付けない」）は変えなかった: 待ち合わせの送りは返事を書き終えるまで（PC の待ちは中央値 42.8 分）つながりを持ったままなので、上限を上げると裏の送りの枠が埋まり、新しい区切りを送り始められなくなる心配が前からある（`HomePC.maxWaiting` の説明）。まずわけの数を見てから決める。
+- 何をしたか: 付けたか・付けなかったわけを tally の `jobs.wait.on`・`jobs.wait.busy`・`jobs.wait.noFeature` に数え、自己点検の「処理」に 7 日の数を出す。
 - まだ: 数がたまったら、`busy` が多ければ上限を見直す。
 
 ### 速2 時計の返事待ち 159 個（した）
@@ -146,7 +147,7 @@ iPhone の帳（覚えておくもの・数えるもの）は `LifeLog/S21Book.s
 - まだ: 時計のアプリを入れ替えたとき（TestFlight）も 1 回に数える。
 
 ### 守3 画面が消えているあいだの強い守り（ワークアウト扱い。した・初めはオフ）
-- 何をしたか: 設定でオンのとき、録音中だけ時計をワークアウト扱い（`HKWorkoutSession`）にする。記録はヘルスケアに残さない（`HKLiveWorkoutBuilder` を使わない）。初めてのときにヘルスケアの「ワークアウト」の許可を聞く。時計のアプリに HealthKit の許可（entitlement `com.apple.developer.healthkit`）・`WKBackgroundModes: [workout-processing]`・ヘルスケアの説明文を足した。
+- 何をしたか: 設定でオンのとき、録音中だけ時計をワークアウト扱い（`HKWorkoutSession`）にする。記録はヘルスケアに残さない（`HKLiveWorkoutBuilder` を使わない）。ヘルスケアの「ワークアウト」の許可は、設定をオンにして録音を始めたときに初めて聞く（オフのあいだは `WatchGuard.update` が何もしないので、許可も聞かない。時計に届く設定も初めは false。テスト `testSettingsTravelToWatch`）。時計のアプリに HealthKit の許可（entitlement `com.apple.developer.healthkit`）・`WKBackgroundModes: [workout-processing]`・ヘルスケアの説明文を足した。
 - 初めの値: オフ。
 - 署名: この PR の TestFlight のワークフロー（build）で、時計のアプリの HealthKit つきの署名とアップロードが通り、Apple が受け付けた（ビルド 359。main ではないのでテスターには渡していない）。
 - まだ: 効き目と電池の減りは仮説（実機で未確認）。
