@@ -68,7 +68,9 @@ struct ChunkCutter {
     /// 録り方の実験の日（2026-11-15。RecordingExperiment）は、その日の組の長さ（電池のための5分は、それより優先）
     static var current: Length {
         let planned: Length = RecordingExperiment.length(base: length, combo: RecordingExperiment.current())
-        return effective(planned, saving: batterySaving)
+        // 寝ている時間（1:00〜6:00・充電していない）も 5 分に（2026-11-22。s21 の 電3。時計だけが入れる）
+        let sleeping: Bool = UserDefaults.standard.bool(forKey: S21Watch.sleepSavingKey)
+        return effective(planned, saving: batterySaving || sleeping)
     }
 
     static func effective(_ length: Length, saving: Bool) -> Length { saving ? .normal : length }
@@ -104,6 +106,8 @@ struct ChunkCutter {
         RecordingExperiment.addSettings(to: &context)
         // 時計で声の無い区切りを送らないか（2026-11-16。VoiceGate）
         VoiceGate.addSettings(to: &context)
+        // 寝ている時間の 5 分・ワークアウト扱いの守り（2026-11-22。s21 の 電3・守3）
+        S21Watch.addSettings(to: &context)
     }
 
     /// 時計が iPhone から届いた設定を読む（区切りの長さと「電池が少ないときは5分に」。次の区切りから効く）
@@ -114,6 +118,7 @@ struct ChunkCutter {
         if let on = context[batterySaverKey] as? Bool { batterySaverOn = on }
         RecordingExperiment.readSettings(context)
         VoiceGate.readSettings(context)
+        S21Watch.readSettings(context)
     }
 
     /// 静かな瞬間をこれだけ待つ

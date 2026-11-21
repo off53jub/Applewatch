@@ -337,7 +337,13 @@ extension Pipeline {
         let lines = conversations(on: yesterday).flatMap(\.lines)
         let uncertain = lines.filter(\.isUncertain).count
         let unnamed = Set(lines.compactMap(\.speaker).filter { $0.hasPrefix("人物") }).count
-        return RecordingLedger.reportLine(gaps: map.gaps, counts: counts, uncertain: uncertain, unnamedVoices: unnamed)
+        let base = RecordingLedger.reportLine(gaps: map.gaps, counts: counts, uncertain: uncertain, unnamedVoices: unnamed)
+        // きのう録れた時間・止まりかけた回数（#90 の stalls・autoResumed）・録れなかった時間帯（2026-11-22。s21 の 使3）
+        let recorded = map.spans.filter { $0.kind == .recorded }.reduce(0.0) { $0 + $1.end.timeIntervalSince($1.start) }
+        let watch = S21Book.dayCounts(HolidayRules.dayKey(yesterdayStart))
+        let extra = S21Rules.morningExtra(recordedMinutes: Int(recorded / 60), stalls: watch?.stalls, autoResumed: watch?.autoResumed,
+                                          exits: watch?.exits, gaps: map.gaps.map { (start: $0.start, end: $0.end) })
+        return base + "・" + extra
     }
 
     /// 前の日の点検を、7時半の通知に1行で出す（もう過ぎていて昼前なら、すぐ）。1日1回。

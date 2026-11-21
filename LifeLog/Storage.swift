@@ -143,6 +143,11 @@ enum Storage {
         Set((UserDefaults.standard.dictionary(forKey: receivedKey) as? [String: Double] ?? [:]).keys)
     }
 
+    /// 受け取ったと覚えている区切りの名前と、受け取った時刻（1970 からの秒。2026-11-22。s21 の 速2）
+    static func receivedTimes() -> [String: Double] {
+        UserDefaults.standard.dictionary(forKey: receivedKey) as? [String: Double] ?? [:]
+    }
+
     /// 受け取った区切りの名前を覚える（古いものは忘れる）
     static func noteReceived(_ name: String) {
         var list = UserDefaults.standard.dictionary(forKey: receivedKey) as? [String: Double] ?? [:]

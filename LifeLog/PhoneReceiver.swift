@@ -168,6 +168,14 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         var awayHolding: Bool? = nil
         /// 「初めての人が多い」モードか（休17）
         var crowd: Bool? = nil
+        /// s21（2026-11-22。新しい時計のアプリだけ。S21Watch）: 今日録れた秒（使5）・今日アプリが終わっていた回数と
+        /// 最後のあいだ「秒|秒」（守2）・片付けた返事待ちの合計（速2）・ワークアウト扱いで守っているか（守3）・声の無い区切りの見本の数（精7）
+        var recordedToday: Int? = nil
+        var exits: Int? = nil
+        var lastExit: String? = nil
+        var keptCleared: Int? = nil
+        var guarding: Bool? = nil
+        var sampledNoVoice: Int? = nil
 
         /// 時計の中に残っている区切り（まだ送っていない＋返事待ち）。どちらも分からなければ nil
         var leftOnWatch: Int? {
@@ -181,6 +189,16 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     func askWatchToResend() {
         guard WCSession.isSupported(), WCSession.default.activationState == .activated, WCSession.default.isPaired else { return }
         WCSession.default.transferUserInfo(["resendKept": true])
+    }
+
+    /// iPhone が受け取ったと覚えている時計の区切りの名前を、時計に渡す（時計は返事が届かなかった控えを片付ける。
+    /// 2026-11-22。s21 の 速2）。渡せたら true
+    @discardableResult
+    func sendGotList(_ names: [String]) -> Bool {
+        guard !names.isEmpty, WCSession.isSupported(), WCSession.default.activationState == .activated,
+              WCSession.default.isPaired else { return false }
+        WCSession.default.transferUserInfo([S21Watch.gotListKey: names])
+        return true
     }
 
     /// 前に送った設定（会議モードだけ変えるときなどに、ほかを残す）
@@ -334,6 +352,12 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
             ?? (context[HolidayRules.batteryAtKey] as? [[NSNumber]])?.map { $0.map(\.doubleValue) }
         state.awayHolding = context[HolidayRules.awayHoldingKey] as? Bool
         state.crowd = context[HolidayRules.crowdKey] as? Bool
+        state.recordedToday = context[S21Watch.recordedTodayKey] as? Int
+        state.exits = context[S21Watch.exitsKey] as? Int
+        state.lastExit = context[S21Watch.lastExitKey] as? String
+        state.keptCleared = context[S21Watch.keptClearedKey] as? Int
+        state.guarding = context[S21Watch.guardingKey] as? Bool
+        state.sampledNoVoice = context[S21Watch.sampledNoVoiceKey] as? Int
         let snapshot = state
         Task { @MainActor in
             if let lowPower { self.onWatchLowPower?(lowPower) }

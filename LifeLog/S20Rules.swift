@@ -733,7 +733,8 @@ enum DayPart: Equatable {
 
 enum WhatsNew {
     static let seenKey = "s20.whatsNewSeen"
-    static let version = "s20"
+    /// 版が変わったら、初めて開いたときに 1 画面で出す（2026-11-22 に s21。s21 の 使4）
+    static let version = "s21"
 
     struct Item: Identifiable {
         let id: String
@@ -742,10 +743,18 @@ enum WhatsNew {
         let symbol: String
         /// その場で入り切りするスイッチ（無ければ見せるだけ）
         let key: String?
+        /// スイッチの初めの値（まだ触っていないとき）
+        var defaultOn: Bool = false
     }
 
-    /// 今回の分（s18・s19・s20 から 3 つ）
+    /// 今回の分（s21 から 3 つ・s18〜s20 から 3 つ。新しいものが上）
     static let items: [Item] = [
+        Item(id: "shake", title: "振って「いまの画面が変」", detail: "iPhone を振ると、その画面の名前とひとことを家の PC に送ります（s21）",
+             symbol: "iphone.radiowaves.left.and.right", key: S21Book.shakeKey, defaultOn: true),
+        Item(id: "sleepChunks", title: "寝ている時間は時計の区切りを 5 分に", detail: "1:00〜6:00 で充電していないとき、時計の電池を守ります（s21）",
+             symbol: "moon.stars", key: S21Watch.sleepChunksKey, defaultOn: true),
+        Item(id: "workoutGuard", title: "時計の強い守り（ワークアウト扱い）", detail: "画面が消えても録音を止めにくくします。電池を多く使います（s21・初めはオフ）",
+             symbol: "figure.walk.motion", key: S21Watch.workoutGuardKey),
         Item(id: "digest", title: "知らせを朝夕の便りに", detail: "急ぎでない知らせを 1 日 2 回にまとめます（s20）",
              symbol: "envelope.badge", key: SceneKey.noticeDigest.rawValue),
         Item(id: "sleep", title: "寝ているあいだは録音を休む", detail: "時刻か、集中モード（睡眠）で休みます（s20）",

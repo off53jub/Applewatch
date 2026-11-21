@@ -155,6 +155,8 @@ struct FixView: View {
             if reviewCount > 0 || unnamedToday > 0 {
                 Section("見直したい声（\(reviewCount)）") {
                     if reviewCount > 0 { NavigationLink("声を聞いて直す") { VoiceReviewView() } }
+                    // 1 画面で ○×（2026-11-22。s21 の 使8）
+                    if reviewCount > 0 { NavigationLink("○× でまとめて") { S21VoiceQuickReviewView() } }
                     if unnamedToday > 0 { NavigationLink("今日の人物Nを整理（\(unnamedToday) 人）") { UnnamedVoicesView(day: day) } }
                 }
             }

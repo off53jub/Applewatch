@@ -850,6 +850,7 @@ final class ConversationLog {
         trashTask = nil
         guard let trashCache, let data = try? JSONEncoder().encode(trashCache) else { return }
         try? data.write(to: Self.trashURL, options: .atomic)
+        WriteMeter.note("trash", data.count)  // 書き込みの多い所を測る（2026-11-22。s21 の 速5）
     }
 
     /// 消す候補を探す。only を渡すとその日だけ。
@@ -1338,6 +1339,7 @@ final class ConversationLog {
         }
         guard let data = try? JSONEncoder().encode(value) else { return }
         try? data.write(to: Self.docFixesURL, options: .atomic)
+        WriteMeter.note("docFixes", data.count)  // 書き込みの多い所を測る（2026-11-22。s21 の 速5）
     }
 
     /// その日のドキュメントに直しを当てる。前に当てられなかった直しがあれば、それを先に当てる

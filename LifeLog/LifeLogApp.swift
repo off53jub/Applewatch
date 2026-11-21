@@ -112,6 +112,8 @@ struct LifeLogApp: App {
         // 寝ているあいだ・一緒にいる人のために休む（2026-11-21。s20 の 次10・体37。S20Book.swift）。
         // 時刻の切り替わりを拾うため、録音中は 5 分ごとに確かめ直す（裏で録音しているあいだもアプリは動いている）
         S20Hold.changed = { pipeline.updateHold() }
+        // 時計に伝える設定（寝ている時間の 5 分・強い守り）が変わったら送り直す（2026-11-22。s21。S21Book.swift）
+        S21Book.settingsChanged = { pipeline.receiver.sendSettings(skipSilence: pipeline.skipSilence, held: pipeline.recordingHeld) }
         if !Self.testing && !Self.demo {
             Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
                 Task { @MainActor in pipeline.updateHold() }

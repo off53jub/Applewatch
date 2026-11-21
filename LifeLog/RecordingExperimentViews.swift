@@ -8,6 +8,13 @@ import SwiftUI
 extension Pipeline {
     /// 1日目を決め（まだなら次の日。時計にも渡す）、会議モードかを録音の部品に渡し、その日の組を tally に残す（1日1回）
     func noteRecordingExperiment(now: Date = .now) {
+        // 「直接送る／iPhone 経由だけ」の実験の 1 日目（まだなら次の日。その日の組は tally の s21.route.<組>。2026-11-22。s21 の 電2）
+        S21Book.ensureRouteStart(now: now)
+        if let route = S21Book.routeToday(now: now) {
+            let day: String = RecordingExperiment.dayKey(now)
+            let key: String = "s21.route." + route.rawValue
+            if (Tally.days(1, now: now)[day] ?? [:])[key] == nil { Tally.add(key, at: now) }
+        }
         UserDefaults.standard.set(MeetingMode.active != nil, forKey: RecordingExperiment.meetingKey)
         if RecordingExperiment.start == nil {
             RecordingExperiment.start = RecordingExperiment.firstDay(after: now)

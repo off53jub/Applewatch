@@ -370,12 +370,14 @@ private struct WhatsNewRow: View {
                     on = value
                     UserDefaults.standard.set(value, forKey: key)
                     S20Hold.changed?()
+                    // 時計に伝える設定（寝ている時間の 5 分・強い守り）も送り直す（2026-11-22。s21）
+                    S21Book.settingsChanged?()
                 }))
                 .labelsHidden()
             }
         }
         .onAppear {
-            if let key = item.key { on = UserDefaults.standard.object(forKey: key) as? Bool ?? (item.id == "holiday") }
+            if let key = item.key { on = UserDefaults.standard.object(forKey: key) as? Bool ?? (item.defaultOn || item.id == "holiday") }
         }
     }
 }

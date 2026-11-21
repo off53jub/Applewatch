@@ -180,6 +180,9 @@ private struct RecordPage: View {
                 }
                 // iPhone とのつながりと、送れていない録音
                 VStack(spacing: 2) {
+                    // 今日録れた時間と、最後に届いた時刻（2026-11-22。s21 の 使5）
+                    Text(S21Watch.todayLine(recorded: recorder.recordedToday, delivered: recorder.lastDelivered))
+                        .foregroundStyle(LL.text)
                     Text(recorder.link)
                     if recorder.unsent > 0 {
                         Text("iPhone に送っていない録音 \(recorder.unsent) 個")
@@ -199,6 +202,10 @@ private struct RecordPage: View {
                     // 電池が少ないので、区切りを自動で5分にしている（2026-11-07）
                     if recorder.batterySaving {
                         Text("電池が少ないので、5分ごとに区切っています")
+                    }
+                    // 寝ている時間なので 5 分に（2026-11-22。s21 の 電3）
+                    if recorder.sleepSaving {
+                        Text("寝ている時間なので、5分ごとに区切っています")
                     }
                 }
                 .font(.caption2)
@@ -482,6 +489,9 @@ private struct StatusPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
                 PageTitle(text: "様子", symbol: "waveform.path.ecg")
+                // 今日録れた時間と、最後に届いた時刻（2026-11-22。s21 の 使5）
+                Text("今日録れた " + S21Watch.durationText(recorder.recordedToday)).font(.caption2)
+                Text("最後に届いた " + (recorder.lastDelivered.map { when($0.timeIntervalSince1970) } ?? "まだ")).font(.caption2)
                 Text(recorder.link).font(.caption2)
                 Text("時計から送っていない録音 \(recorder.unsent) 個")
                     .font(.caption2)

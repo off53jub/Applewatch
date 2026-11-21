@@ -29,15 +29,19 @@ enum WatchDelivery {
         var lowPower: Bool?
         /// 時計から家の PC にも直接送った
         var viaPC: Bool = false
+        /// 声が無いので捨てるはずだった区切りの見本（1 割。家の PC が本当に声が無かったかを数える。2026-11-22。s21 の 精7）
+        var sampleNoVoice: Bool = false
     }
 
     /// 時計が付ける控え
     static func metadata(zone: TimeZone, cut: Date?, sent: Date, lowPower: Bool, viaPC: Bool,
-                         resend: Int? = nil) -> [String: Any] {
+                         resend: Int? = nil, sampleNoVoice: Bool = false) -> [String: Any] {
         var out: [String: Any] = [zoneKey: zone.identifier, sentKey: sent.timeIntervalSince1970, lowPowerKey: lowPower]
         if let cut { out[cutKey] = cut.timeIntervalSince1970 }
         if viaPC { out[pcKey] = true }
         if let resend { out[resendKey] = resend }
+        // 精7: 見本の印（無ければ付けない。2026-11-22）
+        if sampleNoVoice { out[S21Watch.sampleNoVoiceKey] = true }
         return out
     }
 
@@ -48,7 +52,8 @@ enum WatchDelivery {
             return Date(timeIntervalSince1970: seconds)
         }
         return Stamp(cut: date(cutKey), sent: date(sentKey), lowPower: metadata?[lowPowerKey] as? Bool,
-                     viaPC: metadata?[pcKey] as? Bool ?? false)
+                     viaPC: metadata?[pcKey] as? Bool ?? false,
+                     sampleNoVoice: metadata?[S21Watch.sampleNoVoiceKey] as? Bool ?? false)
     }
 
     // MARK: - 低電力モードで送るか
@@ -426,8 +431,9 @@ enum WatchDelivery {
     /// POST /jobs に付ける query（iPhone の送りと同じ形。待ち合わせ wait=1 は付けない＝答えは iPhone が受け取る）
     /// car: 車につないでいたあいだの区切り（"inCar=1"。会話の記録の inCar・vehicle と同じ印。家の PC はナビ・カーステレオらしい声を本人の発話から外す。無ければ付けない。
     /// 2026-11-21。s19 の 休13。HolidayRules.inCar）
+    /// sampleNoVoice: 声が無いので捨てるはずだった区切りの見本（"sampleNoVoice=1"。2026-11-22。s21 の 精7。無ければ付けない）
     static func jobQuery(name: String, chunkStart: Date?, chunkEnd: Date?, sent: Date,
-                         hints: String?, weights: String?, car: Bool = false) -> [URLQueryItem] {
+                         hints: String?, weights: String?, car: Bool = false, sampleNoVoice: Bool = false) -> [URLQueryItem] {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         var items = [URLQueryItem(name: "name", value: name)]
@@ -437,6 +443,7 @@ enum WatchDelivery {
         if let hints, !hints.isEmpty { items.append(URLQueryItem(name: "hints", value: String(hints.prefix(hintsLimit)))) }
         if let weights, !weights.isEmpty { items.append(URLQueryItem(name: "weights", value: weights)) }
         if car { items.append(URLQueryItem(name: "inCar", value: "1")) }
+        if sampleNoVoice { items.append(URLQueryItem(name: S21Watch.sampleNoVoiceKey, value: "1")) }
         return items
     }
 }

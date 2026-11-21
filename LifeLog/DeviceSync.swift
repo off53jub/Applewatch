@@ -76,7 +76,8 @@ final class DeviceSync {
         }
         do {
             let files = try await docs.syncFiles()
-            otherDevices = Set(files.compactMap { Self.parse($0.name)?.device }.filter { $0 != deviceID }).count
+            otherDevices = Set(files.compactMap { Self.parse($0.name)?.device }
+                .filter { $0 != deviceID && !S21Book.excludedPeers.contains($0) }).count
             try await receive(files)
             try await send(files)
             lastSynced = .now
@@ -93,7 +94,9 @@ final class DeviceSync {
         var days = 0, people = false, words = false, spots = false
         let decoder = JSONDecoder()
         for file in files {
+            // 「同期の相手から外す」にした端末のファイルは読まない（2026-11-22。s21 の 使9）
             guard let parsed = Self.parse(file.name), parsed.device != deviceID,
+                  !S21Book.excludedPeers.contains(parsed.device),
                   seen[file.name] != file.modified else { continue }
             let kind = parsed.kind
             let data = try await docs.downloadSync(id: file.id)

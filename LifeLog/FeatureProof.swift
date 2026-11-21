@@ -374,7 +374,11 @@ struct CountsOpen: ViewModifier {
     let name: String
 
     func body(content: Content) -> some View {
-        content.onAppear { Tally.add("screen." + name) }
+        content.onAppear {
+            Tally.add("screen." + name)
+            // 振って「いまの画面が変」を送るときの画面の名前（2026-11-22。s21 の 使10）
+            ScreenTracker.current = name
+        }
     }
 }
 

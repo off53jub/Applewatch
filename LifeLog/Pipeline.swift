@@ -13,7 +13,8 @@ final class Pipeline {
     private(set) var pendingCount = 0
     private(set) var lastLines: [String] = []
     private(set) var message = "" {
-        didSet { if message != oldValue { diagnostics.problem(message) } }
+        // 進み具合の文（「日本語モデルを確認中…」など）はエラーに残さない（2026-11-22。s21 の 使2）
+        didSet { if message != oldValue, !S21Rules.isProgress(message) { diagnostics.problem(message) } }
     }
     /// エラーと処理の時間の記録（自己点検・ドライブの「診断」）
     let diagnostics = DiagnosticsLog()
@@ -136,8 +137,8 @@ final class Pipeline {
             if !stopAlertsOn { Self.cancelWatchAlert() }
         }
     }
-    /// 時計からこれだけ知らせが無ければ、止まったとみなして通知する
-    private static let watchSilence: TimeInterval = 15 * 60
+    /// 時計からこれだけ知らせが無ければ、止まったとみなして通知する（2026-11-22 に 15 分 → 10 分。s21 の 守4）
+    private static let watchSilence: TimeInterval = S21Rules.watchQuiet
     private static let watchAlertID = "watch-silent"
     /// 音声をドライブにも保存する（Wi-Fi のときだけ上げる）
     var audioBackupOn = UserDefaults.standard.object(forKey: "audioBackup") as? Bool ?? true {
@@ -405,12 +406,15 @@ final class Pipeline {
             // 届いたらすぐ、アプリが止まっても続く転送で家の PC に送っておく（2026-11-07）。
             // 時計が家の PC にも直接送っていて、もうでき上がっていれば、その答えをすぐ使う（WatchDirect.swift）
             sendWatchChunkToPC(url, hints: keywords(for: vocabularyContext(at: start)), viaPC: stamp.viaPC,
+                               sampleNoVoice: stamp.sampleNoVoice,
                                car: carAudio.connected(from: start, to: ended))
             // 時計が PC に送るときのヒントも、ときどき新しくする（10分に1回まで）
             refreshWatchPCHints()
         }
         receiver.onWatchState = { [weak self] state in
             self?.noteWatchState(state)
+            // 時計の便りが途切れたとき・返事待ちが多いとき（2026-11-22。s21 の 守4・速2。S21Book.swift）
+            self?.s21WatchState(state)
             // 時計の区切りが届かないときの立て直し（2026-11-07。WatchRescue.swift）
             self?.checkWatchDelivery(state)
         }
@@ -514,7 +518,7 @@ final class Pipeline {
         guard wait > 0 else { return }
         let content = UNMutableNotificationContent()
         content.title = "時計の録音が届いていません"
-        content.body = "15分以上、時計の LifeLog から知らせがありません。時計の電池や LifeLog を確かめてください（iPhone から離れているだけなら、そのままで大丈夫です）。"
+        content.body = "10分以上、時計の LifeLog から知らせがありません。時計の電池や LifeLog を確かめてください（iPhone から離れているだけなら、そのままで大丈夫です）。"
         content.sound = .default
         content.interruptionLevel = UrgentNotice.level(for: watchAlertID)  // 即時（集中モードでも出る。2026-11-07）
         UNUserNotificationCenter.current().add(UNNotificationRequest(
@@ -1516,6 +1520,7 @@ final class Pipeline {
         // 2026-11-16（v19）: 時計の遅れ・騒がしさの控え、送った記録、効き目の数も。鍵で守るものは裏の糸で書く
         watchDelays.saveNow()
         noiseLog.saveNow()
+        diagnostics.saveNow()  // 自己点検の記録も（2026-11-22。s21 の 速5）
         DispatchQueue.global(qos: .utility).async {
             CloudLog.flush()
             Tally.flush()
@@ -3174,8 +3179,9 @@ final class Pipeline {
             // PC が切れているときや届かないときは、この区切りはほかの方法で
             var fromJob: [HomePC.Line]? = jobLines
             if fromJob == nil {
-                fromJob = try? await homePC.transcribe(url, segments: haasSegments, hints: keywords, previous: previous,
-                                                       noisy: noisy)
+                fromJob = try? await SpanClock.time("pc.transcribe") {
+                    try await homePC.transcribe(url, segments: haasSegments, hints: keywords, previous: previous, noisy: noisy)
+                }
             } else {
                 Tally.add("jobs.used")
                 Task { await homePC.deleteJob(url.lastPathComponent) }
@@ -3184,9 +3190,11 @@ final class Pipeline {
                 let ensemble = homePC.engineCount > 1
                 // 話者が替わった所で行を分ける（PC が言葉ごとの時刻を返したときだけ。2026-11-06）
                 if speakerLabelsOn, lines.contains(where: { $0.words.count >= 2 }),
-                   let segments = try? await speakers.label(url, context: places.context(at: start), strictness: speakerStrictness,
-                                                            selfLevel: officeFilter.selfLevel(watch: fromWatch),
-                                                            expected: expectedSpeakers(at: start, fromWatch: fromWatch)) {
+                   let segments = try? await SpanClock.time("speakers.label", {
+                       try await speakers.label(url, context: places.context(at: start), strictness: speakerStrictness,
+                                                selfLevel: officeFilter.selfLevel(watch: fromWatch),
+                                                expected: expectedSpeakers(at: start, fromWatch: fromWatch))
+                   }) {
                     labeledSegments = segments
                     let before = lines.count
                     lines = HomePC.splitAtSpeakerChanges(lines, segments: segments)
@@ -3220,7 +3228,7 @@ final class Pipeline {
         if !usedHaas, haas.isUsable, !saving {
             // iPhone の中の Haas-ja（無料）。動かせなかったら（裏で Neural Engine が使えないなど）、この区切りはほかの方法で
             do {
-                let lines = try await haas.transcribe(url, segments: haasSegments)
+                let lines = try await SpanClock.time("haas.transcribe") { try await haas.transcribe(url, segments: haasSegments) }
                 entries = lines.map { ($0.offset, $0.text, nil) }
                 second = lines
                 lastEngine = "Haas-ja（iPhone 内）"
@@ -3229,10 +3237,13 @@ final class Pipeline {
                 lastEngine = "端末内（Haas-ja が動かなかったため）"
             }
         }
-        if !usedHaas, !asleep, !local.isEmpty, settings.shouldUseCloud, let key = settings.apiKey {
+        // Groq につながらなかったあとの 10 分は試さない（端末内の結果で続ける。2026-11-22。s21 の 使11）
+        if !usedHaas, !asleep, !local.isEmpty, settings.shouldUseCloud, !S21Book.cloudResting(), let key = settings.apiKey {
             do {
-                let cloud = try await CloudTranscriber.transcribe(
-                    url, provider: settings.provider, apiKey: key, keywords: keywords, previous: previous)
+                let cloud = try await SpanClock.time("cloud.transcribe") {
+                    try await CloudTranscriber.transcribe(url, provider: settings.provider, apiKey: key, keywords: keywords,
+                                                          previous: previous)
+                }
                 settings.addUsage(seconds: duration)
                 lastEngine = cloud.model
                 if !cloud.lines.isEmpty {
@@ -3268,6 +3279,11 @@ final class Pipeline {
                 // キーや残高の問題は待っても直らないので、高精度をオフにして端末内の結果を使う
                 settings.useCloud = false
                 message = reason + "（高精度をオフにして、端末内の文字起こしで続けます）"
+            } catch CloudTranscriber.Failure.temporary(let reason) where S21Rules.isUnreachable(reason) {
+                // Groq につながらない: 自己点検のエラーにせず、この区切りは端末内の結果で済ませる。数だけ残す
+                // （家の PC が使えるときは、上の家の PC がもう答えている。2026-11-22。s21 の 使11）
+                S21Book.noteCloudUnreachable()
+                lastEngine = "端末内（クラウドにつながらないため）"
             }
         }
         // 騒がしい区切りを Haas-ja で書いたときは、クラウドの Whisper でも聞いて、Haas-ja が何も書かなかった声のところを補う
@@ -3337,10 +3353,15 @@ final class Pipeline {
             }
         }
         if correctionOn, !asleep, !silent, let key = llmKey, ChunkBudget.take(.correct),
-           var fixed = try? await Summarizer.$sensitive.withValue(context == .work, operation: {
-               try await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
-                                            previous: previous, alternatives: others, apiKey: key)
+           var fixed = try? await SpanClock.time("llm.correct", {
+               try await Summarizer.$sensitive.withValue(context == .work, operation: {
+                   try await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
+                                                previous: previous, alternatives: others, apiKey: key)
+               })
            }) {
+            // 落ちやすい型の直し（句読点だけ・行の大部分の書き換え）は、出す前に元に戻す（2026-11-22。s21 の 精5）
+            fixed = Self.preFilterFixes(original: entries.map(\.text), fixed: fixed)
+            let firstFixed = fixed
             // 直した行は、もう1つの言語モデル（iPhone の中）も同じように直したか、家の PC のほかのモデルの文に合うときだけ使う（2026-11-06）
             let changedAny = entries.indices.contains { fixed[$0] != entries[$0].text && !fixed[$0].isEmpty }
             let proposed = entries.indices.filter { fixed[$0] != entries[$0].text && !fixed[$0].isEmpty }.count
@@ -3359,6 +3380,8 @@ final class Pipeline {
                 Tally.add("fix.proposed", proposed)
                 Tally.add("fix.kept", kept)
                 Tally.add("fix.dropped", proposed - kept)
+                // 落ちた直しの型（fix.drop.<型>。s21 の 精5）
+                Self.tallyDroppedFixes(original: entries.map(\.text), proposed: firstFixed, kept: fixed)
             }
             for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
                 if originals[i] == nil { originals[i] = entries[i].text }
@@ -3541,10 +3564,15 @@ final class Pipeline {
         var engine = (ensemble ? "家の PC（\(homePC.engineCount) つのモデルの多数決）" : "Haas-ja（家の PC）")
         // 同音の誤変換などを言語モデルで直す（transcribe と同じ。直せなければそのまま）
         if correctionOn, let key = llmKey, ChunkBudget.take(.correct),
-           var fixed = try? await Summarizer.$sensitive.withValue(context == .work, operation: {
-               try await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
-                                            previous: previous, alternatives: others, apiKey: key)
+           var fixed = try? await SpanClock.time("llm.correct", {
+               try await Summarizer.$sensitive.withValue(context == .work, operation: {
+                   try await Summarizer.correct(entries.map { $0.text }, keywords: correctionWords,
+                                                previous: previous, alternatives: others, apiKey: key)
+               })
            }), fixed.count == entries.count {
+            // 落ちやすい型の直しは、出す前に元に戻す（s21 の 精5）
+            fixed = Self.preFilterFixes(original: entries.map(\.text), fixed: fixed)
+            let firstFixed = fixed
             let changedAny = entries.indices.contains { fixed[$0] != entries[$0].text && !fixed[$0].isEmpty }
             let proposed = entries.indices.filter { fixed[$0] != entries[$0].text && !fixed[$0].isEmpty }.count
             if changedAny, !MultiModel.secondOpinionOK { Tally.add("second.skipped") }
@@ -3561,6 +3589,7 @@ final class Pipeline {
                 Tally.add("fix.proposed", proposed)
                 Tally.add("fix.kept", kept)
                 Tally.add("fix.dropped", proposed - kept)
+                Self.tallyDroppedFixes(original: entries.map(\.text), proposed: firstFixed, kept: fixed)
             }
             for i in entries.indices where fixed[i] != entries[i].text && !fixed[i].isEmpty {
                 if originals[i] == nil { originals[i] = entries[i].text }

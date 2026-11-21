@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Groq の無料枠の言語モデルで、会話の見出し・要約と1日のまとめを作る。
 /// 無料枠は1分 8,000 トークン・1日 200,000 トークン（モデルごと）なので、
@@ -865,10 +866,21 @@ enum Summarizer {
         // 家の PC で止めた用途・今日の上限に届いた用途は、しばらく頼まない（2026-11-15。強化案 37）
         guard claudeFirst, let claude = claudeLLM, !ClaudeRoute.purposePaused(job.purpose) else { return nil }
         let work = sensitive
+        // 取り消されそうな呼び出しは出す前に止める（止められている・裏で残り時間が足りない。claude.cancelled が 1 日 38 回あった。
+        // 2026-11-22。s21 の 速7）。止めた分は今までどおり下の順（Groq・端末内・家の PC）で作る
+        let timeout = ClaudeRoute.timeout(maxWait: maxWait)
+        let clock = await MainActor.run {
+            (background: UIApplication.shared.applicationState == .background, left: UIApplication.shared.backgroundTimeRemaining)
+        }
+        guard S21Rules.claudeStartAllowed(cancelled: Task.isCancelled, background: clock.background, remaining: clock.left,
+                                          needed: S21Rules.claudeNeeded(timeout: timeout)) else {
+            Tally.add("claude.skippedEarly")
+            return nil
+        }
         do {
             let text = try await claude(ClaudeCall(system: system, prompt: prompt, json: true, maxTokens: 8192,
                                                    tier: job.tier, purpose: job.purpose, work: work,
-                                                   timeout: ClaudeRoute.timeout(maxWait: maxWait)))
+                                                   timeout: timeout))
             guard let result = LocalModel.parse(text) else { throw ClaudeFailure.unreadable }
             Tally.add("claude.ok")
             if work { Tally.add("claude.work") }

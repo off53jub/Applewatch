@@ -109,6 +109,7 @@ final class RecordingLedger {
         saveTask = nil
         guard let data = try? JSONEncoder().encode(Store(chunks: chunks, states: states)) else { return }
         try? data.write(to: Self.url, options: .atomic)
+        WriteMeter.note("recordings", data.count)  // 書き込みの多い所を測る（2026-11-22。s21 の 速5）
     }
 
     static func source(of url: URL) -> String {
@@ -217,7 +218,8 @@ final class RecordingLedger {
         // その日と、その前の日の様子だけ（理由を決めるのに前の様子も見る）
         let nearby = states.filter { $0.at >= dayStart.addingTimeInterval(-24 * 3600) && $0.at <= dayEnd }
         let spans = Self.spans(from: dayStart, to: dayEnd, recorded: recorded, states: nearby)
-        let gaps = Self.gaps(spans, states: nearby)
+        // 時計の止まりかけ・アプリが止められていたあいだも理由に使う（2026-11-22。s21 の 使6。S21Book.swift）
+        let gaps = Self.gaps(spans, states: nearby, stalls: S21Book.stallTimes(), exits: S21Book.exitWindows())
         return (spans, gaps)
     }
 
@@ -260,9 +262,17 @@ final class RecordingLedger {
     }
 
     /// 10分以上の抜けと、その理由
-    nonisolated static func gaps(_ spans: [Span], states: [State]) -> [Gap] {
+    /// stalls は時計が止まりかけた時刻、exits は時計のアプリが止められていたあいだ（どちらも s21。無ければ前のまま）
+    nonisolated static func gaps(_ spans: [Span], states: [State], stalls: [Date] = [],
+                                 exits: [(alive: Date, relaunch: Date)] = []) -> [Gap] {
         spans.filter { $0.kind == .gap && $0.end.timeIntervalSince($0.start) >= minimumGap }
-            .map { Gap(start: $0.start, end: $0.end, reason: reason(from: $0.start, to: $0.end, states: states)) }
+            .map { span in
+                // 充電中・電池切れは時計の様子のほうが確かなので先に。そのあと止まりかけ・止められていた
+                let base = reason(from: span.start, to: span.end, states: states)
+                let firm = base == "時計の充電中" || base == "時計の電池切れ"
+                let extra = firm ? nil : S21Rules.gapReason(start: span.start, end: span.end, stalls: stalls, exits: exits)
+                return Gap(start: span.start, end: span.end, reason: extra ?? base)
+            }
     }
 
     /// 抜けの理由を、その前後の時計の様子から決める

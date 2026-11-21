@@ -52,6 +52,7 @@ enum Tally {
         writePending = false
         guard let cache, let data = try? JSONEncoder().encode(cache) else { return }
         try? data.write(to: url, options: .atomic)
+        WriteMeter.note("tally", data.count)  // 書き込みの多い所を測る（2026-11-22。s21 の 速5）
     }
 
     /// 直近の何日か（今日を含む）の合計

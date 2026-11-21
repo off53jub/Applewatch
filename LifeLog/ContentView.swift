@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// 画面の下の5つのタブ（2026-11-12 に組み替え）。「何をしに開いたか」でタブを分ける。
@@ -10,6 +11,8 @@ struct ContentView: View {
     @State private var reviewCount = 0
     /// 初めての入口・アップデートのあとの案内（2026-11-21。s20）
     @State private var firstRun: FirstRun?
+    /// 振った（「いまの画面が変」。2026-11-22。s21 の 使10）
+    @State private var shook: S21ShakeTarget?
 
     /// 今日までのもの・過ぎたもの（待っているものは除く）
     private var lateTasks: Int {
@@ -73,6 +76,18 @@ struct ContentView: View {
                 case .onboarding: OnboardingView { firstRun = nil }
                 case .whatsNew: WhatsNewView { firstRun = nil }
                 }
+            }
+            .environment(pipeline)
+            .llRoot()
+        }
+        // 振って「いまの画面が変」（2026-11-22。s21 の 使10。S21Views.swift）
+        .onReceive(NotificationCenter.default.publisher(for: .llShake)) { _ in
+            guard firstRun == nil, pipeline.noticeRoute == nil, shook == nil else { return }
+            shook = S21ShakeTarget(screen: ScreenTracker.current)
+        }
+        .sheet(item: $shook) { target in
+            NavigationStack {
+                S21ShakeSheet(screen: target.screen) { shook = nil }
             }
             .environment(pipeline)
             .llRoot()
@@ -868,6 +883,8 @@ private struct SettingsView: View {
         } footer: {
             Text("調子が悪いときは「自己点検」から。")
         }
+        // 時計の声から自分の声・見直したい声を ○× で（2026-11-22。s21 の 使7・使8）
+        S21CheckSection()
         // 実機でまだ確かめていない新しい動き（2026-11-10。Checklist.swift。前は「今日」に出していた）
         ChecklistSection()
         // 精度の通信簿・あまり開かれていない画面（2026-11-13。施策 12・21。MothershipFeeds.swift）
@@ -904,6 +921,8 @@ private struct SettingsView: View {
     private func everydayPage() -> some View {
         // 場面のセット・見た目・寝ているあいだ・知らせ・説明（2026-11-21。s20 の 体31〜37。S20SettingsViews.swift）
         S20SettingsSection()
+        // 電池優先・早さ優先・精度優先（2026-11-22。s21 の 使1。S21Views.swift）
+        S21PresetSection()
         Section {
             Toggle("開くときに Face ID", isOn: $appLock)
             // 朝の「昨日と今日」の知らせと時刻（MorningBrief.swift）
@@ -1000,6 +1019,8 @@ private struct DetailedSettingsView: View {
                         if let problem = pipeline.sync.problem {
                             Text(problem).font(.footnote).foregroundStyle(LL.danger)
                         }
+                        // 版が古い相手を外す・戻す（2026-11-22。s21 の 使9）
+                        S21SyncPeersRows()
                     }
                 } header: {
                     Text("iPhone と iPad の同期")
@@ -1041,12 +1062,15 @@ private struct DetailedSettingsView: View {
                         Text(pipeline.standbyOn
                              ? "時計が録音しているあいだだけ無音を流してアプリを起こしておき、時計の録音を区切りごとにすぐ文字起こしします。電池を少し多く使います。"
                              : "時計の録音は、アプリを開いたときや充電中にまとめて文字起こしします。")
-                        HelpNote("「音がしないあいだは書かない」をオンにすると、時計と iPhone で1分続けて静かなときは録音ファイルに書かず、音がしたらその1秒前から書き始めます（マイクは聞き続けます）。無音を送ったり文字にしたりしないぶん、電池が長持ちします。\n「区切りの長さ」は、録音を区切って送る長さです。短め（初め）は45秒を過ぎた話の切れ目で区切り、長くても2分で区切るので、文字になるまでが早くなります。ふつうは今までどおり5分ほどで区切ります（送る回数が少ないぶん、時計の電池が少し長持ちします）。どちらも次の区切りから変わります。\n「電池が少ないときは5分に」をオンにすると（初めはオン）、時計の電池が 30% より少ないときと低電力モードのあいだは、短めの設定でも時計が自動で5分ごとに区切ります。電池が 35% まで戻るか充電を始めると、短めに戻ります。いま5分にしているかは、時計の画面と自己点検に出ます。時計の設定は、時計と iPhone がつながったときに伝わります。")
+                        HelpNote("「音がしないあいだは書かない」をオンにすると、時計と iPhone で1分続けて静かなときは録音ファイルに書かず、音がしたらその2.5秒前から書き始めます（マイクは聞き続けます）。無音を送ったり文字にしたりしないぶん、電池が長持ちします。\n「区切りの長さ」は、録音を区切って送る長さです。短め（初め）は45秒を過ぎた話の切れ目で区切り、長くても2分で区切るので、文字になるまでが早くなります。ふつうは今までどおり5分ほどで区切ります（送る回数が少ないぶん、時計の電池が少し長持ちします）。どちらも次の区切りから変わります。\n「電池が少ないときは5分に」をオンにすると（初めはオン）、時計の電池が 30% より少ないときと低電力モードのあいだは、短めの設定でも時計が自動で5分ごとに区切ります。電池が 35% まで戻るか充電を始めると、短めに戻ります。いま5分にしているかは、時計の画面と自己点検に出ます。時計の設定は、時計と iPhone がつながったときに伝わります。")
                     }
                 }
 
                 // 録り方の実験（2026-11-15。強化案 47。RecordingExperimentViews.swift）
                 RecordingExperimentSection()
+
+                // 時計の守りと実験（寝ている時間の 5 分・強い守り・便りが途切れたら・直接送るの実験・振って送る。2026-11-22。s21）
+                S21WatchSettingsSection()
 
                 // 外付けマイク（2026-11-07。MicViews.swift）
                 MicSettingsSection()
