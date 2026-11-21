@@ -5,7 +5,7 @@
 `Shared/Audio/S21Watch.swift`（時計と iPhone）と `LifeLog/S21Rules.swift`（iPhone）に置き、テストは `LifeLogTests/S21Tests.swift`。
 iPhone の帳（覚えておくもの・数えるもの）は `LifeLog/S21Book.swift`、画面は `LifeLog/S21Views.swift`、時計の強い守りは `LifeLogWatch/WatchGuard.swift`。
 
-この Windows では Swift をビルドできないので、確かめたのは CI（tests.yml の build・test・screens・sample）まで。
+この Windows では Swift をビルドできないので、確かめたのは CI（TestFlight のワークフローの build と、tests.yml の test・screens）まで。3 つとも通った。
 実機（iPhone・時計）では、どれもまだ確かめていない。
 
 ## 家の PC（担当 P）に渡す形
@@ -148,7 +148,8 @@ iPhone の帳（覚えておくもの・数えるもの）は `LifeLog/S21Book.s
 ### 守3 画面が消えているあいだの強い守り（ワークアウト扱い。した・初めはオフ）
 - 何をしたか: 設定でオンのとき、録音中だけ時計をワークアウト扱い（`HKWorkoutSession`）にする。記録はヘルスケアに残さない（`HKLiveWorkoutBuilder` を使わない）。初めてのときにヘルスケアの「ワークアウト」の許可を聞く。時計のアプリに HealthKit の許可（entitlement `com.apple.developer.healthkit`）・`WKBackgroundModes: [workout-processing]`・ヘルスケアの説明文を足した。
 - 初めの値: オフ。
-- まだ: **TestFlight の署名で時計のアプリの App ID に HealthKit が足されるか**は、CI の tests.yml（署名なし）では確かめられない（main に入ったあとの TestFlight で分かる。iPhone のアプリは 11/7 に同じやり方で HealthKit を足せている）。効き目と電池の減りは仮説。
+- 署名: この PR の TestFlight のワークフロー（build）で、時計のアプリの HealthKit つきの署名とアップロードが通り、Apple が受け付けた（ビルド 359。main ではないのでテスターには渡していない）。
+- まだ: 効き目と電池の減りは仮説（実機で未確認）。
 
 ### 守4 時計の便りが 10 分途切れたら（した・初めは知らせるだけ）
 - 何をしたか: 前からの「時計の録音が届いていません」の知らせを 15 分 → 10 分に。くわしい設定の「時計の便りが10分途切れたら」で「知らせて iPhone で録り始める」を選ぶと、iPhone のアプリが動いているときは iPhone でも録り始め、時計の便りが戻ったら、そのとき始めた iPhone の録音は止める。数は tally の `s21.watchQuiet`・`s21.watchQuiet.startPhone`・`s21.watchQuiet.stopPhone`。
