@@ -638,7 +638,8 @@ final class HomePC {
     /// 区切りの時刻（録音の始まり・終わり・iPhone に届いた・送り始めた）も渡す（版 8。docs/v8-latency.md の 1）。
     /// PC が待ち合わせを受け付けるなら wait=1 を付け、文字にし終わった答えを返事で受け取る（PCJobUploader が受け取る）
     /// car は車につないでいたあいだの区切り（"inCar=1"。家の PC がナビ・カーステレオらしい声を本人の発話から外す。2026-11-21。s19 の 休13）
-    func enqueueJob(_ url: URL, hints: [String], car: Bool = false) {
+    /// sampleNoVoice は、時計が声が無いので捨てるはずだった区切りの見本（"sampleNoVoice=1"。2026-11-22。s21 の 精7。無ければ付けない）
+    func enqueueJob(_ url: URL, hints: [String], car: Bool = false, sampleNoVoice: Bool = false) {
         guard isConfigured, Self.acceptsJobs, var req = try? request("jobs") else { return }
         let name = url.lastPathComponent
         var components = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)
@@ -646,7 +647,10 @@ final class HomePC {
         let sent = Date.now
         Latency.noteSent(name, at: sent)
         items += Self.timeItems(Latency.marks(name), sent: sent)
-        if Self.acceptsJobWait, PCJobUploader.stagedCount < Self.maxWaiting {
+        // 待ち合わせを付けるか。付けなかったわけも数える（50 件中 1 件しか待ち合わせで渡していなかった。2026-11-22。s21 の 速1）
+        let wait = S21Rules.jobWait(accepts: Self.acceptsJobWait, staged: PCJobUploader.stagedCount, maxWaiting: Self.maxWaiting)
+        Tally.add("jobs.wait." + wait.reason)
+        if wait.wait {
             items.append(URLQueryItem(name: "wait", value: "1"))
         }
         var words: [String] = []
@@ -659,6 +663,7 @@ final class HomePC {
         if !words.isEmpty { items.append(URLQueryItem(name: "hints", value: words.joined(separator: "\n"))) }
         if !Self.skipWeights, let text = Self.weightsText(noisy: false) { items.append(URLQueryItem(name: "weights", value: text)) }
         if car { items.append(URLQueryItem(name: "inCar", value: "1")) }
+        if sampleNoVoice { items.append(URLQueryItem(name: S21Watch.sampleNoVoiceKey, value: "1")) }
         components?.queryItems = items
         req.url = components?.url
         req.httpMethod = "POST"

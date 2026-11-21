@@ -531,6 +531,12 @@ extension Pipeline {
         if let latency = Latency.summary() { state["latency"] = latency.json }
         // 体験の数字（答えるまでの秒・開かれた通知・止めた種類。どれも省ける。2026-11-21。s20 の 体38。S20Book.swift）
         for (key, value) in S20Book.todayUX() { state[key] = value }
+        // s21（2026-11-22）: その日の組（電2）を時計の便りが無い日にも・書き込みの多い所（速5）・長い処理（速6）。どれも省ける
+        if let route = S21Book.routeToday() { state["watchRouteExp"] = route.rawValue }
+        let writes = WriteMeter.today()
+        if !writes.isEmpty { state["writeKB"] = writes }
+        let spans = SpanClock.longest()
+        if !spans.isEmpty { state["slowSpans"] = spans }
         return state
     }
 
@@ -576,7 +582,18 @@ extension Pipeline {
         if let samples = state.batteryAt { detail["watchBatteryAt"] = samples }
         if let holding = state.awayHolding { detail["watchAwayHolding"] = holding }
         if let crowd = state.crowd { detail["watchCrowd"] = crowd }
+        // s21（2026-11-22。docs/s21-app.md。どれも省ける）: 時計のアプリが終わっていた回数（今日）と最後のあいだ（守2）・
+        // 今日録れた秒（使5）・片付けた返事待ち（速2）・ワークアウト扱い（守3）・声の無い区切りの見本（精7）・
+        // その日の「直接送る／iPhone 経由だけ」の組（電2。iPhone が決める。実験の外は付けない）
+        if let n = state.exits { detail["watchExits"] = n }
+        if let last = state.lastExit { detail["watchLastExit"] = last }
+        if let n = state.recordedToday { detail["watchRecordedToday"] = n }
+        if let n = state.keptCleared { detail["watchKeptCleared"] = n }
+        if let on = state.guarding { detail["watchGuarding"] = on }
+        if let n = state.sampledNoVoice { detail["watchSampledNoVoice"] = n }
+        if let route = S21Book.routeToday() { detail["watchRouteExp"] = route.rawValue }
         UserDefaults.standard.set(detail, forKey: PCDiag.watchDetailKey)
+        S21Book.noteWatch(state)
     }
 
     /// 夜の聞き直しが終わったときに呼ぶ（runNightly）。全部済んだら、どの日の夜の分かを覚える

@@ -105,11 +105,15 @@ enum HolidayRules {
         return now.timeIntervalSince1970 - last >= every
     }
 
-    /// 見本を足して、古いものを捨てる
-    static func addingSample(_ samples: [[Double]], time: Date, level: Double, holding: Bool,
+    /// 見本を足して、古いものを捨てる。
+    /// charging を渡すと 4 つ目に「充電中なら 1」を足す（2026-11-22。s21 の 電1。家の PC が充電中の増えを減りと分けられるように。
+    /// 前の 3 つの並びは変えない。古い見本は 3 つのまま）
+    static func addingSample(_ samples: [[Double]], time: Date, level: Double, holding: Bool, charging: Bool? = nil,
                              limit: Int = batterySampleLimit) -> [[Double]] {
         var out = samples.filter { $0.count >= 2 }
-        out.append([time.timeIntervalSince1970.rounded(), (level * 100).rounded() / 100, holding ? 1 : 0])
+        var sample: [Double] = [time.timeIntervalSince1970.rounded(), (level * 100).rounded() / 100, holding ? 1 : 0]
+        if let charging { sample.append(charging ? 1 : 0) }
+        out.append(sample)
         return Array(out.suffix(max(0, limit)))
     }
 

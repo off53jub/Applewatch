@@ -70,6 +70,7 @@ enum CloudLog {
             writePending = false
             guard let cache, let data = try? JSONEncoder().encode(cache) else { return }
             try? data.write(to: url, options: .atomic)
+            WriteMeter.note("cloudLog", data.count)  // 書き込みの多い所を測る（2026-11-22。s21 の 速5）
         }
     }
 

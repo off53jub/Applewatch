@@ -26,6 +26,7 @@ final class WatchPC: @unchecked Sendable {
     /// 外の道で合言葉が違うと言われた（新しい合言葉が届いたら消す）
     private static let refusedKey = "pcPublicRefused"
     private static let keepSent: TimeInterval = 86400
+    private static let keepSentNames: TimeInterval = 2 * 86400
 
     /// 最後に家の PC に直接送れた時刻（1970 からの秒。直近1日の分から）。iPhone が「家の PC と音沙汰なし」を見るのに使う
     /// （時計の様子の知らせの "pcSentAt"。2026-11-15。強化案 38）
@@ -226,7 +227,10 @@ final class WatchPC: @unchecked Sendable {
             if isPublic { keys.append(Self.publicSentKey) }
             for key in keys {
                 var list = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
-                list = list.filter { now - $0.value < Self.keepSent }
+                // 届いた区切りは 2 日覚える（1 日を過ぎた返事待ちを片付けるときに使う。2026-11-22。s21 の 速2）。
+                // 外の道の数は今までどおり 1 日
+                let keep: TimeInterval = key == Self.sentKey ? Self.keepSentNames : Self.keepSent
+                list = list.filter { now - $0.value < keep }
                 list[fileName] = now
                 UserDefaults.standard.set(list, forKey: key)
             }
@@ -291,7 +295,8 @@ final class WatchPC: @unchecked Sendable {
                                                         hints: defaults.string(forKey: WatchDelivery.hintsKey),
                                                         weights: defaults.string(forKey: WatchDelivery.weightsKey),
                                                         car: HolidayRules.inCar(chunkStart: start, chunkEnd: end,
-                                                                                carSince: defaults.double(forKey: HolidayRules.carSinceKey)))
+                                                                                carSince: defaults.double(forKey: HolidayRules.carSinceKey)),
+                                                        sampleNoVoice: WatchSender.isNoVoiceSample(fileName))
         guard let target = components?.url else {
             release(fileName)
             return false

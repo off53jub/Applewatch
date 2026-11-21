@@ -195,7 +195,7 @@ final class Recorder: NSObject {
 }
 
 /// マイクの音を 16kHz・1ch にして、いまの区切りのファイルに書く。録音の糸と画面の糸の両方から触るので鍵をかける。
-/// 1分続けて静かなら区切りを閉じて休み、音がしたらその1秒前から次の区切りを書き始める（SilenceGate）。
+/// 1分続けて静かなら区切りを閉じて休み、音がしたらその2.5秒前から次の区切りを書き始める（SilenceGate）。
 final class ChunkWriter: @unchecked Sendable {
     static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
     /// ふだんは 32kbps。録り方の実験の日は、その日の組の音質（会議モードのあいだは今までどおり 32kbps。2026-11-15。RecordingExperiment）

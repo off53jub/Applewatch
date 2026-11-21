@@ -32,6 +32,7 @@ enum MergeLog {
     private static func save(_ list: [Record]) {
         guard let data = try? JSONEncoder().encode(Array(list.suffix(limit))) else { return }
         try? data.write(to: url, options: .atomic)
+        WriteMeter.note("merges", data.count)  // 書き込みの多い所を測る（2026-11-22。s21 の 速5）
     }
 
     static func add(_ record: Record) {

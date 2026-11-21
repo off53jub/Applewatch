@@ -95,6 +95,7 @@ final class WatchDelayLog {
         saveTask = nil
         guard let data = try? JSONEncoder().encode(entries) else { return }
         try? data.write(to: Self.url, options: .atomic)
+        WriteMeter.note("watchDelays", data.count)  // 書き込みの多い所を測る（2026-11-22。s21 の 速5）
     }
 
     static func text(_ seconds: TimeInterval) -> String {

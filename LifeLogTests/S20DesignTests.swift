@@ -306,7 +306,10 @@ final class S20DesignTests: XCTestCase {
     // MARK: - 体32 アップデートの案内
 
     func testWhatsNew() {
-        XCTAssertEqual(WhatsNew.items.count, 3)
+        // s21 で 3 つ足した（2026-11-22。s21 の 使4）
+        XCTAssertEqual(WhatsNew.items.count, 6)
+        XCTAssertEqual(WhatsNew.version, "s21")
         XCTAssertTrue(WhatsNew.items.allSatisfy { $0.key != nil })
+        XCTAssertEqual(Set(WhatsNew.items.map(\.id)).count, WhatsNew.items.count)
     }
 }

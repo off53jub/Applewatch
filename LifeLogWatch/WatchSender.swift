@@ -229,7 +229,121 @@ final class WatchSender: NSObject, WCSessionDelegate {
         }
         if awayHolding { out[HolidayRules.awayHoldingKey] = true }
         if HolidayRules.crowdActive(until: defaults.double(forKey: Self.crowdUntilKey), now: now) { out[HolidayRules.crowdKey] = true }
+        // s21（2026-11-22。S21Watch）: 今日録れた秒（使5）・アプリが終わっていた回数と最後のあいだ（守2）・
+        // 片付けた返事待ち（速2）・ワークアウト扱いで守っているか（守3）・声の無い区切りの見本の数（精7）。どれも省ける
+        out[S21Watch.recordedTodayKey] = Int(recordedToday(now: now).rounded())
+        let exits = defaults.array(forKey: Self.exitsListKey) as? [[Double]] ?? []
+        out[S21Watch.exitsKey] = S21Watch.exitsOn(exits, day: today)
+        if let last = S21Watch.lastExitText(exits) { out[S21Watch.lastExitKey] = last }
+        let cleared = defaults.integer(forKey: Self.keptClearedKey)
+        if cleared > 0 { out[S21Watch.keptClearedKey] = cleared }
+        if guarding { out[S21Watch.guardingKey] = true }
+        out[S21Watch.sampledNoVoiceKey] = HolidayRules.count(counts, S21Watch.sampledNoVoiceKey, day: today)
         return out
+    }
+
+    // MARK: - s21（2026-11-22。S21Watch・docs/s21-app.md）
+
+    /// いまワークアウト扱いで守っているか（WatchGuard が入れる。守3）
+    var guarding: Bool {
+        get { lock.withLock { guardingNow } }
+        set { lock.withLock { guardingNow = newValue } }
+    }
+    private var guardingNow = false
+
+    /// 今日録れた秒（"日" → 秒。使5）
+    static let recordedKey = "s21.recorded"
+    /// 録音しているつもりのまま終わっていたあいだ（[[最後に動いていた秒, 起き直した秒]]。守2）
+    static let exitsListKey = "s21.exits"
+    /// 最後に動いていた時刻（区切り・休みの知らせのたび。守2）
+    static let aliveKey = "s21.alive"
+    /// 片付けた返事待ちの数（速2）
+    static let keptClearedKey = "s21.keptCleared"
+    /// 最後に iPhone への受け渡しが終わった時刻（1970 からの秒。使5）
+    static let lastDeliveredKey = "s21.lastDelivered"
+    /// 声の無い区切りの見本にした名前（名前 → 時刻。精7）
+    static let noVoiceSamplesKey = "s21.noVoiceSamples"
+
+    /// 区切りの録れた秒を今日に足す（WatchRecorder が区切るたびに呼ぶ）
+    func noteRecorded(_ seconds: TimeInterval, now: Date = .now) {
+        lock.withLock {
+            let saved = UserDefaults.standard.dictionary(forKey: Self.recordedKey) as? [String: Double] ?? [:]
+            UserDefaults.standard.set(S21Watch.addingSeconds(saved, day: HolidayRules.dayKey(now), seconds: seconds),
+                                      forKey: Self.recordedKey)
+        }
+    }
+
+    /// 今日録れた秒
+    func recordedToday(now: Date = .now) -> TimeInterval {
+        let saved = UserDefaults.standard.dictionary(forKey: Self.recordedKey) as? [String: Double] ?? [:]
+        return saved[HolidayRules.dayKey(now)] ?? 0
+    }
+
+    /// 最後に届いた時刻（iPhone への受け渡しが終わった・家の PC に直接届いた、の新しいほう。使5）
+    func lastDelivered() -> Date? {
+        let phone = UserDefaults.standard.double(forKey: Self.lastDeliveredKey)
+        let latest = max(phone, WatchPC.lastSentAt ?? 0)
+        return latest > 0 ? Date(timeIntervalSince1970: latest) : nil
+    }
+
+    /// 動いていた印（区切り・休みの知らせのたび。守2）
+    func noteAlive(now: Date = .now) {
+        UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Self.aliveKey)
+    }
+
+    /// 起き直したときに呼ぶ（録音しているつもりのまま終わっていたら、そのあいだを残す。守2）
+    func noteRelaunch(now: Date = .now) {
+        let defaults = UserDefaults.standard
+        let alive = defaults.object(forKey: Self.aliveKey) as? Double
+        let list = defaults.array(forKey: Self.exitsListKey) as? [[Double]] ?? []
+        defaults.set(S21Watch.addingExit(list, alive: alive, relaunch: now.timeIntervalSince1970), forKey: Self.exitsListKey)
+        noteAlive(now: now)
+    }
+
+    /// 声が無いので捨てるはずだった区切りを、見本として残す（精7）
+    static func markNoVoiceSample(_ name: String, now: Date = .now) {
+        let saved = UserDefaults.standard.dictionary(forKey: noVoiceSamplesKey) as? [String: Double] ?? [:]
+        UserDefaults.standard.set(S21Watch.addingSample(saved, name: name, now: now), forKey: noVoiceSamplesKey)
+    }
+
+    /// 見本の区切りか（送り直しでも印を付ける）
+    static func isNoVoiceSample(_ name: String) -> Bool {
+        (UserDefaults.standard.dictionary(forKey: noVoiceSamplesKey) as? [String: Double])?[name] != nil
+    }
+
+    /// 最後に返事待ちを片付けた時刻（30 分に 1 回まで）
+    private var tidiedAt = Date.distantPast
+
+    /// 1 日を過ぎて家の PC に届いている返事待ち・iPhone が「受け取った」と言った返事待ちを片付ける（速2）。
+    /// phoneHas は iPhone が受け取ったと覚えている時計の名前（gotList。無ければ空）
+    func tidyKept(phoneHas: Set<String> = [], now: Date = .now, force: Bool = false) {
+        let due = lock.withLock { () -> Bool in
+            guard force || now.timeIntervalSince(tidiedAt) >= 30 * 60 else { return false }
+            tidiedAt = now
+            return true
+        }
+        guard due else { return }
+        var cleared = 0
+        for url in sentFiles() {
+            let name = url.lastPathComponent
+            let age = Self.cutTime(url).map { now.timeIntervalSince($0) }
+            guard S21Watch.tidyKept(cutAge: age, sentToPC: WatchPC.wasSent(name), phoneHas: phoneHas.contains(name)) else { continue }
+            acknowledged(name)
+            cleared += 1
+        }
+        guard cleared > 0 else { return }
+        lock.withLock {
+            let total = UserDefaults.standard.integer(forKey: Self.keptClearedKey) + cleared
+            UserDefaults.standard.set(total, forKey: Self.keptClearedKey)
+        }
+        onChange?()
+    }
+
+    /// iPhone が受け取ったと覚えている名前（iPhone で付く名前）を、時計の名前に直す
+    private func watchNames(_ phoneNames: [String]) -> Set<String> {
+        let phoneZone = UserDefaults.standard.string(forKey: WatchDelivery.phoneZoneKey)
+            .flatMap(TimeZone.init(identifier:)) ?? .current
+        return Set(phoneNames.compactMap { WatchDelivery.watchName($0, watchZone: .current, phoneZone: phoneZone) })
     }
 
     // MARK: - 休日のライフログ（2026-11-21。s19。HolidayRules）
@@ -270,7 +384,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
             let defaults = UserDefaults.standard
             let samples = defaults.array(forKey: Self.batterySamplesKey) as? [[Double]] ?? []
             guard HolidayRules.batterySampleDue(last: samples.last?.first, now: now) else { return }
-            defaults.set(HolidayRules.addingSample(samples, time: now, level: battery.level, holding: holding),
+            defaults.set(HolidayRules.addingSample(samples, time: now, level: battery.level, holding: holding,
+                                                   charging: battery.charging),
                          forKey: Self.batterySamplesKey)
         }
     }
@@ -304,6 +419,9 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// 区切るたびに呼ぶ。iPhone は、しばらく知らせが無いと「止まっているかも」と通知する。
     func heartbeat() {
         sampleBattery()
+        noteAlive()
+        // 1 日を過ぎた返事待ちを片付ける（30 分に 1 回まで。2026-11-22。s21 の 速2）
+        tidyKept()
         publish()
         // 送れずに残っている区切りを送る（つながる前に区切った・低電力モードで溜めた・低電力モードを切った。2026-11-07）
         unstickTransfers()
@@ -518,7 +636,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
             budget -= 1
             WCSession.default.transferFile(url, metadata: WatchDelivery.metadata(
                 zone: .current, cut: Self.cutTime(url), sent: now, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                viaPC: WatchPC.wasSent(name), resend: count + 1))
+                viaPC: WatchPC.wasSent(name), resend: count + 1, sampleNoVoice: Self.isNoVoiceSample(name)))
         }
         guard counts != stored.resent else { return }
         lock.withLock {
@@ -652,7 +770,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
         // 区切った時刻と送り始めた時刻も添える（iPhone が「時計で待った」と「受け渡し」を分けて測る。2026-11-07）
         WCSession.default.transferFile(url, metadata: WatchDelivery.metadata(
             zone: .current, cut: Self.cutTime(url), sent: .now, lowPower: lowPower,
-            viaPC: direct || WatchPC.wasSent(url.lastPathComponent)))
+            viaPC: direct || WatchPC.wasSent(url.lastPathComponent), sampleNoVoice: Self.isNoVoiceSample(name)))
     }
 
     /// 受け渡しの列に止まったままの区切りを取り消す（2026-11-20。WatchDelivery.stuckTransfers）。
@@ -764,6 +882,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
             publish()
         }
         if let answer = userInfo["answer"] as? String { onAnswer?(answer, userInfo["question"] as? String ?? "") }
+        // iPhone が受け取ったと覚えている名前の一覧（返事が届かなかった控えを片付ける。2026-11-22。s21 の 速2）
+        if let list = userInfo[S21Watch.gotListKey] as? [String] { tidyKept(phoneHas: watchNames(list), force: true) }
         onChange?()
     }
 
@@ -798,6 +918,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
         if error == nil {
             lock.withLock { lastFinished = .now }
+            UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: Self.lastDeliveredKey)
             keepSent(fileTransfer.file.fileURL)
         }
         onChange?()

@@ -67,12 +67,30 @@ final class DiagnosticsLog {
         }
         if expired { run.expired = true }
         runs = Array((runs + [run]).suffix(300))
+        // 自分で動いていた時間を、名前つきの長い処理として残す（2026-11-22。s21 の 速6）
+        SpanClock.note("process.run", seconds: run.working)
         save()
     }
 
+    // 2026-11-22（s21 の 速5）: 処理 1 回ごと・エラー 1 つごとに 300 回分を書き直していた。中身はアプリの中の写しが正なので、
+    // ファイルには 2 分まとめて書く（裏に回ったときは saveNow。落ちたら数分の記録を失うだけ）
+    @ObservationIgnored private var saveTask: Task<Void, Never>?
+
     private func save() {
+        guard saveTask == nil else { return }
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(120))
+            self?.saveNow()
+        }
+    }
+
+    /// まとめて書くのを待たずに書く（アプリが裏に回ったときにも呼ぶ）
+    func saveNow() {
+        saveTask?.cancel()
+        saveTask = nil
         guard let data = try? JSONEncoder().encode(Saved(problems: problems, runs: runs)) else { return }
         try? data.write(to: Self.url, options: .atomic)
+        WriteMeter.note("diagnostics", data.count)  // 書き込みの多い所を測る（2026-11-22。s21 の 速5）
     }
 }
 
@@ -164,7 +182,7 @@ extension Pipeline {
         add("設定", "iPhone と iPad の同期", onOff(sync.isOn))
         if sync.isOn {
             // 版が古い端末があると、新しい版で足した項目が同期で抜けやすい（手元の値で埋めて守るが、入れ直すのがいちばん）
-            let older = AppBuild.olderPeers()
+            let older = S21Rules.olderPeers(AppBuild.peers, mine: AppBuild.current, excluded: S21Book.excludedPeers)
             add("設定", "同期の相手のアプリの版",
                 older.isEmpty ? (AppBuild.peers.isEmpty ? "まだ分からない" : "同じか新しい")
                     : older.map { "端末 \($0.device): " + ($0.build == 0 ? "かなり古い" : "\($0.build)") }.joined(separator: "、") + "（新しい IPA を入れ直す）",
@@ -247,6 +265,24 @@ extension Pipeline {
         }
         // 時計の区切りの長さ（電池が少ないので自動で5分にしているか。2026-11-07。WatchPresence.swift）
         add("時計", "区切りの長さ", watchChunkLengthText)
+        // s21（2026-11-22。docs/s21-app.md）: 時計と iPhone の版のずれ（守5）・アプリが止められていた（守2）・
+        // 片付けた返事待ち（速2）・声の無い区切りの見本（精7）・直接送るの実験（電2）
+        if let build = S21Rules.buildCheck(phone: AppBuild.current, watch: detail["watchBuild"] as? String) {
+            add("時計", "時計のアプリの版", build.text, build.ok)
+        }
+        if let exits = detail["watchExits"] as? Int {
+            var text = "今日 \(exits) 回"
+            if let last = S21Watch.parseExit(detail["watchLastExit"] as? String) {
+                text += "・最後 " + Self.when(last.alive) + "〜" + Self.when(last.relaunch)
+            }
+            add("時計", "録音中に時計のアプリが止められていた", text, exits == 0)
+        }
+        if let cleared = detail["watchKeptCleared"] as? Int { add("時計", "片付けた返事待ち（これまで）", "\(cleared) 個") }
+        if let sampled = detail["watchSampledNoVoice"] as? Int {
+            add("時計", "声の無い区切りの見本（今日）", "\(sampled) 個（家の PC が本当に声が無かったか数えます）")
+        }
+        if detail["watchGuarding"] as? Bool == true { add("時計", "強い守り（ワークアウト扱い）", "使っています") }
+        add("時計", "直接送るの実験", S21Book.routeText())
         // 時計から家の PC への外の道（Tailscale の Funnel。2026-11-07。WatchDirect.swift）
         if let route = watchRouteDiag() {
             add("時計", "時計から PC への外の道",
@@ -331,8 +367,21 @@ extension Pipeline {
             add(row.section, row.label, row.value, row.ok)
         }
 
-        // 最近のエラー
-        for problem in diagnostics.problems.suffix(15).reversed() {
+        // 長い処理と書き込みの多い所（この起動の今日の分。2026-11-22。s21 の 速5・速6）
+        if let spans = SpanClock.text() { add("処理", "今日いちばん長かった処理", spans) }
+        let writes = WriteMeter.today(limit: 4).sorted { $0.value > $1.value }
+        if !writes.isEmpty {
+            add("処理", "今日書き込みの多い所（起動から）", writes.map { "\($0.key) \($0.value)KB" }.joined(separator: "・"))
+        }
+        // 待ち合わせを付けなかったわけ（直近7日。s21 の 速1）
+        let sums = Tally.sums(days: 7)
+        let waits = ["on", "busy", "noFeature"].map { (key: $0, n: sums["jobs.wait." + $0] ?? 0) }
+        if waits.contains(where: { $0.n > 0 }) {
+            add("処理", "家の PC の待ち合わせ（直近7日）",
+                "付けた \(waits[0].n)・送っている途中が多くて付けなかった \(waits[1].n)・PC が対応していない \(waits[2].n)")
+        }
+        // 最近のエラー（進み具合の文は外す。2026-11-22。s21 の 使2）
+        for problem in diagnostics.problems.filter({ !S21Rules.isProgress($0.text) }).suffix(15).reversed() {
             add("最近のエラー", Self.diagTime.string(from: problem.time), problem.text, false)
         }
         return items

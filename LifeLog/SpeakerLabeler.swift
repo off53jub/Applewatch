@@ -1246,6 +1246,7 @@ actor SpeakerLabeler {
         saveTask = nil
         guard let loadedStore, let data = try? JSONEncoder().encode(loadedStore) else { return }
         try? data.write(to: Self.storeURL, options: .atomic)
+        WriteMeter.note("speakers", data.count)  // 書き込みの多い所を測る（2026-11-22。s21 の 速5）
         savedShape = Self.shape(loadedStore)
     }
 }

@@ -6,7 +6,7 @@ import WatchKit
 /// 時計で録音し続け、区切ったファイル（短めの設定で長くても2分、ふつうで5分ほど）を iPhone に送る。
 /// 画面が消えているあいだは録音を新しく始め直せないので、マイクは止めずに
 /// AVAudioEngine で流し続け、書き込むファイルだけを切り替える。ほぼ無音の区切りは捨てる。
-/// 1分続けて静かなら書くのを休み、音がしたらその1秒前から書き始める（無音を送らない）。
+/// 1分続けて静かなら書くのを休み、音がしたらその2.5秒前から書き始める（無音を送らない）。
 /// 区切りは、決めた長さを過ぎたあとの声の途切れたところで切る（言葉の途中で切らないため。ChunkCutter）。
 /// 音は文字起こしに使う 16kHz・1ch にしてから書く（圧縮と送る量が減り、電池が長持ちする）。
 @MainActor
@@ -49,6 +49,13 @@ final class WatchRecorder: NSObject {
     private(set) var awayHolding = false
     /// 今日のお酒の杯数（時計の中の数。iPhone にも 1 杯ずつ送る。2026-11-21。s19 の 休30）
     private(set) var drinksToday = 0
+    /// 今日録れた秒と、最後に届いた時刻（画面に出す。2026-11-22。s21 の 使5）
+    private(set) var recordedToday: TimeInterval = 0
+    private(set) var lastDelivered: Date?
+    /// 寝ている時間なので 5 分で区切っているか（s21 の 電3）
+    private(set) var sleepSaving = false
+    /// 画面が消えているあいだの強い守り（ワークアウト扱い。設定でオンのときだけ。s21 の 守3。WatchGuard.swift）
+    @ObservationIgnored private let guardian = WatchGuard()
     /// 中断（アラーム・電話・Siri）のあと、まだ流し直せていない（戻れた回数を数える。休10）
     @ObservationIgnored private var interruptionOpen = false
     /// 時計の空きが少ないと知らせたか（12時間に1回まで）
@@ -99,8 +106,12 @@ final class WatchRecorder: NSObject {
         }
         sender.activate()
         refreshStatus()
+        guardian.onChange = { [weak self] on in self?.sender.guarding = on }
         // 前回、止めるボタンを押さずに終わっていたら、開き直したときに録音を再開する
         if UserDefaults.standard.bool(forKey: Self.wasRecordingKey) {
+            // 録音しているつもりのまま時計のアプリが終わっていた（落ちた・止められた）。最後に動いていた時刻からのあいだを残す
+            // （watchOS には落ちた記録を読む道が無いので、次の起動で残す。2026-11-22。s21 の 守2）
+            sender.noteRelaunch()
             Task { @MainActor in
                 await self.start()
                 if self.isRecording {
@@ -221,6 +232,8 @@ final class WatchRecorder: NSObject {
             isRecording = true
             sender.isRecording = true
             UserDefaults.standard.set(true, forKey: Self.wasRecordingKey)
+            sender.noteAlive()
+            guardian.update(recording: true)
             message = ""
             sender.resendPending()
             watchMicrophone()
@@ -253,6 +266,7 @@ final class WatchRecorder: NSObject {
         sender.isRecording = false
         NotificationCenter.default.removeObserver(self)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        guardian.update(recording: false)
         refreshStatus()
     }
 
@@ -319,12 +333,24 @@ final class WatchRecorder: NSObject {
     private func deliver(_ url: URL, peakDB: Float, voiceFrames: Int) {
         // 区切った時刻を残す（無音で捨てる区切りも。iPhone が「録音が本当に続いているか」を見分ける。2026-11-07）
         sender.noteCut()
+        // 今日録れた時間に足す（ほぼ無音の区切りは数えない。声が無いので捨てる区切りは数える＝マイクで書いた時間。s21 の 使5）
+        let now = Date.now
+        if peakDB >= -50,
+           let seconds = S21Watch.chunkSeconds(start: WatchDelivery.startDate(url.lastPathComponent, zone: .current), cut: now) {
+            sender.noteRecorded(seconds, now: now)
+        }
+        let drop = VoiceGate.shouldDrop(tonalFrames: voiceFrames, enabled: VoiceGate.enabled, meeting: meetingOn)
         if peakDB < -50 {
             try? FileManager.default.removeItem(at: url)
-        } else if VoiceGate.shouldDrop(tonalFrames: voiceFrames, enabled: VoiceGate.enabled, meeting: meetingOn) {
+        } else if drop, !S21Watch.shouldSampleNoVoice(name: url.lastPathComponent) {
             try? FileManager.default.removeItem(at: url)
             VoiceGate.noteDropped()
         } else {
+            // 捨てるはずだった区切りのうち 1 割は、印を付けて送る（家の PC が本当に声が無かったかを数える。s21 の 精7）
+            if drop {
+                WatchSender.markNoVoiceSample(url.lastPathComponent, now: now)
+                sender.countToday(S21Watch.sampledNoVoiceKey, now: now)
+            }
             sender.deliver(url)
             // 「初めての人が多い」モードのあいだは、区切りごとに「初めての人」の印を付ける（2026-11-21。s19 の 休17）
             if crowdActiveNow() { sender.newPerson(Date.now.addingTimeInterval(-HolidayRules.crowdMarkBack)) }
@@ -348,6 +374,12 @@ final class WatchRecorder: NSObject {
         _ = crowdActiveNow()
         let holding = sender.awayHolding
         if awayHolding != holding { awayHolding = holding }
+        // 今日録れた時間と、最後に届いた時刻（s21 の 使5）
+        let recorded = sender.recordedToday()
+        if abs(recordedToday - recorded) >= 1 { recordedToday = recorded }
+        let delivered = sender.lastDelivered()
+        if lastDelivered != delivered { lastDelivered = delivered }
+        guardian.update(recording: isRecording)
         // 録音を始めた・止めた・送っていない数が変わったら、文字盤も出し直す（変わったときだけ書く。2026-11-07）
         updateWidgets()
         let center = UNUserNotificationCenter.current()
@@ -390,6 +422,13 @@ final class WatchRecorder: NSObject {
         // 画面に出すのは、短めの設定を5分にしているときだけ（ふつうの設定なら、もともと5分）
         let shown = saving && ChunkCutter.length == .short
         if batterySaving != shown { batterySaving = shown }
+        // 寝ている時間（1:00〜6:00・充電していない）は 5 分に（設定「寝ている時間は 5 分に」。初めはオン。2026-11-22。s21 の 電3）
+        let defaults = UserDefaults.standard
+        let sleeping = S21Watch.sleepSaving(enabled: defaults.object(forKey: S21Watch.sleepChunksKey) as? Bool ?? true,
+                                            hour: Calendar.current.component(.hour, from: .now), charging: charging)
+        if defaults.bool(forKey: S21Watch.sleepSavingKey) != sleeping { defaults.set(sleeping, forKey: S21Watch.sleepSavingKey) }
+        let sleepShown = sleeping && !saving && ChunkCutter.length == .short
+        if sleepSaving != sleepShown { sleepSaving = sleepShown }
     }
 
     // MARK: - 休日のライフログ（2026-11-21。s19。HolidayRules）
@@ -656,7 +695,7 @@ final class WatchRecorder: NSObject {
 
 /// マイクの音を 16kHz・1ch にして、今の区切りのファイルに書く。マイクの音は別のスレッドから届くので鍵をかける。
 /// 決めた長さを過ぎたあとの静かなところで、自分で次の区切りに切り替える。
-/// 1分続けて静かなら区切りを閉じて休み、音がしたらその1秒前から次の区切りを書き始める（SilenceGate）。
+/// 1分続けて静かなら区切りを閉じて休み、音がしたらその2.5秒前から次の区切りを書き始める（SilenceGate）。
 final class ChunkWriter: @unchecked Sendable {
     static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
     /// 会議モードのあいだは 48kbps、ふだんは 32kbps（2026-11-06。次の区切りから変わる）。

@@ -231,7 +231,7 @@ extension Pipeline {
         let watch = WCSession.default.receivedApplicationContext
         let open = publicWatchCredentials()
         let credentials = homePC.watchCredentials()
-        let expectedOn = !credentials.address.isEmpty || !open.url.isEmpty
+        let expectedOn = (!credentials.address.isEmpty || !open.url.isEmpty) && S21Rules.allowsDirect(S21Book.routeToday())
         let need = WatchDelivery.needsResend(watchHasPublic: watch["pcPublic"] as? Bool,
                                              watchDirectOn: watch["pcDirect"] as? Bool,
                                              phoneHasPublic: !open.url.isEmpty, phoneDirectOn: expectedOn)
@@ -340,8 +340,10 @@ extension Pipeline {
         let state = WatchDirectState.shared
         guard force || Date.now.timeIntervalSince(state.hintsSentAt) >= 600 else { return }
         state.hintsSentAt = .now
-        // 家の中の住所か、PC の外の道のどちらかがあれば、時計から直接送る
-        let on = !homePC.watchCredentials().address.isEmpty || !publicWatchCredentials().url.isEmpty
+        // 家の中の住所か、PC の外の道のどちらかがあれば、時計から直接送る。
+        // 「直接送る／iPhone 経由だけ」の実験の「iPhone 経由だけ」の日は渡さない（2026-11-22。s21 の 電2）
+        let on = (!homePC.watchCredentials().address.isEmpty || !publicWatchCredentials().url.isEmpty)
+            && S21Rules.allowsDirect(S21Book.routeToday())
         var words: [String] = []
         if on {
             // iPhone の送り（HomePC.enqueueJob）と同じ選び方
@@ -365,9 +367,10 @@ extension Pipeline {
     /// でき上がっていれば答えを端末の中に置いて取り込みを進める（音声を PC に送り直さない）。まだなら今までどおり送る
     /// （PC は同じ名前の仕事を1つにまとめるので、二重には文字にしない。待ち合わせで答えを受け取る）
     /// car は車につないでいたあいだの区切りか（2026-11-21。s19 の 休13）
-    func sendWatchChunkToPC(_ url: URL, hints: [String], viaPC: Bool, car: Bool = false) {
+    /// sampleNoVoice は、時計が声が無いので捨てるはずだった区切りの見本（家の PC に sampleNoVoice=1 で渡す。2026-11-22。s21 の 精7）
+    func sendWatchChunkToPC(_ url: URL, hints: [String], viaPC: Bool, sampleNoVoice: Bool = false, car: Bool = false) {
         guard viaPC, homePC.shouldTry, HomePC.acceptsJobs else {
-            homePC.enqueueJob(url, hints: hints, car: car)
+            homePC.enqueueJob(url, hints: hints, car: car, sampleNoVoice: sampleNoVoice)
             return
         }
         let name = url.lastPathComponent
@@ -379,7 +382,7 @@ extension Pipeline {
                 Tally.add("watch.pcFirst")
                 processQueue()
             } else {
-                homePC.enqueueJob(url, hints: hints, car: car)
+                homePC.enqueueJob(url, hints: hints, car: car, sampleNoVoice: sampleNoVoice)
             }
         }
     }
