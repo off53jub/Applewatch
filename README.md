@@ -1099,3 +1099,5 @@ ChatGPT や Claude に Google ドライブの LifeLog フォルダを読ませ�
 ## これから
 - 会議だけ話者分離（OpenAI gpt-4o-transcribe-diarize）
 - Limitless・PLAUD などの過去の記録は、家の PC がドライブの「LifeLog/過去の記録」に写している（アプリには取り込まない）。AI 向けの説明「00 はじめに読んでください」で、そのフォルダも探すよう案内している。
+
+<!-- skip test -->
