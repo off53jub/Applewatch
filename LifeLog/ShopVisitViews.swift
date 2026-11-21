@@ -30,7 +30,7 @@ struct ShopVisitsView: View {
             if days.isEmpty {
                 Section {
                     Text(book.isOn ? "まだありません。お店に3分以上いて出ると、ここに出ます。" : "下のスイッチをオンにすると、寄ったお店をここに出します。")
-                        .foregroundStyle(.llDim)
+                        .foregroundStyle(LL.dim)
                 }
             }
             ForEach(days) { group in
@@ -90,12 +90,12 @@ private struct ShopVisitRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(ShopTime.range(visit)).font(.caption).foregroundStyle(.llDim)
+            Text(ShopTime.range(visit)).font(.caption).foregroundStyle(LL.dim)
             switch visit.state {
             case .confirmed:
                 Text(visit.confirmedName ?? "")
             case .notShop:
-                Text("お店ではない").foregroundStyle(.llDim)
+                Text("お店ではない").foregroundStyle(LL.dim)
             case .guessed:
                 HStack(spacing: 6) {
                     Text("たぶん")
@@ -107,13 +107,13 @@ private struct ShopVisitRow: View {
                 }
                 let others = visit.candidates.filter { $0.id != visit.guessID }.compactMap(\.name).prefix(2)
                 if !others.isEmpty {
-                    Text("ほかに: " + others.joined(separator: "、")).font(.caption).foregroundStyle(.llDim)
+                    Text("ほかに: " + others.joined(separator: "、")).font(.caption).foregroundStyle(LL.dim)
                 }
             case .waiting:
-                Text(visit.departure == nil ? "いる途中" : "まだ調べていません").foregroundStyle(.llDim)
+                Text(visit.departure == nil ? "いる途中" : "まだ調べていません").foregroundStyle(LL.dim)
             }
             if let paid {
-                Text("PayPay: \(paid.shop)　\(paid.amount.formatted())円").font(.caption).foregroundStyle(.llDim)
+                Text("PayPay: \(paid.shop)　\(paid.amount.formatted())円").font(.caption).foregroundStyle(LL.dim)
             }
         }
     }
@@ -135,10 +135,10 @@ private struct ShopVisitDetailView: View {
                     LabeledContent("時間", value: ShopTime.range(visit))
                     LabeledContent("いまの答え", value: answer(visit))
                     if visit.skippedAudio == true {
-                        Text("仕事の時間（または職場）なので、会話は読んでいません。").font(.caption).foregroundStyle(.llDim)
+                        Text("仕事の時間（または職場）なので、会話は読んでいません。").font(.caption).foregroundStyle(LL.dim)
                     } else if let n = visit.linesRead, n > 0 {
                         Text("この時間の会話 \(n) 行も手がかりにしました（iPhone の中だけで読みました）。")
-                            .font(.caption).foregroundStyle(.llDim)
+                            .font(.caption).foregroundStyle(LL.dim)
                     }
                 }
                 if visit.state == .guessed, visit.guess?.name != nil {
@@ -195,7 +195,7 @@ private struct ShopVisitDetailView: View {
                 Button("キャンセル", role: .cancel) {}
             }
         } else {
-            Text("この立ち寄りはありません").foregroundStyle(.llDim)
+            Text("この立ち寄りはありません").foregroundStyle(LL.dim)
         }
     }
 
@@ -220,16 +220,16 @@ private struct CandidateRow: View {
                 Text(candidate.name ?? "")
                 let source = candidate.source == .google ? "Google" : (candidate.source == .apple ? "Apple の地図" : "前に決めた")
                 let detail = "\(candidate.kind.label)・\(Int(candidate.distance.rounded())) m・\(source)"
-                Text(detail).font(.caption).foregroundStyle(.llDim)
+                Text(detail).font(.caption).foregroundStyle(LL.dim)
                 if let clues = candidate.clues, !clues.isEmpty {
-                    Text(clues.joined(separator: "・")).font(.caption).foregroundStyle(.llDim)
+                    Text(clues.joined(separator: "・")).font(.caption).foregroundStyle(LL.dim)
                 }
             }
             Spacer()
             if chosen {
                 Image(systemName: "checkmark").foregroundStyle(.tint)
             } else if best {
-                Text("たぶん").font(.caption).foregroundStyle(.llWarn)
+                Text("たぶん").font(.caption).foregroundStyle(LL.warn)
             }
         }
     }

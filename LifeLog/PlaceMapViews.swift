@@ -215,7 +215,7 @@ struct MomentView: View {
             }
             Section("会話") {
                 if talks.isEmpty {
-                    Text(loaded ? "この時間の会話はありません" : "探しています…").foregroundStyle(.llDim)
+                    Text(loaded ? "この時間の会話はありません" : "探しています…").foregroundStyle(LL.dim)
                 }
                 ForEach(talks, id: \.start) { c in
                     NavigationLink {
@@ -225,7 +225,7 @@ struct MomentView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(Self.clock.string(from: c.start) + "　" + ((c.title?.isEmpty == false ? c.title : nil) ?? "（見出しなし）"))
                             if !c.people.isEmpty {
-                                Text(c.people.joined(separator: "、")).font(.caption).foregroundStyle(.llDim)
+                                Text(c.people.joined(separator: "、")).font(.caption).foregroundStyle(LL.dim)
                             }
                         }
                     }

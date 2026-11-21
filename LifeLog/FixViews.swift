@@ -107,7 +107,7 @@ struct FixView: View {
             } else {
                 Section {
                     Text("1日に上から\(Self.dailyCap)つまでで十分です（5分ほど）。残りは明日に回して大丈夫です。タブの数字も、今日の\(Self.dailyCap)つまでを数えています（全部で \(total)）。")
-                        .font(.footnote).foregroundStyle(.llDim)
+                        .font(.footnote).foregroundStyle(LL.dim)
                 }
             }
             // タスクの候補は「タスク」タブで片づける（ここからは移るだけ）

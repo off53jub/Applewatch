@@ -373,7 +373,7 @@ struct AnswerKeyView: View {
         LLList {
             Section {
                 if week.isEmpty {
-                    Text("直近7日に、音声の残っている会話の行がまだありません。").foregroundStyle(.llDim)
+                    Text("直近7日に、音声の残っている会話の行がまだありません。").foregroundStyle(LL.dim)
                 }
                 ForEach(week) { s in
                     let sample = current(s)
@@ -386,7 +386,7 @@ struct AnswerKeyView: View {
                                 .foregroundStyle(sample.isAnswered ? LL.good : LL.dim)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(sample.text).foregroundStyle(.primary).lineLimit(2)
-                                Text(caption(sample)).font(.caption).foregroundStyle(.llDim)
+                                Text(caption(sample)).font(.caption).foregroundStyle(LL.dim)
                             }
                         }
                     }
@@ -525,7 +525,7 @@ private struct AnswerSheet: View {
                     }
                 }
                 Text(sample.time.formatted(date: .abbreviated, time: .shortened)
-                     + (sample.title.map { "・" + $0 } ?? "")).font(.caption).foregroundStyle(.llDim)
+                     + (sample.title.map { "・" + $0 } ?? "")).font(.caption).foregroundStyle(LL.dim)
             }
             Section {
                 Text(sample.text)

@@ -786,7 +786,7 @@ struct ReviewNudgeView: View {
             if today.isEmpty {
                 Section {
                     Text("今は聞いて直す行がありません。確からしさの低い行や、家の PC のモデルが食い違った行で、音声が残っているものを、毎朝10行ほど選びます。")
-                        .foregroundStyle(.llDim)
+                        .foregroundStyle(LL.dim)
                 }
             } else if let current {
                 card(current, in: today)
@@ -827,14 +827,14 @@ struct ReviewNudgeView: View {
         let edited = typed != shown
         Section {
             VStack(alignment: .leading, spacing: 6) {
-                Text(ReviewNudge.caption(item)).font(.caption).foregroundStyle(.llDim)
-                Text(ReviewNudge.reasonText(item.reasons)).font(.caption2).foregroundStyle(.llWarn)
+                Text(ReviewNudge.caption(item)).font(.caption).foregroundStyle(LL.dim)
+                Text(ReviewNudge.reasonText(item.reasons)).font(.caption2).foregroundStyle(LL.warn)
                 if let before = context.before {
-                    Text("前: " + ReviewNudge.say(before)).font(.caption).foregroundStyle(.llDim).lineLimit(2)
+                    Text("前: " + ReviewNudge.say(before)).font(.caption).foregroundStyle(LL.dim).lineLimit(2)
                 }
                 Text((speaker.map { "[\($0)] " } ?? "") + shown)
                 if let after = context.after {
-                    Text("後: " + ReviewNudge.say(after)).font(.caption).foregroundStyle(.llDim).lineLimit(2)
+                    Text("後: " + ReviewNudge.say(after)).font(.caption).foregroundStyle(LL.dim).lineLimit(2)
                 }
             }
             Button {
@@ -851,7 +851,7 @@ struct ReviewNudgeView: View {
             let others = ReviewNudge.alternatives(item.votes, current: shown)
             if !others.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("ほかのモデルの聞き取り（押すと下の欄に入ります）").font(.caption).foregroundStyle(.llDim)
+                    Text("ほかのモデルの聞き取り（押すと下の欄に入ります）").font(.caption).foregroundStyle(LL.dim)
                     ForEach(others, id: \.self) { other in
                         Button(other) { text = other }
                             .buttonStyle(.bordered)
@@ -867,7 +867,7 @@ struct ReviewNudgeView: View {
             if working {
                 HStack(spacing: 8) {
                     ProgressView()
-                    Text("直しています…").foregroundStyle(.llDim)
+                    Text("直しています…").foregroundStyle(LL.dim)
                 }
             } else {
                 HStack(spacing: 10) {
@@ -886,7 +886,7 @@ struct ReviewNudgeView: View {
                 }
             }
             if let note {
-                Text(note).font(.footnote).foregroundStyle(.llDanger)
+                Text(note).font(.footnote).foregroundStyle(LL.danger)
             }
         } header: {
             Text("\(number) / \(today.count)")
@@ -904,7 +904,7 @@ struct ReviewNudgeView: View {
         let skipped = today.filter { $0.answer == .skipped }.count
         Section {
             Label("今日の分は終わりました", systemImage: "checkmark.seal.fill")
-                .foregroundStyle(.llGood)
+                .foregroundStyle(LL.good)
             Text("直した \(fixed) 行・合っている \(ok) 行・飛ばした \(skipped) 行")
             Button("続けてもう\(ReviewNudge.perDay)行") {
                 let added = pipeline.addMoreReviewNudge()
@@ -912,7 +912,7 @@ struct ReviewNudgeView: View {
                 chosen = nil
             }
             if let moreNote {
-                Text(moreNote).font(.footnote).foregroundStyle(.llDim)
+                Text(moreNote).font(.footnote).foregroundStyle(LL.dim)
             }
         } footer: {
             Text("直した行と「合っている」行は、夜に充電しているとき（夜の聞き直しのあと）、家の PC に材料として送ります。")
@@ -932,7 +932,7 @@ struct ReviewNudgeView: View {
                             .foregroundStyle(item.isAnswered ? LL.good : LL.dim)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.right ?? item.text).foregroundStyle(.primary).lineLimit(2)
-                            Text(ReviewNudge.status(item)).font(.caption).foregroundStyle(.llDim)
+                            Text(ReviewNudge.status(item)).font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                 }

@@ -58,12 +58,12 @@ struct RecordingMapView: View {
             }
             Section("録れていなかった時間") {
                 if map.gaps.isEmpty {
-                    Text("10分以上の抜けはありません").foregroundStyle(.llDim)
+                    Text("10分以上の抜けはありません").foregroundStyle(LL.dim)
                 }
                 ForEach(map.gaps) { gap in
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(gap.start.formatted(date: .omitted, time: .shortened))〜\(gap.end.formatted(date: .omitted, time: .shortened))（\(gap.minutes)分）")
-                        Text(gap.reason).font(.caption).foregroundStyle(.llDim)
+                        Text(gap.reason).font(.caption).foregroundStyle(LL.dim)
                     }
                 }
             }
@@ -148,7 +148,7 @@ struct NewVoicesSection: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 label(note, name: name)
                                 Text("この声は、もうありません（ほかの人にまとめたか、消した声です）。左へ払って消してください。")
-                                    .font(.caption).foregroundStyle(.llDim)
+                                    .font(.caption).foregroundStyle(LL.dim)
                             }
                         }
                         if let other = note.pcSuggests, pipeline.people.contains(where: { $0.id == other }) {
@@ -184,7 +184,7 @@ struct NewVoicesSection: View {
                      ?? "初めての人の印のころに話した 人物\(note.personID)")
             }
             Text("\(note.time.formatted(date: .abbreviated, time: .shortened))「\(note.quote.prefix(40))」")
-                .font(.caption).foregroundStyle(.llDim)
+                .font(.caption).foregroundStyle(LL.dim)
         }
     }
 }
@@ -220,7 +220,7 @@ struct CarDevicesView: View {
             Section {
                 if seen.isEmpty {
                     Text("まだ Bluetooth の機器につないだことがありません。車につないでから開いてください。")
-                        .foregroundStyle(.llDim)
+                        .foregroundStyle(LL.dim)
                 }
                 ForEach(seen, id: \.self) { name in
                     Toggle(isOn: Binding(
@@ -230,7 +230,7 @@ struct CarDevicesView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(name)
                             Text(chosen[name] == nil ? "名前で決めています" : "自分で選びました")
-                                .font(.caption).foregroundStyle(.llDim)
+                                .font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                 }

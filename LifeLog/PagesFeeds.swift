@@ -845,7 +845,7 @@ struct PeoplePagesView: View {
         let people: [PersonPage] = PagesBook.shared.people
         LLList {
             if people.isEmpty {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(.llDim)
+                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
             }
             ForEach(Self.groups, id: \.self) { group in
                 let rows: [PersonPage] = people.filter { $0.group == group }
@@ -879,7 +879,7 @@ struct PersonPageRow: View {
                 Text(page.name)
                 if let last = page.last_talk {
                     Text(AppFeeds.monthDay(last.day) + " " + last.summary)
-                        .font(.caption).foregroundStyle(.llDim).lineLimit(2)
+                        .font(.caption).foregroundStyle(LL.dim).lineLimit(2)
                 }
             }
         }
@@ -895,7 +895,7 @@ struct PersonPageView: View {
                 Section {
                     Text(page.next_line)
                     if !page.next_why.isEmpty {
-                        Text("もと:「" + page.next_why + "」").font(.caption).foregroundStyle(.llDim)
+                        Text("もと:「" + page.next_why + "」").font(.caption).foregroundStyle(LL.dim)
                     }
                 } header: {
                     Text("次に会うときの一言")
@@ -905,7 +905,7 @@ struct PersonPageView: View {
                 Section("最後に話したこと") {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(last.summary)
-                        Text(PagesFeeds.talkLine(last)).font(.caption).foregroundStyle(.llDim)
+                        Text(PagesFeeds.talkLine(last)).font(.caption).foregroundStyle(LL.dim)
                     }
                 }
             }
@@ -968,7 +968,7 @@ struct PageDatedRow: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(item.text)
             if let day = item.day {
-                Text(AppFeeds.monthDay(day)).font(.caption).foregroundStyle(.llDim)
+                Text(AppFeeds.monthDay(day)).font(.caption).foregroundStyle(LL.dim)
             }
         }
     }
@@ -981,7 +981,7 @@ struct PagePromiseRow: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(promise.text)
             let day: String = promise.day.map { AppFeeds.monthDay($0) + "・" } ?? ""
-            Text(day + PagesFeeds.promiseSourceLabel(promise.source)).font(.caption).foregroundStyle(.llDim)
+            Text(day + PagesFeeds.promiseSourceLabel(promise.source)).font(.caption).foregroundStyle(LL.dim)
         }
     }
 }
@@ -1055,7 +1055,7 @@ struct ThreadsView: View {
         let settled: [ThreadPage] = threads.filter { $0.status != "open" }
         LLList {
             if threads.isEmpty {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(.llDim)
+                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
             }
             if !open.isEmpty {
                 Section("続いている") {
@@ -1085,12 +1085,12 @@ struct ThreadRow: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(thread.title)
                     Spacer(minLength: 4)
-                    Text(PagesFeeds.kindLabel(thread.kind)).font(.caption2).foregroundStyle(.llDim)
+                    Text(PagesFeeds.kindLabel(thread.kind)).font(.caption2).foregroundStyle(LL.dim)
                 }
                 if !thread.next.isEmpty {
-                    Text("次: " + thread.next).font(.caption).foregroundStyle(.llDim).lineLimit(2)
+                    Text("次: " + thread.next).font(.caption).foregroundStyle(LL.dim).lineLimit(2)
                 }
-                Text(PagesFeeds.daysLine(thread.days)).font(.caption2).foregroundStyle(.llDim)
+                Text(PagesFeeds.daysLine(thread.days)).font(.caption2).foregroundStyle(LL.dim)
             }
         }
     }
@@ -1108,7 +1108,7 @@ struct ThreadDetailView: View {
             }
             Section("まだのこと") {
                 if thread.open.isEmpty {
-                    Text("いまは無いようです").foregroundStyle(.llDim)
+                    Text("いまは無いようです").foregroundStyle(LL.dim)
                 }
                 ForEach(Array(thread.open.enumerated()), id: \.offset) { _, item in PageDatedRow(item: item) }
             }
@@ -1160,7 +1160,7 @@ struct PlacePagesView: View {
         let places: [PlacePage] = PagesBook.shared.places
         LLList {
             if places.isEmpty {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(.llDim)
+                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
             }
             ForEach(places) { place in
                 NavigationLink {
@@ -1169,7 +1169,7 @@ struct PlacePagesView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(PlaceNameBook.shared.shown(pageID: place.id, original: place.name) + (place.sure ? "" : "（たぶん）"))
                         Text(PagesFeeds.placeLine(place) + "・最後 " + AppFeeds.monthDay(place.last_day))
-                            .font(.caption).foregroundStyle(.llDim)
+                            .font(.caption).foregroundStyle(LL.dim)
                     }
                 }
             }
@@ -1255,10 +1255,10 @@ struct PlaceVisitRow: View {
                 }
             }
             if !visit.with.isEmpty {
-                Text("誰と: " + visit.with.joined(separator: "、")).font(.caption).foregroundStyle(.llDim)
+                Text("誰と: " + visit.with.joined(separator: "、")).font(.caption).foregroundStyle(LL.dim)
             }
             if !visit.talk.isEmpty {
-                Text(visit.talk).font(.caption).foregroundStyle(.llDim).lineLimit(2)
+                Text(visit.talk).font(.caption).foregroundStyle(LL.dim).lineLimit(2)
             }
         }
     }
@@ -1299,10 +1299,10 @@ struct DecisionsView: View {
         let today: String = PagesFeeds.dayKey(.now)
         LLList {
             if let note {
-                Section { Text(note).font(.footnote).foregroundStyle(.llDim) }
+                Section { Text(note).font(.footnote).foregroundStyle(LL.dim) }
             }
             if book.decisions.isEmpty {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(.llDim)
+                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
             }
             ForEach(book.decisions) { item in
                 Section {
@@ -1362,14 +1362,14 @@ struct DecisionCard: View {
                     .foregroundStyle(left <= PagesFeeds.dueDays ? LL.warn : LL.dim)
             }
             if !item.defaultAnswer.isEmpty {
-                Text("決めないと: " + item.defaultAnswer).font(.caption).foregroundStyle(.llDim)
+                Text("決めないと: " + item.defaultAnswer).font(.caption).foregroundStyle(LL.dim)
             }
             if !item.background.isEmpty {
-                Text(item.background).font(.caption).foregroundStyle(.llDim).lineLimit(4)
+                Text(item.background).font(.caption).foregroundStyle(LL.dim).lineLimit(4)
             }
         }
         if let chosen {
-            Label("「" + chosen + "」で送りました", systemImage: "checkmark.circle").foregroundStyle(.llGood)
+            Label("「" + chosen + "」で送りました", systemImage: "checkmark.circle").foregroundStyle(LL.good)
         } else {
             ForEach(PagesFeeds.choices(item)) { option in
                 Button {
@@ -1378,7 +1378,7 @@ struct DecisionCard: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(PagesFeeds.choiceTitle(option))
                         if !option.detail.isEmpty {
-                            Text(option.detail).font(.caption).foregroundStyle(.llDim)
+                            Text(option.detail).font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                 }
@@ -1399,7 +1399,7 @@ struct DecisionDueRows: View {
             } label: {
                 Label("決めごと「" + item.title + "」" + PagesFeeds.deadlineLabel(item.deadline, today: today),
                       systemImage: "signpost.right.and.left")
-                    .foregroundStyle(.llWarn)
+                    .foregroundStyle(LL.warn)
             }
         }
     }

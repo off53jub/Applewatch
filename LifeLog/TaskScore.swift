@@ -85,7 +85,7 @@ struct TaskScoreView: View {
             }
             Section {
                 if rows.isEmpty {
-                    Text("まだありません").foregroundStyle(.llDim)
+                    Text("まだありません").foregroundStyle(LL.dim)
                 }
                 ForEach(rows) { row in
                     VStack(alignment: .leading, spacing: 4) {
@@ -97,9 +97,9 @@ struct TaskScoreView: View {
                             }
                         }
                         Text("全部 \(row.total)・入れた/済み \(row.kept)・違う \(row.rejected)・確かめ待ち \(row.waiting)")
-                            .font(.caption).foregroundStyle(.llDim)
+                            .font(.caption).foregroundStyle(LL.dim)
                         if !row.reasons.isEmpty {
-                            Text("違う: " + TaskScore.reasonText(row.reasons)).font(.caption2).foregroundStyle(.llDim)
+                            Text("違う: " + TaskScore.reasonText(row.reasons)).font(.caption2).foregroundStyle(LL.dim)
                         }
                     }
                 }
@@ -113,7 +113,7 @@ struct TaskScoreView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(r.title)
                         Text("出した \(r.sent)・知らせから開いた \(r.opened)・ボタンを押した \(r.buttons)")
-                            .font(.caption).foregroundStyle(.llDim)
+                            .font(.caption).foregroundStyle(LL.dim)
                     }
                 }
             } header: {

@@ -106,7 +106,7 @@ struct IntegrationsView: View {
 
             Section {
                 if !motion.available {
-                    Text("この iPhone では使えません").foregroundStyle(.llDim)
+                    Text("この iPhone では使えません").foregroundStyle(LL.dim)
                 } else if motion.authorized {
                     Toggle("移動の様子を使う", isOn: $motion.enabled)
                 } else {
@@ -124,7 +124,7 @@ struct IntegrationsView: View {
                 } else {
                     Button("ヘルスケアを使えるようにする") { Task { await health.requestAccess() } }
                 }
-                if !health.note.isEmpty { Text(health.note).font(.footnote).foregroundStyle(.llDim) }
+                if !health.note.isEmpty { Text(health.note).font(.footnote).foregroundStyle(LL.dim) }
             } header: {
                 Text("ヘルスケア")
             } footer: {
@@ -205,7 +205,7 @@ private struct CalendarsView: View {
         .safeAreaInset(edge: .bottom) {
             Text("右のスイッチを切ったカレンダー（家族の共有カレンダーなど、自分の予定ではないもの）は使いません。「職場」を付けたカレンダーの予定の時間は、職場とみなします。")
                 .font(.caption)
-                .foregroundStyle(.llDim)
+                .foregroundStyle(LL.dim)
                 .padding()
                 .background(.bar)
         }
@@ -235,7 +235,7 @@ struct NightlyView: View {
                     Button("今すぐ聞き直す") { Task { await pipeline.runNightly(force: true) } }
                 }
                 if !pipeline.nightlyResult.isEmpty {
-                    Text(pipeline.nightlyResult).font(.callout).foregroundStyle(.llDim)
+                    Text(pipeline.nightlyResult).font(.callout).foregroundStyle(LL.dim)
                 }
             } footer: {
                 Text("夜（22時〜6時）に充電しているとき、iPhone に残っている1日分の音声を聞き直します。その日に出た名前・話題・予定の言葉をヒントにし、Haas-ja で書けていなかった区切り（電池優先のときなど）は Haas-ja で書き直して、前より良くなった行だけ差し替えます。確かさの低い行は、2つの聞き取りを見比べて直します。手で直した行は変えず、差し替えた行の元の文は「直す前」として残ります。")
@@ -260,9 +260,9 @@ struct ShortcutsHelpView: View {
             }
             Section {
                 Text("「録音を始める・止める」は、LifeLog を開かず、ロックしたまま（Face ID なし）で動きます。iOS の決まりで、こうして始めた録音のあいだは、ロック画面と Dynamic Island に「LifeLog 録音中」が出ます（そこからも止められます）。この表示は8時間で iOS に消されることがあるので、録音中に LifeLog を開くと出し直します。録音が止まったときは、いつもの通知で知らせます。")
-                    .foregroundStyle(.llDim)
+                    .foregroundStyle(LL.dim)
                 Text("「印を付ける」は、押すと LifeLog が開いて動きます。")
-                    .foregroundStyle(.llDim)
+                    .foregroundStyle(LL.dim)
             }
         }
         .navigationTitle("ほかの場所から使う")
@@ -293,7 +293,7 @@ struct OverRemovedView: View {
                 if !loaded {
                     ProgressView()
                 } else if items.isEmpty {
-                    Text("戻す行はありません").foregroundStyle(.llDim)
+                    Text("戻す行はありません").foregroundStyle(LL.dim)
                 } else {
                     LabeledContent("戻す行", value: "\(items.count) 行・\(Set(items.map(\.day)).count) 日")
                     if running {
@@ -306,7 +306,7 @@ struct OverRemovedView: View {
                         }
                     }
                 }
-                if let result { Text(result).font(.footnote).foregroundStyle(.llDim) }
+                if let result { Text(result).font(.footnote).foregroundStyle(LL.dim) }
             } footer: {
                 Text("「周りの声」として外した行のうち、名前を付けた人の声と、登録した職場にいない・仕事の予定の最中でもないときの声です（11/5 に、この2つは外さない決まりに直しました）。戻した会話は、見出しと要点を作り直します。1行ずつドキュメントに入れるので、多いと時間がかかります。途中で止まっても、もう一度押せば続きから戻します。")
             }
@@ -316,7 +316,7 @@ struct OverRemovedView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.line.text).font(.callout).lineLimit(3)
                             Text(Self.time.string(from: item.line.time) + (item.line.speaker.map { "・" + $0 } ?? ""))
-                                .font(.caption).foregroundStyle(.llDim)
+                                .font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                     if items.count > 30 && !showAll {

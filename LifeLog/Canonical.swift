@@ -220,7 +220,7 @@ struct CanonicalLineRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                Text(line.time).font(.caption.monospacedDigit()).foregroundStyle(.llDim)
+                Text(line.time).font(.caption.monospacedDigit()).foregroundStyle(LL.dim)
                 Text(line.who).font(.caption.bold())
                 Spacer(minLength: 0)
                 Text(line.isPlaud ? "PLAUD" : "アプリ")
@@ -246,12 +246,12 @@ struct CanonicalDayView: View {
             if let value {
                 Section {
                     Text("PLAUD のある時間は PLAUD の文に、アプリの行から話し手と時刻を重ねました。PLAUD の無い時間はアプリの行です。「?」の付いた話し手は推定です。")
-                        .font(.footnote).foregroundStyle(.llDim)
+                        .font(.footnote).foregroundStyle(LL.dim)
                     LabeledContent("行", value: "\(value.lines.count)（PLAUD \(value.plaudCount)・アプリ \(value.lines.count - value.plaudCount)）")
                     LabeledContent("話し手が分かる行", value: "\(value.speakerCount)")
                     if book.stale.contains(day), let fetched = value.fetched {
                         Text("家の PC につながらないので、" + HomeFeeds.clock(fetched) + " に読んだ分を出しています。")
-                            .font(.caption).foregroundStyle(.llDim)
+                            .font(.caption).foregroundStyle(LL.dim)
                     }
                 }
             }

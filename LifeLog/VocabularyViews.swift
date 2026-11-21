@@ -47,7 +47,7 @@ struct VocabularyView: View {
                                 Text(candidate.edited ? "手で直した言葉（\(candidate.count) 回）"
                                      : "\(candidate.days) 日・\(candidate.count) 回の会話に出てきた")
                                     .font(.caption)
-                                    .foregroundStyle(.llDim)
+                                    .foregroundStyle(LL.dim)
                             }
                             Spacer()
                             Button("「\(group.label)」に足す") {
@@ -167,7 +167,7 @@ struct AddWordView: View {
         NavigationStack {
             LLForm {
                 Section {
-                    Text(line.text).foregroundStyle(.llDim).textSelection(.enabled)
+                    Text(line.text).foregroundStyle(LL.dim).textSelection(.enabled)
                 } header: {
                     Text("この行")
                 }

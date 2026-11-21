@@ -375,7 +375,7 @@ struct DiagnosticsView: View {
                     }
                 }
                 .disabled(writing)
-                if let note { Text(note).font(.footnote).foregroundStyle(.llDim) }
+                if let note { Text(note).font(.footnote).foregroundStyle(LL.dim) }
             } footer: {
                 Text("同じ中身を、ドライブの「LifeLog」フォルダの「診断」ドキュメントにも1時間に1回ほど書きます。会話の中身・人の名前は入れません。Claude などに「診断を見て」と頼むと、実際の iPhone での動き具合を読めます。")
             }
@@ -389,7 +389,7 @@ struct DiagnosticsView: View {
                             }
                             if section == "最近のエラー" {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.label).font(.caption).foregroundStyle(.llDim)
+                                    Text(item.label).font(.caption).foregroundStyle(LL.dim)
                                     Text(item.value).font(.callout)
                                 }
                             } else {

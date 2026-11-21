@@ -288,7 +288,7 @@ struct MisheardView: View {
                     }
                 }
                 .disabled(searching)
-                if let searchNote { Text(searchNote).font(.footnote).foregroundStyle(.llDim) }
+                if let searchNote { Text(searchNote).font(.footnote).foregroundStyle(LL.dim) }
             } footer: {
                 Text("直近14日の閉じた会話を Groq の言語モデルに読んでもらい、音を聞き間違えて書いたと思われる言葉を出します（10分に1回ほど、まだ読んでいない会話から）。登録した言葉と、「合っている」にした言葉は出しません。誤変換の一覧に足すと、これからの文字起こしでも自動で直します。")
             }
@@ -299,7 +299,7 @@ struct MisheardView: View {
                 Section {
                     Button(redoing ? "作り直しています…" : "まとめを作り直す（会話 \(counts.conversations)・日 \(counts.days)）") { redo() }
                         .disabled(redoing)
-                    if let redoNote { Text(redoNote).font(.footnote).foregroundStyle(.llDim) }
+                    if let redoNote { Text(redoNote).font(.footnote).foregroundStyle(LL.dim) }
                 } footer: {
                     Text("文字を直した会話の見出しと要点を作り直し、その日の「1日のまとめ」も作り直して、ドキュメントの見出しとまとめを置き換えます。この一覧にその日の言葉が残っていなければ、押さなくても次の処理のときに作り直します（今日の1日のまとめは日が変わってから）。")
                 }
@@ -334,7 +334,7 @@ struct MisheardView: View {
         Section {
             ForEach(suspect.refs, id: \.self) { ref in lineRow(ref, wrong: suspect.wrong) }
             if let note = notes[suspect.id] {
-                Text(note).font(.footnote).foregroundStyle(.llDim)
+                Text(note).font(.footnote).foregroundStyle(LL.dim)
             } else if working == suspect.id {
                 HStack { ProgressView(); Text("直しています…") }
             } else {
@@ -371,7 +371,7 @@ struct MisheardView: View {
         let label = HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(Self.time.string(from: ref.time) + (line?.speaker.map { "　[\($0)]" } ?? ""))
-                    .font(.caption).foregroundStyle(.llDim)
+                    .font(.caption).foregroundStyle(LL.dim)
                 Text(highlighted(ref.text, wrong))
             }
             Spacer(minLength: 0)

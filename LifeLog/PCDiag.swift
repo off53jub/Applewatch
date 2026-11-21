@@ -625,7 +625,7 @@ struct PCLinkSection: View {
             }
             .disabled(sending || !diagOn)
             if let note {
-                Text(note).font(.caption).foregroundStyle(.llDim)
+                Text(note).font(.caption).foregroundStyle(LL.dim)
             }
         } header: {
             Text("実機の様子・見えない通知・PC で直す")

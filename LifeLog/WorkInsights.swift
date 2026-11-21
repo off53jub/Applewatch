@@ -257,7 +257,7 @@ struct WorkWeekView: View {
                     ForEach(Array(week.decided.enumerated()), id: \.offset) { item in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.element.text)
-                            Text(Pipeline.workDigestDayTitle(item.element.day)).font(.caption).foregroundStyle(.llDim)
+                            Text(Pipeline.workDigestDayTitle(item.element.day)).font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                 }
@@ -273,7 +273,7 @@ struct WorkWeekView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.what)
                             if let due = item.due {
-                                Text(Pipeline.taskDueText(due)).font(.caption).foregroundStyle(.llWarn)
+                                Text(Pipeline.taskDueText(due)).font(.caption).foregroundStyle(LL.warn)
                             }
                         }
                     }
@@ -290,7 +290,7 @@ struct WorkWeekView: View {
                 }
             }
             if week.days.isEmpty && week.done.isEmpty {
-                Section { Text("この週のまとめはありません").foregroundStyle(.llDim) }
+                Section { Text("この週のまとめはありません").foregroundStyle(LL.dim) }
             }
         }
         .navigationTitle("週のまとめ")
@@ -306,7 +306,7 @@ struct WorkThreadsView: View {
         LLList {
             if threads.isEmpty {
                 Section {
-                    Text("まだありません").foregroundStyle(.llDim)
+                    Text("まだありません").foregroundStyle(LL.dim)
                 } footer: {
                     Text("まとめの【よく出た言葉】のうち、30日のうちに2日以上のまとめに出てきた言葉が、ここに並びます。")
                 }
@@ -371,7 +371,7 @@ struct MeetingPrepView: View {
         LLList {
             if meetings.isEmpty {
                 Section {
-                    Text("これから24時間に、名前のある人と会う予定はありません").foregroundStyle(.llDim)
+                    Text("これから24時間に、名前のある人と会う予定はありません").foregroundStyle(LL.dim)
                 } footer: {
                     Text("カレンダーの予定の参加者か、予定名に入っている名前で、会う人を決めます。")
                 }
@@ -383,14 +383,14 @@ struct MeetingPrepView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(name).font(.headline)
                             if prep.tasks.isEmpty && prep.lines.isEmpty {
-                                Text("残っている頼まれごと・まとめの行はありません").font(.caption).foregroundStyle(.llDim)
+                                Text("残っている頼まれごと・まとめの行はありません").font(.caption).foregroundStyle(LL.dim)
                             }
                             ForEach(prep.tasks) { item in
                                 Label(item.what, systemImage: "circle").font(.callout)
                             }
                             ForEach(prep.lines) { line in
                                 Text(Pipeline.workDigestDayTitle(line.day) + "・" + line.heading + ": " + line.text)
-                                    .font(.caption).foregroundStyle(.llDim)
+                                    .font(.caption).foregroundStyle(LL.dim)
                             }
                         }
                     }

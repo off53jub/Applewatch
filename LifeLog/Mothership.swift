@@ -614,16 +614,16 @@ struct MothershipRow: View {
                     }
                     if let project = item.project, !project.isEmpty { Text(project) }
                     if item.work != true {
-                        Label("仕事以外", systemImage: "house").labelStyle(.titleAndIcon).foregroundStyle(.llGood)
+                        Label("仕事以外", systemImage: "house").labelStyle(.titleAndIcon).foregroundStyle(LL.good)
                     }
                     if let added = item.added, added.count == 10 {
                         Text(String(added.suffix(5)).replacingOccurrences(of: "-", with: "/") + " に足した")
                     }
                 }
-                .font(.caption).foregroundStyle(.llDim)
+                .font(.caption).foregroundStyle(LL.dim)
                 // 「もう済んだかも」とされた（2026-11-09）
                 if book.asksDone(item), let reason = item.maybeDone {
-                    Text("済みでは？ " + reason).font(.caption).foregroundStyle(.llWarn)
+                    Text("済みでは？ " + reason).font(.caption).foregroundStyle(LL.warn)
                     HStack(spacing: 16) {
                         Button("済み") { Task { await book.markDone(item, pc: pipeline.homePC) } }
                         if book.acceptsKinds(pipeline.homePC) {

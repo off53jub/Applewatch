@@ -34,7 +34,7 @@ struct RecordingExperimentSection: View {
             LabeledContent("きょう", value: todayText)
             if let start = RecordingExperiment.start {
                 ForEach(0..<RecordingExperiment.days, id: \.self) { i in
-                    Text(Self.dayLine(start: start, index: i)).font(.caption).foregroundStyle(.llDim)
+                    Text(Self.dayLine(start: start, index: i)).font(.caption).foregroundStyle(LL.dim)
                 }
             }
         } header: {

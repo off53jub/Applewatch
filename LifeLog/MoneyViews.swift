@@ -39,7 +39,7 @@ struct MoneyView: View {
             if all.isEmpty {
                 Section {
                     Text("まだ支払いの記録がありません。下の「PayPay の明細」から読み込むか、カードの利用速報・ウォレットの記録をつなぐと、ここに日ごとに並びます。")
-                        .foregroundStyle(.llDim)
+                        .foregroundStyle(LL.dim)
                 }
             }
             ForEach(days, id: \.self) { day in
@@ -59,16 +59,16 @@ struct MoneyView: View {
 
     private func row(_ p: Payment) -> some View {
         HStack {
-            Text(Self.clock.string(from: p.time)).font(.caption).foregroundStyle(.llDim)
+            Text(Self.clock.string(from: p.time)).font(.caption).foregroundStyle(LL.dim)
             if p.hasShop {
                 Text(p.shop)
             } else if let guess = PaymentMatch.placeGuessLabel(for: p, visits: pipeline.shopVisits.visits) {
                 // 店名の無いかざした記録には、そのころいた場所からの推測を添える（表示だけ）
-                Text(guess).foregroundStyle(.llDim)
+                Text(guess).foregroundStyle(LL.dim)
             } else {
                 Text("（店名なし）")
             }
-            Text(p.via).font(.caption2).foregroundStyle(.llDim)
+            Text(p.via).font(.caption2).foregroundStyle(LL.dim)
             Spacer()
             Text(p.amount > 0 ? "\(p.amount.formatted())円" : "").font(.callout.monospacedDigit())
         }

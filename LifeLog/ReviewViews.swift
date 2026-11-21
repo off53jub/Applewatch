@@ -73,11 +73,11 @@ struct VoiceReviewView: View {
                         SampleButton(player: player, sample: item.sample, key: item.id)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("「\(item.info.text)」").lineLimit(3)
-                            Text(item.info.caption).font(.caption).foregroundStyle(.llDim)
-                            Text(reason(item)).font(.caption).foregroundStyle(.llWarn)
+                            Text(item.info.caption).font(.caption).foregroundStyle(LL.dim)
+                            Text(reason(item)).font(.caption).foregroundStyle(LL.warn)
                             if item.info.loose {
                                 Text("この文と声の時刻が少しずれているかもしれません。左の▶︎は声のひとこま、下の「この行を聞く」は文の行です。")
-                                    .font(.caption2).foregroundStyle(.llDim)
+                                    .font(.caption2).foregroundStyle(LL.dim)
                             }
                         }
                     }
@@ -96,7 +96,7 @@ struct VoiceReviewView: View {
                     }
                     .disabled(!pipeline.archive.canPlay(item.sample.audio))
                     if let note = done[item.id] {
-                        Text(note).font(.footnote).foregroundStyle(.llDim)
+                        Text(note).font(.footnote).foregroundStyle(LL.dim)
                     } else if working == item.id {
                         HStack { ProgressView(); Text("直しています…") }
                     } else {
@@ -145,7 +145,7 @@ struct VoiceReviewView: View {
         .safeAreaInset(edge: .bottom) {
             if !items.isEmpty {
                 Text("▶︎で聞いて、その人の声でなければ直してください。どちらでもないときは「その他…」から（ほかの人・自分・テレビ・分からない）。忘れると、そのひとこまの音と同じ声も忘れるので、聞き分けの間違いが減ります。")
-                    .font(.caption).foregroundStyle(.llDim).padding(.horizontal).padding(.bottom, 8)
+                    .font(.caption).foregroundStyle(LL.dim).padding(.horizontal).padding(.bottom, 8)
             }
         }
     }
@@ -249,14 +249,14 @@ struct SplitPersonView: View {
                 Text("「\(person?.displayName ?? "")」とされた行（2秒以上話したもの）の声を取り、声の近さで何組にでも分けます（はっきり近い声だけをまとめるので、同じ人が2組に分かれることもあります）。▶︎で聞いて、組ごとに「この人の声」か「別の人に移す」を選び、最後に「分ける」を押してください。選ばなかった組は、そのままにします。録音が手元に無い行はドライブから取ってくるので、Wi-Fi のときに。")
             }
             if let note = result?.note {
-                Section { Text(note).foregroundStyle(.llWarn) }
+                Section { Text(note).foregroundStyle(LL.warn) }
             }
             if let result, done == nil {
                 ForEach(result.groups.indices, id: \.self) { g in
                     Section {
                         ForEach(result.groups[g].prefix(6)) { clip in clipRow(clip) }
                         if result.groups[g].count > 6 {
-                            Text("ほか \(result.groups[g].count - 6) 行").font(.caption).foregroundStyle(.llDim)
+                            Text("ほか \(result.groups[g].count - 6) 行").font(.caption).foregroundStyle(LL.dim)
                         }
                         HStack {
                             choiceButton("この人の声", selected: choices[g] == .keep) { choices[g] = .keep }
@@ -386,7 +386,7 @@ struct SplitPersonView: View {
         } label: {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(Self.time.string(from: clip.line.time)).font(.caption).foregroundStyle(.llDim)
+                    Text(Self.time.string(from: clip.line.time)).font(.caption).foregroundStyle(LL.dim)
                     Text(clip.line.text).lineLimit(3)
                 }
                 Spacer(minLength: 0)
@@ -471,7 +471,7 @@ struct BackupView: View {
             Section {
                 LabeledContent("アプリの中", value: backups.lastLocal.map { Self.time.string(from: $0) } ?? "まだ")
                 LabeledContent("ドライブ", value: backups.lastDrive.map { Self.time.string(from: $0) } ?? "まだ")
-                if let problem = backups.problem { Text(problem).font(.footnote).foregroundStyle(.llWarn) }
+                if let problem = backups.problem { Text(problem).font(.footnote).foregroundStyle(LL.warn) }
                 Button(working ? "控えています…" : "今すぐ控える") {
                     working = true
                     Task {
@@ -494,11 +494,11 @@ struct BackupView: View {
             }
             Section("アプリの中の控え") {
                 let local = backups.localEntries()
-                if local.isEmpty { Text("まだありません").foregroundStyle(.llDim) }
+                if local.isEmpty { Text("まだありません").foregroundStyle(LL.dim) }
                 ForEach(local) { entry in Button(entry.label) { choosing = entry } }
             }
             Section {
-                if let driveNote { Text(driveNote).font(.footnote).foregroundStyle(.llDim) }
+                if let driveNote { Text(driveNote).font(.footnote).foregroundStyle(LL.dim) }
                 ForEach(drive) { entry in Button(entry.label) { choosing = entry } }
             } header: {
                 Text("ドライブの控え")
@@ -580,7 +580,7 @@ struct SelfClaimView: View {
                 Text("「\(name)」とされた行（2秒以上話したもの）の声を取り、自分の登録・手直しの声にはっきり近く、「\(name)」の声よりも近い行を探します。▶︎で聞いて、自分の声だった行だけに印を残し、「自分に直す」を押してください。記録とドキュメントの名前が「自分」になり、その会話の見出しと要点を作り直します。迷う行は出しません。録音が手元に無い行はドライブから取ってくるので、Wi-Fi のときに。")
             }
             if let note = result?.note {
-                Section { Text(note).foregroundStyle(.llWarn) }
+                Section { Text(note).foregroundStyle(LL.warn) }
             }
             if let done {
                 Section { Text(done) }
@@ -631,7 +631,7 @@ struct SelfClaimView: View {
             } label: {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(Self.time.string(from: clip.line.time)).font(.caption).foregroundStyle(.llDim)
+                        Text(Self.time.string(from: clip.line.time)).font(.caption).foregroundStyle(LL.dim)
                         Text(clip.line.text).lineLimit(3)
                     }
                     Spacer(minLength: 0)

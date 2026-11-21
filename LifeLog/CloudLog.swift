@@ -163,12 +163,12 @@ struct CloudLogView: View {
                 Text("送った時刻・送り先・何のためかだけを残します（中身は残しません。90日分）。「Claude（家の PC 経由）」は、家の PC を通して Claude に頼んだものです（鍵は PC の中だけ）。「職場の会話も Claude で」がオン（初め）のあいだは、職場の会話も Claude に送ります。職場の会話を外に送らないようにするには、その設定をオフにして、「言語モデル」の設定で「職場の会話は端末内で」を選んでください。")
             }
             Section("送ったもの") {
-                if inMonth.isEmpty { Text("ありません").foregroundStyle(.llDim) }
+                if inMonth.isEmpty { Text("ありません").foregroundStyle(LL.dim) }
                 ForEach(inMonth.prefix(200)) { entry in
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(entry.at.formatted(date: .abbreviated, time: .shortened))　\(entry.service)")
                         Text(entry.what + (entry.work == true ? "・職場" : ""))
-                            .font(.caption).foregroundStyle(.llDim)
+                            .font(.caption).foregroundStyle(LL.dim)
                     }
                 }
             }

@@ -1264,7 +1264,7 @@ private struct TodayThreeRow: View {
             HStack(spacing: 14) {
                 Spacer(minLength: 0)
                 if answer == "skipped" {
-                    Text("やらない にしました").font(.caption).foregroundStyle(.llDim)
+                    Text("やらない にしました").font(.caption).foregroundStyle(LL.dim)
                 }
                 Button {
                     working = true
@@ -1309,7 +1309,7 @@ struct TodayAnswerCard: View {
         let open: [Proposal] = pipeline.homeFeeds.openProposals()
         Section {
             if three.isEmpty {
-                Text("今日の三つはまだありません。タスクが入ると、ここに出ます。").font(.callout).foregroundStyle(.llDim)
+                Text("今日の三つはまだありません。タスクが入ると、ここに出ます。").font(.callout).foregroundStyle(LL.dim)
             } else {
                 TodayThreeRows(picks: three)
             }
@@ -1318,7 +1318,7 @@ struct TodayAnswerCard: View {
                     .onAppear { pipeline.homeFeeds.noteShown([first.id]) }
             }
             if let note {
-                Text(note).font(.caption).foregroundStyle(.llDim)
+                Text(note).font(.caption).foregroundStyle(LL.dim)
             }
             if !open.isEmpty {
                 NavigationLink("提案をすべて見る（\(open.count)）") { ProposalsView() }
@@ -1403,7 +1403,7 @@ struct PrepCard: View {
                 Text(item.title).font(.headline)
             }
             if !item.people.isEmpty {
-                Text(item.people.joined(separator: "、")).font(.caption).foregroundStyle(.llDim)
+                Text(item.people.joined(separator: "、")).font(.caption).foregroundStyle(LL.dim)
             }
             if let last = item.last_talk {
                 PrepLines(title: "前回（" + AppFeeds.monthDay(last.day) + "）", lines: [last.summary])
@@ -1423,7 +1423,7 @@ private struct PrepLines: View {
     var body: some View {
         if !lines.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.caption.bold()).foregroundStyle(.llDim)
+                Text(title).font(.caption.bold()).foregroundStyle(LL.dim)
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                     Text("・" + line).font(.callout)
                 }
@@ -1486,7 +1486,7 @@ struct NightMoodSection: View {
         if let day = windowDay, done || !pipeline.mothershipFeeds.answeredMood(day: day) {
             Section {
                 if done {
-                    Label("残しました。おつかれさまでした。", systemImage: "checkmark.circle").foregroundStyle(.llDim)
+                    Label("残しました。おつかれさまでした。", systemImage: "checkmark.circle").foregroundStyle(LL.dim)
                 } else {
                     MoodScaleRow(title: "気分", low: "わるい", high: "よい", value: $mood)
                     MoodScaleRow(title: "疲れ", low: "くたくた", high: "元気", value: $energy)
@@ -1525,13 +1525,13 @@ private struct MoodScaleRow: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.subheadline.bold())
             HStack(spacing: 6) {
-                Text("1 " + low).font(.caption2).foregroundStyle(.llDim)
+                Text("1 " + low).font(.caption2).foregroundStyle(LL.dim)
                 Spacer(minLength: 4)
                 ForEach(1...5, id: \.self) { n in
                     MoodScaleButton(n: n, selected: value == n) { value = n }
                 }
                 Spacer(minLength: 4)
-                Text(high + " 5").font(.caption2).foregroundStyle(.llDim)
+                Text(high + " 5").font(.caption2).foregroundStyle(LL.dim)
             }
         }
     }
@@ -1593,7 +1593,7 @@ struct WeeklyLookBackSection: View {
                     WeeklyItemRow(item: item)
                 }
                 if weekly.items.isEmpty {
-                    Text("今週のふり返りはまだありません。").foregroundStyle(.llDim)
+                    Text("今週のふり返りはまだありません。").foregroundStyle(LL.dim)
                 }
                 if !weekly.hypotheses.isEmpty {
                     NavigationLink {
@@ -1607,7 +1607,7 @@ struct WeeklyLookBackSection: View {
                     }
                 }
                 if let feedback = weekly.feedback {
-                    Text(MothershipFeeds.feedbackLine(feedback)).font(.caption).foregroundStyle(.llDim)
+                    Text(MothershipFeeds.feedbackLine(feedback)).font(.caption).foregroundStyle(LL.dim)
                 }
             } header: {
                 Text("今週のふり返り" + headerWeek(weekly))
@@ -1639,7 +1639,7 @@ private struct WeeklyItemRow: View {
                 Text(item.body).font(.callout)
             }
             ForEach(Array(item.evidence.enumerated()), id: \.offset) { _, e in
-                Text("・「" + e.quote + "」（" + AppFeeds.monthDay(e.day) + "）").font(.caption).foregroundStyle(.llDim)
+                Text("・「" + e.quote + "」（" + AppFeeds.monthDay(e.day) + "）").font(.caption).foregroundStyle(LL.dim)
             }
             FeedbackButtons(kind: "weekly", id: item.id)
         }
@@ -1656,7 +1656,7 @@ struct HypothesesView: View {
         LLList {
             Section {
                 if list.isEmpty {
-                    Text("まだありません").foregroundStyle(.llDim)
+                    Text("まだありません").foregroundStyle(LL.dim)
                 }
                 ForEach(list) { h in
                     HypothesisRow(hypothesis: h)
@@ -1681,17 +1681,17 @@ private struct HypothesisRow: View {
                     .foregroundStyle(MothershipFeeds.statusColor(hypothesis.status))
                 Spacer(minLength: 8)
                 if let said = hypothesis.said_on {
-                    Text(AppFeeds.monthDay(said) + " に").font(.caption2).foregroundStyle(.llDim)
+                    Text(AppFeeds.monthDay(said) + " に").font(.caption2).foregroundStyle(LL.dim)
                 }
             }
             // 確かさの見た目（見立て（仮）は点線の枠。2026-11-21。s20 の 体2）
             Text(hypothesis.text).certainty(Certainty.from(hypothesisStatus: hypothesis.status))
             if !hypothesis.note.isEmpty {
-                Text(hypothesis.note).font(.caption).foregroundStyle(.llDim)
+                Text(hypothesis.note).font(.caption).foregroundStyle(LL.dim)
             }
             HStack {
                 if let checked = hypothesis.checked_on {
-                    Text(AppFeeds.monthDay(checked) + " に照らしました").font(.caption2).foregroundStyle(.llDim)
+                    Text(AppFeeds.monthDay(checked) + " に照らしました").font(.caption2).foregroundStyle(LL.dim)
                 }
                 Spacer()
                 // なぜこうなった？（2026-11-21。s20 の 体33）
@@ -1735,7 +1735,7 @@ struct BriefCompareView: View {
         let days: [BriefCompareDay] = pipeline.mothershipFeeds.compare
         LLList {
             if days.isEmpty {
-                Text("比べる朝のまとめはまだありません。").foregroundStyle(.llDim)
+                Text("比べる朝のまとめはまだありません。").foregroundStyle(LL.dim)
             } else {
                 let shown: BriefCompareDay = days[min(index, days.count - 1)]
                 Section {
@@ -1779,7 +1779,7 @@ private struct BriefVersion: View {
     var body: some View {
         let chosen: String? = pipeline.mothershipFeeds.voted("brief_compare", id: "cmp-" + day)
         VStack(alignment: .leading, spacing: 8) {
-            Text(maker == "codex" ? "Codex" : "Claude").font(.caption.bold()).foregroundStyle(.llDim)
+            Text(maker == "codex" ? "Codex" : "Claude").font(.caption.bold()).foregroundStyle(LL.dim)
             Text(text).font(.callout).textSelection(.enabled)
             Button {
                 pipeline.mothershipFeeds.vote("brief_compare", id: "cmp-" + day, value: maker, day: day)
@@ -1833,7 +1833,7 @@ struct AccuracyView: View {
         LLList {
             Section {
                 if weeks.isEmpty {
-                    Text("まだありません").foregroundStyle(.llDim)
+                    Text("まだありません").foregroundStyle(LL.dim)
                 } else {
                     ScrollView(.horizontal) {
                         AccuracyGrid(weeks: weeks)
@@ -1865,7 +1865,7 @@ private struct AccuracyGrid: View {
                 Text("話し方")
             }
             .font(.caption.bold())
-            .foregroundStyle(.llDim)
+            .foregroundStyle(LL.dim)
             ForEach(weeks) { w in
                 AccuracyGridRow(week: w)
             }
@@ -1901,13 +1901,13 @@ struct UnusedScreensView: View {
         LLList {
             Section {
                 if items.isEmpty {
-                    Text("ありません").foregroundStyle(.llDim)
+                    Text("ありません").foregroundStyle(LL.dim)
                 }
                 ForEach(items) { item in
                     VStack(alignment: .leading, spacing: 2) {
                         LabeledContent(MothershipFeeds.screenName(item.screen), value: "\(item.days)日で \(item.opens) 回")
                         if !item.note.isEmpty {
-                            Text(item.note).font(.caption).foregroundStyle(.llDim)
+                            Text(item.note).font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                 }

@@ -20,7 +20,7 @@ struct ImportView: View {
                 Section {
                     HStack {
                         if importer.working { ProgressView() }
-                        Text(importer.status).foregroundStyle(.llDim)
+                        Text(importer.status).foregroundStyle(LL.dim)
                     }
                 }
             }
@@ -41,7 +41,7 @@ struct ImportView: View {
                                 Text(item.name).lineLimit(1)
                                 Text(item.alreadyImported ? "取り込み済み" : "時刻: " + item.source)
                                     .font(.caption)
-                                    .foregroundStyle(.llDim)
+                                    .foregroundStyle(LL.dim)
                             }
                             DatePicker("録音を始めた時刻",
                                        selection: Binding(get: { item.start ?? .now },

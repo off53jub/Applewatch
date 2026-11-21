@@ -169,8 +169,8 @@ struct MinutesView: View {
                 ForEach(list, id: \.start) { c in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(ConversationLog.headingText(c)).font(.callout)
-                        if let name = c.minutes { Text("作った: " + name).font(.caption).foregroundStyle(.llDim) }
-                        if let note = notes[c.start] { Text(note).font(.caption).foregroundStyle(.llDim) }
+                        if let name = c.minutes { Text("作った: " + name).font(.caption).foregroundStyle(LL.dim) }
+                        if let note = notes[c.start] { Text(note).font(.caption).foregroundStyle(LL.dim) }
                         if working == c.start {
                             HStack { ProgressView(); Text("作っています…（長い会議は数分かかります）").font(.caption) }
                         } else {

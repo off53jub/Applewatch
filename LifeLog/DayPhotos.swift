@@ -231,7 +231,7 @@ struct DayPhotoSettingsSection: View {
                 // Info.plist に写真の説明が無い版で許可を求めると、アプリが落ちる
                 Text("この版では、まだ写真の許可を求められません（次の版から）。")
                     .font(.caption)
-                    .foregroundStyle(.llDim)
+                    .foregroundStyle(LL.dim)
             } else if status == .notDetermined {
                 Button("写真の許可を求める") {
                     Task {

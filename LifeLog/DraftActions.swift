@@ -147,11 +147,11 @@ struct DraftConfirmView: View {
                     LabeledContent("題", value: titleText)
                     LabeledContent("日時", value: DraftRules.whenText(target: target, item: item))
                     if let quote = item.quote, !quote.isEmpty {
-                        Text("もとの言葉: " + quote).font(.caption).foregroundStyle(.llDim)
+                        Text("もとの言葉: " + quote).font(.caption).foregroundStyle(LL.dim)
                     }
                 }
                 Section {
-                    Text(footerText).font(.caption).foregroundStyle(.llDim)
+                    Text(footerText).font(.caption).foregroundStyle(LL.dim)
                 }
             }
             .navigationTitle("確かめる")
@@ -204,7 +204,7 @@ struct TaskDraftSection: View {
                 target = .reminder
             }
             if let note {
-                Text(note).font(.caption).foregroundStyle(.llDim)
+                Text(note).font(.caption).foregroundStyle(LL.dim)
             }
         } header: {
             Text("下書き（押すまで入りません）")
@@ -259,7 +259,7 @@ struct PromiseDraftButtons: View {
                 }
             }
             if let note {
-                Text(note).font(.caption2).foregroundStyle(.llDim)
+                Text(note).font(.caption2).foregroundStyle(LL.dim)
             }
         }
     }
@@ -608,10 +608,10 @@ struct ReplyDraftRow: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(item.chat).font(.subheadline.bold())
                 Spacer(minLength: 4)
-                Text(ActionFeeds.waitingText(item)).font(.caption).foregroundStyle(.llDim)
+                Text(ActionFeeds.waitingText(item)).font(.caption).foregroundStyle(LL.dim)
             }
             if !item.ask.isEmpty {
-                Text("「" + item.ask + "」").font(.caption).foregroundStyle(.llDim).lineLimit(3)
+                Text("「" + item.ask + "」").font(.caption).foregroundStyle(LL.dim).lineLimit(3)
             }
             Text(item.draft)
                 .font(.callout)
@@ -620,7 +620,7 @@ struct ReplyDraftRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(LL.dim.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
             if !item.note.isEmpty {
-                Text("送る前に: " + item.note).font(.caption).foregroundStyle(.llWarn)
+                Text("送る前に: " + item.note).font(.caption).foregroundStyle(LL.warn)
             }
             HStack(spacing: 16) {
                 Button(copied ? "写しました" : "写す") {
@@ -634,7 +634,7 @@ struct ReplyDraftRow: View {
                 Button("返した") {
                     withAnimation { ActionsBook.shared.markDone(item.id) }
                 }
-                .foregroundStyle(.llDim)
+                .foregroundStyle(LL.dim)
             }
             .buttonStyle(.borderless)
             .font(.callout)
@@ -650,10 +650,10 @@ struct MailDraftRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("メールの下書き", systemImage: "envelope").font(.caption).foregroundStyle(.llDim)
+            Label("メールの下書き", systemImage: "envelope").font(.caption).foregroundStyle(LL.dim)
             Text(mail.subject).font(.subheadline.bold())
             if !mail.to.isEmpty {
-                Text("宛先: " + mail.to).font(.caption).foregroundStyle(.llDim)
+                Text("宛先: " + mail.to).font(.caption).foregroundStyle(LL.dim)
             }
             Text(mail.body)
                 .font(.callout)
@@ -663,7 +663,7 @@ struct MailDraftRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(LL.dim.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
             if !mail.why.isEmpty {
-                Text("もとの約束: " + mail.why).font(.caption).foregroundStyle(.llDim)
+                Text("もとの約束: " + mail.why).font(.caption).foregroundStyle(LL.dim)
             }
             HStack(spacing: 16) {
                 Button(copiedSubject ? "件名を写しました" : "件名を写す") {
@@ -678,7 +678,7 @@ struct MailDraftRow: View {
                 Button("送った") {
                     withAnimation { ActionsBook.shared.markDone(mail.id) }
                 }
-                .foregroundStyle(.llDim)
+                .foregroundStyle(LL.dim)
             }
             .buttonStyle(.borderless)
             .font(.callout)
@@ -703,7 +703,7 @@ struct TimeLedgerSection: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Label("時間の家計簿", systemImage: "clock")
-                            Text(ActionFeeds.summary(latest, ledger.categories)).font(.caption).foregroundStyle(.llDim)
+                            Text(ActionFeeds.summary(latest, ledger.categories)).font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                 } header: {
@@ -736,11 +736,11 @@ struct TimeLedgerView: View {
                 }
                 if !ledger.method.isEmpty {
                     Section("数え方") {
-                        Text(ledger.method).font(.caption).foregroundStyle(.llDim)
+                        Text(ledger.method).font(.caption).foregroundStyle(LL.dim)
                     }
                 }
             } else {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(.llDim)
+                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
             }
         }
         .navigationTitle("時間の家計簿")

@@ -435,7 +435,7 @@ struct CoachSection: View {
                 }
                 if coach.good == nil && coach.improve == nil {
                     Text("この日は選べませんでした（自分の発言が少ない日か、Claude を使えなかった日です）。")
-                        .font(.caption).foregroundStyle(.llDim)
+                        .font(.caption).foregroundStyle(LL.dim)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("直近 7 日").font(.caption.bold())
@@ -448,10 +448,10 @@ struct CoachSection: View {
                         Label("話す練習の題材 \(coach.seeds) 件", systemImage: "figure.wave")
                             .font(.caption)
                         if let first = coach.firstSeed {
-                            Text("最初の題: " + first).font(.caption2).foregroundStyle(.llDim)
+                            Text("最初の題: " + first).font(.caption2).foregroundStyle(LL.dim)
                         }
                         Text("家の PC で「話す練習（rehearse）」を開くと、実際の相手の物差しで 30 秒×3 本の練習ができます。")
-                            .font(.caption2).foregroundStyle(.llDim)
+                            .font(.caption2).foregroundStyle(LL.dim)
                     }
                 }
             } header: {
@@ -462,7 +462,7 @@ struct CoachSection: View {
             .task { await book.refresh(pipeline.homePC) }
         } else if pipeline.homePC.features.contains("coach") {
             Section("今夜のコーチ") {
-                Text("家の PC がまだ作っていません（毎晩 23 時ごろに作ります）。").font(.caption).foregroundStyle(.llDim)
+                Text("家の PC がまだ作っていません（毎晩 23 時ごろに作ります）。").font(.caption).foregroundStyle(LL.dim)
             }
             .task { await book.refresh(pipeline.homePC) }
         }
@@ -478,11 +478,11 @@ struct CoachSection: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption.bold()).foregroundStyle(color)
             Text("「" + m.text + "」").font(.callout)
-            if !m.why.isEmpty { Text(m.why).font(.caption).foregroundStyle(.llDim) }
+            if !m.why.isEmpty { Text(m.why).font(.caption).foregroundStyle(LL.dim) }
             if !m.better.isEmpty { Text("言い直すなら: " + m.better).font(.caption) }
             HStack(spacing: 12) {
                 Text(CoachFeeds.when(m.time) + (m.conversation.map { "・" + $0 } ?? ""))
-                    .font(.caption2).foregroundStyle(.llDim)
+                    .font(.caption2).foregroundStyle(LL.dim)
                 if let audio = m.audio, let offset = m.offset {
                     Button {
                         Task {
@@ -522,7 +522,7 @@ struct TensionLookBackSection: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Label("緊張した場面", systemImage: "heart.text.square")
-                        Text(TensionLookBackSection.summary(tension)).font(.caption).foregroundStyle(.llDim)
+                        Text(TensionLookBackSection.summary(tension)).font(.caption).foregroundStyle(LL.dim)
                     }
                 }
             }
@@ -551,7 +551,7 @@ struct TensionView: View {
             if let t = book.tension {
                 Section {
                     if t.items.isEmpty {
-                        Text("この 7 日は、はっきり上がった時刻はありませんでした。").font(.caption).foregroundStyle(.llDim)
+                        Text("この 7 日は、はっきり上がった時刻はありませんでした。").font(.caption).foregroundStyle(LL.dim)
                     }
                     ForEach(t.items) { item in
                         row(item)
@@ -596,7 +596,7 @@ struct TensionView: View {
                 Spacer()
                 Text("\(item.peak)（ふだん \(item.baseline)・+\(item.peak - item.baseline)）")
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.llDim)
+                    .foregroundStyle(LL.dim)
             }
             if let talk = item.talk {
                 if !talk.title.isEmpty { Text(talk.title).font(.caption) }
@@ -604,10 +604,10 @@ struct TensionView: View {
                 let place: String = talk.place
                 if !who.isEmpty || !place.isEmpty {
                     Text([who, place].filter { !$0.isEmpty }.joined(separator: "・"))
-                        .font(.caption2).foregroundStyle(.llDim)
+                        .font(.caption2).foregroundStyle(LL.dim)
                 }
             } else {
-                Text("重なる会話はありませんでした").font(.caption2).foregroundStyle(.llDim)
+                Text("重なる会話はありませんでした").font(.caption2).foregroundStyle(LL.dim)
             }
         }
     }

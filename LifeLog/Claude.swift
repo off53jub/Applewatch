@@ -324,14 +324,14 @@ struct ClaudeSettingsSection: View {
             if let usage, usage.available || usage.calls > 0 {
                 LabeledContent("今月", value: usage.spendText)
                 if !usage.whoText.isEmpty {
-                    Text(usage.whoText).font(.caption).foregroundStyle(.llDim)
+                    Text(usage.whoText).font(.caption).foregroundStyle(LL.dim)
                 }
                 ForEach(usage.purposeRows, id: \.label) { row in
                     LabeledContent(row.label, value: ClaudeUsage.dollars(row.usd))
                         .font(.caption)
                 }
             } else if let problem {
-                Text(problem).font(.caption).foregroundStyle(.llDim)
+                Text(problem).font(.caption).foregroundStyle(LL.dim)
             }
             // 月末の見込み・今日の多い用途・止めた用途（GET /costs。2026-11-15。強化案 37。SettleFeeds.swift）
             if let costs = SettleBook.shared.costs {

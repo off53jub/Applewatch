@@ -22,10 +22,10 @@ struct VoiceCapture: View {
                 .disabled(disabled || pipeline.isRecording)
         }
         if pipeline.isRecording {
-            Text("ライフログの録音を止めてから録ってください。").foregroundStyle(.llDim)
+            Text("ライフログの録音を止めてから録ってください。").foregroundStyle(LL.dim)
         }
         if !status.isEmpty {
-            Text(status).foregroundStyle(.llDim)
+            Text(status).foregroundStyle(LL.dim)
         }
     }
 
@@ -129,6 +129,35 @@ struct PeopleView: View {
             .sorted { $0.seconds > $1.seconds }
     }
 
+    @ViewBuilder
+    private func tailSections() -> some View {
+            let hidden = pipeline.people.filter { $0.hidden == true }
+            if !hidden.isEmpty {
+                Section {
+                    ForEach(hidden) { row($0) }
+                } header: {
+                    Text("記録に出さない声")
+                } footer: {
+                    Text("この人の声とされた行は、記録にもドキュメントにも書かず、「記録の掃除」の「消した行」に30日間残します。")
+                }
+            }
+            Section {
+                Button(rebuilding ? "作り直しています…" : "記録から人と声を作り直す") {
+                    rebuilding = true
+                    Task {
+                        rebuildResult = await pipeline.rebuildPeople { rebuildResult = $0 }
+                        rebuilding = false
+                    }
+                }
+                .disabled(rebuilding)
+                if !rebuildResult.isEmpty {
+                    Text(rebuildResult).font(.callout).foregroundStyle(LL.dim)
+                }
+            } footer: {
+                Text("覚えている人が消えてしまったときに。これまでの記録に残っている名前（自分を含む）から人を作り直し、その人が話していた録音から声を取り直します。手元に無い録音はドライブから取ってくるので、Wi-Fi のときに。")
+            }
+    }
+
     var body: some View {
         // 中身が大きいので LLList に包まない（2026-11-21。型の決まりが時間切れになった）
         List {
@@ -215,31 +244,8 @@ struct PeopleView: View {
                     Text("名前を付けていない声は、2週間聞かなければ自動で忘れます。")
                 }
             }
-            let hidden = pipeline.people.filter { $0.hidden == true }
-            if !hidden.isEmpty {
-                Section {
-                    ForEach(hidden) { row($0) }
-                } header: {
-                    Text("記録に出さない声")
-                } footer: {
-                    Text("この人の声とされた行は、記録にもドキュメントにも書かず、「記録の掃除」の「消した行」に30日間残します。")
-                }
-            }
-            Section {
-                Button(rebuilding ? "作り直しています…" : "記録から人と声を作り直す") {
-                    rebuilding = true
-                    Task {
-                        rebuildResult = await pipeline.rebuildPeople { rebuildResult = $0 }
-                        rebuilding = false
-                    }
-                }
-                .disabled(rebuilding)
-                if !rebuildResult.isEmpty {
-                    Text(rebuildResult).font(.callout).foregroundStyle(.llDim)
-                }
-            } footer: {
-                Text("覚えている人が消えてしまったときに。これまでの記録に残っている名前（自分を含む）から人を作り直し、その人が話していた録音から声を取り直します。手元に無い録音はドライブから取ってくるので、Wi-Fi のときに。")
-            }
+            // 下の 2 つの節は別の関数に分けた（型の決まりが時間切れになったため。2026-11-21）
+            tailSections()
         }
         .llListBackground()
         .navigationTitle("話した相手")
@@ -309,12 +315,12 @@ struct PeopleView: View {
                     if let list = places.byPerson[person.id], !list.isEmpty {
                         Text(list.prefix(3).map(\.place).joined(separator: "・"))
                             .font(.caption)
-                            .foregroundStyle(.llDim)
+                            .foregroundStyle(LL.dim)
                             .lineLimit(1)
                     }
                     // ▶︎で鳴る声が、いつ何を話したところか（声だけでは分かりにくいので）
                     if let sample = person.samples.last, let info = sampleInfo[sample] {
-                        Text("▶︎「\(info.text)」\(info.caption)").font(.caption).foregroundStyle(.llDim).lineLimit(2)
+                        Text("▶︎「\(info.text)」\(info.caption)").font(.caption).foregroundStyle(LL.dim).lineLimit(2)
                     }
                     // 名前の無い声は、呼ばれた名前を添える
                     if let top = clues[person.id]?.candidates.first {
@@ -406,7 +412,7 @@ struct PersonView: View {
             if person == nil {
                 Section {
                     Text("この声は、もうありません（ほかの人にまとめたか、消した声です）。")
-                        .foregroundStyle(.llDim)
+                        .foregroundStyle(LL.dim)
                 }
             }
             if let person {
@@ -477,11 +483,11 @@ struct PersonView: View {
                                 // どの声を拾ったか分かるよう、その時に話していた文と、いつ・どこか・記録での名前を出す
                                 if let info = sampleInfo[sample] {
                                     Text("「\(info.text)」").lineLimit(3)
-                                    Text(info.caption).font(.caption).foregroundStyle(.llDim)
+                                    Text(info.caption).font(.caption).foregroundStyle(LL.dim)
                                     let elsewhere = info.speakers.filter { $0 != person.displayName }
                                     if !elsewhere.isEmpty {
                                         Text("記録では「\(elsewhere.joined(separator: "」「"))」の行（ほかの人の声を拾っているかもしれません）")
-                                            .font(.caption).foregroundStyle(.llWarn)
+                                            .font(.caption).foregroundStyle(LL.warn)
                                     }
                                     if !elsewhere.isEmpty || info.media {
                                         NavigationLink("見直す") { VoiceReviewView(only: id) }
@@ -490,7 +496,7 @@ struct PersonView: View {
                                 } else {
                                     Text("声のひとこま \(person.samples.count - i)")
                                     if let place = places.byAudio[sample.audio] {
-                                        Text(place).font(.caption).foregroundStyle(.llDim)
+                                        Text(place).font(.caption).foregroundStyle(LL.dim)
                                     }
                                 }
                             }
@@ -538,19 +544,19 @@ struct PersonView: View {
                                     SampleButton(player: player, sample: item.sample, key: "aside-" + item.id)
                                 } else {
                                     // 声の特徴だけを外したもの（聞ける音のひとこまは無い）
-                                    Image(systemName: "person.wave.2").foregroundStyle(.llDim).frame(width: 32)
+                                    Image(systemName: "person.wave.2").foregroundStyle(LL.dim).frame(width: 32)
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
                                     if item.hasClip {
                                         if let info = asideInfo[item.sample] {
                                             Text("「\(info.text)」").lineLimit(3)
-                                            Text(info.caption).font(.caption).foregroundStyle(.llDim)
+                                            Text(info.caption).font(.caption).foregroundStyle(LL.dim)
                                         }
-                                        Text("記録では\(item.reason)だった").font(.caption).foregroundStyle(.llDim)
+                                        Text("記録では\(item.reason)だった").font(.caption).foregroundStyle(LL.dim)
                                     } else {
                                         Text(item.reason).font(.caption)
                                         Text("\(item.at.formatted(date: .abbreviated, time: .shortened))に外した（聞ける音はありません）")
-                                            .font(.caption).foregroundStyle(.llDim)
+                                            .font(.caption).foregroundStyle(LL.dim)
                                     }
                                     Button(item.hasClip ? "この人の声だった（戻す）" : "この人の声だった（\(item.voices.count) 個を戻す）") {
                                         Task {
@@ -578,7 +584,7 @@ struct PersonView: View {
                                 .disabled(removingLines)
                         }
                         if let removedMessage {
-                            Text(removedMessage).font(.footnote).foregroundStyle(.llDim)
+                            Text(removedMessage).font(.footnote).foregroundStyle(LL.dim)
                         }
                     } header: {
                         Text("記録に出さない")
@@ -610,12 +616,12 @@ struct PersonView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("「\(record.sourceName)」を戻す")
                                 Text("\(Self.mergeDate.string(from: record.date)) に\(record.automatic == true ? "自動で" : "")まとめた・\(record.lines.count) 行")
-                                    .font(.caption).foregroundStyle(.llDim)
+                                    .font(.caption).foregroundStyle(LL.dim)
                             }
                         }
                     }
                     NavigationLink("ドキュメントの履歴から探す") { PastMergesView(target: id) }
-                    if let undoMessage { Text(undoMessage).font(.footnote).foregroundStyle(.llDim) }
+                    if let undoMessage { Text(undoMessage).font(.footnote).foregroundStyle(LL.dim) }
                 } header: {
                     Text("まとめた人を分け直す")
                 } footer: {
@@ -785,7 +791,7 @@ struct PastMergesView: View {
             Section {
                 Button(working ? "探しています…" : (searched ? "もう一度探す" : "探す")) { search() }
                     .disabled(working)
-                if let status { Text(status).font(.footnote).foregroundStyle(.llDim) }
+                if let status { Text(status).font(.footnote).foregroundStyle(LL.dim) }
             } footer: {
                 Text("いま「\(targetName)」になっている行のうち、ドライブの日ごとのドキュメントの前の版で「人物N」だった行を、番号ごとに集めます。行の話者を手で直したところも混ざるので、中身を見て選んでください。記録はまだ変えません。")
             }
@@ -793,12 +799,12 @@ struct PastMergesView: View {
                 Section {
                     ForEach(Array(past.lines.prefix(4).enumerated()), id: \.offset) { _, item in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(Self.lineTime.string(from: item.line.time)).font(.caption).foregroundStyle(.llDim)
+                            Text(Self.lineTime.string(from: item.line.time)).font(.caption).foregroundStyle(LL.dim)
                             Text(item.line.text).lineLimit(2)
                         }
                     }
                     if past.lines.count > 4 {
-                        Text("ほか \(past.lines.count - 4) 行").font(.caption).foregroundStyle(.llDim)
+                        Text("ほか \(past.lines.count - 4) 行").font(.caption).foregroundStyle(LL.dim)
                     }
                     Button("「\(past.name)」に戻す") { confirming = past }
                         .disabled(working)
@@ -879,7 +885,7 @@ struct PersonPicker: View {
                                 // どこで聞いた声か（名前の無い声を見分ける手がかり）
                                 if let list = places.byPerson[p.id], !list.isEmpty {
                                     Text(list.prefix(3).map(\.place).joined(separator: "・"))
-                                        .font(.caption).foregroundStyle(.llDim)
+                                        .font(.caption).foregroundStyle(LL.dim)
                                 }
                             }
                         }
@@ -951,7 +957,7 @@ struct SpeakerFixView: View {
         NavigationStack {
             VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(line.speaker.map { "いま: \($0)" } ?? "いま: 話者なし").font(.caption).foregroundStyle(.llDim)
+                Text(line.speaker.map { "いま: \($0)" } ?? "いま: 話者なし").font(.caption).foregroundStyle(LL.dim)
                 Text(line.text).lineLimit(3)
                 Picker("直す範囲", selection: $scope) {
                     Text("この行だけ").tag(Pipeline.SpeakerFix.line)
@@ -961,7 +967,7 @@ struct SpeakerFixView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                Text(scopeHint).font(.caption).foregroundStyle(.llDim)
+                Text(scopeHint).font(.caption).foregroundStyle(LL.dim)
             }
             .padding(.horizontal)
             PersonPicker(exclude: line.speakerID, context: context) { id in apply(id) }
@@ -1050,10 +1056,10 @@ struct SelfMergeView: View {
                                     Text(person.displayName)
                                     Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))"
                                          + (workOnly ? "・職場で \(workLines[person.id] ?? 0) 行" : ""))
-                                        .font(.caption).foregroundStyle(.llDim)
+                                        .font(.caption).foregroundStyle(LL.dim)
                                     if let sample = person.samples.last, let info = sampleInfo[sample] {
                                         Text("▶︎「\(info.text)」\(info.caption)")
-                                            .font(.caption).foregroundStyle(.llDim).lineLimit(2)
+                                            .font(.caption).foregroundStyle(LL.dim).lineLimit(2)
                                     }
                                 }
                                 Spacer()
@@ -1147,7 +1153,7 @@ struct UnnamedVoicesView: View {
                         }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.lines.last?.text ?? "").lineLimit(2)
-                            Text(dayCaption(item, talks)).font(.caption).foregroundStyle(.llDim)
+                            Text(dayCaption(item, talks)).font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                     if working == item.person.id {

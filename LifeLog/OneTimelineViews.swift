@@ -28,10 +28,10 @@ struct TimelineRowLine: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(OneTimeline.timeLabel(row))
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.llDim)
+                .foregroundStyle(LL.dim)
             Image(systemName: OneTimeline.laneIcon(row.lane))
                 .font(.caption)
-                .foregroundStyle(.llDim)
+                .foregroundStyle(LL.dim)
                 .frame(width: 18)
                 .accessibilityLabel(row.lane)
             Text(row.text)
@@ -41,7 +41,7 @@ struct TimelineRowLine: View {
             if let detail = OneTimeline.detail(row) {
                 Text(detail)
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.llDim)
+                    .foregroundStyle(LL.dim)
                     .lineLimit(1)
             }
         }
@@ -57,7 +57,7 @@ struct TimelineNoteSection: View {
     var body: some View {
         if let note = pipeline.oneTimeline.note(for: day) {
             Section {
-                Text(note).font(.caption).foregroundStyle(.llDim)
+                Text(note).font(.caption).foregroundStyle(LL.dim)
             }
         }
     }
@@ -105,16 +105,16 @@ struct PayPayShotView: View {
                 if let progress {
                     HStack(spacing: 8) {
                         ProgressView()
-                        Text(progress).foregroundStyle(.llDim)
+                        Text(progress).foregroundStyle(LL.dim)
                     }
                 }
                 if !canRead {
                     Text("家の PC につながっていて、家の PC が新しい版（Claude が使えるとき）だと選べます。")
                         .font(.footnote)
-                        .foregroundStyle(.llDim)
+                        .foregroundStyle(LL.dim)
                 }
                 ForEach(Array(notes.enumerated()), id: \.offset) { _, note in
-                    Text(note).font(.footnote).foregroundStyle(.llDim)
+                    Text(note).font(.footnote).foregroundStyle(LL.dim)
                 }
             } footer: {
                 Text("写真は家の PC に1枚ずつ送り、読み終えたら捨てます（この iPhone の写真はそのまま。PC にも残しません）。")
@@ -248,7 +248,7 @@ private struct PayShotRowEditor: View {
             HStack {
                 Toggle(isOn: $checked) {
                     HStack(spacing: 6) {
-                        Text(PayShotRowEditor.when(row)).font(.caption.monospacedDigit()).foregroundStyle(.llDim)
+                        Text(PayShotRowEditor.when(row)).font(.caption.monospacedDigit()).foregroundStyle(LL.dim)
                         if known {
                             Text("もうある")
                                 .font(.caption2.bold())
@@ -265,10 +265,10 @@ private struct PayShotRowEditor: View {
                 TextField("金額", value: $row.amount, format: .number)
                     .keyboardType(.numberPad)
                     .font(.callout.monospacedDigit())
-                Text("円").foregroundStyle(.llDim)
+                Text("円").foregroundStyle(LL.dim)
                 if !row.method.isEmpty {
                     Spacer()
-                    Text(row.method).font(.caption).foregroundStyle(.llDim)
+                    Text(row.method).font(.caption).foregroundStyle(LL.dim)
                 }
             }
         }
@@ -320,7 +320,7 @@ struct ReflectionView: View {
                             .padding(.vertical, 4)
                     }
                 } else {
-                    Text("まだありません").foregroundStyle(.llDim)
+                    Text("まだありません").foregroundStyle(LL.dim)
                 }
             } header: {
                 if let generated = table?.generated_at, let date = AppFeeds.parseTime(generated) {
@@ -350,7 +350,7 @@ private struct ReflectionGrid: View {
                 }
             }
             .font(.caption.bold())
-            .foregroundStyle(.llDim)
+            .foregroundStyle(LL.dim)
             ForEach(table.elements) { e in
                 ReflectionGridRow(element: e, today: today, entry: entry)
             }

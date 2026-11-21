@@ -280,7 +280,7 @@ private struct TodayView: View {
                 .accessibilityLabel(pipeline.liveOn ? "ライブ字幕（オン）" : "ライブ字幕")
             }
             if let line = barNote() {
-                Text(line).font(.caption).foregroundStyle(.llDim).lineLimit(1)
+                Text(line).font(.caption).foregroundStyle(LL.dim).lineLimit(1)
             }
         }
         .padding(.horizontal)
@@ -346,24 +346,24 @@ private struct TodayView: View {
             Section("気をつけること") {
                 DecisionDueRows(items: decisionsDue)
                 if let pcQuiet {
-                    Label(pcQuiet, systemImage: "exclamationmark.triangle").foregroundStyle(.llWarn)
+                    Label(pcQuiet, systemImage: "exclamationmark.triangle").foregroundStyle(LL.warn)
                 }
                 if let sign {
                     // 無料の署名は7日で切れ、切れるとアプリが起動しなくなって録音が止まる
                     Label("署名の期限 \(sign)。切れる前に Sideloadly で入れ直してください（記録は消えません）",
                           systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.llWarn)
+                        .foregroundStyle(LL.warn)
                 }
                 if held {
                     Label("録音を休む場所にいるので、書くのを休んでいます", systemImage: "pause.circle")
-                        .foregroundStyle(.llWarn)
+                        .foregroundStyle(LL.warn)
                 }
                 ForEach(stale) { item in
-                    Label(AppFeeds.freshLine(item), systemImage: "exclamationmark.triangle").foregroundStyle(.llWarn)
+                    Label(AppFeeds.freshLine(item), systemImage: "exclamationmark.triangle").foregroundStyle(LL.warn)
                 }
                 if noLogin {
                     Text("右上の歯車（設定）で Google にログインすると、ドキュメントに書き始めます。")
-                        .foregroundStyle(.llDim)
+                        .foregroundStyle(LL.dim)
                 }
             }
         }
@@ -376,7 +376,7 @@ private struct TodayView: View {
             DisclosureGroup(isExpanded: $recordOpen) {
                 talkRows(today: today, talks: talks)
                 recentRows()
-                Text("いまの様子").font(.caption.bold()).foregroundStyle(.llDim)
+                Text("いまの様子").font(.caption.bold()).foregroundStyle(LL.dim)
                 statusRows()
             } label: {
                 LabeledContent("今日の記録", value: summary)
@@ -387,20 +387,20 @@ private struct TodayView: View {
     @ViewBuilder
     private func talkRows(today: String, talks: [ConversationLog.Conversation]) -> some View {
         if talks.isEmpty {
-            Text("今日の会話はまだありません。録音すると、話の切れ目ごとにここに出ます。").foregroundStyle(.llDim)
+            Text("今日の会話はまだありません。録音すると、話の切れ目ごとにここに出ます。").foregroundStyle(LL.dim)
         } else {
             NavigationLink {
                 DayView(day: today)
             } label: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("今日の会話").font(.caption.bold()).foregroundStyle(.llDim)
+                    Text("今日の会話").font(.caption.bold()).foregroundStyle(LL.dim)
                     ForEach(Array(talks.suffix(8).reversed().enumerated()), id: \.offset) { _, c in
                         Text(ConversationLog.headingText(c))
                             .font(.callout)
                             .lineLimit(2)
                     }
                     if talks.count > 8 {
-                        Text("ほか \(talks.count - 8) 件").font(.caption).foregroundStyle(.llDim)
+                        Text("ほか \(talks.count - 8) 件").font(.caption).foregroundStyle(LL.dim)
                     }
                 }
             }
@@ -411,7 +411,7 @@ private struct TodayView: View {
     private func recentRows() -> some View {
         let lines: [String] = Array(pipeline.lastLines.suffix(8).reversed())
         if !lines.isEmpty {
-            Text("最近の発言").font(.caption.bold()).foregroundStyle(.llDim)
+            Text("最近の発言").font(.caption.bold()).foregroundStyle(LL.dim)
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 Text(line).font(.callout)
             }
@@ -444,7 +444,7 @@ private struct TodayView: View {
             LabeledContent("直近の文字起こし", value: pipeline.lastEngine)
         }
         if !pipeline.message.isEmpty {
-            Text(pipeline.message).foregroundStyle(.llDim)
+            Text(pipeline.message).foregroundStyle(LL.dim)
         }
     }
 }
@@ -508,7 +508,7 @@ private struct LiveView: View {
                     set: { on in Task { await pipeline.setLive(on) } })) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("ライブ字幕").font(.headline)
-                        Text(statusText(live)).font(.caption).foregroundStyle(.llDim)
+                        Text(statusText(live)).font(.caption).foregroundStyle(LL.dim)
                     }
                 }
                 .padding()
@@ -520,7 +520,7 @@ private struct LiveView: View {
                                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                                     Text(line.time.formatted(date: .omitted, time: .shortened))
                                         .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.llDim)
+                                        .foregroundStyle(LL.dim)
                                     // ライブの文は仮（2026-11-06）。タスク・要約・記録には使わず、記録には多数決のあとの確定した文が入る
                                     Text("仮").font(.caption2).padding(.horizontal, 4)
                                         .background(LL.dim.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
@@ -642,7 +642,7 @@ private struct DaysPage: View {
                                 Text(item.what)
                                 Text([item.from, item.due.map { Pipeline.taskDueText($0) }, item.state == .done ? "済み" : nil]
                                     .compactMap { $0 }.joined(separator: "・"))
-                                    .font(.caption).foregroundStyle(.llDim)
+                                    .font(.caption).foregroundStyle(LL.dim)
                             }
                         }
                     }
@@ -680,7 +680,7 @@ private struct DaysPage: View {
                 }
                 Section("日ごと") {
                     if days.isEmpty {
-                        Text("文字起こしが終わると、ここに日ごとに出てきます。").foregroundStyle(.llDim)
+                        Text("文字起こしが終わると、ここに日ごとに出てきます。").foregroundStyle(LL.dim)
                     }
                     ForEach(days, id: \.self) { day in
                         NavigationLink(day) { DayView(day: day) }
@@ -891,7 +891,7 @@ private struct SettingsView: View {
                 }
             }
             .disabled(pipeline.email == nil)
-            if let exportNote { Text(exportNote).font(.caption).foregroundStyle(.llDim) }
+            if let exportNote { Text(exportNote).font(.caption).foregroundStyle(LL.dim) }
         } header: {
             Text("控えと掃除")
         } footer: {
@@ -966,7 +966,7 @@ private struct DetailedSettingsView: View {
                     NavigationLink("有料の票（ElevenLabs）") { PaidVoteView() }
                     Toggle("日付と時刻を日本時間で（海外にいるとき）", isOn: $japanTime)
                     if japanTime != Storage.japanTimeApplied {
-                        Text("アプリを一度終えて開き直すと変わります。").font(.caption).foregroundStyle(.llWarn)
+                        Text("アプリを一度終えて開き直すと変わります。").font(.caption).foregroundStyle(LL.warn)
                     }
                 } header: {
                     Text("守り")
@@ -998,7 +998,7 @@ private struct DetailedSettingsView: View {
                         }
                         .disabled(pipeline.sync.running || pipeline.email == nil)
                         if let problem = pipeline.sync.problem {
-                            Text(problem).font(.footnote).foregroundStyle(.llDanger)
+                            Text(problem).font(.footnote).foregroundStyle(LL.danger)
                         }
                     }
                 } header: {

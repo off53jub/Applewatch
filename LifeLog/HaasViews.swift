@@ -23,7 +23,7 @@ struct HaasView: View {
                 case .ready:
                     Toggle("Haas-ja で文字起こし", isOn: Binding(get: { haas.enabled }, set: { haas.enabled = $0 }))
                 case .failed(let reason):
-                    Text("うまくいきませんでした: \(reason)").foregroundStyle(.llDim)
+                    Text("うまくいきませんでした: \(reason)").foregroundStyle(LL.dim)
                     Button("もう一度ダウンロード") { Task { await haas.download() } }
                 }
             } footer: {
@@ -89,14 +89,14 @@ struct HomePCView: View {
                 Toggle("時計から家の PC に直接送る", isOn: $pc.watchDirect)
                 // いまの道（PC の外の道があるか。2026-11-07。WatchDirect.swift）
                 if let route = pc.watchRouteText {
-                    Text(route).font(.caption).foregroundStyle(.llDim)
+                    Text(route).font(.caption).foregroundStyle(LL.dim)
                 }
                 TextField("家の中の住所（例: 192.168.1.20）", text: $pc.homeAddress)
                     .keyboardType(.numbersAndPunctuation)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 if let problem = pc.homeAddressProblem {
-                    Text(problem).font(.caption).foregroundStyle(.llWarn)
+                    Text(problem).font(.caption).foregroundStyle(LL.warn)
                 }
                 // 時計の音声は、時計からではなく家の PC から受け取る（2026-11-15。強化案 64。PCRelay.swift）
                 if pc.watchDirect {
@@ -104,7 +104,7 @@ struct HomePCView: View {
                     if pc.watchRelay {
                         Toggle("モバイル通信でも受け取る", isOn: $pc.relayCellular)
                         Text("時計は、家の PC に届いた区切りを iPhone には送らずに待ち、iPhone が PC から音声を受け取ります（時計が同じ音声を2回送らずに済むので、時計の電池と、届くまでの遅れが減ります）。20分たっても受け取れなければ、今までどおり時計から届きます。モバイル通信でも受け取ると、外にいるあいだ1時間に15MBほど使います。オフなら Wi-Fi のときだけ受け取ります。")
-                            .font(.caption).foregroundStyle(.llDim)
+                            .font(.caption).foregroundStyle(LL.dim)
                     }
                 }
             } header: {
@@ -135,7 +135,7 @@ struct HomePCView: View {
                     Text(result).font(.callout).textSelection(.enabled)
                 }
                 if !pc.lastResult.isEmpty {
-                    Text(pc.lastResult).font(.caption).foregroundStyle(.llDim)
+                    Text(pc.lastResult).font(.caption).foregroundStyle(LL.dim)
                 }
             }
             .disabled(working)

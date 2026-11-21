@@ -44,7 +44,7 @@ struct WorkDigestListView: View {
                 .onChange(of: remindMinute) { pipeline.scheduleWorkDigestReminder() }
             }
             if let note {
-                Section { Text(note).font(.footnote).foregroundStyle(.llDim) }
+                Section { Text(note).font(.footnote).foregroundStyle(LL.dim) }
             }
             // 週ごと・案件ごとに読む（2026-11-10。言語モデルは使わない）
             if !groups.isEmpty {
@@ -67,7 +67,7 @@ struct WorkDigestListView: View {
                 }
             }
             if groups.isEmpty {
-                Section { Text("まだありません").foregroundStyle(.llDim) }
+                Section { Text("まだありません").foregroundStyle(LL.dim) }
             }
             ForEach(groups, id: \.day) { group in
                 Section {
@@ -113,7 +113,7 @@ struct WorkDigestRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(headline).lineLimit(2)
-            Text(caption).font(.caption).foregroundStyle(.llDim)
+            Text(caption).font(.caption).foregroundStyle(LL.dim)
         }
     }
 
@@ -165,7 +165,7 @@ struct WorkDigestDetailView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.element.text).textSelection(.enabled)
                                 if !item.element.source.isEmpty {
-                                    Text("出どころ: " + item.element.source).font(.caption).foregroundStyle(.llDim)
+                                    Text("出どころ: " + item.element.source).font(.caption).foregroundStyle(LL.dim)
                                 }
                             }
                         }
@@ -222,7 +222,7 @@ struct WorkDigestImportView: View {
                     UIPasteboard.general.string = WorkDigestPrompt.full(day: TaskBook.dayFormat.string(from: date))
                     promptCopied = "コピーしました。職場の Claude に貼ってください。"
                 }
-                if let promptCopied { Text(promptCopied).font(.footnote).foregroundStyle(.llDim) }
+                if let promptCopied { Text(promptCopied).font(.footnote).foregroundStyle(LL.dim) }
             } header: {
                 Text("まず、職場の Claude に聞く")
             } footer: {
@@ -244,7 +244,7 @@ struct WorkDigestImportView: View {
                     HStack { ProgressView(); Text(reading) }
                 }
                 if let problem {
-                    Text(problem).foregroundStyle(.llDanger)
+                    Text(problem).foregroundStyle(LL.danger)
                 }
             } header: {
                 Text("読み取る")

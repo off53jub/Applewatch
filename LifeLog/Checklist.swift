@@ -133,7 +133,7 @@ struct ChecklistView: View {
             let left: [Checklist.Item] = Checklist.items.filter { finished[$0.id] == nil }
             let ended: [Checklist.Item] = Checklist.items.filter { finished[$0.id] != nil }
             Section {
-                if left.isEmpty { Text("全部確かめました").foregroundStyle(.llDim) }
+                if left.isEmpty { Text("全部確かめました").foregroundStyle(LL.dim) }
                 ForEach(left) { item in row(item) }
             } header: {
                 Text("まだ（\(left.count)）")
@@ -165,12 +165,12 @@ struct ChecklistView: View {
                 HStack {
                     Text(item.title).foregroundStyle(.primary)
                     Spacer()
-                    Image(systemName: open == item.id ? "chevron.up" : "chevron.down").foregroundStyle(.llDim)
+                    Image(systemName: open == item.id ? "chevron.up" : "chevron.down").foregroundStyle(LL.dim)
                 }
             }
             .buttonStyle(.borderless)
             if open == item.id {
-                Text(item.how).font(.callout).foregroundStyle(.llDim)
+                Text(item.how).font(.callout).foregroundStyle(LL.dim)
                 HStack(spacing: 20) {
                     Button("確かめた", systemImage: "checkmark") { set(item.id, true) }
                     Button("動かなかった", systemImage: "xmark", role: .destructive) { set(item.id, false) }

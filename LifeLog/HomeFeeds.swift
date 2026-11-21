@@ -918,9 +918,9 @@ struct ProposalCard: View {
                 Spacer(minLength: 8)
                 if let past {
                     Text(ProposalRules.answerLabel(past.answer) + "・" + AppFeeds.shortTime(past.at))
-                        .font(.caption2).foregroundStyle(.llDim)
+                        .font(.caption2).foregroundStyle(LL.dim)
                 } else if let created = AppFeeds.parseTime(proposal.created) {
-                    Text(AppFeeds.shortTime(created)).font(.caption2).foregroundStyle(.llDim)
+                    Text(AppFeeds.shortTime(created)).font(.caption2).foregroundStyle(LL.dim)
                 }
             }
             Text(proposal.title).font(.headline)
@@ -928,10 +928,10 @@ struct ProposalCard: View {
                 Text(proposal.body).font(.callout)
             }
             ForEach(Array(proposal.evidence.enumerated()), id: \.offset) { _, e in
-                Text(ProposalRules.evidenceLine(e)).font(.caption).foregroundStyle(.llDim)
+                Text(ProposalRules.evidenceLine(e)).font(.caption).foregroundStyle(LL.dim)
             }
             if past == nil, let action = ProposalRules.actionLine(proposal) {
-                Text(action).font(.caption).foregroundStyle(.llDim)
+                Text(action).font(.caption).foregroundStyle(LL.dim)
             }
             if let onAnswer {
                 HStack(spacing: 8) {
@@ -968,7 +968,7 @@ struct ProposalCardsSection: View {
                         .onAppear { book.noteShown([p.id]) }
                 }
                 if let note {
-                    Text(note).font(.caption).foregroundStyle(.llDim)
+                    Text(note).font(.caption).foregroundStyle(LL.dim)
                 }
                 NavigationLink("提案をすべて見る") { ProposalsView() }
             } header: {
@@ -1003,13 +1003,13 @@ struct ProposalsView: View {
         LLList {
             Section {
                 if open.isEmpty {
-                    Text("いまは提案はありません").foregroundStyle(.llDim)
+                    Text("いまは提案はありません").foregroundStyle(LL.dim)
                 }
                 ForEach(open) { p in
                     ProposalCard(proposal: p, busy: working == p.id) { answer in act(p, answer) }
                 }
                 if let note {
-                    Text(note).font(.caption).foregroundStyle(.llDim)
+                    Text(note).font(.caption).foregroundStyle(LL.dim)
                 }
             } header: {
                 Text("まだ答えていない（\(open.count)）")
@@ -1022,7 +1022,7 @@ struct ProposalsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(p.title)
                             if let until = book.local.laterUntil[p.id] {
-                                Text(AppFeeds.shortTime(until) + " にまた出します").font(.caption).foregroundStyle(.llDim)
+                                Text(AppFeeds.shortTime(until) + " にまた出します").font(.caption).foregroundStyle(LL.dim)
                             }
                         }
                     }
@@ -1116,7 +1116,7 @@ struct PlaudFillSpanRow: View {
             }
             ForEach(Array(shown.enumerated()), id: \.offset) { _, line in
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(HomeFeeds.fillLineHead(line)).font(.caption.monospacedDigit()).foregroundStyle(.llDim)
+                    Text(HomeFeeds.fillLineHead(line)).font(.caption.monospacedDigit()).foregroundStyle(LL.dim)
                     Text(line.text).font(.callout)
                 }
             }
@@ -1138,7 +1138,7 @@ struct PlaudFillSpanView: View {
             Section {
                 ForEach(Array(span.lines.enumerated()), id: \.offset) { _, line in
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(HomeFeeds.fillLineHead(line)).font(.caption.monospacedDigit()).foregroundStyle(.llDim)
+                        Text(HomeFeeds.fillLineHead(line)).font(.caption.monospacedDigit()).foregroundStyle(LL.dim)
                         Text(line.text).textSelection(.enabled)
                     }
                 }
@@ -1172,9 +1172,9 @@ struct SpeakerDoubtRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline) {
-                Text(HomeFeeds.doubtWhen(doubt)).font(.caption.monospacedDigit()).foregroundStyle(.llDim)
+                Text(HomeFeeds.doubtWhen(doubt)).font(.caption.monospacedDigit()).foregroundStyle(LL.dim)
                 Spacer(minLength: 8)
-                Text(HomeFeeds.whyLabel(doubt.why)).font(.caption2).foregroundStyle(.llDim)
+                Text(HomeFeeds.whyLabel(doubt.why)).font(.caption2).foregroundStyle(LL.dim)
             }
             Text("「\(doubt.text_head)」").lineLimit(2)
             Text("今は「\(doubt.current)」→ \(HomeFeeds.suggestLabel(doubt.suggest))")
@@ -1182,7 +1182,7 @@ struct SpeakerDoubtRow: View {
                 .foregroundStyle(doubt.suggest == "self" ? LL.accent : LL.warn)
             if doubt.sure == true {
                 Text(NightReviewRules.sureLabel(doubt.sure_why))
-                    .font(.caption2).foregroundStyle(.llDim)
+                    .font(.caption2).foregroundStyle(LL.dim)
             }
         }
     }
@@ -1197,7 +1197,7 @@ struct SpeakerDoubtsView: View {
         LLList {
             Section {
                 if list.isEmpty {
-                    Text("確かめるものはありません").foregroundStyle(.llDim)
+                    Text("確かめるものはありません").foregroundStyle(LL.dim)
                 }
                 SpeakerDoubtBulkRow()
                 ForEach(list) { d in
@@ -1238,7 +1238,7 @@ struct SpeakerDoubtView: View {
                     lineRows(spot)
                 } else if looked {
                     Text("この時刻（前後\(Int(HomeFeeds.doubtTolerance))秒）の行が、この端末の記録に見つかりませんでした。")
-                        .foregroundStyle(.llDim)
+                        .foregroundStyle(LL.dim)
                 } else {
                     ProgressView()
                 }

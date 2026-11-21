@@ -660,7 +660,7 @@ struct CheckupsView: View {
             }
             if list.isEmpty {
                 Section {
-                    Text("今日の答え合わせは、ここまでです。").foregroundStyle(.llDim)
+                    Text("今日の答え合わせは、ここまでです。").foregroundStyle(LL.dim)
                 } footer: {
                     Text("1 日 5 問までです。答えると、次から同じ所・同じ人に使います。")
                 }
@@ -697,14 +697,14 @@ struct CheckupCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(item.title).font(.headline)
                 if !item.detail.isEmpty {
-                    Text(item.detail).font(.caption).foregroundStyle(.llDim)
+                    Text(item.detail).font(.caption).foregroundStyle(LL.dim)
                 }
                 if item.source == "night" {
-                    Text("夜に見つけた繋がりの候補です").font(.caption2).foregroundStyle(.llDim)
+                    Text("夜に見つけた繋がりの候補です").font(.caption2).foregroundStyle(LL.dim)
                 }
             }
             if let note {
-                Text(note).font(.footnote).foregroundStyle(.llDim)
+                Text(note).font(.footnote).foregroundStyle(LL.dim)
             } else if busy {
                 HStack { ProgressView(); Text("送っています…") }
             } else if item.kind == "place_unnamed" {
@@ -742,7 +742,7 @@ struct UnnamedPlacesView: View {
         let stays: [UnnamedStay] = CheckupBook.shared.unknownStays()
         LLList {
             if stays.isEmpty {
-                Text("名前のない所は、もうありません。").foregroundStyle(.llDim)
+                Text("名前のない所は、もうありません。").foregroundStyle(LL.dim)
             }
             ForEach(stays) { stay in
                 Section {

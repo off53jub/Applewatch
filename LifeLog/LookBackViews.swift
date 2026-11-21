@@ -35,7 +35,7 @@ struct LookBackTab: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Label("いいこと帳", systemImage: "hand.thumbsup")
                             Text("家の PC の LifeLog PC がいいこと帳を作れるようになると、ここから開けます（お礼・ほめ言葉・済ませたこと）。")
-                                .font(.caption).foregroundStyle(.llDim)
+                                .font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                     NavigationLink {
@@ -68,7 +68,7 @@ struct LookBackTab: View {
                         }
                     } else {
                         Text("「タスク」の上の「仕事のまとめ」に取り込むと、週のまとめと案件ごとの流れが読めます。")
-                            .font(.callout).foregroundStyle(.llDim)
+                            .font(.callout).foregroundStyle(LL.dim)
                     }
                     NavigationLink {
                         TaskScoreView()

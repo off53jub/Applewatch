@@ -302,7 +302,7 @@ struct WordCandidateRow: View {
                 if !note.isEmpty {
                     Text(note)
                         .font(.caption)
-                        .foregroundStyle(.llDim)
+                        .foregroundStyle(LL.dim)
                 }
             }
             Spacer()

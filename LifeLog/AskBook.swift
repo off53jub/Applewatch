@@ -493,7 +493,7 @@ struct QuestionsView: View {
         LLList {
             if book.open.isEmpty {
                 Section {
-                    Text("今は質問がありません").foregroundStyle(.llDim)
+                    Text("今は質問がありません").foregroundStyle(LL.dim)
                 } footer: {
                     Text("夜（下の時刻）を過ぎると、その日の記録から、AI が合っているか分からないところを\(Pipeline.askPerDay)つまで聞きます。")
                 }
@@ -516,7 +516,7 @@ struct QuestionsView: View {
                     }
                 }
                 .disabled(making)
-                if let madeNote { Text(madeNote).font(.footnote).foregroundStyle(.llDim) }
+                if let madeNote { Text(madeNote).font(.footnote).foregroundStyle(LL.dim) }
             } footer: {
                 Text("押すたびに、まだ聞いていない日を新しい日から1日ずつ読み、\(Pipeline.askPerDay)つまで質問を作ります。押さなくても、処理のたびに少しずつ作ります。")
             }
@@ -589,13 +589,13 @@ private struct QuestionRow: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(question.question).font(.body)
             if let quote = question.quote {
-                Text("「\(quote)」").font(.caption).foregroundStyle(.llDim).lineLimit(4)
+                Text("「\(quote)」").font(.caption).foregroundStyle(LL.dim).lineLimit(4)
             }
             HStack(spacing: 6) {
                 if let time = question.time { Text(AskBook.factDate.string(from: time)) }
                 if let place = question.place { Text(place) }
             }
-            .font(.caption).foregroundStyle(.llDim)
+            .font(.caption).foregroundStyle(LL.dim)
             HStack(spacing: 16) {
                 if let audio = question.audio {
                     let key = "ask-" + question.id
@@ -677,9 +677,9 @@ private struct AnsweredRow: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(question.question).font(.callout)
             switch question.state {
-            case .answered: Text("→ " + (question.answer ?? "")).font(.callout).foregroundStyle(.llAccent)
-            case .skipped: Text("分からない").font(.caption).foregroundStyle(.llDim)
-            case .wrong: Text("的外れな質問").font(.caption).foregroundStyle(.llDim)
+            case .answered: Text("→ " + (question.answer ?? "")).font(.callout).foregroundStyle(LL.accent)
+            case .skipped: Text("分からない").font(.caption).foregroundStyle(LL.dim)
+            case .wrong: Text("的外れな質問").font(.caption).foregroundStyle(LL.dim)
             case .open: EmptyView()
             }
             HStack(spacing: 20) {
@@ -709,14 +709,14 @@ struct FactsView: View {
         let facts = pipeline.asks.facts.sorted { $0.added > $1.added }
         LLList {
             if facts.isEmpty {
-                Text("まだありません。「AI からの質問」に答えると、ここにたまります。").foregroundStyle(.llDim)
+                Text("まだありません。「AI からの質問」に答えると、ここにたまります。").foregroundStyle(LL.dim)
             }
             Section {
                 ForEach(facts) { fact in
                     VStack(alignment: .leading, spacing: 3) {
                         Text(fact.text).font(.callout)
                         Text(fact.kind.label + "・" + AskBook.factDate.string(from: fact.added) + " に答えた")
-                            .font(.caption).foregroundStyle(.llDim)
+                            .font(.caption).foregroundStyle(LL.dim)
                     }
                     .swipeActions {
                         Button("消す", role: .destructive) {

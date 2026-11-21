@@ -1385,7 +1385,7 @@ struct TaskBookView: View {
             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
             .listRowSeparator(.hidden)
             if let note {
-                Section { Text(note).font(.footnote).foregroundStyle(.llDim) }
+                Section { Text(note).font(.footnote).foregroundStyle(LL.dim) }
             }
             if reading {
                 Section { HStack { ProgressView(); Text("写真の文字を読み取っています…") } }
@@ -1627,7 +1627,7 @@ struct TaskBookView: View {
         let homes = Dictionary(grouping: homeExtra(scope)) { OneTaskList.bucket($0, now: .now) }
         let buckets = TaskBook.Bucket.allCases.filter { apps[$0] != nil || homes[$0] != nil }
         if buckets.isEmpty {
-            Section { Text("今やることはありません").foregroundStyle(.llDim) }
+            Section { Text("今やることはありません").foregroundStyle(LL.dim) }
         }
         ForEach(buckets, id: \.self) { bucket in
             let mine = apps[bucket] ?? []
@@ -1660,7 +1660,7 @@ struct TaskBookView: View {
     private func waitingPage(_ book: TaskBook.Lists) -> some View {
         if book.waiting.isEmpty {
             Section {
-                Text("待っているものはありません").foregroundStyle(.llDim)
+                Text("待っているものはありません").foregroundStyle(LL.dim)
             } footer: {
                 Text("人に頼んだこと（会話から拾ったもの・＋の「人に頼んだことを書く」）と、左へ払って「待ち」にしたものがここに並びます。")
             }
@@ -1678,7 +1678,7 @@ struct TaskBookView: View {
         let people = TaskBook.byPerson(book.open)
         if people.isEmpty {
             Section {
-                Text("相手の分かるものはまだありません").foregroundStyle(.llDim)
+                Text("相手の分かるものはまだありません").foregroundStyle(LL.dim)
             } footer: {
                 Text("頼んだ人・頼んだ相手・約束した相手が分かるものを、人ごとにまとめます。")
             }
@@ -1695,7 +1695,7 @@ struct TaskBookView: View {
     @ViewBuilder
     private func donePage(_ book: TaskBook.Lists) -> some View {
         if book.done.isEmpty {
-            Section { Text("30日以内に済んだものはありません").foregroundStyle(.llDim) }
+            Section { Text("30日以内に済んだものはありません").foregroundStyle(LL.dim) }
         } else {
             Section {
                 ForEach(book.done) { item in
@@ -1703,14 +1703,14 @@ struct TaskBookView: View {
                         Button {
                             change(item.id, .open)
                         } label: {
-                            Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.llGood)
+                            Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(LL.good)
                         }
                         .buttonStyle(.borderless)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(item.what).strikethrough().foregroundStyle(.llDim)
+                            Text(item.what).strikethrough().foregroundStyle(LL.dim)
                             if let at = item.doneAt {
                                 Text(at.formatted(date: .abbreviated, time: .shortened) + " に済み")
-                                    .font(.caption).foregroundStyle(.llDim)
+                                    .font(.caption).foregroundStyle(LL.dim)
                             }
                         }
                     }
@@ -1822,7 +1822,7 @@ struct TaskRow: View {
             Button(action: onEdit) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     if item.urgent == true {
-                        Image(systemName: "exclamationmark").foregroundStyle(.llDanger).fontWeight(.bold)
+                        Image(systemName: "exclamationmark").foregroundStyle(LL.danger).fontWeight(.bold)
                     }
                     Text(item.what).foregroundStyle(.primary).multilineTextAlignment(.leading)
                 }
@@ -1840,7 +1840,7 @@ struct TaskRow: View {
                     Text("延期\(n)回").foregroundStyle(n >= 3 ? LL.danger : LL.dim)
                 }
                 if !item.isWork {
-                    Label("仕事以外", systemImage: "house").labelStyle(.titleAndIcon).foregroundStyle(.llGood)
+                    Label("仕事以外", systemImage: "house").labelStyle(.titleAndIcon).foregroundStyle(LL.good)
                 }
             }
             .font(.caption)
@@ -1849,7 +1849,7 @@ struct TaskRow: View {
                     let text = Pipeline.taskDueText(due)
                     Text(text).foregroundStyle(text.hasSuffix("過ぎ") || text == "今日まで" ? LL.danger : LL.warn)
                 } else if let dueText = item.dueText {
-                    Text(dueText).foregroundStyle(.llWarn)
+                    Text(dueText).foregroundStyle(LL.warn)
                 }
                 if let from = item.from {
                     switch item.kindOrDefault {
@@ -1860,13 +1860,13 @@ struct TaskRow: View {
                 }
                 Text(Self.said.string(from: item.said) + "・" + item.originLabel)
             }
-            .font(.caption).foregroundStyle(.llDim)
+            .font(.caption).foregroundStyle(LL.dim)
             // ほかの入り口でも見つかった（会話で拾ったものが、仕事のまとめにもあった など。2026-11-10）
             if let also = item.alsoIn, !also.isEmpty {
-                Label(also + "にもありました", systemImage: "checkmark.seal").font(.caption).foregroundStyle(.llAccent)
+                Label(also + "にもありました", systemImage: "checkmark.seal").font(.caption).foregroundStyle(LL.accent)
             }
             if let quote = item.quote, !quote.isEmpty {
-                Text("「\(quote)」").font(.caption).foregroundStyle(.llDim).lineLimit(3)
+                Text("「\(quote)」").font(.caption).foregroundStyle(LL.dim).lineLimit(3)
             }
             if let memo = item.memo, !memo.isEmpty {
                 Text("メモ: " + memo).font(.caption)
@@ -1897,7 +1897,7 @@ struct TaskRow: View {
                         if let entry = pipeline.workDigests.sorted.first(where: { $0.day == day }) {
                             WorkDigestDetailView(entry: entry)
                         } else {
-                            Text("このまとめは、もうありません。").foregroundStyle(.llDim)
+                            Text("このまとめは、もうありません。").foregroundStyle(LL.dim)
                         }
                     }
                 } else if let day = item.day {
@@ -1954,7 +1954,7 @@ struct TaskEditView: View {
                     ForEach(TaskBook.Repeat.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 if let dueText = item.dueText {
-                    Text("聞いた言い方: \(dueText)").font(.caption).foregroundStyle(.llDim)
+                    Text("聞いた言い方: \(dueText)").font(.caption).foregroundStyle(LL.dim)
                 }
             }
             // 「予定に仮登録」「リマインダーに」（2026-11-15。強化案 58。確かめの画面で押すまで入れない。DraftActions.swift）
@@ -2060,7 +2060,7 @@ struct PersonHistorySection: View {
                 .font(.callout)
             }
             if history.isEmpty {
-                Text("まだありません").foregroundStyle(.llDim)
+                Text("まだありません").foregroundStyle(LL.dim)
             }
             ForEach(Array((showAll ? history : Array(history.prefix(8))).enumerated()), id: \.offset) { _, entry in
                 NavigationLink {
@@ -2069,10 +2069,10 @@ struct PersonHistorySection: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(Self.time.string(from: entry.conversation.start)
                              + (entry.conversation.place.map { "・" + $0 } ?? ""))
-                            .font(.caption).foregroundStyle(.llDim)
+                            .font(.caption).foregroundStyle(LL.dim)
                         Text(entry.conversation.title ?? "（見出しなし）").font(.callout)
                         ForEach(entry.conversation.points.prefix(2), id: \.self) { point in
-                            Text("・" + point).font(.caption).foregroundStyle(.llDim).lineLimit(2)
+                            Text("・" + point).font(.caption).foregroundStyle(LL.dim).lineLimit(2)
                         }
                     }
                 }
