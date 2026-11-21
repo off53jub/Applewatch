@@ -50,8 +50,23 @@ def read_feature_check(base: Path) -> dict:
     return _read(base, FEATURE_CHECK, "検品表")
 
 
+RESULT_OK = {"ok": True, "ng": False}
+
+
 def read_device_checks(base: Path) -> dict:
-    return _read(base, DEVICE_CHECKS, "実機の確かめ")
+    """母艦の {"result": ok|ng|unknown, "evidence", "fix"} に、アプリの読む {"ok": true|false|null, "note"} を足す"""
+    out = _read(base, DEVICE_CHECKS, "実機の確かめ")
+    checks = out.get("checks") if out.get("available") else None
+    if isinstance(checks, list):
+        rows = []
+        for c in checks:
+            if not isinstance(c, dict) or not isinstance(c.get("id"), str) or not isinstance(c.get("name"), str):
+                continue
+            ok = RESULT_OK.get(c.get("result"))
+            note = " ".join(str(x) for x in (c.get("evidence"), None if ok else c.get("fix")) if isinstance(x, str) and x)
+            rows.append({**c, "ok": ok, "note": note[:300]})
+        out["checks"] = rows
+    return out
 
 
 def read_holiday_tags(base: Path) -> dict:

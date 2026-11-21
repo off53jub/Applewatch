@@ -578,6 +578,11 @@ def check_s20feeds() -> int:
         "stats": {"open": 1}}), encoding="utf-8")
     (base / "state" / "holiday" / "tags.json").write_text(json.dumps({"_meta": {}, "2026-11-21": [{"tag": "外食"}]}), encoding="utf-8")
     (base / "reports" / "interview-sheet.html").write_text("<!doctype html><p>甲</p>", encoding="utf-8")
+    (base / "state" / "device_checks.json").write_text(json.dumps({"checks": [
+        {"id": "c1", "name": "n", "result": "ok", "evidence": "e"}, {"id": "c2", "name": "n", "result": "ng", "evidence": "e", "fix": "f"},
+        {"id": "c3", "name": "n", "result": "unknown"}]}), encoding="utf-8")
+    dc = [(c["ok"], c["note"]) for c in s20feeds.read_device_checks(base)["checks"]]
+    failed += say(dc == [(True, "e"), (False, "e f"), (None, "")], "s20 道: 実機の確かめの result を、アプリの読む ok（true・false・null）と note に")
     q = s20feeds.read_review(base)
     failed += say(q["available"] and [i["id"] for i in q["items"]] == ["a1"] and q["stats"]["open"] == 1,
                   "s20 道: 確かめ待ちの列を返す（形の違う行は落とす）")
