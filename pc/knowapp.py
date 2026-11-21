@@ -106,7 +106,9 @@ BUNDLE = (
     ("q-general-7", "general", "text", "迷ったとき、最後は何で決めていますか？"),
     ("q-general-8", "general", "text", "今年いちばん「自分らしかった」と思う日は？"),
 )
-GROUPS = ("general", "notdo", "dislike", "respect", "adult", "ask_friend", "family", "draft", "recheck", "hypothesis")
+GROUPS = ("general", "notdo", "dislike", "respect", "adult", "ask_friend", "family", "draft", "recheck", "hypothesis",
+          "with_people", "speaker_split")  # s20 次13: 「一緒にいた人」（yesno・根拠つき）・次5: 声が集まりすぎた話し手の確かめ
+EXTRA_ANSWERS = ("text", "record", "yesno")
 
 
 def config(base: Path) -> dict:
@@ -312,13 +314,23 @@ def _extra_questions(base: Path) -> list[dict]:
     for x in data["items"][:200]:
         if not isinstance(x, dict):
             continue
-        qid, text = appfeeds._id(x.get("id")), appfeeds._text(x.get("text"), 160)
+        qid, text = appfeeds._id(x.get("id")), appfeeds._text(x.get("text") or x.get("question"), 160)
         group = x.get("group") if x.get("group") in GROUPS else "general"
-        answer = x.get("answer") if x.get("answer") in ("text", "record") else "text"
+        expires = appfeeds._day(x.get("expires"))
+        if expires and expires < datetime.date.today().isoformat():
+            continue  # 14 日で流れる（s20 次3・体15。期限を過ぎた問いは出さない）
+        answer = x.get("answer") if x.get("answer") in EXTRA_ANSWERS else "text"
         if qid and text:
-            out.append({"id": qid, "group": group, "answer": answer, "text": text,
-                        "draft": appfeeds._text(x.get("draft"), 400), "draft_evidence": _evidence(x.get("evidence")),
-                        **_tier(x)})
+            item = {"id": qid, "group": group, "answer": answer, "text": text,
+                    "draft": appfeeds._text(x.get("draft"), 400), "draft_evidence": _evidence(x.get("evidence")),
+                    **_tier(x)}
+            if answer == "yesno":
+                # s20 次13: はい・いいえで答える問い（「一緒にいた人」など）は、根拠を evidence のまま通す（アプリが 1 タップで見せる）
+                item["evidence"] = item.pop("draft_evidence")
+                item["label"] = "見立て（仮）"
+            if expires:
+                item["expires"] = expires
+            out.append(item)
     return out
 
 

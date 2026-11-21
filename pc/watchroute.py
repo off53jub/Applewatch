@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import jobqueue
+import linehook  # s20 追10: POST /line/webhook（LINE の webhook。署名で守る）
 
 WATCH_PORT = 47617
 TOKEN_FILE = "watch-token.txt"
@@ -184,6 +185,9 @@ class WatchHandler(BaseHTTPRequestHandler):
             self.discard_body()
             self.send_json(429, {"error": "しばらく受け付けません"}, {"Retry-After": str(int(LOCK_SECONDS))})
             return
+        if method == "POST" and url.path == linehook.PATH:  # s20 追10: 署名で守る（ふだんの合言葉は使わない）
+            self.line_webhook()
+            return
         if (method, url.path) not in PATHS:
             self.discard_body()
             self.send_json(404, {"error": "not found"})
@@ -198,6 +202,29 @@ class WatchHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"ok": True})
             return
         self.jobs(url.query)
+
+    def line_webhook(self) -> None:
+        """POST /line/webhook: 署名を確かめ、本人の文字だけ母艦の inbox/line_notes.jsonl に足す（中身は linehook.py）"""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length < 0 or length > linehook.BODY_LIMIT:
+            self.send_json(413, {"error": "too large"})
+            return
+        try:
+            body = self.rfile.read(length) if length else b""
+        except OSError:
+            return
+        main = W.main
+        mother = None
+        try:
+            mother = main.mothership.home(main.load_config())
+        except Exception:  # noqa: BLE001 — 母艦が見つからなければ、記録せず返事もしない
+            pass
+        status, answer = linehook.handle(body, self.headers.get("X-Line-Signature"), main.HOME, main.load_config(),
+                                         mother, _log)
+        self.send_json(status, answer)
 
     def jobs(self, query_text: str) -> None:
         """POST /w/jobs: 時計の区切りを預かる（待ち合わせはしない）"""

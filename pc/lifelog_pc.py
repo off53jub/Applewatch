@@ -195,6 +195,7 @@ import priority  # 2026-11-15: この PC の Ollama の優先度を「通常以�
 import load  # 2026-11-15: PC の負荷（CPU の秒・譲った分）を毎日数える（中身は load.py）
 import promises
 import livecoach  # 2026-11-15（強化案 50〜52）: 会議の相棒（その場版）・話し方コーチ・緊張した場面・心拍の分ごとの記録
+import forget  # s20 次11: 時間を選んで記録と音声を消す
 import knowme  # 2026-11-19（s18 の 45・47・63・69〜73・78）: 自分を知ってもらう分（中身は knowme.py ほか）
 import quality  # 2026-11-13（施策 9・10・11）: 品質の記録・夜の流れ・同じ人かも・夜の読み直し（中身は quality.py ほか）
 
@@ -2199,6 +2200,7 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(livecoach.features())
     # GET /people-pages・/threads・/place-pages・/decisions と POST /decisions/answer（2026-11-15。強化案 53・54・55・61。pages.py）
     found.extend(mothership.pages.FEATURES)
+    found.extend(mothership.s20feeds.FEATURES)  # s20: reviewq・featcheck・devchecks・interview・holidaytags（s20feeds.py）
     found.extend(mothership.knowapp.FEATURES)  # s18 自分を知ってもらう（2026-11-19。knowapp.py）
     # GET /canonical?day=（2026-11-15。強化案 57。canonical.py）
     found.extend(mothership.canonical.features())
@@ -2208,6 +2210,7 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(promises.features() + askmother.features(load_config()))  # 2026-11-13（施策 13・15）
     found.append("audioclip")  # 2026-11-16（強化案 130）: GET /audio-clip
     found.extend(placelinks.features())  # 2026-11-16: placenames・checkups・linkfind
+    found.append("forget")  # s20 次11: POST /records/<日>/forget
     found.extend(knowme.features())  # 2026-11-19（s18）: voicetone・honne・voicefix・voicesamples・selfvoice・plauddoubt
     # vad=union を Silero VAD で探すとき（読み込めていなければ、音の大きさで探す）
     if "vad" in _extras:
@@ -3051,6 +3054,9 @@ class Handler(BaseHTTPRequestHandler):
         # 版 7（records）: 記録の画面のボタン（合言葉は見守りの画面と同じ）と、POST /records/<日>・/edits/ack（Bearer）
         if recordsui.handles(url.path):
             recordsui.http(self, url, "POST", App.records, App.semantic, log)
+            return
+        if forget.handles(url.path):  # s20 次11: POST /records/<日>/forget（時間を選んで消す。中身は forget.py）
+            forget.http_post(self, App.records, url.path, log, App.semantic, App.jobs)
             return
         if url.path.startswith("/records/") or url.path == "/edits/ack":
             records.http_post(self, App.records, url.path, log)

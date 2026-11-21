@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
+import s20feeds  # s20: アプリの新しい画面が読む写し（2026-11-21）
 import appfeeds  # 自分の声の候補・新しさ・PLAUD との差（2026-11-12）
 import oneline  # 1日の年表・PayPay の写真・位置を当日のうちに・反映の見張り（2026-11-14。強化案 25・28・30・34）
 import settle  # 施策の検品表・正しさの抜き取り・Claude の費用（2026-11-15。強化案 36・37・41）
@@ -57,9 +58,10 @@ import drafts  # noqa: E402  返事の下書き・時間の家計簿（2026-11-1
 GETS = (*GETS, *drafts.READERS)
 import knowapp  # noqa: E402  s18 自分を知ってもらう（2026-11-19。GET /know/*・POST /know/*・/mood/tap）
 GETS = (*GETS, *knowapp.READERS)
+GETS = (*GETS, *s20feeds.GETS)  # s20: /review-queue・/feature-check・/device-checks・/interview-sheet・/holiday-tags（s20feeds.py）
 # POST /proposals/answer（母艦からの提案への答え。2026-11-13。中身は appfeeds.py）
 POSTS = ("/todo/done", "/pay/taps", "/pay/paypay", "/good/feedback", *appfeeds.POSTS, *oneline.POSTS, *pages.POSTS,
-         *knowapp.POSTS)
+         *knowapp.POSTS, *s20feeds.POSTS)
 BODY_LIMIT = 16 * 1024
 # 支払いの記録を母艦へ（2026-11-11）
 TAPS_FILE = Path("inbox") / "card-taps" / "card-taps.json"
@@ -440,6 +442,9 @@ def http_get(handler, config: dict) -> None:
     if path in pages.READERS:  # GET /people-pages・/threads・/place-pages・/decisions（2026-11-15）
         handler.send_json(200, pages.READERS[path](home(config)))
         return
+    if path in s20feeds.GETS:  # s20（2026-11-21。s20feeds.py）
+        s20feeds.http_get(handler, home(config), path)
+        return
     if path in knowapp.READERS:  # GET /know/*（2026-11-19。s18。knowapp.py）
         handler.send_json(200, knowapp.READERS[path](home(config)))
         return
@@ -538,6 +543,9 @@ def http_post(handler, config: dict, data: bytes, log: Callable[[str], None]) ->
         return
     if urlparse(handler.path).path in appfeeds.POSTS:
         appfeeds.POSTS[urlparse(handler.path).path](handler, home(config), data, log)
+        return
+    if urlparse(handler.path).path in s20feeds.POSTS:  # POST /feature-answer（s20。s20feeds.py）
+        s20feeds.POSTS[urlparse(handler.path).path](handler, home(config), data, log)
         return
     if urlparse(handler.path).path in knowapp.POSTS:  # POST /know/*・/mood/tap（2026-11-19。s18。knowapp.py）
         knowapp.POSTS[urlparse(handler.path).path](handler, home(config), data, log)

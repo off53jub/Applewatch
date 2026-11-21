@@ -239,6 +239,13 @@ jobs:
           python pc/v23checks_holiday.py > v23.txt 2>&1 || { cat v23.txt; grep '^NG' v23.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v23.txt | sed 's/^/::notice::v23checks_holiday の OK の数: /'
 
+      # 2026-11-21（s20 次5・次6・次11・次13・追10）: 声が集まりすぎた話し手の候補・自分の行の近さの印・時間を選んで消す口（控え 7 日・取り消し）・
+      #   「一緒にいた人」の問い（yesno・根拠）・LINE の webhook（署名・本人だけ・母艦の inbox へ）を、作り物の記録・声・母艦・LINE と一時フォルダで確かめる
+      - name: s20（集まりすぎの話し手・自分の行・時間を選んで消す・LINE の受け口）を確かめる
+        run: |
+          python pc/v24checks_s20.py > v24.txt 2>&1 || { cat v24.txt; grep '^NG' v24.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v24.txt | sed 's/^/::notice::v24checks_s20 の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py
@@ -303,6 +310,7 @@ jobs:
             --hidden-import watchroute --hidden-import v10checks --hidden-import mothership --hidden-import appfeeds \
             --hidden-import oneline --hidden-import askmother --hidden-import mothersearch --hidden-import priority --hidden-import presence --hidden-import load --hidden-import settle --hidden-import pages \
             --hidden-import drafts --hidden-import knowapp --hidden-import holidaymarks \
+            --hidden-import splitcand --hidden-import selflines --hidden-import forget --hidden-import linehook --hidden-import v24checks_s20 \
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \
             --hidden-import claude --hidden-import v11checks \
