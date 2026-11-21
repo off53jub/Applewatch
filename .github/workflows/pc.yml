@@ -5,9 +5,9 @@ name: PC
 on:
   push:
     branches: [main]
-    paths: ['pc/**', '.github/workflows/pc.yml', '.github/scripts/**']
+    paths: ['pc/**', '.github/workflows/pc.yml', '.github/scripts/swift_precheck.py']
   pull_request:
-    paths: ['pc/**', '.github/workflows/pc.yml', '.github/scripts/**']
+    paths: ['pc/**', '.github/workflows/pc.yml', '.github/scripts/swift_precheck.py']
   workflow_dispatch:
 
 jobs:

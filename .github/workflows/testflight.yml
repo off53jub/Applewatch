@@ -9,8 +9,49 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 同じ PR に続けて push したら、古い実行は止める（main への push は止めない）
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # 変更されたファイルを見て、関係ない変更（pc/・docs/・文書・ほかの workflow だけ）なら重い検査を飛ばす（速10）。
+  # 飛ばしたジョブは Skipped になり、必須の検査としては通る。判定に失敗したときは、必ず動かす側に倒す。
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      app: ${{ steps.f.outputs.app }}
+    steps:
+      - id: f
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          IGNORE='^(pc/|docs/)|\.md$|^\.github/workflows/(pc|tests)\.yml$'
+          files=""
+          ok=false
+          if [ "$EVENT" = "pull_request" ]; then
+            files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[] | .filename, (.previous_filename // empty)') && ok=true
+          elif [ "$EVENT" = "push" ] && [ "${BEFORE#0000000}" = "$BEFORE" ]; then
+            files=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" --jq '.files[] | .filename, (.previous_filename // empty)') && ok=true
+            # compare は 300 ファイルまで。それ以上は全部動かす
+            [ "$(echo "$files" | wc -l)" -ge 300 ] && ok=false
+          fi
+          [ -n "$files" ] || ok=false
+          echo "変更したファイル:"; echo "$files" | head -50
+          rest=$(echo "$files" | grep -Ev "$IGNORE" || true)
+          if [ "$ok" = "true" ] && [ -z "$rest" ]; then app=false; else app=true; fi
+          echo "判定 ok=$ok app=$app ui=${ui:-}"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.app != 'false' }}
     runs-on: macos-26
     # Apple の受け付け結果を最大 35 分待つ分も含める
     timeout-minutes: 80
@@ -63,6 +104,20 @@ jobs:
               targets: [.target(name: "HaasCore", path: "Sources/HaasCore")]
           )
           SWIFT
+
+      # 速11: 部品の作り置き（仮説: 2 回目の実行から効く）。SwiftPM の取ってきた部品と、Xcode のコンパイルの作り置き（中身は中間ファイルだけ。署名済みの成果物・鍵は入らない）
+      - name: SwiftPM の部品の作り置きを戻す
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/spm
+          key: spm-build-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-build-${{ runner.os }}-
+      - name: コンパイルの作り置きを戻す
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cc
+          key: cc-build-${{ runner.os }}-${{ github.sha }}
+          restore-keys: cc-build-${{ runner.os }}-
 
       - name: プロジェクトを生成
         run: |
@@ -117,6 +172,8 @@ jobs:
               -project LifeLog.xcodeproj -scheme LifeLog \
               -destination 'generic/platform=iOS' \
               -archivePath "$RUNNER_TEMP/LifeLog.xcarchive" \
+              -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" \
+              COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_CAS_PATH="$RUNNER_TEMP/cc" \
               DEVELOPMENT_TEAM="$TEAM_ID" \
               CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
               GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
