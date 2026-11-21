@@ -23,6 +23,14 @@ enum HolidayRules {
     static let interruptionsKey = "interruptions"
     /// 今日、中断のあとに録音を流し直せた回数（休10）
     static let resumedKey = "resumed"
+    /// 今日、録音が止まりかけた回数（マイクが来ない・流し直せない・書けない。止めずに試し続ける。2026-11-22）
+    static let stallsKey = "stalls"
+    /// 今日、止まりかけた録音を自動で戻せた回数（2026-11-22）
+    static let autoResumedKey = "autoResumed"
+    /// 最後に止まりかけた時刻と理由（"1970 からの秒|mic・open・restart・write・alarm"。2026-11-22）
+    static let lastStallKey = "lastStall"
+    /// 時計のアプリの build（iPhone と版が食い違っていないかを見る。2026-11-22）
+    static let watchBuildKey = "build"
     /// 電池の見本（[[時刻, 0〜1, 外出モードで溜めていたら 1]]。1 時間に 1 つ・直近 48 個。休8）
     static let batteryAtKey = "batteryAt"
     /// いま外出モードで区切りを溜めているか（休8）

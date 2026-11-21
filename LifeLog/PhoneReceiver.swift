@@ -158,6 +158,11 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         /// 今日の中断（アラーム・電話・Siri）の回数と、流し直せた回数（休10）
         var interruptions: Int? = nil
         var resumed: Int? = nil
+        /// 今日、録音が止まりかけた回数・自動で戻せた回数・最後の「秒|理由」・時計の build（2026-11-22）
+        var stalls: Int? = nil
+        var autoResumed: Int? = nil
+        var lastStall: String? = nil
+        var build: String? = nil
         /// 電池の見本（[[時刻, 0〜1, 外出モードで溜めていたら 1]]。休8）と、いま外出モードで溜めているか
         var batteryAt: [[Double]]? = nil
         var awayHolding: Bool? = nil
@@ -321,6 +326,10 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         state.unstuck = context["unstuck"] as? Int
         state.interruptions = context[HolidayRules.interruptionsKey] as? Int
         state.resumed = context[HolidayRules.resumedKey] as? Int
+        state.stalls = context[HolidayRules.stallsKey] as? Int
+        state.autoResumed = context[HolidayRules.autoResumedKey] as? Int
+        state.lastStall = context[HolidayRules.lastStallKey] as? String
+        state.build = context[HolidayRules.watchBuildKey] as? String
         state.batteryAt = (context[HolidayRules.batteryAtKey] as? [[Double]])
             ?? (context[HolidayRules.batteryAtKey] as? [[NSNumber]])?.map { $0.map(\.doubleValue) }
         state.awayHolding = context[HolidayRules.awayHoldingKey] as? Bool

@@ -141,6 +141,8 @@ final class WatchRecorder: NSObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(Self.micSilence))
                 guard let self, self.isRecording, !Task.isCancelled else { return }
+                // 止まりかけて試し直しているあいだは、試し直しの係に任せる（2026-11-22）
+                if self.stalled { continue }
                 if let since = self.interruptedSince, Date.now.timeIntervalSince(since) < 120 { continue }
                 // 音は届いているのに書く先が無ければ開く（割り込みのあとなど）
                 self.reopenIfNeeded()
@@ -154,31 +156,31 @@ final class WatchRecorder: NSObject {
                     self.forceRestartEngine()
                     continue
                 }
-                self.micCheck = nil
-                self.stopWithAlert("マイクの音が \(Int(silent)) 秒届いていません。LifeLog を開いて録音し直してください。")
-                return
+                // 前はここで録音を止め、開き直すまで戻らなかった（2026-11-22）。止めずに試し続ける
+                self.stall("mic", "マイクの音が \(Int(silent)) 秒届いていません")
+                continue
             }
         }
     }
 
     /// 録音中なのに書く先（区切りのファイル）が開いていなければ開く（休んでいるときは開かない）
     private func reopenIfNeeded() {
-        guard isRecording, !writer.isWriting else { return }
+        guard isRecording, !stalled, !writer.isWriting else { return }
         do {
             try openChunk()
         } catch {
-            stopWithAlert("録音を続けられませんでした: \(error.localizedDescription)")
+            stall("open", "録音のファイルを開けませんでした: \(error.localizedDescription)")
         }
     }
 
     /// マイクが動いているように見えても、音が来ないときに流し直す
     private func forceRestartEngine() {
-        guard isRecording else { return }
+        guard isRecording, !stalled else { return }
         do {
             stopEngine()
             try startEngine()
         } catch {
-            stopWithAlert("マイクを流し直せませんでした。LifeLog を開いて録音し直してください。")
+            stall("restart", "マイクを流し直せませんでした")
         }
     }
 
@@ -237,6 +239,9 @@ final class WatchRecorder: NSObject {
 
     func stop() {
         isRecording = false
+        stalled = false
+        stallTask?.cancel()
+        stallTask = nil
         micCheck?.cancel()
         micCheck = nil
         interruptedSince = nil
@@ -305,7 +310,7 @@ final class WatchRecorder: NSObject {
         deliver(url, peakDB: peakDB, voiceFrames: voiceFrames)
         armWatchdog()
         if let error, isRecording {
-            stopWithAlert("録音を続けられませんでした: \(error.localizedDescription)")
+            stall("write", "録音を続けられませんでした: \(error.localizedDescription)")
         }
     }
 
@@ -496,7 +501,7 @@ final class WatchRecorder: NSObject {
     /// 1回で諦めて録音を止めていた（14:16〜18:23 に止まった）。許可を取り直し、だめなら 30 秒ごとに 4 回まで試す
     private func restartEngine(attempt: Int = 0) {
         interruptedSince = nil
-        guard isRecording else { return }
+        guard isRecording, !stalled else { return }
         // 割り込みの始まりで区切りを閉じたが、マイクは止まっていなかったとき、前はここで何もせず、
         // 区切りを開かないまま「録音中」が続いていた（音は届くのに書く先が無い。2026-11-07）。書く先を開き直す
         if engine.isRunning {
@@ -505,7 +510,7 @@ final class WatchRecorder: NSObject {
             return
         }
         Task { @MainActor in
-            guard self.isRecording else { return }
+            guard self.isRecording, !self.stalled else { return }
             do {
                 self.stopEngine()
                 try await AVAudioSession.sharedInstance().activate()
@@ -513,7 +518,8 @@ final class WatchRecorder: NSObject {
                 self.noteResumed()
             } catch {
                 guard attempt < Self.restartRetries else {
-                    self.stopWithAlert("アラームや電話のあとで録音を再開できませんでした。LifeLog を開くと再開します。")
+                    // 前はここで録音を止めていた（2026-11-22）。止めずに、間を空けて試し続ける
+                    self.stall("alarm", "アラームや電話のあとで録音を再開できていません")
                     return
                 }
                 // 試しているあいだは、マイクの見張りに「止まっている」と数えさせない
@@ -534,9 +540,74 @@ final class WatchRecorder: NSObject {
     /// 止めるボタンを押さずに録音が止まっていたら、始め直す（画面を開いたとき。2026-11-20）。
     /// 前はアプリが一から起動したときだけ再開していて、裏に残っていたアプリを開き直しても再開しなかった
     func resumeIfWanted() async {
+        // 止まりかけて試し直しているところなら、待たずにすぐ試す（画面を開いたときは戻りやすい。2026-11-22）
+        if isRecording, stalled {
+            _ = await recoverStall()
+            return
+        }
         guard !isRecording, UserDefaults.standard.bool(forKey: Self.wasRecordingKey) else { return }
         await start()
         if isRecording { message = "止まっていた録音を再開しました" }
+    }
+
+    // MARK: - 止まりかけても止めない（2026-11-22）
+
+    /// 2026-11-20・21 に、マイクの音が来ない・流し直せないときに 1〜2 回試すだけで録音を止め、時計の LifeLog を開くまで
+    /// 戻らなかった（11/20 14:25〜18:24・11/21 15:07〜16:27。時計自身が「録音していない」と言っていた）。
+    /// 止めずに「止まりかけ」として残し、間を空けて（15 秒・30 秒・1 分・2 分、そのあと 5 分ごと）ずっと試し直す。
+    /// 止めるボタンを押すまで続ける。止まっているあいだは見張りの通知（armWatchdog）が延びないので、数分で本人に届く
+    @ObservationIgnored private var stalled = false
+    @ObservationIgnored private var stallTask: Task<Void, Never>?
+    /// 試し直すまでの間（仮）
+    static let stallWaits: [TimeInterval] = [15, 30, 60, 120, 300]
+
+    static func stallWait(_ attempt: Int) -> TimeInterval {
+        stallWaits[min(max(attempt, 0), stallWaits.count - 1)]
+    }
+
+    private func stall(_ code: String, _ reason: String) {
+        guard isRecording, !stalled else { return }
+        stalled = true
+        interruptedSince = nil
+        sender.countToday(HolidayRules.stallsKey)
+        sender.noteStall(code)
+        message = reason + "（自動で試し直しています）"
+        stopEngine()
+        // iPhone には「いまは録音していない」と知らせる（「録音しているつもり」は残る）
+        sender.isRecording = false
+        refreshStatus()
+        stallTask?.cancel()
+        stallTask = Task { @MainActor [weak self] in
+            var attempt = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.stallWait(attempt)))
+                guard let self, self.isRecording, self.stalled, !Task.isCancelled else { return }
+                if await self.recoverStall() { return }
+                attempt += 1
+            }
+        }
+    }
+
+    /// 止まりかけた録音を戻してみる（音を使う許可を取り直してからマイクを流す）。戻せたら true
+    private func recoverStall() async -> Bool {
+        guard isRecording, stalled else { return !stalled }
+        do {
+            stopEngine()
+            try await AVAudioSession.sharedInstance().activate()
+            try startEngine()
+        } catch {
+            return false
+        }
+        stalled = false
+        stallTask = nil
+        sender.isRecording = true
+        sender.countToday(HolidayRules.autoResumedKey)
+        noteResumed()
+        message = "止まりかけた録音を自動で戻しました"
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [Self.watchdogID, "stopped"])
+        sender.heartbeat()
+        refreshStatus()
+        return true
     }
 
     /// 録音が止まったことを、手首の振動と通知で知らせる。

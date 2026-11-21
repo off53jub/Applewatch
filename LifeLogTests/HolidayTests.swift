@@ -240,4 +240,19 @@ final class HolidayTests: XCTestCase {
         XCTAssertEqual(items.first?.group, "with_people")
         XCTAssertEqual(items.first?.answer, "yesno")
     }
+
+    /// 2026-11-22: 時計の録音が止まりかけた回数と自動で戻せた回数は、中断の数と同じ「今日の数」で数え、ほかの名前とぶつからない
+    func testWatchStallCountsAreSeparateDailyCounts() {
+        let keys = [HolidayRules.interruptionsKey, HolidayRules.resumedKey, HolidayRules.stallsKey, HolidayRules.autoResumedKey,
+                    HolidayRules.lastStallKey, HolidayRules.watchBuildKey, HolidayRules.batteryAtKey, HolidayRules.awayHoldingKey,
+                    HolidayRules.crowdKey]
+        XCTAssertEqual(Set(keys).count, keys.count)
+        var counts: [String: Int] = [:]
+        counts = HolidayRules.bumped(counts, HolidayRules.stallsKey, day: "2026-11-22")
+        counts = HolidayRules.bumped(counts, HolidayRules.stallsKey, day: "2026-11-22")
+        counts = HolidayRules.bumped(counts, HolidayRules.autoResumedKey, day: "2026-11-22")
+        XCTAssertEqual(HolidayRules.count(counts, HolidayRules.stallsKey, day: "2026-11-22"), 2)
+        XCTAssertEqual(HolidayRules.count(counts, HolidayRules.autoResumedKey, day: "2026-11-22"), 1)
+        XCTAssertEqual(HolidayRules.count(counts, HolidayRules.stallsKey, day: "2026-11-23"), 0)
+    }
 }
