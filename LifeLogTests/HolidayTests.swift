@@ -221,7 +221,12 @@ final class HolidayTests: XCTestCase {
         let row = try XCTUnwrap((hrv["data"] as? [[String: Any]])?.first)
         XCTAssertEqual(row["qty"] as? Double, 41.3)
         XCTAssertEqual(row["Min"] as? Double, 20)
-        XCTAssertGreaterThanOrEqual(HealthLink.readsVersion, 3)
+    }
+
+    @MainActor
+    func testHealthAsksForHRVOnce() {
+        let version: Int = HealthLink.readsVersion
+        XCTAssertGreaterThanOrEqual(version, 3)
     }
 
     // MARK: - 休16 一緒にいた人の確かめ
