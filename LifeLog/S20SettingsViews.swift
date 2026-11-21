@@ -247,6 +247,21 @@ struct CompanionCardView: View {
     var body: some View {
         LLList {
             Section {
+                // 見せる 1 枚の見本（押すと全画面）
+                Button {
+                    fullScreen = true
+                } label: {
+                    VStack(spacing: LL.Space.s) {
+                        Image(systemName: "waveform.badge.mic").font(.system(size: 30, weight: .light)).foregroundStyle(LL.accent)
+                        Text("記録を取っています").font(.title3.weight(.heavy)).foregroundStyle(LL.text)
+                        Text("止めてほしいときは、いつでも言ってください。").font(.caption).foregroundStyle(LL.dim)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, LL.Space.xl)
+                    .background(LL.bg, in: RoundedRectangle(cornerRadius: LL.Radius.card))
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(Color.clear)
                 Button {
                     fullScreen = true
                 } label: {

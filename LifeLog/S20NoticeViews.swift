@@ -38,6 +38,7 @@ struct NoticeHistoryView: View {
                     StatTile(title: "押して開いた", value: list.isEmpty ? "—" : "\(opened * 100 / max(1, list.count))", unit: "%")
                     StatTile(title: "止めた種類", value: "\(book.muted.count)")
                 }
+                .fixedSize(horizontal: false, vertical: true)
                 .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
             }
             if !kinds.isEmpty || !book.muted.isEmpty {
@@ -68,7 +69,7 @@ struct NoticeHistoryView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(n.title).font(.callout).lineLimit(2)
                             HStack(spacing: LL.Space.s) {
-                                Text(n.at.formatted(.dateTime.month().day().hour().minute())).monospacedDigit()
+                                Text(n.at.formatted(.dateTime.month().day().hour().minute().locale(LL.ja))).monospacedDigit()
                                 Text(NoticeHistoryRules.kindLabel(n.kind))
                                 if n.held { Text("便りへ") }
                                 if n.opened == true { Text("開いた").foregroundStyle(LL.good) }

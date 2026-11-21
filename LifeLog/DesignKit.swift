@@ -5,6 +5,11 @@ import UIKit
 // 全画面で使う部品（s20 の 体1〜6・体33。2026-11-21）。色・余白・角は Shared/Design/LLTheme.swift の LL から取る。
 // 決まりの一覧は docs/s20-design.md。
 
+extension LL {
+    /// 日付の言い方は日本語に（アプリの言語の設定に関わらず）
+    static let ja = Locale(identifier: "ja_JP")
+}
+
 // MARK: - 見た目（暗い画面が先。体5）
 
 enum LLAppearance: String, CaseIterable, Identifiable {
@@ -36,6 +41,7 @@ struct LLRoot: ViewModifier {
     func body(content: Content) -> some View {
         content
             .tint(LL.accent)
+            .environment(\.locale, LL.ja)
             .preferredColorScheme((LLAppearance(rawValue: appearance) ?? .dark).scheme)
     }
 }
@@ -310,15 +316,16 @@ struct StatTile: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: LL.Space.xs) {
-            Text(title).font(.caption).foregroundStyle(LL.dim)
+            Text(title).font(.caption).foregroundStyle(LL.dim).lineLimit(1).minimumScaleFactor(0.75)
             HStack(alignment: .firstTextBaseline, spacing: 2) {
                 Text(value).font(.title2.weight(.bold)).monospacedDigit()
                     .foregroundStyle(certainty == .fact ? LL.text : certainty.color)
                 if !unit.isEmpty { Text(unit).font(.caption).foregroundStyle(LL.dim) }
             }
             if !points.isEmpty { MiniBars(points: points, height: 28) }
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(LL.Space.m)
         .background(LL.surface2, in: RoundedRectangle(cornerRadius: LL.Radius.small))
         .accessibilityElement(children: .combine)

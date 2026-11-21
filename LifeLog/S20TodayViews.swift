@@ -20,7 +20,7 @@ struct TodayHeroSection: View {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(part.greeting).font(.title3.weight(.bold)).foregroundStyle(LL.text)
-                        Text(now.formatted(.dateTime.month().day().weekday(.wide)))
+                        Text(now.formatted(.dateTime.month().day().weekday(.wide).locale(LL.ja)))
                             .font(.caption).foregroundStyle(LL.dim)
                     }
                     Spacer()
@@ -316,7 +316,7 @@ struct OneYearAgoSection: View {
                             .clipShape(RoundedRectangle(cornerRadius: LL.Radius.small))
                     }
                     VStack(alignment: .leading, spacing: LL.Space.xs) {
-                        Text(OneYearAgoBook.target(.now).formatted(.dateTime.year().month().day()))
+                        Text(OneYearAgoBook.target(.now).formatted(.dateTime.year().month().day().locale(LL.ja)))
                             .font(.caption).foregroundStyle(LL.dim)
                         Text(book.line ?? "この日に撮った写真").font(.callout).lineLimit(3)
                     }

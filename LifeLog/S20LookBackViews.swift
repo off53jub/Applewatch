@@ -16,11 +16,12 @@ struct S20LookBackSection: View {
         let lastHoliday = Self.lastHoliday(pipeline)
         Section {
             HStack(spacing: LL.Space.s) {
-                StatTile(title: "録った時間（7 日）", value: MiniBars.short(recorded.reduce(0) { $0 + $1.value }), unit: "時間",
+                StatTile(title: "録音・7 日", value: MiniBars.short(recorded.reduce(0) { $0 + $1.value }), unit: "時間",
                          points: recorded)
-                StatTile(title: "会話（7 日）", value: "\(Int(talks.reduce(0) { $0 + $1.value }))", unit: "回", points: talks)
-                StatTile(title: "ラーメン（今月）", value: "\(ramenMonth)", unit: "杯", certainty: .guess)
+                StatTile(title: "会話・7 日", value: "\(Int(talks.reduce(0) { $0 + $1.value }))", unit: "回", points: talks)
+                StatTile(title: "ラーメン・今月", value: "\(ramenMonth)", unit: "杯", certainty: .guess)
             }
+            .fixedSize(horizontal: false, vertical: true)
             .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
         } header: {
             LLHeader(title: "数で見る", symbol: "chart.bar")
@@ -33,7 +34,7 @@ struct S20LookBackSection: View {
                 NavigationLink {
                     HolidayMagazineView(day: lastHoliday)
                 } label: {
-                    Label("休日のページ（" + lastHoliday.formatted(.dateTime.month().day().weekday()) + "）", systemImage: "book.pages")
+                    Label("休日のページ（" + lastHoliday.formatted(.dateTime.month().day().weekday().locale(LL.ja)) + "）", systemImage: "book.pages")
                 }
             }
             NavigationLink { StoryView(month: true) } label: { Label("今月の物語", systemImage: "text.book.closed") }
@@ -64,7 +65,7 @@ struct S20LookBackSection: View {
             let spans = pipeline.ledger.map(for: d).spans
             var seconds = 0.0
             for s in spans where s.kind == .recorded { seconds += s.end.timeIntervalSince(s.start) }
-            let label = d.formatted(.dateTime.weekday(.narrow))
+            let label = d.formatted(.dateTime.weekday(.narrow).locale(LL.ja))
             rec.append(MiniPoint(id: 6 - back, label: label, value: (seconds / 360).rounded() / 10))
             tk.append(MiniPoint(id: 6 - back, label: label, value: Double(pipeline.conversations(on: ReviewRules.dayKey(d)).count)))
             await Task.yield()
@@ -97,9 +98,9 @@ struct HolidayMagazineView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: LL.Space.l) {
                 VStack(alignment: .leading, spacing: LL.Space.xs) {
-                    Text(day.formatted(.dateTime.weekday(.wide))).font(.caption.weight(.semibold)).foregroundStyle(LL.accent)
+                    Text(day.formatted(.dateTime.weekday(.wide).locale(LL.ja))).font(.caption.weight(.semibold)).foregroundStyle(LL.accent)
                         .textCase(.uppercase)
-                    Text(day.formatted(.dateTime.month().day())).font(.system(size: 40, weight: .heavy, design: .rounded))
+                    Text(day.formatted(.dateTime.month().day().locale(LL.ja))).font(.system(size: 40, weight: .heavy, design: .rounded))
                         .foregroundStyle(LL.text)
                     if let best = notes.first(where: { $0.kind == "best" }) {
                         Text("「" + best.text + "」").font(.title3.weight(.semibold)).foregroundStyle(LL.text)
@@ -124,7 +125,8 @@ struct HolidayMagazineView: View {
                     LLCard {
                         LLHeader(title: "食べた物", symbol: "fork.knife")
                         ForEach(Array(food.enumerated()), id: \.offset) { _, f in
-                            Label(f, systemImage: TagIcons.symbol(for: f)).font(.callout)
+                            Label(f, systemImage: TagIcons.symbol(for: f) == TagIcons.fallback ? "fork.knife" : TagIcons.symbol(for: f))
+                                .font(.callout)
                         }
                     }
                 }
@@ -178,7 +180,7 @@ struct StoryView: View {
         ScrollView {
             LazyVStack(spacing: LL.Space.l) {
                 VStack(spacing: LL.Space.s) {
-                    Text(month ? range.start.formatted(.dateTime.year().month(.wide)) : range.start.formatted(.dateTime.year()))
+                    Text(month ? range.start.formatted(.dateTime.year().month(.wide).locale(LL.ja)) : range.start.formatted(.dateTime.year().locale(LL.ja)))
                         .font(.caption.weight(.semibold)).foregroundStyle(LL.accent)
                     Text(month ? "今月の物語" : "今年の物語").font(.largeTitle.weight(.heavy)).foregroundStyle(LL.text)
                     Text("下へめくって進みます").font(.caption).foregroundStyle(LL.dim)
@@ -254,6 +256,10 @@ struct InterviewSheetView: View {
         Group {
             if let file {
                 HTMLFileView(url: file)
+                    .clipShape(RoundedRectangle(cornerRadius: LL.Radius.small))
+                    .padding(LL.Space.m)
+                    .llShadow()
+                    .llScreen()
                     .toolbar {
                         ToolbarItem(placement: .primaryAction) {
                             ShareLink(item: file) { Label("共有", systemImage: "square.and.arrow.up") }
@@ -294,9 +300,11 @@ struct HTMLFileView: UIViewRepresentable {
     let url: URL
 
     func makeUIView(context: Context) -> WKWebView {
+        // 紙の 1 枚として白い地に出す（中の html は印刷用の黒い文字）
         let view = WKWebView()
-        view.isOpaque = false
-        view.backgroundColor = .clear
+        view.isOpaque = true
+        view.backgroundColor = .white
+        view.scrollView.backgroundColor = .white
         view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         return view
     }
@@ -335,7 +343,7 @@ struct FeatureReportView: View {
                     Text("s18").tag("s18")
                     Text("s19").tag("s19")
                     Text("s20").tag("s20")
-                    Text("止める候補").tag("stop")
+                    Text("候補").tag("stop")
                 }
                 .pickerStyle(.segmented)
             } header: {

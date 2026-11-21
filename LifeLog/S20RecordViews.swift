@@ -78,7 +78,9 @@ struct DayBandView: View {
                             })
                     }
                     .frame(height: 70)
+                    .accessibilityElement(children: .ignore)
                     .accessibilityLabel("1 日の帯。指でなぞって時間を選びます")
+                    .accessibilityIdentifier("dayBand")
                     HStack {
                         ForEach([0, 6, 12, 18, 24], id: \.self) { h in
                             Text("\(h)").font(.caption2).foregroundStyle(LL.dim).monospacedDigit()
