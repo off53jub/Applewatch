@@ -27,18 +27,22 @@ from typing import Callable
 from urllib.parse import parse_qs
 
 import asrlearn
+import forget  # s20 次11（控えの掃除だけ）
 import holidaymarks
 import honne
 import plauddoubt
+import selflines  # s20 次6
 import selfvoice
+import splitcand  # s20 次5
 import voicefix
 import voices
 import voicesamples
 import voicetone
 
-GETS = ("/voice-tone", "/honne", "/voice-samples", "/self-voice", "/plaud-doubts", "/holiday-marks")
+GETS = ("/voice-tone", "/honne", "/voice-samples", "/self-voice", "/plaud-doubts", "/holiday-marks", "/self-lines",
+        "/speaker-split")
 POSTS = (*voicefix.POSTS, *voicesamples.POSTS)
-FEATURES = ("voicetone", "honne", "voicefix", "voicesamples", "selfvoice", "plauddoubt", "holidaymarks")
+FEATURES = ("voicetone", "honne", "voicefix", "voicesamples", "selfvoice", "plauddoubt", "holidaymarks", "selflines", "splitcand")
 LOOP_S = 1800.0
 HEAVY_BUDGET_S = 120.0     # 仮: 1 回の見回りで音声を読む秒の上限
 HEAVY_DAYS = 7
@@ -68,6 +72,8 @@ def extra_doubts(day: str, parsed: dict) -> tuple[dict[int, list[str]], set[int]
         return {}, set()
     base = State.mother() if State.mother else None
     add, quiet = plauddoubt.doubts(base, day, parsed)
+    for moment, reasons in selflines.doubts(State.home, day, State.config()).items():  # s20 次6（設定で入れたときだけ）
+        add[moment] = add.get(moment, []) + [r for r in reasons if r not in add.get(moment, [])]
     for moment, reasons in asrlearn.tentative_doubts(State.home, parsed).items():
         add[moment] = add.get(moment, []) + [r for r in reasons if r not in add.get(moment, [])]
     return add, quiet
@@ -109,6 +115,12 @@ def tick(now: datetime.datetime | None = None) -> dict:
         ("voicefix", lambda: voicefix.drain_inbox(State.home, base, State.store, State.log)),  # 時計から（母艦の inbox）
         ("voicesamples", lambda: voicesamples.build(State.home, State.store, today)),
         ("selfvoice", lambda: selfvoice.build(State.home, State.store, State.embed, today, heavy=heavy)),
+        # s20 次6・次5: 自分の行の近さの印・声が集まりすぎた話し手の候補（重い所は heavy_ok の時間だけ・言語モデルは使わない）
+        ("selflines", lambda: selflines.run(State.home, State.store, base, config, State.log, _days(2, today), heavy,
+                                            mother_copy=copy, today=today)),
+        ("splitcand", lambda: splitcand.run(State.home, State.store, base, config, State.log, heavy, mother_copy=copy,
+                                            today=today)),
+        ("forget", lambda: forget.purge(State.home)),  # s20 次11: 7 日たった控えを消す
     )
     for name, step in steps:
         try:
@@ -163,6 +175,10 @@ def http_get(handler, path: str, query: str) -> None:
         handler.send_json(200, selfvoice.read(State.home))
     elif path == "/holiday-marks":
         handler.send_json(200, holidaymarks.read_day(State.home, (q.get("day") or [datetime.date.today().isoformat()])[0]))
+    elif path == "/self-lines":
+        handler.send_json(200, selflines.read_day(State.home, (q.get("day") or [datetime.date.today().isoformat()])[0]))
+    elif path == "/speaker-split":
+        handler.send_json(200, splitcand.read(State.home))
     elif path == "/plaud-doubts":
         handler.send_json(200, plauddoubt.listing(State.mother() if State.mother else None, State.store))
     else:

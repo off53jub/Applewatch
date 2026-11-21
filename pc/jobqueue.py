@@ -454,6 +454,13 @@ class JobQueue:
             self._remove_files(name)
             return True
 
+    def purge(self, name: str) -> bool:
+        """s20 次11: 音声も答えも、残さずに全部消す（delete と違い、音声を残す先へは移さない。forget.py が控えを取ったあとに呼ぶ）"""
+        with self.lock:
+            meta = self.jobs.pop(name, None)
+            self._remove_files(name)
+            return meta is not None
+
     def _keep_audio(self, name: str, meta: dict) -> None:
         """版 7（records）: 音声を残す先に移す（無い・移せなければ、このあと消す）"""
         audio = self.audio_path(name)
