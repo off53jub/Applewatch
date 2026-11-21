@@ -130,7 +130,8 @@ struct PeopleView: View {
     }
 
     var body: some View {
-        LLList {
+        // 中身が大きいので LLList に包まない（2026-11-21。型の決まりが時間切れになった）
+        List {
             PeoplePagesSection()  // 人のページ（2026-11-15。強化案 53。PagesFeeds.swift。写しがあるときだけ）
             // 自分の声（声を足す・まとめた人を分け直す）
             if let me = pipeline.people.first(where: \.isSelf) {
@@ -240,6 +241,7 @@ struct PeopleView: View {
                 Text("覚えている人が消えてしまったときに。これまでの記録に残っている名前（自分を含む）から人を作り直し、その人が話していた録音から声を取り直します。手元に無い録音はドライブから取ってくるので、Wi-Fi のときに。")
             }
         }
+        .llListBackground()
         .navigationTitle("話した相手")
         .countsOpen("people")
         .toolbar {

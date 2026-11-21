@@ -110,7 +110,7 @@ private struct SceneDetailView: View {
 
 struct AppearanceView: View {
     @AppStorage(LLAppearance.key) private var appearance = LLAppearance.dark.rawValue
-    @State private var icon: String? = UIApplication.shared.alternateIconName
+    @State private var icon: String?
     @State private var problem: String?
 
     var body: some View {
@@ -147,6 +147,7 @@ struct AppearanceView: View {
         }
         .navigationTitle("見た目")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { icon = UIApplication.shared.alternateIconName }
     }
 
     private func iconRow(_ name: String?, title: String, file: String) -> some View {

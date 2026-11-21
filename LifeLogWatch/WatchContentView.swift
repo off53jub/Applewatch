@@ -112,7 +112,7 @@ private struct NothingYet: View {
     var body: some View {
         Text("まだ iPhone から届いていません。iPhone の LifeLog を開くと届きます。")
             .font(.footnote)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(LL.dim)
     }
 }
 
@@ -296,7 +296,7 @@ private struct TasksPage: View {
                 if board.info == nil {
                     NothingYet()
                 } else if board.tasks.isEmpty {
-                    Text("まだのものはありません。").font(.footnote).foregroundStyle(.secondary)
+                    Text("まだのものはありません。").font(.footnote).foregroundStyle(LL.dim)
                 }
                 ForEach(board.tasks) { item in
                     VStack(alignment: .leading, spacing: 4) {
@@ -306,7 +306,7 @@ private struct TasksPage: View {
                         if !sub.isEmpty {
                             Text(sub)
                                 .font(.caption2)
-                                .foregroundStyle(item.late == true ? .orange : .secondary)
+                                .foregroundStyle(item.late == true ? LL.warn : LL.dim)
                         }
                         Button {
                             board.markDone(item.id)
@@ -314,7 +314,7 @@ private struct TasksPage: View {
                             Label("済み", systemImage: "checkmark")
                                 .font(.caption2)
                         }
-                        .tint(.green)
+                        .tint(LL.good)
                     }
                     .padding(.vertical, 2)
                     Divider()
@@ -341,7 +341,7 @@ private struct NextEventPage: View {
                     Text(clock(event.start) + (event.end.map { "〜" + clock($0) } ?? ""))
                         .font(.caption2)
                     if let place = event.place {
-                        Text(place).font(.caption2).foregroundStyle(.secondary)
+                        Text(place).font(.caption2).foregroundStyle(LL.dim)
                     }
                     if let people = event.people, !people.isEmpty {
                         Text("会う人: " + people.joined(separator: "、")).font(.caption2)
@@ -349,10 +349,10 @@ private struct NextEventPage: View {
                     if let brief = event.brief {
                         Text(brief)
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(LL.dim)
                     }
                 } else {
-                    Text("12時間以内の予定はありません。").font(.footnote).foregroundStyle(.secondary)
+                    Text("12時間以内の予定はありません。").font(.footnote).foregroundStyle(LL.dim)
                 }
             }
         }
@@ -379,9 +379,9 @@ private struct LastTalkPage: View {
                    Date().timeIntervalSince1970 - draft.start < 30 * 60 {
                     Text("仮（\(clock(draft.start))〜・書いている途中）")
                         .font(.caption2)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(LL.warn)
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                        Text(line).font(.caption2).foregroundStyle(.secondary)
+                        Text(line).font(.caption2).foregroundStyle(LL.dim)
                     }
                     Divider()
                 }
@@ -394,13 +394,13 @@ private struct LastTalkPage: View {
                         Text(title).font(.footnote).bold()
                     }
                     if let people = talk.people, !people.isEmpty {
-                        Text(people.joined(separator: "、")).font(.caption2).foregroundStyle(.secondary)
+                        Text(people.joined(separator: "、")).font(.caption2).foregroundStyle(LL.dim)
                     }
                     ForEach(Array((talk.points ?? []).enumerated()), id: \.offset) { _, point in
                         Text("・" + point).font(.caption2)
                     }
                 } else {
-                    Text("まだ閉じた会話はありません。").font(.footnote).foregroundStyle(.secondary)
+                    Text("まだ閉じた会話はありません。").font(.footnote).foregroundStyle(LL.dim)
                 }
             }
         }
@@ -428,7 +428,7 @@ private struct AskPage: View {
                 }
                 .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
                 if let question = board.question {
-                    Text("質問: " + question).font(.caption2).foregroundStyle(.secondary)
+                    Text("質問: " + question).font(.caption2).foregroundStyle(LL.dim)
                 }
                 if !board.askState.isEmpty, board.answer == nil {
                     HStack(spacing: 4) {
@@ -465,7 +465,7 @@ private struct MorningPage: View {
                     Text(brief.text).font(.footnote)
                 } else {
                     Text("まだ今日の分がありません。iPhone の LifeLog を開くと作ります。")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.footnote).foregroundStyle(LL.dim)
                 }
             }
         }
@@ -485,7 +485,7 @@ private struct StatusPage: View {
                 Text(recorder.link).font(.caption2)
                 Text("時計から送っていない録音 \(recorder.unsent) 個")
                     .font(.caption2)
-                    .foregroundStyle(recorder.unsent >= ChunkCutter.scaled(4) ? .orange : .primary)
+                    .foregroundStyle(recorder.unsent >= ChunkCutter.scaled(4) ? LL.warn : LL.text)
                 if recorder.relayWaiting > 0 {
                     Text("家の PC に届いて iPhone の受け取り待ち \(recorder.relayWaiting) 個").font(.caption2)
                 }
@@ -500,14 +500,14 @@ private struct StatusPage: View {
                 if let made = board.info?.made {
                     Text("iPhone から届いた " + when(made))
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LL.dim)
                 }
                 if recorder.lowPower {
-                    Text("低電力モード: 15分ほどごとにまとめて送ります").font(.caption2).foregroundStyle(.secondary)
+                    Text("低電力モード: 15分ほどごとにまとめて送ります").font(.caption2).foregroundStyle(LL.dim)
                 }
                 if recorder.batterySaving {
                     Text("電池が少ないので、5分ごとに区切っています（電池が戻れば短めに戻します）")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption2).foregroundStyle(LL.dim)
                 }
             }
         }

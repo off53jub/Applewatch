@@ -47,6 +47,11 @@ extension View {
     func llScreen() -> some View {
         background(LL.bg.ignoresSafeArea())
     }
+
+    /// 中身が大きくて LLList に包むと型の決まりが時間切れになる一覧に、地だけ付ける（行は iOS の色のまま）
+    func llListBackground() -> some View {
+        scrollContentBackground(.hidden).background(LL.bg.ignoresSafeArea())
+    }
 }
 
 // MARK: - 一覧（地は紺・行は面）

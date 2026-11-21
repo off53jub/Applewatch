@@ -29,14 +29,14 @@ struct MeetingGlance: View {
         VStack(alignment: .leading, spacing: 3) {
             Label("会議の相棒", systemImage: "person.3.sequence")
                 .font(.caption2)
-                .foregroundStyle(.orange)
-            Text(heading).font(.caption2).foregroundStyle(.secondary)
+                .foregroundStyle(LL.warn)
+            Text(heading).font(.caption2).foregroundStyle(LL.dim)
             Text(counts).font(.caption2)
             ForEach(Array((meeting.items ?? []).enumerated()), id: \.offset) { _, line in
                 Text(line).font(.caption2)
             }
             if meeting.updated == nil {
-                Text("まだ作っていません").font(.caption2).foregroundStyle(.secondary)
+                Text("まだ作っていません").font(.caption2).foregroundStyle(LL.dim)
             }
         }
     }
