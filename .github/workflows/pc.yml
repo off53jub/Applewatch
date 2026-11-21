@@ -232,6 +232,13 @@ jobs:
           python pc/v21checks_knowme.py > v21.txt 2>&1 || { cat v21.txt; grep '^NG' v21.txt | sed 's/^/::error::/'; exit 1; }
           grep -c '^OK' v21.txt | sed 's/^/::notice::v21checks_knowme の OK の数: /'
 
+      # 2026-11-21（s19「休日のライフログ」休12〜15。docs/s19-holiday-pc.md）: 騒がしい場・車内のナビの声・動画や配信の音（仮）・
+      #   3 人以上の会話の「彼女」「同棲」などに印を付ける口を、作り物の記録と母艦と一時フォルダで確かめる
+      - name: 休日の印（騒がしい場・車内・メディアの音・確かめ待ち）を確かめる
+        run: |
+          python pc/v23checks_holiday.py > v23.txt 2>&1 || { cat v23.txt; grep '^NG' v23.txt | sed 's/^/::error::/'; exit 1; }
+          grep -c '^OK' v23.txt | sed 's/^/::notice::v23checks_holiday の OK の数: /'
+
       - name: 学び直しの台本が GPU・材料が無いときに断るか確かめる
         run: |
           python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" pc/train_personal.py
@@ -295,7 +302,7 @@ jobs:
             --hidden-import v8checks --hidden-import v9checks --hidden-import lifelog_mcp \
             --hidden-import watchroute --hidden-import v10checks --hidden-import mothership --hidden-import appfeeds \
             --hidden-import oneline --hidden-import askmother --hidden-import mothersearch --hidden-import priority --hidden-import presence --hidden-import load --hidden-import settle --hidden-import pages \
-            --hidden-import drafts --hidden-import knowapp \
+            --hidden-import drafts --hidden-import knowapp --hidden-import holidaymarks \
             --hidden-import httpx2 --hidden-import httpcore2._sync.http2 --collect-submodules h2 \
             --hidden-import hpack --hidden-import hyperframe \
             --hidden-import claude --hidden-import v11checks \

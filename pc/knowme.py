@@ -27,6 +27,7 @@ from typing import Callable
 from urllib.parse import parse_qs
 
 import asrlearn
+import holidaymarks
 import honne
 import plauddoubt
 import selfvoice
@@ -35,9 +36,9 @@ import voices
 import voicesamples
 import voicetone
 
-GETS = ("/voice-tone", "/honne", "/voice-samples", "/self-voice", "/plaud-doubts")
+GETS = ("/voice-tone", "/honne", "/voice-samples", "/self-voice", "/plaud-doubts", "/holiday-marks")
 POSTS = (*voicefix.POSTS, *voicesamples.POSTS)
-FEATURES = ("voicetone", "honne", "voicefix", "voicesamples", "selfvoice", "plauddoubt")
+FEATURES = ("voicetone", "honne", "voicefix", "voicesamples", "selfvoice", "plauddoubt", "holidaymarks")
 LOOP_S = 1800.0
 HEAVY_BUDGET_S = 120.0     # 仮: 1 回の見回りで音声を読む秒の上限
 HEAVY_DAYS = 7
@@ -96,10 +97,13 @@ def tick(now: datetime.datetime | None = None) -> dict:
         voicetone.run(State.home, State.store, base, State.log, have, mother_copy=copy)
         State.first_done = True
     heavy = voices.heavy_ok(now) and State.load_audio is not None
+    holidaymarks.CONFIG = config
     steps = (
         ("voicetone", lambda: voicetone.run(State.home, State.store, base, State.log,
                                             _days(HEAVY_DAYS if heavy else 2, today), _find_audio, State.load_audio,
                                             HEAVY_BUDGET_S if heavy else 0.0, mother_copy=copy)),
+        ("holidaymarks", lambda: holidaymarks.run(State.home, State.store, base, config, State.log, _days(2, today),
+                                                  mother_copy=copy)),   # s19 休12〜15: 混ざる音の印
         ("honne", lambda: honne.run(State.home, State.store, base, config, State.log, _days(2, today), mother_copy=copy)),
         ("asrlearn", lambda: asrlearn.run(State.home, State.store, base, config, State.log, mother_copy=copy)),
         ("voicefix", lambda: voicefix.drain_inbox(State.home, base, State.store, State.log)),  # 時計から（母艦の inbox）
@@ -157,6 +161,8 @@ def http_get(handler, path: str, query: str) -> None:
         handler.send_json(200, voicesamples.read(State.home))
     elif path == "/self-voice":
         handler.send_json(200, selfvoice.read(State.home))
+    elif path == "/holiday-marks":
+        handler.send_json(200, holidaymarks.read_day(State.home, (q.get("day") or [datetime.date.today().isoformat()])[0]))
     elif path == "/plaud-doubts":
         handler.send_json(200, plauddoubt.listing(State.mother() if State.mother else None, State.store))
     else:
