@@ -424,8 +424,10 @@ enum WatchDelivery {
     }
 
     /// POST /jobs に付ける query（iPhone の送りと同じ形。待ち合わせ wait=1 は付けない＝答えは iPhone が受け取る）
+    /// car: 車につないでいたあいだの区切り（"car=1"。家の PC はナビ・カーステレオらしい声を本人の発話から外す。無ければ付けない。
+    /// 2026-11-21。s19 の 休13。HolidayRules.inCar）
     static func jobQuery(name: String, chunkStart: Date?, chunkEnd: Date?, sent: Date,
-                         hints: String?, weights: String?) -> [URLQueryItem] {
+                         hints: String?, weights: String?, car: Bool = false) -> [URLQueryItem] {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         var items = [URLQueryItem(name: "name", value: name)]
@@ -434,6 +436,7 @@ enum WatchDelivery {
         items.append(URLQueryItem(name: "sent", value: f.string(from: sent)))
         if let hints, !hints.isEmpty { items.append(URLQueryItem(name: "hints", value: String(hints.prefix(hintsLimit)))) }
         if let weights, !weights.isEmpty { items.append(URLQueryItem(name: "weights", value: weights)) }
+        if car { items.append(URLQueryItem(name: "car", value: "1")) }
         return items
     }
 }

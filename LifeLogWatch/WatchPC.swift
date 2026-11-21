@@ -289,7 +289,9 @@ final class WatchPC: @unchecked Sendable {
         var components = URLComponents(url: route.uploadURL, resolvingAgainstBaseURL: false)
         components?.queryItems = WatchDelivery.jobQuery(name: name, chunkStart: start, chunkEnd: end, sent: now,
                                                         hints: defaults.string(forKey: WatchDelivery.hintsKey),
-                                                        weights: defaults.string(forKey: WatchDelivery.weightsKey))
+                                                        weights: defaults.string(forKey: WatchDelivery.weightsKey),
+                                                        car: HolidayRules.inCar(chunkStart: start, chunkEnd: end,
+                                                                                carSince: defaults.double(forKey: HolidayRules.carSinceKey)))
         guard let target = components?.url else {
             release(fileName)
             return false

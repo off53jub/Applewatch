@@ -279,9 +279,11 @@ final class HealthLink {
         // 運動（2026-11-19。s18 の 48）: 動いたエネルギー・エクササイズ・立った時間・ワークアウト・歩いた距離
         HKQuantityType(.activeEnergyBurned), HKQuantityType(.appleExerciseTime), HKQuantityType(.appleStandTime),
         HKQuantityType(.distanceWalkingRunning), HKObjectType.workoutType(),
+        // 心拍変動（2026-11-21。s19 の 休45。許可が 1 つ増える）
+        HKQuantityType(.heartRateVariabilitySDNN),
     ]
-    /// 読む種類を足したら上げる（前に許可した人にも、足した種類だけをもう一度聞く。2026-11-19）
-    static let readsVersion = 2
+    /// 読む種類を足したら上げる（前に許可した人にも、足した種類だけをもう一度聞く。2026-11-19。3 は心拍変動。2026-11-21）
+    static let readsVersion = 3
     static let readsVersionKey = "healthReadsVersion"
 
     /// 前の版で許可した人に、足した種類だけを 1 回聞く（アプリを開いているときだけ。聞いたら版を覚える）
@@ -389,7 +391,31 @@ final class HealthLink {
         day.standMinutes = await statistics(.appleStandTime, from: dayStart, to: dayEnd, options: .cumulativeSum)?
             .sumQuantity()?.doubleValue(for: .minute())
         day.workouts = await workouts(from: dayStart, to: dayEnd)
+        // 心拍変動（2026-11-21。s19 の 休45。許可が無ければ空のまま）
+        let ms = HKUnit.secondUnit(with: .milli)
+        if let v = await statistics(.heartRateVariabilitySDNN, from: dayStart, to: dayEnd,
+                                    options: [.discreteAverage, .discreteMin, .discreteMax]) {
+            day.hrv = v.averageQuantity()?.doubleValue(for: ms)
+            day.hrvMin = v.minimumQuantity()?.doubleValue(for: ms)
+            day.hrvMax = v.maximumQuantity()?.doubleValue(for: ms)
+        }
         return day
+    }
+
+    /// その時間にゴルフのワークアウトがあったか（2026-11-21。s19 の 休32。スコアを一言の促しに使う）
+    func didGolf(from start: Date, to end: Date) async -> Bool {
+        guard enabled, available, end > start else { return false }
+        return await withCheckedContinuation { continuation in
+            let predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate),
+                HKQuery.predicateForWorkouts(with: .golf),
+            ])
+            let query = HKSampleQuery(sampleType: HKObjectType.workoutType(), predicate: predicate, limit: 1,
+                                      sortDescriptors: nil) { _, samples, _ in
+                continuation.resume(returning: !(samples ?? []).isEmpty)
+            }
+            store.execute(query)
+        }
     }
 
     /// 始まりがその日のワークアウト（種類の名前・時間・エネルギー・距離）
@@ -423,6 +449,7 @@ final class HealthLink {
         case .yoga: "ヨガ"
         case .highIntensityIntervalTraining: "HIIT"
         case .socialDance, .cardioDance: "ダンス"
+        case .golf: "ゴルフ"
         default: "運動"
         }
     }

@@ -28,6 +28,8 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
     var onMeeting: (@MainActor (Bool) -> Void)?
     /// 時計で「違う、〇〇さん」と言った（言った言葉と時刻。2026-11-19。s18。KnowMe.swift）
     var onVoiceFix: (@MainActor (String, Date) -> Void)?
+    /// 時計の「お酒 +1」（2026-11-21。s19 の 休30）
+    var onDrink: (@MainActor (Date) -> Void)?
     /// 時計から「さっき何て言った？」と聞かれた（答えの文を返す）
     var onAsk: (@MainActor (String) -> String)?
     /// 時計で頼まれごとの「済み」が押された（頼まれごとの id。2026-11-07）
@@ -152,6 +154,15 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         var noVoiceDropped: Int? = nil
         /// 時計が、受け渡しの列に止まっていた区切りを取り消した数（これまでの合計。新しい時計のアプリだけ。2026-11-20）
         var unstuck: Int? = nil
+        /// 休日のライフログ（2026-11-21。s19。新しい時計のアプリだけ。HolidayRules）:
+        /// 今日の中断（アラーム・電話・Siri）の回数と、流し直せた回数（休10）
+        var interruptions: Int? = nil
+        var resumed: Int? = nil
+        /// 電池の見本（[[時刻, 0〜1, 外出モードで溜めていたら 1]]。休8）と、いま外出モードで溜めているか
+        var batteryAt: [[Double]]? = nil
+        var awayHolding: Bool? = nil
+        /// 「初めての人が多い」モードか（休17）
+        var crowd: Bool? = nil
 
         /// 時計の中に残っている区切り（まだ送っていない＋返事待ち）。どちらも分からなければ nil
         var leftOnWatch: Int? {
@@ -209,6 +220,24 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         guard changed || force else { return }
         lastSettings = next
         // isWatchAppInstalled は TestFlight で入れ直したあと false のままのことがあるので、時計からの最近の便りも見る（2026-11-08）
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated,
+              WatchPresence.installed(WCSession.default) else { return }
+        try? WCSession.default.updateApplicationContext(lastSettings)
+    }
+
+    /// 休日のライフログの設定を時計に送る（変わったときだけ。2026-11-21。s19。HolidayRules）。
+    /// holidayDay は今日が休みならその日・休みでなければ空、carSince は車につないだ時刻（つないでいなければ 0）
+    func sendHolidayContext(holidayDay: String, lowBattery: Bool, awayMode: Bool, away: Bool, carSince: Double) {
+        let values: [String: Any] = [HolidayRules.holidayDayKey: holidayDay, HolidayRules.lowBatteryKey: lowBattery,
+                                     HolidayRules.awayModeKey: awayMode, HolidayRules.awayKey: away,
+                                     HolidayRules.carSinceKey: carSince]
+        let changed = (lastSettings[HolidayRules.holidayDayKey] as? String) != holidayDay
+            || (lastSettings[HolidayRules.lowBatteryKey] as? Bool) != lowBattery
+            || (lastSettings[HolidayRules.awayModeKey] as? Bool) != awayMode
+            || (lastSettings[HolidayRules.awayKey] as? Bool) != away
+            || (lastSettings[HolidayRules.carSinceKey] as? Double) != carSince
+        guard changed else { return }
+        for (key, value) in values { lastSettings[key] = value }
         guard WCSession.isSupported(), WCSession.default.activationState == .activated,
               WatchPresence.installed(WCSession.default) else { return }
         try? WCSession.default.updateApplicationContext(lastSettings)
@@ -290,6 +319,12 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         state.relayDone = context["relayDone"] as? Int
         state.noVoiceDropped = context["noVoiceDropped"] as? Int
         state.unstuck = context["unstuck"] as? Int
+        state.interruptions = context[HolidayRules.interruptionsKey] as? Int
+        state.resumed = context[HolidayRules.resumedKey] as? Int
+        state.batteryAt = (context[HolidayRules.batteryAtKey] as? [[Double]])
+            ?? (context[HolidayRules.batteryAtKey] as? [[NSNumber]])?.map { $0.map(\.doubleValue) }
+        state.awayHolding = context[HolidayRules.awayHoldingKey] as? Bool
+        state.crowd = context[HolidayRules.crowdKey] as? Bool
         let snapshot = state
         Task { @MainActor in
             if let lowPower { self.onWatchLowPower?(lowPower) }
@@ -315,6 +350,10 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         }
         if let text = userInfo["voiceFix"] as? String, let at = userInfo["at"] as? Double {
             Task { @MainActor in self.onVoiceFix?(text, Date(timeIntervalSince1970: at)) }
+        }
+        // 時計の「お酒 +1」（2026-11-21。s19 の 休30）
+        if let at = userInfo["drink"] as? Double {
+            Task { @MainActor in self.onDrink?(Date(timeIntervalSince1970: at)) }
         }
     }
 

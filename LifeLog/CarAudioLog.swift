@@ -13,6 +13,8 @@ final class CarAudioLog {
     private static let key = "carAudioPeriods"
     private(set) var periods: [Period]
     private var observer: NSObjectProtocol?
+    /// つながった・離れたとき（時計に「車につないだ時刻」を送る。2026-11-21。s19 の 休13。Holiday.swift）
+    var onChange: (() -> Void)?
 
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.key),
@@ -77,6 +79,7 @@ final class CarAudioLog {
         let old = now.addingTimeInterval(-14 * 86400)
         periods.removeAll { ($0.end ?? now) < old }
         if let data = try? JSONEncoder().encode(periods) { UserDefaults.standard.set(data, forKey: Self.key) }
+        onChange?()
     }
 
     /// その時間の半分以上（か3分以上）、車につながっていたか

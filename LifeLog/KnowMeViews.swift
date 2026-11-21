@@ -130,6 +130,10 @@ struct KnowQuestionRow: View {
             if question.group == "hypothesis" {
                 Text("見立て（仮）").font(.caption2.bold()).foregroundStyle(.orange)
             }
+            // 一緒にいた人の確かめ（予定・LINE の約束・声から。名前はまとめない。2026-11-21。s19 の 休16）
+            if question.group == "with_people" {
+                Text("一緒にいた人（仮）").font(.caption2.bold()).foregroundStyle(.orange)
+            }
             Text(question.text)
             ForEach(Array(question.evidence.enumerated()), id: \.offset) { _, e in
                 KnowEvidenceRow(evidence: e)

@@ -562,6 +562,13 @@ extension Pipeline {
         if let dropped = state.noVoiceDropped { detail["watchNoVoiceDropped"] = dropped }
         // 受け渡しの列に止まっていて、時計が取り消した区切りの数（これまでの合計。2026-11-20）
         if let unstuck = state.unstuck { detail["watchUnstuck"] = unstuck }
+        // 休日のライフログ（2026-11-21。s19。HolidayRules）: 今日の中断と流し直せた回数（休10。PR #85 の効き目も見る）・
+        // 電池の見本と外出モード（休8）・初めての人が多いモード（休17）
+        if let n = state.interruptions { detail["watchInterruptions"] = n }
+        if let n = state.resumed { detail["watchResumed"] = n }
+        if let samples = state.batteryAt { detail["watchBatteryAt"] = samples }
+        if let holding = state.awayHolding { detail["watchAwayHolding"] = holding }
+        if let crowd = state.crowd { detail["watchCrowd"] = crowd }
         UserDefaults.standard.set(detail, forKey: PCDiag.watchDetailKey)
     }
 

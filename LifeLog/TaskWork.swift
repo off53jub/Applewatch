@@ -49,11 +49,25 @@ enum DayOff {
         if calendar.isDateInWeekend(day) { return true }
         return allDay.contains { isOffEvent($0) }
     }
+    /// 休みの理由（2026-11-21。s19 の 休1。母艦の state/holiday/days.json の why と同じ言葉）。
+    /// 土日 → 「土日」・祝日のカレンダーの休み → 「祝日」・有休などの終日の予定 → 「アプリの休み」。休みでなければ nil。
+    /// 土日と祝日が重なれば「土日」（isOff と同じ順に見る）
+    static func reason(_ day: Date, allDay: [AllDay], calendar: Calendar = .current) -> String? {
+        if calendar.isDateInWeekend(day) { return HolidayRules.whyWeekend }
+        if allDay.contains(where: { $0.holidayCalendar && isOffEvent($0) }) { return HolidayRules.whyHoliday }
+        if allDay.contains(where: { isOffEvent($0) }) { return HolidayRules.whyLeave }
+        return nil
+    }
 }
 
 extension Pipeline {
     /// 休みの日か（土日・カレンダーの祝日・休みの終日の予定）。カレンダーを使っていなければ土日だけ
     func isDayOff(_ date: Date) -> Bool {
         DayOff.isOff(date, allDay: calendar.allDayEvents(on: date))
+    }
+
+    /// 休みの理由（土日・祝日・アプリの休み。休みでなければ nil。2026-11-21。s19 の 休1）
+    func dayOffReason(_ date: Date) -> String? {
+        DayOff.reason(date, allDay: calendar.allDayEvents(on: date))
     }
 }

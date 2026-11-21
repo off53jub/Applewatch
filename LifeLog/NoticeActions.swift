@@ -56,7 +56,8 @@ enum NoticeActions {
             PlaceAssistRules.askNotificationCategory(),
         ]
         // 自分を知る「はい・いいえ」と、職場に着いたときの「録音を始める」（2026-11-19。s18。KnowMe.swift）
-        return base.union(KnowMeRules.notificationCategories())
+        // 休日の「一言」と「さっきの所は〇〇？」（2026-11-21。s19。Holiday.swift）
+        return base.union(KnowMeRules.notificationCategories()).union(HolidayNoticeRules.categories())
     }
 
     /// 押されたボタンの名前から、動きを決める（知らせそのものを押したときは open。分からないものは nil）
@@ -192,6 +193,8 @@ enum NoticeRoute: Identifiable, Equatable {
         if id.hasPrefix(ProposalRules.noticePrefix) { return .screen(.proposals) }
         // 自分を知る（2026-11-19。s18。KnowMe.swift）は「直す」の「自分を知る」から
         if id.hasPrefix(KnowMeRules.noticePrefix) { return .tab(.fix) }
+        // 休日の知らせ（2026-11-21。s19。Holiday.swift）は「今日」から
+        if id.hasPrefix(HolidayNoticeRules.prefix) { return .tab(.today) }
         switch id {
         case MorningBrief.noticeID, "watch-silent", "phone-stopped", "watch-battery", "stall",
              "watch-open-after-update", "watch-not-recording":

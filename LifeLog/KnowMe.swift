@@ -104,8 +104,9 @@ enum KnowMeRules {
     static let noAction = "know.no"
     static let unsureAction = "know.unsure"
     static let recordAction = "know.rec"
+    /// with_people は「この時間に一緒にいた人（仮）」の確かめ（2026-11-21。s19 の 休16。母艦の M2 が questions_for_app.json に足す）
     static let groups: [String] = ["general", "notdo", "dislike", "respect", "adult", "ask_friend", "family", "draft",
-                                   "recheck", "hypothesis"]
+                                   "recheck", "hypothesis", "with_people"]
     static let answers: [String] = ["text", "record", "yesno", "recheck"]
     static let tiers: [String] = ["auto", "tentative", "ask"]
     /// 送り口（MothershipOutbox の道）。どれも家の PC の features の "knowme"
@@ -888,7 +889,14 @@ final class KnowGeo {
         listening = Task { [weak self] in
             do {
                 for try await event in await monitor.events {
+                    // 自宅を出た（2026-11-21。s19 の 休6・休7・休8。Holiday.swift）
+                    if event.state == .unsatisfied, event.identifier.hasPrefix("home:") {
+                        await HolidayNudges.shared.leftHome(at: event.date)
+                        continue
+                    }
                     guard event.state == .satisfied else { continue }
+                    // 家に戻った（時計の外出モードが溜めた区切りを送る。2026-11-21。s19 の 休8）
+                    if event.identifier.hasPrefix("home:") { await HolidayNudges.shared.arrivedHome() }
                     await self?.arrived(event.identifier, at: event.date)
                 }
             } catch {

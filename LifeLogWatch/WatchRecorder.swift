@@ -43,6 +43,14 @@ final class WatchRecorder: NSObject {
 
     /// 会議モードか（iPhone と同じ。会議のあいだは録音の音質を上げる）
     private(set) var meetingOn = UserDefaults.standard.bool(forKey: "meetingOn")
+    /// 「初めての人が多い」モード（飲み会・イベント。区切りごとに「初めての人」の印を付ける。4 時間で自動で終わる。2026-11-21。s19 の 休17）
+    private(set) var crowdOn = HolidayRules.crowdActive(until: UserDefaults.standard.double(forKey: WatchSender.crowdUntilKey), now: .now)
+    /// 外出モードで区切りを溜めているか（休8）
+    private(set) var awayHolding = false
+    /// 今日のお酒の杯数（時計の中の数。iPhone にも 1 杯ずつ送る。2026-11-21。s19 の 休30）
+    private(set) var drinksToday = 0
+    /// 中断（アラーム・電話・Siri）のあと、まだ流し直せていない（戻れた回数を数える。休10）
+    @ObservationIgnored private var interruptionOpen = false
     /// 時計の空きが少ないと知らせたか（12時間に1回まで）
     @ObservationIgnored private var lowSpaceAlerted = Date.distantPast
 
@@ -306,6 +314,8 @@ final class WatchRecorder: NSObject {
             VoiceGate.noteDropped()
         } else {
             sender.deliver(url)
+            // 「初めての人が多い」モードのあいだは、区切りごとに「初めての人」の印を付ける（2026-11-21。s19 の 休17）
+            if crowdActiveNow() { sender.newPerson(Date.now.addingTimeInterval(-HolidayRules.crowdMarkBack)) }
         }
         // 無音で捨てた区切りでも、録音が続いていることは知らせる
         if isRecording {
@@ -323,9 +333,13 @@ final class WatchRecorder: NSObject {
         lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
         updateBatterySaver()
         meetingOn = UserDefaults.standard.bool(forKey: "meetingOn")
+        _ = crowdActiveNow()
+        let holding = sender.awayHolding
+        if awayHolding != holding { awayHolding = holding }
         // 録音を始めた・止めた・送っていない数が変わったら、文字盤も出し直す（変わったときだけ書く。2026-11-07）
         updateWidgets()
         let center = UNUserNotificationCenter.current()
+        warnLowBatteryIfNeeded(center)
         // 時計の空きが少なくなったら知らせる（録音と控えが置けなくなる前に）
         if let free = WatchSender.freeSpace(), free < 300 * 1024 * 1024,
            Date.now.timeIntervalSince(lowSpaceAlerted) > 12 * 3600 {
@@ -336,7 +350,8 @@ final class WatchRecorder: NSObject {
             content.sound = .default
             center.add(UNNotificationRequest(identifier: "low-space", content: content, trigger: nil))
         }
-        if unsent >= (lowPower ? Self.unsentAlertLowPower : Self.unsentAlert) {
+        // 外出モードでわざと溜めているあいだは、「送れていない」の知らせを出さない（2026-11-21。休8）
+        if !sender.awayHolding, unsent >= (lowPower ? Self.unsentAlertLowPower : Self.unsentAlert) {
             guard !unsentAlerted else { return }
             unsentAlerted = true
             let content = UNMutableNotificationContent()
@@ -363,6 +378,68 @@ final class WatchRecorder: NSObject {
         // 画面に出すのは、短めの設定を5分にしているときだけ（ふつうの設定なら、もともと5分）
         let shown = saving && ChunkCutter.length == .short
         if batterySaving != shown { batterySaving = shown }
+    }
+
+    // MARK: - 休日のライフログ（2026-11-21。s19。HolidayRules）
+
+    private static let lowBatteryDayKey = "lowBatteryWarnedDay"
+    private static let lowBatteryID = "holiday-low-battery"
+
+    /// 休日に電池が 20%（仮）を切ったら「PLAUD に任せて」（1 日 1 回。iPhone の設定でオンのときだけ。休9）
+    private func warnLowBatteryIfNeeded(_ center: UNUserNotificationCenter) {
+        let device = WKInterfaceDevice.current()
+        let level: Double? = device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil
+        let charging = device.batteryState == .charging || device.batteryState == .full
+        let defaults = UserDefaults.standard
+        let now = Date.now
+        let today = HolidayRules.dayKey(now)
+        let enabled = defaults.object(forKey: HolidayRules.lowBatteryKey) as? Bool ?? true
+        let holiday = HolidayRules.isHolidayToday(defaults.string(forKey: HolidayRules.holidayDayKey), now: now)
+        guard HolidayRules.shouldWarnLowBattery(enabled: enabled, holiday: holiday, level: level, charging: charging,
+                                                warnedDay: defaults.string(forKey: Self.lowBatteryDayKey), today: today),
+              let level else { return }
+        defaults.set(today, forKey: Self.lowBatteryDayKey)
+        let content = UNMutableNotificationContent()
+        content.title = "時計の電池が \(Int((level * 100).rounded()))% です"
+        content.body = "このあとの録音は PLAUD に任せてください。時計の録音を止めると、電池が長く持ちます。"
+        content.sound = .default
+        center.add(UNNotificationRequest(identifier: Self.lowBatteryID, content: content, trigger: nil))
+    }
+
+    /// 「初めての人が多い」モードが続いているか（時間が過ぎたら切る）
+    @discardableResult
+    private func crowdActiveNow() -> Bool {
+        let on = HolidayRules.crowdActive(until: UserDefaults.standard.double(forKey: WatchSender.crowdUntilKey), now: .now)
+        if crowdOn != on { crowdOn = on }
+        return on
+    }
+
+    /// 「初めての人が多い」モードを始める・終える（休17）
+    func toggleCrowd() {
+        let on = !crowdActiveNow()
+        UserDefaults.standard.set(on ? Date.now.addingTimeInterval(HolidayRules.crowdLength).timeIntervalSince1970 : 0,
+                                  forKey: WatchSender.crowdUntilKey)
+        crowdOn = on
+        if on { sender.newPerson(.now) }
+        WKInterfaceDevice.current().play(on ? .start : .stop)
+        message = on ? "初めての人が多いモード: 区切りごとに印を付けます（4 時間で終わります）" : "初めての人が多いモードを終えました"
+    }
+
+    /// お酒を 1 杯（休30）
+    func drink() {
+        let now = Date.now
+        let key = "drinks|" + HolidayRules.dayKey(now)
+        let count = UserDefaults.standard.integer(forKey: key) + 1
+        UserDefaults.standard.set(count, forKey: key)
+        drinksToday = count
+        sender.drink(now)
+        WKInterfaceDevice.current().play(.success)
+        message = "お酒 \(count) 杯目を残しました"
+    }
+
+    /// 今日の杯数を読み直す（画面を開いたとき）
+    func refreshDrinks() {
+        drinksToday = UserDefaults.standard.integer(forKey: "drinks|" + HolidayRules.dayKey(.now))
     }
 
     /// 大事なところに印を付ける（前後1分の行に★が付く）。
@@ -417,6 +494,7 @@ final class WatchRecorder: NSObject {
         // 区切りを開かないまま「録音中」が続いていた（音は届くのに書く先が無い。2026-11-07）。書く先を開き直す
         if engine.isRunning {
             reopenIfNeeded()
+            noteResumed()
             return
         }
         Task { @MainActor in
@@ -425,6 +503,7 @@ final class WatchRecorder: NSObject {
                 self.stopEngine()
                 try await AVAudioSession.sharedInstance().activate()
                 try self.startEngine()
+                self.noteResumed()
             } catch {
                 guard attempt < Self.restartRetries else {
                     self.stopWithAlert("アラームや電話のあとで録音を再開できませんでした。LifeLog を開くと再開します。")
@@ -436,6 +515,13 @@ final class WatchRecorder: NSObject {
                 self.restartEngine(attempt: attempt + 1)
             }
         }
+    }
+
+    /// 中断のあとに流し直せた（今日の数。休10）
+    private func noteResumed() {
+        guard interruptionOpen else { return }
+        interruptionOpen = false
+        sender.countToday(HolidayRules.resumedKey)
     }
 
     /// 止めるボタンを押さずに録音が止まっていたら、始め直す（画面を開いたとき。2026-11-20）。
@@ -467,6 +553,11 @@ final class WatchRecorder: NSObject {
             switch type {
             case .began:
                 self.interruptedSince = .now
+                // 中断の回数を数える（今日。家の PC の diag に watchInterruptions として載る。2026-11-21。s19 の 休10）
+                if !self.interruptionOpen {
+                    self.interruptionOpen = true
+                    self.sender.countToday(HolidayRules.interruptionsKey)
+                }
                 self.finishChunk()
                 // 「終わった」の知らせが来ないこともあるので、1分たっても止まったままなら自分で再開する
                 try? await Task.sleep(for: .seconds(60))

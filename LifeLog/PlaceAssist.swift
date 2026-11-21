@@ -171,13 +171,19 @@ final class PlaceAssist {
                 await WifiHint.capture()
                 remindIfNeeded(near: here, accuracy: accuracy)
                 await askLater(arrival: arrival, here: here, accuracy: accuracy)
+                // 映画館・ライブ会場なら録音を休む（設定がオンのときだけ。2026-11-21。s19 の 休34。Holiday.swift）
+                await HolidayNudges.shared.venueArrived(here, at: arrival)
             }
         } else {
             cancelAskIfLeft(here)
             // 30 分以上いて、知らない所なら、名前なしの所に足す（週に 1 回まとめて聞く。強化案 90。Checkups.swift）
             let accuracy: Double = max(raw.accuracy, 0)
+            let known: Bool = isKnown(here, accuracy: accuracy)
             UnnamedStayBook.shared.record(arrival: raw.arrival, departure: raw.departure, latitude: raw.latitude,
-                                          longitude: raw.longitude, accuracy: accuracy, known: isKnown(here, accuracy: accuracy))
+                                          longitude: raw.longitude, accuracy: accuracy, known: known)
+            // 休日は、滞在の直後に「さっきの所は〇〇？」・会場で休んでいたら戻す（2026-11-21。s19 の 休21・休34。Holiday.swift）
+            let arrival: Date = raw.arrival, departure: Date = raw.departure
+            Task { await HolidayNudges.shared.stayEnded(arrival: arrival, departure: departure, here: here, known: known) }
         }
     }
 
@@ -202,6 +208,7 @@ final class PlaceAssist {
 
     private func moved(to location: CLLocation) {
         cancelAskIfLeft(location)
+        HolidayNudges.shared.venueLeft(location, departed: false)
         Task { await WifiHint.capture() }
         remindIfNeeded(near: location, accuracy: max(location.horizontalAccuracy, 0))
     }

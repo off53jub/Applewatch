@@ -70,7 +70,8 @@ final class Pipeline {
 
     /// 休む場所にいるかを確かめて、iPhone と時計に伝える
     func updateHold() {
-        let held = places.atPausePlace()
+        // 映画館・ライブ会場で休んでいるあいだも（設定がオンのときだけ。2026-11-21。s19 の 休34。Holiday.swift）
+        let held = places.atPausePlace() || HolidayBook.shared.venueHolding()
         guard held != recordingHeld || SilenceGate.held != held else { return }
         recordingHeld = held
         SilenceGate.held = held
@@ -301,6 +302,7 @@ final class Pipeline {
         places.onChange = { [weak self] in self?.updateHold() }
         shopVisits.attach(self)
         PlaceAssist.shared.attach(self)  // 着いたとき・30 分いたとき（2026-11-16。強化案 88・91・104）
+        HolidayNudges.shared.attach(self)  // 休日のライフログ（2026-11-21。s19。Holiday.swift）
         conversations.eventInfo = { [weak self] start, end in
             guard let event = self?.calendar.events(from: start, to: end).first, !event.title.isEmpty else { return nil }
             let detail = event.title + (event.location.map { "（場所: \($0)）" } ?? "")
@@ -334,7 +336,9 @@ final class Pipeline {
                 // 文字になるまでの時間を測る（iPhone で録った区切りは、録り終えた時刻が届いた時刻。2026-11-07。Latency.swift）
                 let end = start.addingTimeInterval(Self.duration(of: url))
                 Latency.noteChunk(url.lastPathComponent, start: start, end: end, arrived: end, watch: false)
-                homePC.enqueueJob(url, hints: keywords(for: vocabularyContext(at: start)))
+                // 車につないでいたあいだの区切りには「車内」の印（2026-11-21。s19 の 休13）
+                homePC.enqueueJob(url, hints: keywords(for: vocabularyContext(at: start)),
+                                  car: carAudio.connected(from: start, to: end))
             }
             processQueue()
         }
@@ -398,7 +402,8 @@ final class Pipeline {
                               watchCut: stamp.cut, watchSent: stamp.sent)
             // 届いたらすぐ、アプリが止まっても続く転送で家の PC に送っておく（2026-11-07）。
             // 時計が家の PC にも直接送っていて、もうでき上がっていれば、その答えをすぐ使う（WatchDirect.swift）
-            sendWatchChunkToPC(url, hints: keywords(for: vocabularyContext(at: start)), viaPC: stamp.viaPC)
+            sendWatchChunkToPC(url, hints: keywords(for: vocabularyContext(at: start)), viaPC: stamp.viaPC,
+                               car: carAudio.connected(from: start, to: ended))
             // 時計が PC に送るときのヒントも、ときどき新しくする（10分に1回まで）
             refreshWatchPCHints()
         }
@@ -437,6 +442,7 @@ final class Pipeline {
         }
         receiver.onMark = { [weak self] time in self?.addMark(at: time) }
         receiver.onVoiceFix = { [weak self] text, at in self?.receiveVoiceFix(text, at: at) }  // 2026-11-19（s18。KnowMe.swift）
+        receiver.onDrink = { at in HolidayBook.shared.addDrink(at) }  // 時計の「お酒 +1」（2026-11-21。s19 の 休30）
         receiver.onWatchResting = { [weak self] since in
             guard let self, since != watchRestingSince else { return }
             watchRestingSince = since
@@ -1756,6 +1762,9 @@ final class Pipeline {
             await sendHeartMinutesIfDue()
             // 位置の終わった日も、母艦に渡すためドライブに書く（2026-11-09。LocationExport.swift）
             await exportLocationIfDue()
+            // 休日のライフログ: 見回りと、終わった日の「休日」のファイル（2026-11-21。s19。Holiday.swift）
+            await HolidayNudges.shared.tick()
+            await exportHolidayIfDue()
             // 終わった滞在と今の滞在を、15分に1回まで家の PC へ（2026-11-14。強化案 30。OneTimeline.swift）
             await sendLiveStaysIfDue()
             // 朝の「昨日と今日」（充電しない夜にも。作り終えていれば何もしない。2026-11-09。MorningBrief.swift）
@@ -1867,6 +1876,31 @@ final class Pipeline {
             done.insert(key)
         }
         UserDefaults.standard.set(done.sorted(), forKey: LocationExport.doneKey)
+    }
+
+    /// 終わった日の「休日」のファイルを、ドライブの「LifeLog/休日」に 1 日 1 ファイルで書く（母艦の M1・M2 が読む）。
+    /// 休みの印（dayOff）・お酒の杯数・一言・「さっきの所は〇〇？」の答え。iPhone だけ。一度書いた日は書き直さない（2026-11-21。s19）
+    func exportHolidayIfDue(now: Date = .now) async {
+        guard email != nil, UIDevice.current.userInterfaceIdiom != .pad else { return }
+        var done = Set(UserDefaults.standard.stringArray(forKey: HolidayExport.doneKey) ?? [])
+        let due = HealthExport.dueDays(now: now, done: done, first: HolidayExport.firstDay, limit: HolidayExport.perRun)
+        guard !due.isEmpty else { return }
+        let book = HolidayBook.shared
+        for key in due {
+            guard let start = HealthExport.dayDate(key),
+                  let data = HolidayExport.json(day: key, why: dayOffReason(start), drinks: book.drinks, notes: book.notes,
+                                                places: book.places) else { continue }
+            do {
+                try await docs.uploadIfMissing(data, name: HolidayExport.fileName(key), folder: HolidayExport.folderName)
+            } catch {
+                if DriveRetry.kind(error) == .error {
+                    diagnostics.problem("休日のファイルをドライブに書けませんでした: \(error.localizedDescription)")
+                }
+                break
+            }
+            done.insert(key)
+        }
+        UserDefaults.standard.set(done.sorted(), forKey: HolidayExport.doneKey)
     }
 
     /// 書き出しをドライブの「控え」に置く（同じ名前の頭のものは新しい2つだけ残す）

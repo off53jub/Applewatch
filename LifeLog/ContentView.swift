@@ -855,6 +855,8 @@ private struct SettingsView: View {
         } footer: {
             Text("Face ID をオンにすると、アプリが前に出るたびに確かめるまで記録を隠します（録音と文字起こしは続きます）。")
         }
+        // 休日の知らせ・時計の外出モード・映画館で休む（2026-11-21。s19。Holiday.swift）
+        HolidaySettingsSection()
         Section {
             NavigationLink {
                 DetailedSettingsView()
