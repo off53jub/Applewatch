@@ -119,7 +119,7 @@ struct GoodThingsView: View {
     var body: some View {
         let book = pipeline.good
         let feedback = GoodFeedbackBook.shared
-        List {
+        LLList {
             Section {
                 Toggle("毎晩 21:30 に、今夜の3つを知らせる", isOn: $nightlyOn)
                     .onChange(of: nightlyOn) { _, _ in
@@ -141,7 +141,7 @@ struct GoodThingsView: View {
                 Section("初めて") {
                     ForEach(firsts, id: \.self) { first in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("\(Self.dayTitle(first.day))  \(first.kind)").font(.caption).foregroundStyle(.secondary)
+                            Text("\(Self.dayTitle(first.day))  \(first.kind)").font(.caption).foregroundStyle(.llDim)
                             Text(first.text)
                         }
                     }
@@ -152,7 +152,7 @@ struct GoodThingsView: View {
                     ForEach(Array(weeks.enumerated()), id: \.offset) { index, week in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(Self.weekTitle(week.start, current: index == 0)).font(.subheadline.bold())
-                            Text(Self.weekLine(week)).font(.caption).foregroundStyle(.secondary)
+                            Text(Self.weekLine(week)).font(.caption).foregroundStyle(.llDim)
                         }
                     }
                 } header: {
@@ -167,7 +167,7 @@ struct GoodThingsView: View {
                             id: \.self) { word in
                         VStack(alignment: .leading, spacing: 2) {
                             Text("\(word.time)  \(word.kind) — \(word.who)\(word.place.isEmpty ? "" : "・\(word.place)")")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.caption).foregroundStyle(.llDim)
                             Text("「\(word.text)」")
                         }
                         // 違うときは左へなぞるか長押しで「違う」。押すとすぐ見えなくなる
@@ -191,7 +191,7 @@ struct GoodThingsView: View {
                     if !laughs.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             Label("ウケたかも（仮）\(laughs.count) 場面。時刻を押すと、当たりか外れかを残せます", systemImage: "face.smiling")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.llDim)
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 8)], alignment: .leading, spacing: 8) {
                                 ForEach(laughs.prefix(12), id: \.self) { time in
                                     laughMenu(day: day, time: time, feedback: feedback)
@@ -202,7 +202,7 @@ struct GoodThingsView: View {
                 }
             }
             Section {
-                if let error = book.error { Text(error).foregroundStyle(.secondary) }
+                if let error = book.error { Text(error).foregroundStyle(.llDim) }
                 if book.data == nil && book.error == nil { Text("まだ読み込んでいません") }
             } footer: {
                 Text("記録に本当にあったことだけを並べています。お礼・ほめ言葉は、自分が話した直後に相手の行に出た言葉です。話し手の名前は声からの自動の聞き分けなので、違うことがあります。違うものは「違う」で消せます。「ウケたかも」は、自分が話した直後に笑いの音が聞こえたところで、誰の笑いかは分かりません（仮）。")

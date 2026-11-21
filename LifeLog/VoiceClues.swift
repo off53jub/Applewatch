@@ -561,7 +561,7 @@ struct NameCandidateRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(candidate.target != nil ? "「\(candidate.name)」にまとめる" : "「\(candidate.name)」と名前を付ける")
                 Text(candidate.reasons.joined(separator: "・"))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.llDim)
             }
         }
     }
@@ -583,14 +583,14 @@ struct VoiceTalksSection: View {
                     }
                     if !talk.others.isEmpty {
                         Text("一緒にいた人: " + talk.others.joined(separator: "、"))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.llDim)
                     }
                 }
                 ForEach(talk.lines, id: \.line.time) { item in
                     lineRow(item.line, end: item.end)
                 }
                 if talk.count > talk.lines.count {
-                    Text("この会話でほか \(talk.count - talk.lines.count) 行").font(.caption).foregroundStyle(.secondary)
+                    Text("この会話でほか \(talk.count - talk.lines.count) 行").font(.caption).foregroundStyle(.llDim)
                 }
             }
         } header: {
@@ -606,14 +606,14 @@ struct VoiceTalksSection: View {
         let audio = line.audio.flatMap { pipeline.archive.canPlay($0) ? $0 : nil }
         let label = HStack(alignment: .firstTextBaseline) {
             Text(Pipeline.VoiceTalk.time.string(from: line.time))
-                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .font(.caption.monospacedDigit()).foregroundStyle(.llDim)
             Text(line.text)
             Spacer(minLength: 0)
             if player.loading == key {
                 ProgressView()
             } else if audio != nil {
                 Image(systemName: player.playing == key ? "stop.circle.fill" : "play.circle")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(LL.accent)
             }
         }
         if let audio {

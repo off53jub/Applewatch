@@ -36,11 +36,11 @@ struct KnowMeView: View {
     var body: some View {
         let book = KnowMeBook.shared
         let day = KnowMeRules.dayKey(.now)
-        List {
+        LLList {
             Section {
                 if book.openQuestions.isEmpty {
                     Text(book.local.todayQuestions.isEmpty ? "今日の問いはまだありません。家の PC につながると読みます。"
-                         : "今日の分は答えました。また明日。").foregroundStyle(.secondary)
+                         : "今日の分は答えました。また明日。").foregroundStyle(.llDim)
                 }
                 ForEach(book.openQuestions) { q in
                     KnowQuestionRow(question: q, day: day)
@@ -52,7 +52,7 @@ struct KnowMeView: View {
             }
             Section {
                 if book.local.weekHypotheses.isEmpty {
-                    Text("今週の見立てはまだありません。").foregroundStyle(.secondary)
+                    Text("今週の見立てはまだありません。").foregroundStyle(.llDim)
                 }
                 ForEach(book.local.weekHypotheses) { h in
                     KnowHypothesisRow(hypothesis: h, day: day)
@@ -77,7 +77,7 @@ struct KnowMeView: View {
             KnowGeoSettingsSection()
             Section {
                 Text("時計の録音の画面の「違う、〇〇さん」に話すと、直前の会話の行といっしょに家の PC に送ります（だれのことかを読むのは家の PC）。")
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(.footnote).foregroundStyle(.llDim)
             } header: {
                 Text("声で直す")
             }
@@ -112,7 +112,7 @@ struct KnowEvidenceRow: View {
         VStack(alignment: .leading, spacing: 1) {
             Text("「" + evidence.text + "」").font(.caption)
             if let day {
-                Text(AppFeeds.monthDay(day)).font(.caption2).foregroundStyle(.secondary)
+                Text(AppFeeds.monthDay(day)).font(.caption2).foregroundStyle(.llDim)
             }
         }
     }
@@ -128,11 +128,11 @@ struct KnowQuestionRow: View {
         let book = KnowMeBook.shared
         VStack(alignment: .leading, spacing: 8) {
             if question.group == "hypothesis" {
-                Text("見立て（仮）").font(.caption2.bold()).foregroundStyle(.orange)
+                Text("見立て（仮）").font(.caption2.bold()).foregroundStyle(.llWarn)
             }
             // 一緒にいた人の確かめ（予定・LINE の約束・声から。名前はまとめない。2026-11-21。s19 の 休16）
             if question.group == "with_people" {
-                Text("一緒にいた人（仮）").font(.caption2.bold()).foregroundStyle(.orange)
+                Text("一緒にいた人（仮）").font(.caption2.bold()).foregroundStyle(.llWarn)
             }
             Text(question.text)
             ForEach(Array(question.evidence.enumerated()), id: \.offset) { _, e in
@@ -148,7 +148,7 @@ struct KnowQuestionRow: View {
                 .buttonStyle(.bordered)
             case "recheck":
                 if let current = question.current {
-                    Text("いま書いてあること: " + current).font(.caption).foregroundStyle(.secondary)
+                    Text("いま書いてあること: " + current).font(.caption).foregroundStyle(.llDim)
                 }
                 TextField("変わったなら、いまのこと（なくてよい）", text: $text, axis: .vertical).font(.callout)
                 HStack(spacing: 12) {
@@ -162,7 +162,7 @@ struct KnowQuestionRow: View {
                 Button("今日はいい") { book.skip(question, day: day) }.font(.caption)
             default:
                 if let draft = question.draft, !editing {
-                    Text("下書き（AI）: " + draft).font(.callout).foregroundStyle(.secondary)
+                    Text("下書き（AI）: " + draft).font(.callout).foregroundStyle(.llDim)
                     HStack(spacing: 12) {
                         Button("このままでよい") { book.draftOK(question, day: day) }
                         Button("直す") {
@@ -197,20 +197,20 @@ struct KnowHypothesisRow: View {
         let answered: String? = book.hypothesisAnswer(hypothesis.id)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Text(hypothesis.label).font(.caption2.bold()).foregroundStyle(.orange)
+                Text(hypothesis.label).font(.caption2.bold()).foregroundStyle(.llWarn)
                 if hypothesis.tier == "tentative" {
-                    Text("仮").font(.caption2.bold()).padding(.horizontal, 4).background(Color.orange.opacity(0.2), in: Capsule())
+                    Text("仮").font(.caption2.bold()).padding(.horizontal, 4).background(LL.warn.opacity(0.2), in: Capsule())
                 }
             }
             Text(hypothesis.text)
             if !hypothesis.why.isEmpty {
-                Text(hypothesis.why).font(.caption).foregroundStyle(.secondary)
+                Text(hypothesis.why).font(.caption).foregroundStyle(.llDim)
             }
             ForEach(Array(hypothesis.evidence.enumerated()), id: \.offset) { _, e in
                 KnowEvidenceRow(evidence: e)
             }
             if let answered {
-                Text(knowAnsweredLabel(answered, right: "当たり")).font(.caption).foregroundStyle(.secondary)
+                Text(knowAnsweredLabel(answered, right: "当たり")).font(.caption).foregroundStyle(.llDim)
                 if answered == "wrong" {
                     WhyWrongRow(target: "hypothesis", head: hypothesis.text, question: nil)
                 }
@@ -236,13 +236,13 @@ struct KnowSpotRow: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(spot.claim)
             if !spot.note.isEmpty {
-                Text(spot.note).font(.caption).foregroundStyle(.secondary)
+                Text(spot.note).font(.caption).foregroundStyle(.llDim)
             }
             ForEach(Array(spot.evidence.enumerated()), id: \.offset) { _, e in
                 KnowEvidenceRow(evidence: e)
             }
             if let answered = book.spotAnswer(spot.id) {
-                Text(knowAnsweredLabel(answered, right: "合ってる")).font(.caption).foregroundStyle(.secondary)
+                Text(knowAnsweredLabel(answered, right: "合ってる")).font(.caption).foregroundStyle(.llDim)
             } else {
                 HStack(spacing: 12) {
                     Button("合ってる") { book.voteSpot(spot.id, value: "right", day: spot.day ?? day) }
@@ -325,7 +325,7 @@ struct KnowGeoSettingsSection: View {
             let ok: Int = sums["know.geo.bgrec.ok"] ?? 0
             let fail: Int = sums["know.geo.bgrec.fail"] ?? 0
             if ok + fail > 0 {
-                Text("職場で裏から始められた \(ok) 回・始められなかった \(fail) 回").font(.caption).foregroundStyle(.secondary)
+                Text("職場で裏から始められた \(ok) 回・始められなかった \(fail) 回").font(.caption).foregroundStyle(.llDim)
             }
         } header: {
             Text("場所で自動に・知らせ")
@@ -361,7 +361,7 @@ struct KnowMeTodaySection: View {
                                 .accessibilityLabel("\(n)")
                             }
                         }
-                        Text("左がわるい・右がよい。押すだけで残ります（夜は「夜の10秒」）。").font(.caption2).foregroundStyle(.secondary)
+                        Text("左がわるい・右がよい。押すだけで残ります（夜は「夜の10秒」）。").font(.caption2).foregroundStyle(.llDim)
                     }
                 }
                 if open > 0 {
@@ -394,7 +394,7 @@ struct ConversationNoteRow: View {
     var body: some View {
         let book = KnowMeBook.shared
         if let saved = book.savedNote(day: day, start: start) {
-            Text("実は: " + saved).font(.caption).foregroundStyle(.secondary)
+            Text("実は: " + saved).font(.caption).foregroundStyle(.llDim)
         } else if open {
             TextField("実はこう思ってた", text: $text, axis: .vertical).font(.callout)
             HStack(spacing: 16) {
@@ -461,7 +461,7 @@ struct WhyWrongRow: View {
 
     var body: some View {
         if sent {
-            Text("「違う」の理由を残しました").font(.caption).foregroundStyle(.secondary)
+            Text("「違う」の理由を残しました").font(.caption).foregroundStyle(.llDim)
         } else if open {
             VStack(alignment: .leading, spacing: 6) {
                 TextField("なぜなら（なくてよい）", text: $why).font(.callout)

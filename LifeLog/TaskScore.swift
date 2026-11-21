@@ -75,7 +75,7 @@ struct TaskScoreView: View {
         let since: Date? = recent ? Date.now.addingTimeInterval(-30 * 86400) : nil
         let rows: [TaskScore.Row] = TaskScore.rows(pipeline.tasks.items, since: since)
         let answers = AskFeedback.counts
-        List {
+        LLList {
             Section {
                 Picker("期間", selection: $recent) {
                     Text("30日").tag(true)
@@ -85,7 +85,7 @@ struct TaskScoreView: View {
             }
             Section {
                 if rows.isEmpty {
-                    Text("まだありません").foregroundStyle(.secondary)
+                    Text("まだありません").foregroundStyle(.llDim)
                 }
                 ForEach(rows) { row in
                     VStack(alignment: .leading, spacing: 4) {
@@ -93,13 +93,13 @@ struct TaskScoreView: View {
                             Text(row.title)
                             Spacer()
                             if let p = row.keptPercent {
-                                Text("残した \(p)%").foregroundStyle(p < 30 ? Color.red : Color.secondary)
+                                Text("残した \(p)%").foregroundStyle(p < 30 ? LL.danger : LL.dim)
                             }
                         }
                         Text("全部 \(row.total)・入れた/済み \(row.kept)・違う \(row.rejected)・確かめ待ち \(row.waiting)")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.llDim)
                         if !row.reasons.isEmpty {
-                            Text("違う: " + TaskScore.reasonText(row.reasons)).font(.caption2).foregroundStyle(.secondary)
+                            Text("違う: " + TaskScore.reasonText(row.reasons)).font(.caption2).foregroundStyle(.llDim)
                         }
                     }
                 }
@@ -113,7 +113,7 @@ struct TaskScoreView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(r.title)
                         Text("出した \(r.sent)・知らせから開いた \(r.opened)・ボタンを押した \(r.buttons)")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.llDim)
                     }
                 }
             } header: {

@@ -47,7 +47,7 @@ struct AppUsageHowToView: View {
     @Environment(Pipeline.self) private var pipeline
 
     var body: some View {
-        Form {
+        LLForm {
             Section {
                 Text("iPhone のスクリーンタイム（アプリごとの時間）と Safari の履歴は、Apple の決まりで、ほかのアプリからは読めません。そこで、ショートカット App のオートメーションで、アプリを開いたときに LifeLog に知らせてもらいます。")
             } header: {

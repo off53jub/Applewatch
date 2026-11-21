@@ -420,13 +420,9 @@ enum MothershipFeeds {
         }
     }
 
+    /// 意味の色（2026-11-21。s20 の 体1。確かめられた＝確か・生きている＝見立て（仮）・弱まった＝注意・分からない＝確かめ待ち）
     static func statusColor(_ status: String) -> Color {
-        switch status {
-        case "alive": return .green
-        case "weakened": return .orange
-        case "confirmed": return .blue
-        default: return .secondary
-        }
+        Certainty.from(hypothesisStatus: status).color
     }
 
     /// 「11/9〜11/15」（分からなければ week のまま）
@@ -638,7 +634,11 @@ enum MothershipOutbox {
         // 自分を知ってもらう（2026-11-19。s18。KnowMe.swift）
         case "know/answer", "know/recheck", "know/note", "know/person-goal", "know/why-wrong", "know/mark", "know/voice-fix",
              "mood/tap": return KnowMeRules.feature
-        default: return path
+        // s20（2026-11-21。S20Book.swift）: 検品表の「続ける・止める」と、時間を選んで消した分を家の PC でも消す頼み
+        case "feature-answer": return "featcheck"
+        default:
+            if path.hasPrefix("records/") && path.hasSuffix("/forget") { return "forget" }
+            return path
         }
     }
 
@@ -1264,7 +1264,7 @@ private struct TodayThreeRow: View {
             HStack(spacing: 14) {
                 Spacer(minLength: 0)
                 if answer == "skipped" {
-                    Text("やらない にしました").font(.caption).foregroundStyle(.secondary)
+                    Text("やらない にしました").font(.caption).foregroundStyle(.llDim)
                 }
                 Button {
                     working = true
@@ -1309,7 +1309,7 @@ struct TodayAnswerCard: View {
         let open: [Proposal] = pipeline.homeFeeds.openProposals()
         Section {
             if three.isEmpty {
-                Text("今日の三つはまだありません。タスクが入ると、ここに出ます。").font(.callout).foregroundStyle(.secondary)
+                Text("今日の三つはまだありません。タスクが入ると、ここに出ます。").font(.callout).foregroundStyle(.llDim)
             } else {
                 TodayThreeRows(picks: three)
             }
@@ -1318,7 +1318,7 @@ struct TodayAnswerCard: View {
                     .onAppear { pipeline.homeFeeds.noteShown([first.id]) }
             }
             if let note {
-                Text(note).font(.caption).foregroundStyle(.secondary)
+                Text(note).font(.caption).foregroundStyle(.llDim)
             }
             if !open.isEmpty {
                 NavigationLink("提案をすべて見る（\(open.count)）") { ProposalsView() }
@@ -1403,7 +1403,7 @@ struct PrepCard: View {
                 Text(item.title).font(.headline)
             }
             if !item.people.isEmpty {
-                Text(item.people.joined(separator: "、")).font(.caption).foregroundStyle(.secondary)
+                Text(item.people.joined(separator: "、")).font(.caption).foregroundStyle(.llDim)
             }
             if let last = item.last_talk {
                 PrepLines(title: "前回（" + AppFeeds.monthDay(last.day) + "）", lines: [last.summary])
@@ -1423,7 +1423,7 @@ private struct PrepLines: View {
     var body: some View {
         if !lines.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.caption.bold()).foregroundStyle(.secondary)
+                Text(title).font(.caption.bold()).foregroundStyle(.llDim)
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                     Text("・" + line).font(.callout)
                 }
@@ -1486,7 +1486,7 @@ struct NightMoodSection: View {
         if let day = windowDay, done || !pipeline.mothershipFeeds.answeredMood(day: day) {
             Section {
                 if done {
-                    Label("残しました。おつかれさまでした。", systemImage: "checkmark.circle").foregroundStyle(.secondary)
+                    Label("残しました。おつかれさまでした。", systemImage: "checkmark.circle").foregroundStyle(.llDim)
                 } else {
                     MoodScaleRow(title: "気分", low: "わるい", high: "よい", value: $mood)
                     MoodScaleRow(title: "疲れ", low: "くたくた", high: "元気", value: $energy)
@@ -1525,13 +1525,13 @@ private struct MoodScaleRow: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.subheadline.bold())
             HStack(spacing: 6) {
-                Text("1 " + low).font(.caption2).foregroundStyle(.secondary)
+                Text("1 " + low).font(.caption2).foregroundStyle(.llDim)
                 Spacer(minLength: 4)
                 ForEach(1...5, id: \.self) { n in
                     MoodScaleButton(n: n, selected: value == n) { value = n }
                 }
                 Spacer(minLength: 4)
-                Text(high + " 5").font(.caption2).foregroundStyle(.secondary)
+                Text(high + " 5").font(.caption2).foregroundStyle(.llDim)
             }
         }
     }
@@ -1547,7 +1547,7 @@ private struct MoodScaleButton: View {
             Text("\(n)")
                 .font(.callout.monospacedDigit().bold())
                 .frame(width: 32, height: 32)
-                .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Circle())
+                .background(selected ? LL.accent : LL.dim.opacity(0.15), in: Circle())
                 .foregroundStyle(selected ? Color.white : Color.primary)
         }
         .buttonStyle(.borderless)
@@ -1593,7 +1593,7 @@ struct WeeklyLookBackSection: View {
                     WeeklyItemRow(item: item)
                 }
                 if weekly.items.isEmpty {
-                    Text("今週のふり返りはまだありません。").foregroundStyle(.secondary)
+                    Text("今週のふり返りはまだありません。").foregroundStyle(.llDim)
                 }
                 if !weekly.hypotheses.isEmpty {
                     NavigationLink {
@@ -1607,7 +1607,7 @@ struct WeeklyLookBackSection: View {
                     }
                 }
                 if let feedback = weekly.feedback {
-                    Text(MothershipFeeds.feedbackLine(feedback)).font(.caption).foregroundStyle(.secondary)
+                    Text(MothershipFeeds.feedbackLine(feedback)).font(.caption).foregroundStyle(.llDim)
                 }
             } header: {
                 Text("今週のふり返り" + headerWeek(weekly))
@@ -1633,13 +1633,13 @@ private struct WeeklyItemRow: View {
                 .font(.caption2)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
-                .background(Color.accentColor.opacity(0.12), in: Capsule())
+                .background(LL.accent.opacity(0.12), in: Capsule())
             Text(item.title).font(.headline)
             if !item.body.isEmpty {
                 Text(item.body).font(.callout)
             }
             ForEach(Array(item.evidence.enumerated()), id: \.offset) { _, e in
-                Text("・「" + e.quote + "」（" + AppFeeds.monthDay(e.day) + "）").font(.caption).foregroundStyle(.secondary)
+                Text("・「" + e.quote + "」（" + AppFeeds.monthDay(e.day) + "）").font(.caption).foregroundStyle(.llDim)
             }
             FeedbackButtons(kind: "weekly", id: item.id)
         }
@@ -1653,10 +1653,10 @@ struct HypothesesView: View {
 
     var body: some View {
         let list: [WeeklyFeed.Hypothesis] = pipeline.mothershipFeeds.weekly?.hypotheses ?? []
-        List {
+        LLList {
             Section {
                 if list.isEmpty {
-                    Text("まだありません").foregroundStyle(.secondary)
+                    Text("まだありません").foregroundStyle(.llDim)
                 }
                 ForEach(list) { h in
                     HypothesisRow(hypothesis: h)
@@ -1681,15 +1681,25 @@ private struct HypothesisRow: View {
                     .foregroundStyle(MothershipFeeds.statusColor(hypothesis.status))
                 Spacer(minLength: 8)
                 if let said = hypothesis.said_on {
-                    Text(AppFeeds.monthDay(said) + " に").font(.caption2).foregroundStyle(.secondary)
+                    Text(AppFeeds.monthDay(said) + " に").font(.caption2).foregroundStyle(.llDim)
                 }
             }
-            Text(hypothesis.text)
+            // 確かさの見た目（見立て（仮）は点線の枠。2026-11-21。s20 の 体2）
+            Text(hypothesis.text).certainty(Certainty.from(hypothesisStatus: hypothesis.status))
             if !hypothesis.note.isEmpty {
-                Text(hypothesis.note).font(.caption).foregroundStyle(.secondary)
+                Text(hypothesis.note).font(.caption).foregroundStyle(.llDim)
             }
-            if let checked = hypothesis.checked_on {
-                Text(AppFeeds.monthDay(checked) + " に照らしました").font(.caption2).foregroundStyle(.secondary)
+            HStack {
+                if let checked = hypothesis.checked_on {
+                    Text(AppFeeds.monthDay(checked) + " に照らしました").font(.caption2).foregroundStyle(.llDim)
+                }
+                Spacer()
+                // なぜこうなった？（2026-11-21。s20 の 体33）
+                WhyButton(info: WhyInfo(title: "見立て", reason: MothershipFeeds.statusLabel(hypothesis.status) + "。"
+                                            + (hypothesis.note.isEmpty ? "母艦がその後の記録と照らしました。" : hypothesis.note),
+                                        evidence: [hypothesis.said_on.map { AppFeeds.monthDay($0) + " に口にした見立て" } ?? "口にした見立て"],
+                                        fix: "違っていたら「直す」の「自分を知る」で ○× を付けてください。",
+                                        certainty: Certainty.from(hypothesisStatus: hypothesis.status)))
             }
         }
     }
@@ -1723,9 +1733,9 @@ struct BriefCompareView: View {
 
     var body: some View {
         let days: [BriefCompareDay] = pipeline.mothershipFeeds.compare
-        List {
+        LLList {
             if days.isEmpty {
-                Text("比べる朝のまとめはまだありません。").foregroundStyle(.secondary)
+                Text("比べる朝のまとめはまだありません。").foregroundStyle(.llDim)
             } else {
                 let shown: BriefCompareDay = days[min(index, days.count - 1)]
                 Section {
@@ -1769,7 +1779,7 @@ private struct BriefVersion: View {
     var body: some View {
         let chosen: String? = pipeline.mothershipFeeds.voted("brief_compare", id: "cmp-" + day)
         VStack(alignment: .leading, spacing: 8) {
-            Text(maker == "codex" ? "Codex" : "Claude").font(.caption.bold()).foregroundStyle(.secondary)
+            Text(maker == "codex" ? "Codex" : "Claude").font(.caption.bold()).foregroundStyle(.llDim)
             Text(text).font(.callout).textSelection(.enabled)
             Button {
                 pipeline.mothershipFeeds.vote("brief_compare", id: "cmp-" + day, value: maker, day: day)
@@ -1820,10 +1830,10 @@ struct AccuracyView: View {
 
     var body: some View {
         let weeks: [AccuracyWeek] = pipeline.mothershipFeeds.accuracy
-        List {
+        LLList {
             Section {
                 if weeks.isEmpty {
-                    Text("まだありません").foregroundStyle(.secondary)
+                    Text("まだありません").foregroundStyle(.llDim)
                 } else {
                     ScrollView(.horizontal) {
                         AccuracyGrid(weeks: weeks)
@@ -1855,7 +1865,7 @@ private struct AccuracyGrid: View {
                 Text("話し方")
             }
             .font(.caption.bold())
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.llDim)
             ForEach(weeks) { w in
                 AccuracyGridRow(week: w)
             }
@@ -1888,16 +1898,16 @@ struct UnusedScreensView: View {
     var body: some View {
         let feed: UnusedFeed? = pipeline.mothershipFeeds.unused
         let items: [UnusedScreen] = feed?.items ?? []
-        List {
+        LLList {
             Section {
                 if items.isEmpty {
-                    Text("ありません").foregroundStyle(.secondary)
+                    Text("ありません").foregroundStyle(.llDim)
                 }
                 ForEach(items) { item in
                     VStack(alignment: .leading, spacing: 2) {
                         LabeledContent(MothershipFeeds.screenName(item.screen), value: "\(item.days)日で \(item.opens) 回")
                         if !item.note.isEmpty {
-                            Text(item.note).font(.caption).foregroundStyle(.secondary)
+                            Text(item.note).font(.caption).foregroundStyle(.llDim)
                         }
                     }
                 }

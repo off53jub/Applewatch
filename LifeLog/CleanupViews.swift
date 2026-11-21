@@ -13,13 +13,13 @@ struct CleanupView: View {
     private var chosen: [Junk.Candidate] { (candidates ?? []).filter { !keep.contains($0.id) } }
 
     var body: some View {
-        Form {
+        LLForm {
             Section {
                 Button(candidates == nil ? "調べる" : "もう一度調べる") { scan() }
                     .disabled(working)
                 if let candidates {
                     if candidates.isEmpty {
-                        Text("消す候補はありませんでした。").foregroundStyle(.secondary)
+                        Text("消す候補はありませんでした。").foregroundStyle(.llDim)
                     }
                     ForEach(Junk.Kind.allCases) { kind in
                         let items = candidates.filter { $0.kind == kind }
@@ -38,7 +38,7 @@ struct CleanupView: View {
                     }
                 }
                 if !status.isEmpty {
-                    Text(status).foregroundStyle(.secondary)
+                    Text(status).foregroundStyle(.llDim)
                 }
             } footer: {
                 Text("すべての日の記録から、声の無いところに書かれた決まり文句、同じ文の連打、壊れた行を探します。種類を開くと実際の行を確かめられ、残したい行は外せます。消すとアプリの記録とドキュメントの両方から行ごと消え、外した行はこれからも消しません。これから書く行も、同じ見つけ方で自動で消します。")
@@ -54,7 +54,7 @@ struct CleanupView: View {
                     Button("音声で照らし直す") { pipeline.startRecheck() }
                 }
                 if !pipeline.recheckResult.isEmpty {
-                    Text(pipeline.recheckResult).foregroundStyle(.secondary)
+                    Text(pipeline.recheckResult).foregroundStyle(.llDim)
                 }
             } header: {
                 Text("言っていない文を探す")
@@ -123,7 +123,7 @@ private struct JunkListView: View {
     }()
 
     var body: some View {
-        List {
+        LLList {
             Section {
                 ForEach(items.reversed()) { item in
                     Button {
@@ -131,19 +131,19 @@ private struct JunkListView: View {
                     } label: {
                         HStack(alignment: .firstTextBaseline) {
                             Image(systemName: keep.contains(item.id) ? "circle" : "checkmark.circle.fill")
-                                .foregroundStyle(keep.contains(item.id) ? Color.secondary : Color.red)
+                                .foregroundStyle(keep.contains(item.id) ? LL.dim : LL.danger)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.day + " " + Self.timeFormatter.string(from: item.line.time)
                                      + (item.line.speaker.map { "  " + $0 } ?? ""))
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.llDim)
                                 if let before = item.before {
-                                    Text("前: " + before).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                    Text("前: " + before).font(.caption2).foregroundStyle(.llDim).lineLimit(1)
                                 }
                                 Text(item.line.text)
                                     .strikethrough(!keep.contains(item.id))
                                 if let after = item.after {
-                                    Text("次: " + after).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                    Text("次: " + after).font(.caption2).foregroundStyle(.llDim).lineLimit(1)
                                 }
                             }
                         }
@@ -179,20 +179,20 @@ private struct TrashView: View {
     }()
 
     var body: some View {
-        List {
+        LLList {
             if !status.isEmpty {
-                Text(status).foregroundStyle(.secondary)
+                Text(status).foregroundStyle(.llDim)
             }
             ForEach(items) { item in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.day + " " + Self.timeFormatter.string(from: item.line.time) + "  " + item.kind.label)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.llDim)
                     Text(item.line.text)
                 }
                 .swipeActions {
                     Button("戻す", systemImage: "arrow.uturn.backward") { restore(item) }
-                        .tint(.blue)
+                        .tint(LL.accent)
                 }
             }
         }

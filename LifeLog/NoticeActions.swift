@@ -160,6 +160,8 @@ enum NoticeScreen: String, Equatable {
     case questions, goodThings, money, cloudLog, reviewNudge, diagnostics, homePC
     /// 家の PC からの提案（2026-11-13。HomeFeeds.swift）
     case proposals
+    /// 知らせの履歴（2026-11-21。s20 の 体16・体19。S20NoticeViews.swift）
+    case notices
 }
 
 /// 知らせを押したときに開く画面（2026-11-10。2026-11-12 からタスク以外の知らせも、その画面を開く）
@@ -195,6 +197,8 @@ enum NoticeRoute: Identifiable, Equatable {
         if id.hasPrefix(KnowMeRules.noticePrefix) { return .tab(.fix) }
         // 休日の知らせ（2026-11-21。s19。Holiday.swift）は「今日」から
         if id.hasPrefix(HolidayNoticeRules.prefix) { return .tab(.today) }
+        // 朝夕の便り（2026-11-21。s20 の 体16）は知らせの履歴を開く
+        if id.hasPrefix("digest-") { return .screen(.notices) }
         switch id {
         case MorningBrief.noticeID, "watch-silent", "phone-stopped", "watch-battery", "stall",
              "watch-open-after-update", "watch-not-recording":
@@ -219,7 +223,7 @@ enum NoticeRoute: Identifiable, Equatable {
         guard url.scheme == "lifelog" else { return nil }
         switch url.host() ?? "" {
         case "tasks": return .tab(.tasks)
-        case "fix": return .tab(.fix)
+        case "fix", "review": return .tab(.fix)
         case "records": return .tab(.records)
         case "lookback": return .tab(.lookBack)
         case "good": return .screen(.goodThings)

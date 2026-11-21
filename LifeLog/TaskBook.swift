@@ -1256,6 +1256,9 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let request = response.notification.request
         let content = request.content
+        // 押された知らせを履歴に印（体験の数字。2026-11-21。s20 の 体38。S20Book.swift）
+        let openedID: String = request.identifier
+        Task { @MainActor in S20Book.shared.noteOpened(id: openedID) }
         // 30 分いたら「ここは？」のボタン（候補の名前を位置で覚える。2026-11-16。強化案 91。PlaceAssist.swift）
         if content.categoryIdentifier == PlaceAssistRules.askCategory {
             let actionID: String = response.actionIdentifier
@@ -1371,7 +1374,7 @@ struct TaskBookView: View {
     var body: some View {
         let book = pipeline.tasks
         let lists = book.lists(scope)
-        List {
+        LLList {
             Section {
                 Picker("見る", selection: $page) {
                     ForEach(Page.allCases) { p in Text(title(p, lists)).tag(p) }
@@ -1382,7 +1385,7 @@ struct TaskBookView: View {
             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
             .listRowSeparator(.hidden)
             if let note {
-                Section { Text(note).font(.footnote).foregroundStyle(.secondary) }
+                Section { Text(note).font(.footnote).foregroundStyle(.llDim) }
             }
             if reading {
                 Section { HStack { ProgressView(); Text("写真の文字を読み取っています…") } }
@@ -1486,7 +1489,7 @@ struct TaskBookView: View {
         }
         .sheet(isPresented: $showSettings) {
             NavigationStack {
-                Form {
+                LLForm {
                     Section {
                         Toggle("朝と夕方に知らせる", isOn: $remindOn)
                         if remindOn {
@@ -1624,7 +1627,7 @@ struct TaskBookView: View {
         let homes = Dictionary(grouping: homeExtra(scope)) { OneTaskList.bucket($0, now: .now) }
         let buckets = TaskBook.Bucket.allCases.filter { apps[$0] != nil || homes[$0] != nil }
         if buckets.isEmpty {
-            Section { Text("今やることはありません").foregroundStyle(.secondary) }
+            Section { Text("今やることはありません").foregroundStyle(.llDim) }
         }
         ForEach(buckets, id: \.self) { bucket in
             let mine = apps[bucket] ?? []
@@ -1641,7 +1644,7 @@ struct TaskBookView: View {
                 }
             } header: {
                 Text("\(bucket.title)（\(mine.count + others.count)）")
-                    .foregroundStyle(bucket == .late ? Color.red : Color.secondary)
+                    .foregroundStyle(bucket == .late ? LL.danger : LL.dim)
             }
         }
         Section {
@@ -1657,7 +1660,7 @@ struct TaskBookView: View {
     private func waitingPage(_ book: TaskBook.Lists) -> some View {
         if book.waiting.isEmpty {
             Section {
-                Text("待っているものはありません").foregroundStyle(.secondary)
+                Text("待っているものはありません").foregroundStyle(.llDim)
             } footer: {
                 Text("人に頼んだこと（会話から拾ったもの・＋の「人に頼んだことを書く」）と、左へ払って「待ち」にしたものがここに並びます。")
             }
@@ -1675,7 +1678,7 @@ struct TaskBookView: View {
         let people = TaskBook.byPerson(book.open)
         if people.isEmpty {
             Section {
-                Text("相手の分かるものはまだありません").foregroundStyle(.secondary)
+                Text("相手の分かるものはまだありません").foregroundStyle(.llDim)
             } footer: {
                 Text("頼んだ人・頼んだ相手・約束した相手が分かるものを、人ごとにまとめます。")
             }
@@ -1692,7 +1695,7 @@ struct TaskBookView: View {
     @ViewBuilder
     private func donePage(_ book: TaskBook.Lists) -> some View {
         if book.done.isEmpty {
-            Section { Text("30日以内に済んだものはありません").foregroundStyle(.secondary) }
+            Section { Text("30日以内に済んだものはありません").foregroundStyle(.llDim) }
         } else {
             Section {
                 ForEach(book.done) { item in
@@ -1700,14 +1703,14 @@ struct TaskBookView: View {
                         Button {
                             change(item.id, .open)
                         } label: {
-                            Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green)
+                            Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.llGood)
                         }
                         .buttonStyle(.borderless)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(item.what).strikethrough().foregroundStyle(.secondary)
+                            Text(item.what).strikethrough().foregroundStyle(.llDim)
                             if let at = item.doneAt {
                                 Text(at.formatted(date: .abbreviated, time: .shortened) + " に済み")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.caption).foregroundStyle(.llDim)
                             }
                         }
                     }
@@ -1748,16 +1751,16 @@ struct TaskBookView: View {
             TaskRow(item: item, player: player) { editing = item }
         }
         .swipeActions(edge: .trailing) {
-            Button("済み") { change(item.id, .done) }.tint(.green)
+            Button("済み") { change(item.id, .done) }.tint(LL.good)
             if item.isWaiting {
-                Button("やるに戻す") { withAnimation { pipeline.tasks.setProgress(item.id, .started) } }.tint(.blue)
+                Button("やるに戻す") { withAnimation { pipeline.tasks.setProgress(item.id, .started) } }.tint(LL.accent)
             } else {
-                Button("待ち") { withAnimation { pipeline.tasks.setProgress(item.id, .waiting) } }.tint(.purple)
+                Button("待ち") { withAnimation { pipeline.tasks.setProgress(item.id, .waiting) } }.tint(LL.accent)
             }
         }
         .swipeActions(edge: .leading) {
-            Button("明日に") { withAnimation { pipeline.tasks.postpone(item.id, days: 1) } }.tint(.orange)
-            Button("来週に") { withAnimation { pipeline.tasks.postpone(item.id, days: TaskBook.nextWeekDays()) } }.tint(.indigo)
+            Button("明日に") { withAnimation { pipeline.tasks.postpone(item.id, days: 1) } }.tint(LL.warn)
+            Button("来週に") { withAnimation { pipeline.tasks.postpone(item.id, days: TaskBook.nextWeekDays()) } }.tint(LL.accent)
         }
         .contextMenu {
             Button(item.urgent == true ? "急ぎを外す" : "急ぎにする", systemImage: "exclamationmark") {
@@ -1819,7 +1822,7 @@ struct TaskRow: View {
             Button(action: onEdit) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     if item.urgent == true {
-                        Image(systemName: "exclamationmark").foregroundStyle(.red).fontWeight(.bold)
+                        Image(systemName: "exclamationmark").foregroundStyle(.llDanger).fontWeight(.bold)
                     }
                     Text(item.what).foregroundStyle(.primary).multilineTextAlignment(.leading)
                 }
@@ -1829,24 +1832,24 @@ struct TaskRow: View {
                 let kind = item.kindOrDefault
                 Label(kind.label, systemImage: kind.symbol)
                     .labelStyle(.titleAndIcon)
-                    .foregroundStyle(kind == .delegated ? Color.purple : kind == .promise ? Color.teal : Color.secondary)
+                    .foregroundStyle(kind == .delegated ? LL.accent : kind == .promise ? LL.accent : LL.dim)
                 if let progress = item.progress {
-                    Text(progress.label).foregroundStyle(progress == .waiting ? Color.purple : Color.blue)
+                    Text(progress.label).foregroundStyle(progress == .waiting ? LL.accent : LL.accent)
                 }
                 if let n = item.postponed, n > 0 {
-                    Text("延期\(n)回").foregroundStyle(n >= 3 ? Color.red : Color.secondary)
+                    Text("延期\(n)回").foregroundStyle(n >= 3 ? LL.danger : LL.dim)
                 }
                 if !item.isWork {
-                    Label("仕事以外", systemImage: "house").labelStyle(.titleAndIcon).foregroundStyle(.green)
+                    Label("仕事以外", systemImage: "house").labelStyle(.titleAndIcon).foregroundStyle(.llGood)
                 }
             }
             .font(.caption)
             HStack(spacing: 6) {
                 if let due = item.due {
                     let text = Pipeline.taskDueText(due)
-                    Text(text).foregroundStyle(text.hasSuffix("過ぎ") || text == "今日まで" ? Color.red : Color.orange)
+                    Text(text).foregroundStyle(text.hasSuffix("過ぎ") || text == "今日まで" ? LL.danger : LL.warn)
                 } else if let dueText = item.dueText {
-                    Text(dueText).foregroundStyle(.orange)
+                    Text(dueText).foregroundStyle(.llWarn)
                 }
                 if let from = item.from {
                     switch item.kindOrDefault {
@@ -1857,13 +1860,13 @@ struct TaskRow: View {
                 }
                 Text(Self.said.string(from: item.said) + "・" + item.originLabel)
             }
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.caption).foregroundStyle(.llDim)
             // ほかの入り口でも見つかった（会話で拾ったものが、仕事のまとめにもあった など。2026-11-10）
             if let also = item.alsoIn, !also.isEmpty {
-                Label(also + "にもありました", systemImage: "checkmark.seal").font(.caption).foregroundStyle(.teal)
+                Label(also + "にもありました", systemImage: "checkmark.seal").font(.caption).foregroundStyle(.llAccent)
             }
             if let quote = item.quote, !quote.isEmpty {
-                Text("「\(quote)」").font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                Text("「\(quote)」").font(.caption).foregroundStyle(.llDim).lineLimit(3)
             }
             if let memo = item.memo, !memo.isEmpty {
                 Text("メモ: " + memo).font(.caption)
@@ -1894,7 +1897,7 @@ struct TaskRow: View {
                         if let entry = pipeline.workDigests.sorted.first(where: { $0.day == day }) {
                             WorkDigestDetailView(entry: entry)
                         } else {
-                            Text("このまとめは、もうありません。").foregroundStyle(.secondary)
+                            Text("このまとめは、もうありません。").foregroundStyle(.llDim)
                         }
                     }
                 } else if let day = item.day {
@@ -1919,7 +1922,7 @@ struct TaskEditView: View {
     @State private var time = Date.now
 
     var body: some View {
-        Form {
+        LLForm {
             Section("やること") {
                 TextField("何を・どうする", text: $item.what, axis: .vertical)
                 Picker("種類", selection: Binding(get: { item.kindOrDefault }, set: { item.kind = $0 })) {
@@ -1951,7 +1954,7 @@ struct TaskEditView: View {
                     ForEach(TaskBook.Repeat.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 if let dueText = item.dueText {
-                    Text("聞いた言い方: \(dueText)").font(.caption).foregroundStyle(.secondary)
+                    Text("聞いた言い方: \(dueText)").font(.caption).foregroundStyle(.llDim)
                 }
             }
             // 「予定に仮登録」「リマインダーに」（2026-11-15。強化案 58。確かめの画面で押すまで入れない。DraftActions.swift）
@@ -2057,7 +2060,7 @@ struct PersonHistorySection: View {
                 .font(.callout)
             }
             if history.isEmpty {
-                Text("まだありません").foregroundStyle(.secondary)
+                Text("まだありません").foregroundStyle(.llDim)
             }
             ForEach(Array((showAll ? history : Array(history.prefix(8))).enumerated()), id: \.offset) { _, entry in
                 NavigationLink {
@@ -2066,10 +2069,10 @@ struct PersonHistorySection: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(Self.time.string(from: entry.conversation.start)
                              + (entry.conversation.place.map { "・" + $0 } ?? ""))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.llDim)
                         Text(entry.conversation.title ?? "（見出しなし）").font(.callout)
                         ForEach(entry.conversation.points.prefix(2), id: \.self) { point in
-                            Text("・" + point).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            Text("・" + point).font(.caption).foregroundStyle(.llDim).lineLimit(2)
                         }
                     }
                 }

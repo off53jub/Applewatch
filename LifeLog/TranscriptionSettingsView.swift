@@ -6,7 +6,7 @@ struct TranscriptionSettingsView: View {
     @State private var keyInput = ""
 
     var body: some View {
-        Form {
+        LLForm {
             Section {
                 Picker("サービス", selection: $settings.provider) {
                     ForEach(CloudTranscriber.Provider.allCases) { Text($0.name).tag($0) }

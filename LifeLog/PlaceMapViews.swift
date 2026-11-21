@@ -104,7 +104,7 @@ struct PlaceMapView: View {
             .padding(.horizontal)
             Map(position: $camera) {
                 if path.count >= 2 {
-                    MapPolyline(coordinates: path).stroke(Color.blue, lineWidth: 3)
+                    MapPolyline(coordinates: path).stroke(LL.accent, lineWidth: 3)
                 }
                 ForEach(marks) { mark in
                     Annotation(mark.title, coordinate: mark.coordinate, anchor: .bottom) {
@@ -164,12 +164,12 @@ struct PlaceMapView: View {
             let name: String = pipeline.shopVisits.name(for: v) ?? "立ち寄り"
             list.append(MapMark(id: "v-" + v.id, coordinate: CLLocationCoordinate2D(latitude: v.latitude, longitude: v.longitude),
                                 title: name, from: v.arrival, to: v.departure ?? v.arrival.addingTimeInterval(1800),
-                                symbol: "cart.fill", tint: Color.orange))
+                                symbol: "cart.fill", tint: LL.warn))
         }
         for s in UnnamedStayBook.shared.stays where s.arrival >= window.from && s.arrival < window.to {
             list.append(MapMark(id: "u-" + s.id, coordinate: CLLocationCoordinate2D(latitude: s.latitude, longitude: s.longitude),
                                 title: "名前なし（\(s.minutes) 分）", from: s.arrival, to: s.departure,
-                                symbol: "questionmark", tint: Color.gray))
+                                symbol: "questionmark", tint: LL.dim))
         }
         let day: String = PCJSON.dayString(window.from)
         for c in pipeline.conversations(on: day) {
@@ -177,7 +177,7 @@ struct PlaceMapView: View {
             let title: String = (c.title?.isEmpty == false ? c.title : nil) ?? c.place ?? "会話"
             list.append(MapMark(id: "c-" + String(Int(c.start.timeIntervalSince1970)),
                                 coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude),
-                                title: title, from: c.start, to: c.end, symbol: "bubble.left.fill", tint: Color.blue))
+                                title: title, from: c.start, to: c.end, symbol: "bubble.left.fill", tint: LL.accent))
         }
         var all: [CLLocationCoordinate2D] = line
         for m in list { all.append(m.coordinate) }
@@ -208,14 +208,14 @@ struct MomentView: View {
     }()
 
     var body: some View {
-        List {
+        LLList {
             Section {
                 Text(Self.clock.string(from: from) + "〜" + Self.clock.string(from: max(from, to)))
                     .font(.subheadline.monospacedDigit())
             }
             Section("会話") {
                 if talks.isEmpty {
-                    Text(loaded ? "この時間の会話はありません" : "探しています…").foregroundStyle(.secondary)
+                    Text(loaded ? "この時間の会話はありません" : "探しています…").foregroundStyle(.llDim)
                 }
                 ForEach(talks, id: \.start) { c in
                     NavigationLink {
@@ -225,7 +225,7 @@ struct MomentView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(Self.clock.string(from: c.start) + "　" + ((c.title?.isEmpty == false ? c.title : nil) ?? "（見出しなし）"))
                             if !c.people.isEmpty {
-                                Text(c.people.joined(separator: "、")).font(.caption).foregroundStyle(.secondary)
+                                Text(c.people.joined(separator: "、")).font(.caption).foregroundStyle(.llDim)
                             }
                         }
                     }

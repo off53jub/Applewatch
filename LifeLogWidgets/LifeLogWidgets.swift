@@ -17,6 +17,8 @@ struct LifeLogWidgets: WidgetBundle {
         TasksWidget()
         // 今週のお礼とほめ言葉の数（2026-11-12）
         GoodWidget()
+        // 充電中（StandBy）の今日のまとめ（2026-11-21。s20 の 追3。TodayStandByWidget.swift）
+        TodayStandByWidget()
         RecordingLiveActivity()
         // 会議モードのあいだの「決まったこと・宿題・聞き忘れ」（2026-11-15。強化案 50。MeetingActivityWidget.swift）
         MeetingLiveActivity()
@@ -29,25 +31,26 @@ struct RecordingLiveActivity: Widget {
         ActivityConfiguration(for: RecordingActivityAttributes.self) { context in
             HStack(spacing: 12) {
                 Image(systemName: "waveform")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(LL.danger)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("LifeLog 録音中").font(.subheadline.bold())
                     Text(context.state.started, style: .timer)
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LL.dim)
                 }
                 Spacer()
                 Button(intent: ToggleRecordingIntent()) {
                     Label("止める", systemImage: "stop.fill")
                 }
-                .tint(.red)
+                .tint(LL.danger)
             }
             .padding()
-            .activityBackgroundTint(nil)
+            .activityBackgroundTint(LL.bg.opacity(0.92))
+                .activitySystemActionForegroundColor(LL.accent)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Label("録音中", systemImage: "waveform").foregroundStyle(.red)
+                    Label("録音中", systemImage: "waveform").foregroundStyle(LL.danger)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     Text(context.state.started, style: .timer)
@@ -58,15 +61,16 @@ struct RecordingLiveActivity: Widget {
                     Button(intent: ToggleRecordingIntent()) {
                         Label("録音を止める", systemImage: "stop.fill")
                     }
-                    .tint(.red)
+                    .tint(LL.danger)
                 }
             } compactLeading: {
-                Image(systemName: "waveform").foregroundStyle(.red)
+                Image(systemName: "waveform").foregroundStyle(LL.danger)
             } compactTrailing: {
                 EmptyView()
             } minimal: {
-                Image(systemName: "waveform").foregroundStyle(.red)
+                Image(systemName: "waveform").foregroundStyle(LL.danger)
             }
+            .keylineTint(LL.danger)
         }
     }
 }

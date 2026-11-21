@@ -24,10 +24,10 @@ struct AppLock: ViewModifier {
                             Button("Face ID で開く") { unlock() }
                                 .buttonStyle(.borderedProminent)
                             if let failure {
-                                Text(failure).font(.footnote).foregroundStyle(.secondary)
+                                Text(failure).font(.footnote).foregroundStyle(.llDim)
                             }
                             Text("録音と文字起こしは、鍵がかかっていても続いています。")
-                                .font(.footnote).foregroundStyle(.secondary)
+                                .font(.footnote).foregroundStyle(.llDim)
                         }
                         .padding()
                     }

@@ -10,7 +10,9 @@ struct LookBackTab: View {
         let hasGood = pipeline.homePC.features.contains("good") || book.data != nil
         let hasWork = !pipeline.workDigests.entries.isEmpty
         NavigationStack {
-            List {
+            LLList {
+                // 数を小さなグラフで・物語・休日のページ・面談の 1 枚・検品表（2026-11-21。s20 の 体3・体23〜26。S20LookBackViews.swift）
+                S20LookBackSection()
                 // 今週のふり返り・見立ての台帳・使われ方の数（2026-11-13。施策 2・3・1。MothershipFeeds.swift。写しがあるときだけ）
                 WeeklyLookBackSection()
                 TimeLedgerSection()  // 時間の家計簿（2026-11-15。強化案 60。DraftActions.swift。写しがあるときだけ）
@@ -33,7 +35,7 @@ struct LookBackTab: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Label("いいこと帳", systemImage: "hand.thumbsup")
                             Text("家の PC の LifeLog PC がいいこと帳を作れるようになると、ここから開けます（お礼・ほめ言葉・済ませたこと）。")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.caption).foregroundStyle(.llDim)
                         }
                     }
                     NavigationLink {
@@ -66,7 +68,7 @@ struct LookBackTab: View {
                         }
                     } else {
                         Text("「タスク」の上の「仕事のまとめ」に取り込むと、週のまとめと案件ごとの流れが読めます。")
-                            .font(.callout).foregroundStyle(.secondary)
+                            .font(.callout).foregroundStyle(.llDim)
                     }
                     NavigationLink {
                         TaskScoreView()

@@ -417,7 +417,7 @@ struct PromisesSection: View {
                         }
                     }
                     if let note {
-                        Text(note).font(.caption).foregroundStyle(.secondary)
+                        Text(note).font(.caption).foregroundStyle(.llDim)
                     }
                 } header: {
                     Text(open.isEmpty ? "会話のあとの約束" : "会話のあとの約束（\(open.count)）")
@@ -438,14 +438,14 @@ struct PromiseRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Text(item.kindLabel).font(.caption).foregroundStyle(.secondary)
+                Text(item.kindLabel).font(.caption).foregroundStyle(.llDim)
                 Text(item.what).font(.body)
             }
             if !item.note.isEmpty {
-                Text(item.note).font(.caption).foregroundStyle(.secondary)
+                Text(item.note).font(.caption).foregroundStyle(.llDim)
             }
             if !item.quote.isEmpty {
-                Text("「\(item.quote)」").font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                Text("「\(item.quote)」").font(.caption).foregroundStyle(.llDim).lineLimit(3)
             }
             HStack(spacing: 20) {
                 Button("タスクに入れる") { onAnswer(true) }
@@ -478,17 +478,17 @@ struct PromiseSettingsView: View {
     @AppStorage(ClaudeRoute.workKey) private var forWork = true
 
     var body: some View {
-        Form {
+        LLForm {
             Section {
                 Toggle("会話のあとに約束を知らせる", isOn: $on)
                 Toggle("通知に中身を出さない", isOn: $hide)
                     .disabled(!on)
                 LabeledContent("家の PC", value: pipeline.homePC.features.contains(PromiseRules.feature) ? "使える" : "まだ使えない")
                 if !useClaude {
-                    Text("「Claude を使う」がオフなので、家の PC は約束を探しません。").font(.caption).foregroundStyle(.secondary)
+                    Text("「Claude を使う」がオフなので、家の PC は約束を探しません。").font(.caption).foregroundStyle(.llDim)
                 } else if !forWork {
                     Text("「職場の会話も Claude で」がオフなので、職場の会話（と、職場か分からない会話）からは探しません。")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.llDim)
                 }
             } footer: {
                 Text("会話が終わって10分ほどで、家の PC がその会話から約束・頼まれごとだけを Claude（軽いモデル）で探し、通知で知らせます。通知の「タスクに入れる」でタスクに入り、「いらない」で消えます。見逃しても「今日」に出ます。通知は1日6回・10分に1回までです。\n「通知に中身を出さない」をオンにすると、通知には件数だけを出します（ロック画面に相手の名前やすることを出したくないとき）。iPhone の「設定」→「通知」→「プレビューを表示」を「ロックされていないときのみ」にしても、ロック画面では隠れます。")

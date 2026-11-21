@@ -370,10 +370,10 @@ struct AnswerKeyView: View {
     var body: some View {
         let key = pipeline.answerKey
         let answered = week.filter { current($0).isAnswered }.count
-        List {
+        LLList {
             Section {
                 if week.isEmpty {
-                    Text("直近7日に、音声の残っている会話の行がまだありません。").foregroundStyle(.secondary)
+                    Text("直近7日に、音声の残っている会話の行がまだありません。").foregroundStyle(.llDim)
                 }
                 ForEach(week) { s in
                     let sample = current(s)
@@ -383,10 +383,10 @@ struct AnswerKeyView: View {
                         HStack(alignment: .top, spacing: 10) {
                             Image(systemName: sample.isAnswered ? (sample.skipped == true ? "forward.circle" : "checkmark.circle.fill")
                                                                 : "circle")
-                                .foregroundStyle(sample.isAnswered ? Color.green : Color.secondary)
+                                .foregroundStyle(sample.isAnswered ? LL.good : LL.dim)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(sample.text).foregroundStyle(.primary).lineLimit(2)
-                                Text(caption(sample)).font(.caption).foregroundStyle(.secondary)
+                                Text(caption(sample)).font(.caption).foregroundStyle(.llDim)
                             }
                         }
                     }
@@ -501,7 +501,7 @@ private struct AnswerSheet: View {
     enum Choice: Hashable { case right, wrong, unknown }
 
     var body: some View {
-        Form {
+        LLForm {
             Section {
                 let key = "answer-" + sample.id
                 Button {
@@ -525,7 +525,7 @@ private struct AnswerSheet: View {
                     }
                 }
                 Text(sample.time.formatted(date: .abbreviated, time: .shortened)
-                     + (sample.title.map { "・" + $0 } ?? "")).font(.caption).foregroundStyle(.secondary)
+                     + (sample.title.map { "・" + $0 } ?? "")).font(.caption).foregroundStyle(.llDim)
             }
             Section {
                 Text(sample.text)

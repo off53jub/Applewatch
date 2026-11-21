@@ -109,6 +109,14 @@ struct LifeLogApp: App {
         Summarizer.claudeLLM = { call in try await pipeline.homePC.claude(call).text }
         // 家の PC からの見えない通知で起きたときの動き（2026-11-07。Push.swift）
         PushWake.pipeline = pipeline
+        // 寝ているあいだ・一緒にいる人のために休む（2026-11-21。s20 の 次10・体37。S20Book.swift）。
+        // 時刻の切り替わりを拾うため、録音中は 5 分ごとに確かめ直す（裏で録音しているあいだもアプリは動いている）
+        S20Hold.changed = { pipeline.updateHold() }
+        if !Self.testing && !Self.demo {
+            Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
+                Task { @MainActor in pipeline.updateHold() }
+            }
+        }
         _pipeline = State(initialValue: pipeline)
     }
 
@@ -119,6 +127,8 @@ struct LifeLogApp: App {
             } else {
                 ContentView()
                     .environment(pipeline)
+                    // 夜の青（見た目と差し色。2026-11-21。s20 の 体1・体5。DesignKit.swift）
+                    .llRoot()
                     // 開くときに Face ID（設定でオンにしたときだけ。録音と裏の処理は止めない）
                     .modifier(AppLock())
                     // lifelog:// はウィジェットから（2026-11-12。NoticeActions.swift の NoticeRoute.route(url:)）。ほかは Google のログイン

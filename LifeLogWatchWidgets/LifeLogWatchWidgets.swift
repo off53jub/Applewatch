@@ -12,10 +12,10 @@ struct LifeLogWatchWidgets: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: WidgetState.watchKind, provider: Provider()) { entry in
             StatusView(entry: entry)
-                .containerBackground(.fill.tertiary, for: .widget)
+                .containerBackground(for: .widget) { LLWidgetBackground() }
         }
         .configurationDisplayName("LifeLog")
-        .description("録音しているか、今日までの頼まれごと、次の予定を出します。押すと LifeLog を開きます。")
+        .description("録音しているか、あと何時間録れるか、確かめ待ちの数を出します。押すと LifeLog を開きます。")
         .supportedFamilies([.accessoryCircular, .accessoryCorner, .accessoryInline, .accessoryRectangular])
     }
 }
@@ -27,6 +27,16 @@ private struct StatusView: View {
     private var state: WidgetState? { entry.state }
     private var symbol: String { state?.watchRecording == true ? "record.circle.fill" : "waveform" }
 
+    static func hoursText(_ hours: Double?) -> String {
+        guard let hours else { return "あと " + WidgetText.unknown }
+        return hours >= 1 ? "あと \(hours.formatted(.number.precision(.fractionLength(0...1)))) 時間" : "あと 1 時間より少ない"
+    }
+
+    static func reviewText(_ count: Int?) -> String {
+        guard let count else { return "確かめ待ち " + WidgetText.unknown }
+        return count == 0 ? "確かめ待ちなし" : "確かめ待ち \(count)"
+    }
+
     var body: some View {
         switch family {
         case .accessoryInline:
@@ -35,12 +45,13 @@ private struct StatusView: View {
                 Label(WidgetText.summary(state, onWatch: true), systemImage: symbol)
             }
         case .accessoryRectangular:
+            // 文字盤に 3 つ: 録音中か・あと何時間録れるか・確かめ待ちの数（2026-11-21。s20 の 体22）
             VStack(alignment: .leading, spacing: 0) {
                 Label(WidgetText.watchHeadline(state), systemImage: symbol)
                     .font(.headline)
                     .widgetAccentable()
-                WidgetEventLine(state: state, date: entry.date)
-                WidgetIconText(symbol: "checklist", text: WidgetText.tasks(state))
+                WidgetIconText(symbol: "battery.75percent", text: Self.hoursText(state?.watchHoursLeft))
+                WidgetIconText(symbol: "hand.raised", text: Self.reviewText(state?.reviewWaiting))
             }
             .lineLimit(1)
             .minimumScaleFactor(0.6)

@@ -72,6 +72,8 @@ final class Pipeline {
     func updateHold() {
         // 映画館・ライブ会場で休んでいるあいだも（設定がオンのときだけ。2026-11-21。s19 の 休34。Holiday.swift）
         let held = places.atPausePlace() || HolidayBook.shared.venueHolding()
+            // 寝ているあいだ（次10）・一緒にいる人のために休む（体37）。どちらも設定で入れるまで動かない（2026-11-21。s20。S20Book.swift）
+            || S20Hold.holding()
         guard held != recordingHeld || SilenceGate.held != held else { return }
         recordingHeld = held
         SilenceGate.held = held
@@ -816,6 +818,27 @@ final class Pipeline {
         return count
     }
 
+    /// 時間を選んで消す（2026-11-21。s20 の 次11。S20RecordViews.swift）。行はアプリの記録とドキュメントから消し、
+    /// 「消した行」に 30 日残る（記録の掃除から戻せる）。手元の音声（文字にし終えた分）も消す。消した行の数を返す
+    func forgetRange(day: String, from: Date, to: Date) async throws -> (lines: Int, audio: Int) {
+        if let queueTask { await queueTask.value }
+        let lines = conversations.conversations(on: day).flatMap(\.lines).filter { $0.time >= from && $0.time <= to }
+        if !lines.isEmpty {
+            try await conversations.remove(lines.map { (line: $0, kind: Junk.Kind.forgotten) }, day: day)
+        }
+        var audio = 0
+        for file in Storage.keptAudio() {
+            guard let start = Storage.startDate(of: file), start >= from, start <= to else { continue }
+            if (try? FileManager.default.removeItem(at: file)) != nil { audio += 1 }
+        }
+        let gone = Set(lines.map { ConversationLog.docLine($0) })
+        lastLines.removeAll { gone.contains($0) }
+        recordsVersion += 1
+        placeIndexBuilt = .distantPast
+        Tally.add("s20.forget.lines", lines.count)
+        return (lines.count, audio)
+    }
+
     // MARK: - 話した場所
 
     /// 人ごとの話した場所と、音声ごとの場所（会話の見出しの場所から）
@@ -1521,6 +1544,7 @@ final class Pipeline {
         scheduleWorkDigestReminder()  // 退勤の頃の「今日のまとめを取り込みましたか」（2026-11-10。WorkDigest.swift）
         Task { await payments.refreshMail(homePC) }
         Task { await appFeeds.refresh(homePC) }  // 自分の声の候補・新しさ・PLAUD との差（30分に1回まで。2026-11-12）
+        Task { await S20Book.shared.refresh(homePC) }  // 確かめ待ちの列・検品表・実機の確かめ（30分に1回まで。2026-11-21。s20）
         Task { await homeFeeds.refresh(homePC) }  // 提案・PLAUD で埋めた所・話し手の疑い（30分に1回まで。2026-11-13）
         Task { await PromiseInbox.shared.refresh(self) }  // 会話のあとの約束と、その設定（5分に1回まで。2026-11-13。Promises.swift）
         Task { await refreshMothershipFeeds() }  // 週のふり返り・会う前の一枚など（30分に1回まで）とためた答えの送り（2026-11-13）

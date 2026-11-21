@@ -28,10 +28,10 @@ struct TimelineRowLine: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(OneTimeline.timeLabel(row))
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.llDim)
             Image(systemName: OneTimeline.laneIcon(row.lane))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.llDim)
                 .frame(width: 18)
                 .accessibilityLabel(row.lane)
             Text(row.text)
@@ -41,7 +41,7 @@ struct TimelineRowLine: View {
             if let detail = OneTimeline.detail(row) {
                 Text(detail)
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.llDim)
                     .lineLimit(1)
             }
         }
@@ -57,7 +57,7 @@ struct TimelineNoteSection: View {
     var body: some View {
         if let note = pipeline.oneTimeline.note(for: day) {
             Section {
-                Text(note).font(.caption).foregroundStyle(.secondary)
+                Text(note).font(.caption).foregroundStyle(.llDim)
             }
         }
     }
@@ -95,7 +95,7 @@ struct PayPayShotView: View {
         let canRead: Bool = pc.isConfigured && pc.features.contains("paypayshot")
         let canSend: Bool = pc.isConfigured && pc.features.contains("paypayrows")
         let chosen: Int = rows.filter { checked.contains($0.id) }.count
-        List {
+        LLList {
             Section {
                 PhotosPicker(selection: $picked, maxSelectionCount: PayShots.maxPhotos, selectionBehavior: .ordered,
                              matching: .images) {
@@ -105,16 +105,16 @@ struct PayPayShotView: View {
                 if let progress {
                     HStack(spacing: 8) {
                         ProgressView()
-                        Text(progress).foregroundStyle(.secondary)
+                        Text(progress).foregroundStyle(.llDim)
                     }
                 }
                 if !canRead {
                     Text("家の PC につながっていて、家の PC が新しい版（Claude が使えるとき）だと選べます。")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.llDim)
                 }
                 ForEach(Array(notes.enumerated()), id: \.offset) { _, note in
-                    Text(note).font(.footnote).foregroundStyle(.secondary)
+                    Text(note).font(.footnote).foregroundStyle(.llDim)
                 }
             } footer: {
                 Text("写真は家の PC に1枚ずつ送り、読み終えたら捨てます（この iPhone の写真はそのまま。PC にも残しません）。")
@@ -248,13 +248,13 @@ private struct PayShotRowEditor: View {
             HStack {
                 Toggle(isOn: $checked) {
                     HStack(spacing: 6) {
-                        Text(PayShotRowEditor.when(row)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Text(PayShotRowEditor.when(row)).font(.caption.monospacedDigit()).foregroundStyle(.llDim)
                         if known {
                             Text("もうある")
                                 .font(.caption2.bold())
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(Color.orange.opacity(0.2), in: Capsule())
+                                .background(LL.warn.opacity(0.2), in: Capsule())
                         }
                     }
                 }
@@ -265,10 +265,10 @@ private struct PayShotRowEditor: View {
                 TextField("金額", value: $row.amount, format: .number)
                     .keyboardType(.numberPad)
                     .font(.callout.monospacedDigit())
-                Text("円").foregroundStyle(.secondary)
+                Text("円").foregroundStyle(.llDim)
                 if !row.method.isEmpty {
                     Spacer()
-                    Text(row.method).font(.caption).foregroundStyle(.secondary)
+                    Text(row.method).font(.caption).foregroundStyle(.llDim)
                 }
             }
         }
@@ -312,7 +312,7 @@ struct ReflectionView: View {
 
     var body: some View {
         let table: ReflectionTable? = pipeline.oneTimeline.reflection
-        List {
+        LLList {
             Section {
                 if let table, !table.elements.isEmpty {
                     ScrollView(.horizontal) {
@@ -320,7 +320,7 @@ struct ReflectionView: View {
                             .padding(.vertical, 4)
                     }
                 } else {
-                    Text("まだありません").foregroundStyle(.secondary)
+                    Text("まだありません").foregroundStyle(.llDim)
                 }
             } header: {
                 if let generated = table?.generated_at, let date = AppFeeds.parseTime(generated) {
@@ -350,7 +350,7 @@ private struct ReflectionGrid: View {
                 }
             }
             .font(.caption.bold())
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.llDim)
             ForEach(table.elements) { e in
                 ReflectionGridRow(element: e, today: today, entry: entry)
             }
@@ -379,7 +379,7 @@ private struct ReflectionCell: View {
 
     var body: some View {
         let days: Int = behind ?? 0
-        let color: Color = days >= Reflection.badDays ? .red : .orange
+        let color: Color = days >= Reflection.badDays ? .llDanger : .llWarn
         Text(Reflection.cellText(behind))
             .font(.caption.monospacedDigit())
             .padding(.horizontal, 6)

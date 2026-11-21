@@ -30,7 +30,7 @@ struct MoneyView: View {
         let since: Date = calendar.date(byAdding: .day, value: -Self.shownDays, to: calendar.startOfDay(for: .now)) ?? .distantPast
         let groups: [Date: [Payment]] = Dictionary(grouping: all.filter { $0.time >= since }) { calendar.startOfDay(for: $0.time) }
         let days: [Date] = groups.keys.sorted(by: >)
-        List {
+        LLList {
             Section {
                 LabeledContent("今月", value: "\(total.formatted())円・\(month.count) 件")
             } footer: {
@@ -39,7 +39,7 @@ struct MoneyView: View {
             if all.isEmpty {
                 Section {
                     Text("まだ支払いの記録がありません。下の「PayPay の明細」から読み込むか、カードの利用速報・ウォレットの記録をつなぐと、ここに日ごとに並びます。")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.llDim)
                 }
             }
             ForEach(days, id: \.self) { day in
@@ -59,16 +59,16 @@ struct MoneyView: View {
 
     private func row(_ p: Payment) -> some View {
         HStack {
-            Text(Self.clock.string(from: p.time)).font(.caption).foregroundStyle(.secondary)
+            Text(Self.clock.string(from: p.time)).font(.caption).foregroundStyle(.llDim)
             if p.hasShop {
                 Text(p.shop)
             } else if let guess = PaymentMatch.placeGuessLabel(for: p, visits: pipeline.shopVisits.visits) {
                 // 店名の無いかざした記録には、そのころいた場所からの推測を添える（表示だけ）
-                Text(guess).foregroundStyle(.secondary)
+                Text(guess).foregroundStyle(.llDim)
             } else {
                 Text("（店名なし）")
             }
-            Text(p.via).font(.caption2).foregroundStyle(.secondary)
+            Text(p.via).font(.caption2).foregroundStyle(.llDim)
             Spacer()
             Text(p.amount > 0 ? "\(p.amount.formatted())円" : "").font(.callout.monospacedDigit())
         }

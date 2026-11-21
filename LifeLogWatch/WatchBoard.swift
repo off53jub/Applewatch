@@ -63,6 +63,8 @@ struct WatchInfo: Codable {
         var lines: [String]?
     }
     var draft: Draft?
+    /// 確かめ待ちの数（2026-11-21。s20 の 体22）
+    var reviewWaiting: Int?
 
     /// 会議の相棒（会議モードの最中と、終わって 30 分まで。2026-11-15。iPhone の MeetingLive.swift）
     struct Meeting: Codable {
@@ -154,7 +156,7 @@ final class WatchBoard {
     func markDone(_ id: String) {
         doneAt[id] = .now
         sender.taskDone(id)
-        WKInterfaceDevice.current().play(.success)
+        LLHaptic.done.play()
         onChange?()
     }
 
@@ -184,7 +186,7 @@ final class WatchBoard {
         if !q.isEmpty { question = q }
         UserDefaults.standard.set(text, forKey: Self.answerKey)
         if !q.isEmpty { UserDefaults.standard.set(q, forKey: Self.questionKey) }
-        WKInterfaceDevice.current().play(.notification)
+        LLHaptic.confirm.play()
     }
 }
 

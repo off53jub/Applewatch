@@ -104,6 +104,8 @@ enum NoticeGate {
 
     /// すぐ出す知らせを、束ねの決まりを通して出す（時刻を決めた知らせは、そのまま頼む）
     static func add(_ request: UNNotificationRequest, now: Date = .now) {
+        // 止めた種類・朝夕の便りに回すもの（2026-11-21。s20 の 体16・体19。S20Notices.swift）
+        guard S20Notices.pass(request, now: now) else { return }
         let center = UNUserNotificationCenter.current()
         guard NoticeBundle.isImmediate(request.trigger) else {
             center.add(request)

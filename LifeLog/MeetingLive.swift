@@ -319,17 +319,17 @@ struct MeetingLiveRows: View {
                     group("決まったこと", feed.decided)
                     if feed.homework.isEmpty && feed.unasked.isEmpty && feed.decided.isEmpty {
                         Text(feed.updatedAt == nil ? "家の PC がまだ作っていません（1 分に 1 回まで作り直します）。" : "まだ何も出ていません。")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.llDim)
                     }
                     if let reason = feed.reason {
-                        Text(reason).font(.caption2).foregroundStyle(.orange)
+                        Text(reason).font(.caption2).foregroundStyle(.llWarn)
                     }
-                    Text(MeetingLiveRows.footer(feed)).font(.caption2).foregroundStyle(.secondary)
+                    Text(MeetingLiveRows.footer(feed)).font(.caption2).foregroundStyle(.llDim)
                 } else {
-                    Text("会議の相棒: 家の PC が区切りの文から作り直すのを待っています。").font(.caption).foregroundStyle(.secondary)
+                    Text("会議の相棒: 家の PC が区切りの文から作り直すのを待っています。").font(.caption).foregroundStyle(.llDim)
                 }
                 if let note = book.note {
-                    Text(note).font(.caption2).foregroundStyle(.secondary)
+                    Text(note).font(.caption2).foregroundStyle(.llDim)
                 }
             }
         }
@@ -343,7 +343,7 @@ struct MeetingLiveRows: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("・" + item.text).font(.callout)
                     if !item.quote.isEmpty {
-                        Text("「" + item.quote + "」").font(.caption2).foregroundStyle(.secondary)
+                        Text("「" + item.quote + "」").font(.caption2).foregroundStyle(.llDim)
                     }
                 }
             }

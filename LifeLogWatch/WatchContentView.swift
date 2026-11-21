@@ -120,79 +120,50 @@ private struct NothingYet: View {
 
 private struct RecordPage: View {
     @Environment(WatchRecorder.self) private var recorder
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 「違う、〇〇さん」（押すと音声入力。2026-11-19。s18）
     @State private var fix = ""
+    /// 「ほか」を開いているか（2026-11-21。s20 の 体20）
+    @State private var more = false
+    @State private var breathe = false
 
     var body: some View {
+        // 表に出すのは、よく使う 3 つ（使った回数で並べ替え。2026-11-21。s20 の 体20）。ほかは「ほか」の中
+        let split = WatchAction.split(recording: recorder.isRecording)
         ScrollView {
             VStack(spacing: 8) {
                 Button {
                     Task { await recorder.toggle() }
                 } label: {
-                    Image(systemName: recorder.isRecording ? "stop.circle.fill" : "record.circle")
-                        .font(.system(size: 56))
-                        .foregroundStyle(recorder.isRecording ? .red : .accentColor)
+                    ZStack {
+                        Circle().fill((recorder.isRecording ? LL.danger : LL.accent).opacity(0.18))
+                            .frame(width: 74, height: 74)
+                            .scaleEffect(recorder.isRecording && breathe ? 1.1 : 1)
+                        Image(systemName: recorder.isRecording ? "stop.fill" : "record.circle")
+                            .font(.system(size: recorder.isRecording ? 28 : 44, weight: .semibold))
+                            .foregroundStyle(recorder.isRecording ? LL.danger : LL.accent)
+                    }
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(recorder.isRecording ? "録音を止める" : "録音を始める")
+                .onAppear {
+                    guard !reduceMotion else { return }
+                    withAnimation(LL.Motion.breathe) { breathe = true }
+                }
                 Text(recorder.isRecording ? "録音中" : "停止中")
                     .font(.headline)
-                if recorder.isRecording {
-                    // 指のダブルタップでも押せる
+                    .foregroundStyle(recorder.isRecording ? LL.text : LL.dim)
+                ForEach(split.top) { action in actionView(action) }
+                if !split.rest.isEmpty {
                     Button {
-                        recorder.mark()
+                        withAnimation(LL.Motion.fade) { more.toggle() }
                     } label: {
-                        Label("印", systemImage: "star.fill")
-                    }
-                    .tint(.yellow)
-                    .handGestureShortcut(.primaryAction)
-                    // 初めての人と話しているときの印と、会議モード（2026-11-06）
-                    HStack(spacing: 6) {
-                        Button {
-                            recorder.markNewPerson()
-                        } label: {
-                            Label("初めての人", systemImage: "person.badge.plus")
-                                .font(.caption2)
-                        }
-                        Button {
-                            recorder.toggleMeeting()
-                        } label: {
-                            Label(recorder.meetingOn ? "会議を終える" : "会議", systemImage: "person.3")
-                                .font(.caption2)
-                        }
-                        .tint(recorder.meetingOn ? .orange : nil)
-                    }
-                    // 初めての人が多い日（飲み会・イベント。区切りごとに印。2026-11-21。s19 の 休17）
-                    Button {
-                        recorder.toggleCrowd()
-                    } label: {
-                        Label(recorder.crowdOn ? "初めての人が多い: 終える" : "初めての人が多い", systemImage: "person.3.sequence")
+                        Label(more ? "畳む" : "ほか（\(split.rest.count)）", systemImage: more ? "chevron.up" : "ellipsis")
                             .font(.caption2)
                     }
-                    .tint(recorder.crowdOn ? .orange : nil)
-                }
-                // お酒を 1 杯（2026-11-21。s19 の 休30。翌日の体調と並べるのは母艦）
-                Button {
-                    recorder.drink()
-                } label: {
-                    Label(recorder.drinksToday > 0 ? "お酒 +1（今日 \(recorder.drinksToday) 杯）" : "お酒 +1", systemImage: "wineglass")
-                        .font(.caption2)
-                }
-                .onAppear { recorder.refreshDrinks() }
-                // 声で直す（「違う、〇〇さん」。押すと話して入れられる。2026-11-19。s18）
-                TextField("違う、〇〇さん", text: $fix)
-                    .font(.caption2)
-                    .onSubmit {
-                        recorder.voiceFix(fix)
-                        fix = ""
-                    }
-                // さっき何て言った？（iPhone の記録の直近の3行。2026-11-06）
-                Button {
-                    recorder.askRecent()
-                } label: {
-                    if recorder.asking {
-                        ProgressView()
-                    } else {
-                        Label("さっき何て言った？", systemImage: "text.bubble").font(.caption2)
+                    .tint(LL.dim)
+                    if more {
+                        ForEach(split.rest) { action in actionView(action) }
                     }
                 }
                 if let answer = recorder.recentAnswer {
@@ -204,7 +175,7 @@ private struct RecordPage: View {
                 if !recorder.message.isEmpty {
                     Text(recorder.message)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LL.dim)
                         .multilineTextAlignment(.center)
                 }
                 // iPhone とのつながりと、送れていない録音
@@ -212,12 +183,11 @@ private struct RecordPage: View {
                     Text(recorder.link)
                     if recorder.unsent > 0 {
                         Text("iPhone に送っていない録音 \(recorder.unsent) 個")
-                            .foregroundStyle(recorder.unsent >= ChunkCutter.scaled(4) ? .orange : .secondary)
+                            .foregroundStyle(recorder.unsent >= ChunkCutter.scaled(4) ? LL.warn : LL.dim)
                     }
                     // 家の PC に届いていて、iPhone が PC から受け取るのを待っている（失われない。2026-11-18）
                     if recorder.relayWaiting > 0 {
                         Text("家の PC に届いた録音 \(recorder.relayWaiting) 個（iPhone は PC から受け取ります）")
-                            .foregroundStyle(.secondary)
                     }
                     if recorder.lowPower {
                         Text("低電力モード: 15分ほどごとにまとめて送ります")
@@ -232,9 +202,83 @@ private struct RecordPage: View {
                     }
                 }
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(LL.dim)
                 .multilineTextAlignment(.center)
             }
+        }
+        .onAppear { recorder.refreshDrinks() }
+    }
+
+    /// ボタン 1 つ（押した回数を数えて、よく使う順に並べる）
+    @ViewBuilder
+    private func actionView(_ action: WatchAction) -> some View {
+        switch action {
+        case .mark:
+            // 指のダブルタップでも押せる
+            Button {
+                WatchAction.used(.mark)
+                recorder.mark()
+            } label: {
+                Label("印", systemImage: "star.fill")
+            }
+            .tint(LL.warn)
+            .handGestureShortcut(.primaryAction)
+        case .newPerson:
+            // 初めての人と話しているときの印（2026-11-06）
+            Button {
+                WatchAction.used(.newPerson)
+                recorder.markNewPerson()
+            } label: {
+                Label("初めての人", systemImage: "person.badge.plus").font(.caption2)
+            }
+        case .meeting:
+            Button {
+                WatchAction.used(.meeting)
+                recorder.toggleMeeting()
+            } label: {
+                Label(recorder.meetingOn ? "会議を終える" : "会議", systemImage: "person.3").font(.caption2)
+            }
+            .tint(recorder.meetingOn ? LL.warn : nil)
+        case .crowd:
+            // 初めての人が多い日（飲み会・イベント。区切りごとに印。2026-11-21。s19 の 休17）
+            Button {
+                WatchAction.used(.crowd)
+                recorder.toggleCrowd()
+            } label: {
+                Label(recorder.crowdOn ? "初めての人が多い: 終える" : "初めての人が多い", systemImage: "person.3.sequence")
+                    .font(.caption2)
+            }
+            .tint(recorder.crowdOn ? LL.warn : nil)
+        case .drink:
+            // お酒を 1 杯（2026-11-21。s19 の 休30。翌日の体調と並べるのは母艦）
+            Button {
+                WatchAction.used(.drink)
+                recorder.drink()
+            } label: {
+                Label(recorder.drinksToday > 0 ? "お酒 +1（今日 \(recorder.drinksToday) 杯）" : "お酒 +1", systemImage: "wineglass")
+                    .font(.caption2)
+            }
+        case .ask:
+            // さっき何て言った？（iPhone の記録の直近の3行。2026-11-06）
+            Button {
+                WatchAction.used(.ask)
+                recorder.askRecent()
+            } label: {
+                if recorder.asking {
+                    ProgressView()
+                } else {
+                    Label("さっき何て言った？", systemImage: "text.bubble").font(.caption2)
+                }
+            }
+        case .fix:
+            // 声で直す（「違う、〇〇さん」。押すと話して入れられる。2026-11-19。s18）
+            TextField("違う、〇〇さん", text: $fix)
+                .font(.caption2)
+                .onSubmit {
+                    WatchAction.used(.fix)
+                    recorder.voiceFix(fix)
+                    fix = ""
+                }
         }
     }
 }

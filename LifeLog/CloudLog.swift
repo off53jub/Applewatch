@@ -145,7 +145,7 @@ struct CloudLogView: View {
         let month = Calendar.current.date(byAdding: .month, value: -monthOffset, to: .now) ?? .now
         let inMonth = entries.filter { Calendar.current.isDate($0.at, equalTo: month, toGranularity: .month) }
             .sorted { $0.at > $1.at }
-        List {
+        LLList {
             Section {
                 Picker("月", selection: $monthOffset) {
                     Text("今月").tag(0)
@@ -163,12 +163,12 @@ struct CloudLogView: View {
                 Text("送った時刻・送り先・何のためかだけを残します（中身は残しません。90日分）。「Claude（家の PC 経由）」は、家の PC を通して Claude に頼んだものです（鍵は PC の中だけ）。「職場の会話も Claude で」がオン（初め）のあいだは、職場の会話も Claude に送ります。職場の会話を外に送らないようにするには、その設定をオフにして、「言語モデル」の設定で「職場の会話は端末内で」を選んでください。")
             }
             Section("送ったもの") {
-                if inMonth.isEmpty { Text("ありません").foregroundStyle(.secondary) }
+                if inMonth.isEmpty { Text("ありません").foregroundStyle(.llDim) }
                 ForEach(inMonth.prefix(200)) { entry in
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(entry.at.formatted(date: .abbreviated, time: .shortened))　\(entry.service)")
                         Text(entry.what + (entry.work == true ? "・職場" : ""))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.llDim)
                     }
                 }
             }

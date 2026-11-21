@@ -200,7 +200,7 @@ struct BulkOKRow: View {
 
     var body: some View {
         if let note {
-            Text(note).font(.footnote).foregroundStyle(.secondary)
+            Text(note).font(.footnote).foregroundStyle(.llDim)
         } else {
             Button {
                 asking = true

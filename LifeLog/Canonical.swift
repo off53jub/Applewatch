@@ -220,12 +220,12 @@ struct CanonicalLineRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                Text(line.time).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Text(line.time).font(.caption.monospacedDigit()).foregroundStyle(.llDim)
                 Text(line.who).font(.caption.bold())
                 Spacer(minLength: 0)
                 Text(line.isPlaud ? "PLAUD" : "アプリ")
                     .font(.caption2)
-                    .foregroundStyle(line.isPlaud ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(line.isPlaud ? LL.accent : LL.dim)
             }
             Text(line.text).font(.callout)
         }
@@ -242,16 +242,16 @@ struct CanonicalDayView: View {
         let book = CanonicalBook.shared
         let value: CanonicalDay? = book.day(day)
         let groups: [CanonicalHour] = CanonicalRules.hours(value?.lines ?? [])
-        List {
+        LLList {
             if let value {
                 Section {
                     Text("PLAUD のある時間は PLAUD の文に、アプリの行から話し手と時刻を重ねました。PLAUD の無い時間はアプリの行です。「?」の付いた話し手は推定です。")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.footnote).foregroundStyle(.llDim)
                     LabeledContent("行", value: "\(value.lines.count)（PLAUD \(value.plaudCount)・アプリ \(value.lines.count - value.plaudCount)）")
                     LabeledContent("話し手が分かる行", value: "\(value.speakerCount)")
                     if book.stale.contains(day), let fetched = value.fetched {
                         Text("家の PC につながらないので、" + HomeFeeds.clock(fetched) + " に読んだ分を出しています。")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.llDim)
                     }
                 }
             }

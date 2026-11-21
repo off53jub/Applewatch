@@ -338,6 +338,19 @@ enum PCRecords {
         return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? data
     }
 
+    /// 電車の中の会話に "vehicle": "train" を足す（inCar は付けない。車の印がある会話は変えない）。
+    /// 決まりは TrainRules（乗り物の動き＋駅の近く）。2026-11-21。s20 の 次15
+    static func markTrain(_ data: Data, flags: [Bool]) -> Data {
+        guard flags.contains(true),
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              var list = object["conversations"] as? [[String: Any]], list.count == flags.count else { return data }
+        for (i, train) in flags.enumerated() where train && list[i]["vehicle"] == nil {
+            list[i]["vehicle"] = "train"
+        }
+        object["conversations"] = list
+        return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? data
+    }
+
     static func isDue(lastTried: Date, now: Date, soon: Bool = false) -> Bool {
         now.timeIntervalSince(lastTried) >= (soon ? Self.soon : every)
     }
@@ -594,7 +607,12 @@ extension Pipeline {
             let body = PCRecordsBody.make(payload) { self.isWorkTime($0) }
             // 車につないでいたあいだの会話に「車内」の印（inCar・vehicle。同期の形は変えず、送る中身にだけ足す。2026-11-21。s19 の 休13）
             let carFlags: [Bool] = payload.conversations.map { carAudio.connected(from: $0.start, to: $0.end) }
-            guard let data = (try? encoder.encode(body)).map({ PCRecords.markCar($0, flags: carFlags) }) else {
+            // 電車の中の印（vehicle "train"。2026-11-21。s20 の 次15。S20Rules.swift の TrainRules）
+            var trainFlags: [Bool] = []
+            for (i, c) in payload.conversations.enumerated() {
+                trainFlags.append(TrainRules.isTrain(movement: c.movement, inCar: carFlags[i], place: c.place, scene: c.scene))
+            }
+            guard let data = (try? encoder.encode(body)).map({ PCRecords.markTrain(PCRecords.markCar($0, flags: carFlags), flags: trainFlags) }) else {
                 Tally.add("records.unencodable")
                 sent[day] = stamp
                 continue

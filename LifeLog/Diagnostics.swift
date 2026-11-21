@@ -365,7 +365,7 @@ struct DiagnosticsView: View {
 
     var body: some View {
         let sections = items.reduce(into: [String]()) { if !$0.contains($1.section) { $0.append($1.section) } }
-        Form {
+        LLForm {
             Section {
                 Button(writing ? "書いています…" : "ドライブの「診断」に書く") {
                     writing = true
@@ -375,7 +375,7 @@ struct DiagnosticsView: View {
                     }
                 }
                 .disabled(writing)
-                if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }
+                if let note { Text(note).font(.footnote).foregroundStyle(.llDim) }
             } footer: {
                 Text("同じ中身を、ドライブの「LifeLog」フォルダの「診断」ドキュメントにも1時間に1回ほど書きます。会話の中身・人の名前は入れません。Claude などに「診断を見て」と頼むと、実際の iPhone での動き具合を読めます。")
             }
@@ -385,11 +385,11 @@ struct DiagnosticsView: View {
                         HStack(alignment: .firstTextBaseline) {
                             if let ok = item.ok {
                                 Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                                    .foregroundStyle(ok ? Color.green : Color.orange)
+                                    .foregroundStyle(ok ? LL.good : LL.warn)
                             }
                             if section == "最近のエラー" {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.label).font(.caption).foregroundStyle(.secondary)
+                                    Text(item.label).font(.caption).foregroundStyle(.llDim)
                                     Text(item.value).font(.callout)
                                 }
                             } else {

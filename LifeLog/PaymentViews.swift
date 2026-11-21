@@ -13,7 +13,7 @@ struct PaymentSection: View {
         let score = PaymentMatch.score(pipeline.shopVisits.visits, payments: book.all)
         Section {
             Button("明細（CSV）を読み込む") { picking = true }
-            if !message.isEmpty { Text(message).font(.footnote).foregroundStyle(.secondary) }
+            if !message.isEmpty { Text(message).font(.footnote).foregroundStyle(.llDim) }
             if !book.payments.isEmpty {
                 LabeledContent("読み込んだ支払い", value: "\(book.payments.count) 件")
                 if let latest = book.latest {
@@ -28,7 +28,7 @@ struct PaymentSection: View {
         }
         Section {
             LabeledContent("カードの利用速報", value: "\(book.mail.count) 件")
-            if let error = book.mailError { Text(error).font(.footnote).foregroundStyle(.secondary) }
+            if let error = book.mailError { Text(error).font(.footnote).foregroundStyle(.llDim) }
             LabeledContent("ウォレットでかざした記録", value: "\(book.taps.count) 件")
             if score.hit + score.miss + score.none > 0 {
                 LabeledContent("推測の答え合わせ", value: "当たり \(score.hit)・外れ \(score.miss)・推測なし \(score.none)")
@@ -86,26 +86,26 @@ struct UnmatchedPaymentsView: View {
         let calendar = Calendar.current
         let groups = Dictionary(grouping: list) { calendar.startOfDay(for: $0.time) }
         let days = groups.keys.sorted(by: >)
-        List {
+        LLList {
             if list.isEmpty {
-                Text("ありません。").foregroundStyle(.secondary)
+                Text("ありません。").foregroundStyle(.llDim)
             }
             ForEach(days, id: \.self) { day in
                 Section(Self.dayFormatter.string(from: day)) {
                     ForEach(groups[day] ?? []) { p in
                         HStack {
-                            Text(Self.clock.string(from: p.time)).font(.caption).foregroundStyle(.secondary)
+                            Text(Self.clock.string(from: p.time)).font(.caption).foregroundStyle(.llDim)
                             if p.hasShop {
                                 Text(p.shop)
                             } else if let guess = PaymentMatch.placeGuessLabel(for: p, visits: pipeline.shopVisits.visits) {
                                 // 店名の無いかざした記録に、そのころいた場所からの推測を添える（表示だけ。記録には書かない。2026-11-12）
-                                Text(guess).foregroundStyle(.secondary)
+                                Text(guess).foregroundStyle(.llDim)
                             } else {
                                 Text("（店名なし）")
                             }
-                            Text(p.via).font(.caption2).foregroundStyle(.secondary)
+                            Text(p.via).font(.caption2).foregroundStyle(.llDim)
                             Spacer()
-                            Text(p.amount > 0 ? "\(p.amount.formatted())円" : "").font(.caption).foregroundStyle(.secondary)
+                            Text(p.amount > 0 ? "\(p.amount.formatted())円" : "").font(.caption).foregroundStyle(.llDim)
                         }
                     }
                 }

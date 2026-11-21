@@ -394,7 +394,7 @@ struct SelfCandidatesView: View {
         let sure: [SelfCandidate] = book.candidates.filter { c in
             (only?.contains(c.id) ?? true) && !book.hidden.contains(c.id) && c.sure == true
         }
-        List {
+        LLList {
             if !sure.isEmpty {
                 Section {
                     BulkOKRow(count: sure.count, what: "職場の自分の声",
@@ -417,7 +417,7 @@ struct SelfCandidatesView: View {
                     row(item)
                 }
                 if shown.isEmpty {
-                    Text("確かめるものはありません").foregroundStyle(.secondary)
+                    Text("確かめるものはありません").foregroundStyle(.llDim)
                 }
             } footer: {
                 Text("PLAUD の文字起こしと突き合わせて、自分が話していそうな場面を家の PC が見つけました。▶︎で聞いて、自分の声なら「自分の声」を押してください。その場面を自分の声として覚え、記録の行も「自分」に直します。押すまでは何も変えません。違うときは「違う」を押すと、もう出しません。")
@@ -434,14 +434,14 @@ struct SelfCandidatesView: View {
         let playable = pipeline.archive.canPlay(item.audio)
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text(AppFeeds.clock(of: item) ?? AppFeeds.monthDay(item.day)).font(.caption).foregroundStyle(.secondary)
+                Text(AppFeeds.clock(of: item) ?? AppFeeds.monthDay(item.day)).font(.caption).foregroundStyle(.llDim)
                 Text(item.why == "plaud-match" ? "PLAUD と文が合った場面" : "いちばん話していた場面")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.caption2).foregroundStyle(.llDim)
             }
             if !item.text.isEmpty { Text("「\(item.text)」").lineLimit(3) }
             if item.sure == true {
                 Text(NightReviewRules.sureLabel(item.sure_why))
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.caption2).foregroundStyle(.llDim)
             }
             if playable {
                 Button {
@@ -459,10 +459,10 @@ struct SelfCandidatesView: View {
                 }
                 .buttonStyle(.borderless)
             } else {
-                Text("音声がこの端末にありません").font(.caption).foregroundStyle(.secondary)
+                Text("音声がこの端末にありません").font(.caption).foregroundStyle(.llDim)
             }
             if let result = results[item.id] {
-                Text(result).font(.caption).foregroundStyle(.secondary)
+                Text(result).font(.caption).foregroundStyle(.llDim)
             } else {
                 HStack {
                     Button("自分の声") { confirm(item) }
