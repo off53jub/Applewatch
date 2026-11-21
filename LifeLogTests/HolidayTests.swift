@@ -187,11 +187,21 @@ final class HolidayTests: XCTestCase {
         XCTAssertFalse(HolidayRules.inCar(chunkStart: now, chunkEnd: now, carSince: 0))
         XCTAssertFalse(HolidayRules.inCar(chunkStart: nil, chunkEnd: nil, carSince: since))
 
-        // 家の PC への問いに car=1 が付く（無ければ付けない）
+        // 家の PC への問いに inCar=1 が付く（無ければ付けない）
         let with = WatchDelivery.jobQuery(name: "a.m4a", chunkStart: now, chunkEnd: now, sent: now, hints: nil, weights: nil, car: true)
-        XCTAssertEqual(with.first { $0.name == "car" }?.value, "1")
+        XCTAssertEqual(with.first { $0.name == "inCar" }?.value, "1")
         let without = WatchDelivery.jobQuery(name: "a.m4a", chunkStart: now, chunkEnd: now, sent: now, hints: nil, weights: nil)
-        XCTAssertNil(without.first { $0.name == "car" })
+        XCTAssertNil(without.first { $0.name == "inCar" })
+
+        // 家の PC への会話の記録に inCar・vehicle（印のある会話だけ）
+        let body = Data(#"{"conversations":[{"start":1},{"start":2}],"work":[]}"#.utf8)
+        let marked = PCRecords.markCar(body, flags: [false, true])
+        let list = (try? JSONSerialization.jsonObject(with: marked) as? [String: Any])?["conversations"] as? [[String: Any]]
+        XCTAssertNil(list?[0]["inCar"])
+        XCTAssertEqual(list?[1]["inCar"] as? Bool, true)
+        XCTAssertEqual(list?[1]["vehicle"] as? String, "car")
+        XCTAssertEqual(PCRecords.markCar(body, flags: [false, false]), body)   // 印が無ければそのまま
+        XCTAssertEqual(PCRecords.markCar(body, flags: [true]), body)           // 数が合わなければそのまま
     }
 
     // MARK: - 休45 心拍変動

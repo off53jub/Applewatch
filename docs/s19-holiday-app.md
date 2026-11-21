@@ -35,10 +35,13 @@
 | watchAwayHolding | 真偽 | いま外出モードで区切りを溜めているか（休8） |
 | watchCrowd | 真偽 | いま「初めての人が多い」モードか（休17） |
 
-### 家の PC への区切り（POST /jobs・時計の直接送り）
+### 家の PC への会話の記録（POST /records/<日>）と区切り（POST /jobs・時計の直接送り）
 
-- 車につないでいたあいだの区切りに `car=1`（休13）。iPhone の区切りは CarPlay・車の Bluetooth につないでいた時間（CarAudioLog）で、
-  時計の区切りは iPhone が送る「車につないだ時刻」（applicationContext の carSince）で決める。無ければ付けない（PC は無くても動く）。
+- 休13 車内の印: 車（CarPlay・車の Bluetooth）につないでいたあいだの会話に `"inCar": true`・`"vehicle": "car"` を足す
+  （家の PC の records.py が読む名前。担当 P の PR #86 に合わせた。同期の形は変えず、PC に送る中身にだけ足す。印が無い会話には付けない）。
+- 区切りの問い（POST /jobs と時計の直接送り）にも、同じ印を `inCar=1` で付ける（PC は無くても動く）。
+  iPhone の区切りは CarAudioLog の時間で、時計の区切りは iPhone が送る「車につないだ時刻」（applicationContext の carSince）で決める。
+- 電車などの乗り物（動きの vehicle）は今は印にしない（車のナビの声を外すためなので、車につないだときだけ）。
 
 ## 時計と iPhone のあいだ（applicationContext・transferUserInfo）
 

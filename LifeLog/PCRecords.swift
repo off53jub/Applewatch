@@ -324,6 +324,20 @@ enum PCRecords {
     /// この端末が記録を送り、直しを当てるか（iPad は送らない）
     @MainActor static var isSender: Bool { UIDevice.current.userInterfaceIdiom != .pad }
 
+    /// 送る中身の会話（conversations の順）に、車内の印を足す（flags が true の会話だけ "inCar": true・"vehicle": "car"）。
+    /// 家の PC（records.py）が読む名前。どれも省略できる。印が無い・読めない中身はそのまま返す（2026-11-21。s19 の 休13）
+    static func markCar(_ data: Data, flags: [Bool]) -> Data {
+        guard flags.contains(true),
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              var list = object["conversations"] as? [[String: Any]], list.count == flags.count else { return data }
+        for (i, inCar) in flags.enumerated() where inCar {
+            list[i]["inCar"] = true
+            list[i]["vehicle"] = "car"
+        }
+        object["conversations"] = list
+        return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? data
+    }
+
     static func isDue(lastTried: Date, now: Date, soon: Bool = false) -> Bool {
         now.timeIntervalSince(lastTried) >= (soon ? Self.soon : every)
     }
@@ -578,7 +592,9 @@ extension Pipeline {
             if payload.conversations.isEmpty, payload.removed.isEmpty, sent[day] == nil { continue }
             // 職場の会話の印を足す（判断はアプリが職場の会話を外に出さない決まりと同じ）
             let body = PCRecordsBody.make(payload) { self.isWorkTime($0) }
-            guard let data = try? encoder.encode(body) else {
+            // 車につないでいたあいだの会話に「車内」の印（inCar・vehicle。同期の形は変えず、送る中身にだけ足す。2026-11-21。s19 の 休13）
+            let carFlags: [Bool] = payload.conversations.map { carAudio.connected(from: $0.start, to: $0.end) }
+            guard let data = (try? encoder.encode(body)).map({ PCRecords.markCar($0, flags: carFlags) }) else {
                 Tally.add("records.unencodable")
                 sent[day] = stamp
                 continue
