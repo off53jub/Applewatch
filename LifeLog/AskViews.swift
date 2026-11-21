@@ -224,11 +224,11 @@ struct DigestHitRow: View {
             if let entry {
                 WorkDigestDetailView(entry: entry)
             } else {
-                Text("このまとめは、もうありません。").foregroundStyle(.secondary)
+                Text("このまとめは、もうありません。").foregroundStyle(LL.dim)
             }
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(caption).font(.caption).foregroundStyle(.secondary)
+                Text(caption).font(.caption).foregroundStyle(LL.dim)
                 Text(hit.text)
             }
         }
@@ -248,14 +248,14 @@ struct HitRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(hit.day + " " + hit.line.time.formatted(date: .omitted, time: .shortened))
-                    if hit.line.marked == true { Image(systemName: "star.fill").foregroundStyle(.yellow) }
+                    if hit.line.marked == true { Image(systemName: "star.fill").foregroundStyle(LL.warn) }
                     if let speaker = hit.line.speaker { Text(speaker).bold() }
                 }
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(LL.dim)
                 Text(hit.line.text)
                 if !hit.heading.isEmpty {
-                    Text(hit.heading).font(.caption2).foregroundStyle(.secondary)
+                    Text(hit.heading).font(.caption2).foregroundStyle(LL.dim)
                 }
             }
         }
@@ -285,7 +285,7 @@ struct AskView: View {
     }
 
     var body: some View {
-        Form {
+        LLForm {
             Section {
                 TextField("例: 先週田中さんと何を決めた？", text: $question, axis: .vertical)
                     .lineLimit(1...4)
@@ -301,7 +301,7 @@ struct AskView: View {
                 }
             }
             if !error.isEmpty {
-                Section { Text(error).foregroundStyle(.secondary) }
+                Section { Text(error).foregroundStyle(LL.dim) }
             }
             if let motherAnswer {
                 MothershipAnswerSections(question: asked, answer: motherAnswer)
@@ -338,7 +338,7 @@ struct AskView: View {
                         ForEach(answer.digestUsed) { line in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(Pipeline.workDigestDayTitle(line.day) + (line.heading.isEmpty ? "" : "・" + line.heading))
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.caption).foregroundStyle(LL.dim)
                                 Text(line.text)
                             }
                         }
@@ -361,7 +361,7 @@ struct AskView: View {
                                 WorkDigestDetailView(entry: entry)
                             } label: {
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(Pipeline.workDigestDayTitle(entry.day)).font(.caption).foregroundStyle(.secondary)
+                                    Text(Pipeline.workDigestDayTitle(entry.day)).font(.caption).foregroundStyle(LL.dim)
                                     WorkDigestRow(entry: entry)
                                 }
                             }

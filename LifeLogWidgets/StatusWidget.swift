@@ -10,7 +10,7 @@ struct StatusWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: WidgetState.phoneKind, provider: StatusProvider()) { entry in
             StatusView(entry: entry)
-                .containerBackground(.fill.tertiary, for: .widget)
+                .containerBackground(for: .widget) { LLWidgetBackground() }
                 // 押すと「今日」タブを開く（2026-11-12）
                 .widgetURL(URL(string: "lifelog://today"))
         }
@@ -116,13 +116,13 @@ private struct StatusView: View {
 
     // MARK: - ホーム画面
 
-    private var phoneTint: Color? { state?.phoneRecording == true ? .red : nil }
+    private var phoneTint: Color? { state?.phoneRecording == true ? LL.danger : nil }
     private var watchTint: Color? {
-        if state?.watchQuiet == true { return .orange }
-        return state?.watchRecording == true ? .red : nil
+        if state?.watchQuiet == true { return LL.warn }
+        return state?.watchRecording == true ? LL.danger : nil
     }
-    private var tasksTint: Color? { (state?.tasksOverdue ?? 0) > 0 ? .orange : nil }
-    private var pcTint: Color? { state?.pcOK == false ? .orange : nil }
+    private var tasksTint: Color? { (state?.tasksOverdue ?? 0) > 0 ? LL.warn : nil }
+    private var pcTint: Color? { state?.pcOK == false ? LL.warn : nil }
 
     /// 録音（iPhone・時計）・頼まれごと・次の予定・文字にした時刻と PC
     private var small: some View {
@@ -130,10 +130,10 @@ private struct StatusView: View {
             HStack(spacing: 4) {
                 Text("LifeLog")
                     .font(.caption.bold())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LL.dim)
                 Spacer(minLength: 0)
                 if recording {
-                    Image(systemName: "record.circle.fill").foregroundStyle(.red)
+                    Image(systemName: "record.circle.fill").foregroundStyle(LL.danger)
                 }
             }
             WidgetIconText(symbol: device, text: WidgetText.phone(state), tint: phoneTint)
@@ -146,7 +146,7 @@ private struct StatusView: View {
             Spacer(minLength: 0)
             Text(footer)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(LL.dim)
         }
         .font(.caption)
         .lineLimit(1)
@@ -166,7 +166,7 @@ private struct StatusView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("録音")
                     .font(.caption.bold())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LL.dim)
                 WidgetIconText(symbol: device, text: deviceName + " " + WidgetText.phone(state), tint: phoneTint)
                 if let watch = WidgetText.watch(state) {
                     WidgetIconText(symbol: "applewatch", text: "時計 " + watch, tint: watchTint)
@@ -182,17 +182,17 @@ private struct StatusView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("次の予定")
                     .font(.caption.bold())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LL.dim)
                 WidgetEventLine(state: state, date: entry.date)
                 Text("頼まれごと")
                     .font(.caption.bold())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LL.dim)
                     .padding(.top, 4)
                 WidgetIconText(symbol: "checklist", text: WidgetText.tasks(state), tint: tasksTint)
                 if let open = WidgetText.openTasks(state) {
                     Text(open)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LL.dim)
                 }
                 Spacer(minLength: 0)
             }

@@ -556,7 +556,7 @@ struct HolidaySettingsSection: View {
             let drinks = HolidayBook.shared.drinks(on: day)
             Text((pipeline.isDayOff(.now) ? "今日は休みの日です" : "今日は休みの日ではありません")
                  + (drinks > 0 ? "・お酒 \(drinks) 杯" : ""))
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(LL.dim)
         } header: {
             Text("休日")
         } footer: {

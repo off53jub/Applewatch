@@ -76,6 +76,8 @@ struct WatchInfo: Codable, Equatable {
     var overdueCount: Int? = nil
     /// 家の PC の下書き（仮）。無ければ省く（古い時計のアプリは読み飛ばす。2026-11-07）
     var draft: Draft? = nil
+    /// 確かめ待ちの数（時計の文字盤に出す。省ける。2026-11-21。s20 の 体22）
+    var reviewWaiting: Int? = nil
 
     /// 会議の相棒（会議モードの最中と、終わって 30 分まで。2026-11-15。強化案 50。MeetingLive.swift）
     struct Meeting: Codable, Equatable {
@@ -294,6 +296,7 @@ extension Pipeline {
         info.last = lastTalkForWatch()
         info.draft = draftForWatch()
         info.meeting = MeetingLiveBook.shared.watchMeeting()  // 会議の相棒（2026-11-15。MeetingLive.swift）
+        info.reviewWaiting = S20Book.shared.waitingCount  // 確かめ待ちの数（2026-11-21。s20 の 体22）
         let today = watchDayKey.string(from: now)
         if let brief = MorningBriefStore.shared.current, brief.day >= today {
             info.morning = WatchInfo.Brief(day: brief.day, text: brief.text)

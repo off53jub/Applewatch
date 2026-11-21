@@ -89,14 +89,14 @@ struct ActivitiesView: View {
         let rows: [TimelineRow] = withTimeline ? pipeline.oneTimeline.rows(for: day) : []
         let anchors: [Date] = activities.map(\.start)
         let slots: [[TimelineRow]] = OneTimeline.slots(anchors: anchors, rows: rows, day: day)
-        List {
+        LLList {
             if withTimeline { TimelineNoteSection(day: day) }
             // PLAUD で埋めた所（アプリの記録が無い時間。読むだけ。2026-11-13。HomeFeeds.swift）
             PlaudFillSection(day: day)
             if building {
                 HStack(spacing: 8) {
                     ProgressView()
-                    Text("過ごし方をまとめています…").foregroundStyle(.secondary)
+                    Text("過ごし方をまとめています…").foregroundStyle(LL.dim)
                 }
             }
             // 年表の行のうち、最初の塊より前のもの（2026-11-14）
@@ -126,11 +126,11 @@ struct ActivitiesView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(Self.clock.string(from: first.start) + "〜")
                                 .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(LL.dim)
                             Text("まだまとめていない会話（\(newer.count) 件）")
                             Text("話が3分途切れて会話が閉じると、過ごし方に入ります。")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(LL.dim)
                         }
                     }
                 }
@@ -173,19 +173,19 @@ private struct ActivityRow: View {
                     .font(.subheadline.monospacedDigit().bold())
                 Text(activity.length)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LL.dim)
                 Spacer(minLength: 0)
                 switch activity.kind {
                 case .recorded:
                     if activity.count > 0 {
                         Text("会話 \(activity.count)")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(LL.dim)
                     }
                 case .plan:
-                    Label("予定・録音なし", systemImage: "calendar").font(.caption).foregroundStyle(.secondary)
+                    Label("予定・録音なし", systemImage: "calendar").font(.caption).foregroundStyle(LL.dim)
                 case .move:
-                    Label("移動", systemImage: "figure.walk").font(.caption).foregroundStyle(.secondary)
+                    Label("移動", systemImage: "figure.walk").font(.caption).foregroundStyle(LL.dim)
                 }
             }
             Text(activity.title)
@@ -193,7 +193,7 @@ private struct ActivityRow: View {
             if !activity.detail.isEmpty {
                 Text(activity.detail)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LL.dim)
             }
             if !activity.did.isEmpty {
                 Text(activity.did.map { "・" + $0 }.joined(separator: "\n"))
@@ -255,7 +255,7 @@ struct ConversationsView: View {
         var anchors: [Date] = []
         for group in groups { anchors.append(group.first?.start ?? .distantFuture) }
         let slots: [[TimelineRow]] = OneTimeline.slots(anchors: anchors, rows: rows, day: day)
-        return List {
+        return LLList {
             if withTimeline && range == nil { TimelineNoteSection(day: day) }
             // PLAUD で埋めた所（1日を見るときだけ。読むだけで、会話には入れない。2026-11-13。HomeFeeds.swift）
             if range == nil { PlaudFillSection(day: day) }
@@ -270,7 +270,7 @@ struct ConversationsView: View {
                         if !conversation.points.isEmpty {
                             Text(conversation.points.map { "・" + $0 }.joined(separator: "\n"))
                                 .font(.callout)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(LL.dim)
                         }
                         // 「実はこう思ってた」の一言（2026-11-19。s18。KnowMeViews.swift）
                         if conversation.closed { ConversationNoteRow(day: day, start: conversation.start) }
@@ -315,11 +315,11 @@ struct ConversationsView: View {
                                     Button("話者", systemImage: "person.crop.circle.badge.questionmark") {
                                         fixing = Fix(line: line, next: next)
                                     }
-                                    .tint(.indigo)
+                                    .tint(LL.accent)
                                     Button("文字", systemImage: "pencil") {
                                         editing = WordTarget(line: line)
                                     }
-                                    .tint(.orange)
+                                    .tint(LL.warn)
                                 }
                         }
                     }
@@ -399,18 +399,18 @@ struct ConversationsView: View {
                     Image(systemName: "speaker.wave.3").font(.caption2)
                 }
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(LL.dim)
             VStack(alignment: .leading, spacing: 2) {
                 if line.speaker != nil || line.marked == true {
                     HStack(spacing: 4) {
                         if line.marked == true {
-                            Image(systemName: "star.fill").foregroundStyle(.yellow)
+                            Image(systemName: "star.fill").foregroundStyle(LL.warn)
                         }
                         if let speaker = line.speaker {
                             Text(speaker)
                             // 2つの声のモデルで話し手が食い違った行（2026-11-06）
                             if let doubt = line.speakerDoubt, doubt != line.speakerID {
-                                Text("？").foregroundStyle(.orange)
+                                Text("？").foregroundStyle(LL.warn)
                             }
                         }
                     }
@@ -419,7 +419,7 @@ struct ConversationsView: View {
                 // 確からしさの低い行は薄く出す（聞き直して確かめたほうがよい行）
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     if line.isUncertain {
-                        Image(systemName: "questionmark.circle").font(.caption).foregroundStyle(.orange)
+                        Image(systemName: "questionmark.circle").font(.caption).foregroundStyle(LL.warn)
                     }
                     // 自信の低い行は、名前・数字・日時・金額に下線（要確認。2026-11-06）
                     Text(line.isUncertain ? UncertainMarks.underlined(line.text) : AttributedString(line.text))
@@ -428,7 +428,7 @@ struct ConversationsView: View {
                 if let original = line.original {
                     Text("直す前: " + original)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LL.dim)
                 }
             }
             Spacer(minLength: 0)
@@ -436,7 +436,7 @@ struct ConversationsView: View {
                 ProgressView()
             } else if audio != nil {
                 Image(systemName: player.playing == key ? "stop.circle.fill" : "play.circle")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(LL.accent)
             }
         }
         if let audio {
@@ -497,7 +497,7 @@ struct EditLineView: View {
     var body: some View {
         let part = Pipeline.changedPart(from: line.text, to: text)
         NavigationStack {
-            Form {
+            LLForm {
                 Section {
                     TextField("文", text: $text, axis: .vertical)
                 } header: {
@@ -519,7 +519,7 @@ struct EditLineView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("\(edit.at.formatted(date: .abbreviated, time: .shortened))　\(edit.by)")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(LL.dim)
                                 Text("前の文: " + edit.from)
                                 Button("この文に戻す") {
                                     text = edit.from
@@ -537,7 +537,7 @@ struct EditLineView: View {
                     }
                 }
                 if let failure {
-                    Section { Text(failure).foregroundStyle(.red) }
+                    Section { Text(failure).foregroundStyle(LL.danger) }
                 }
             }
             .navigationTitle("文字を直す")

@@ -22,10 +22,10 @@ struct VoiceCapture: View {
                 .disabled(disabled || pipeline.isRecording)
         }
         if pipeline.isRecording {
-            Text("ライフログの録音を止めてから録ってください。").foregroundStyle(.secondary)
+            Text("ライフログの録音を止めてから録ってください。").foregroundStyle(LL.dim)
         }
         if !status.isEmpty {
-            Text(status).foregroundStyle(.secondary)
+            Text(status).foregroundStyle(LL.dim)
         }
     }
 
@@ -74,7 +74,7 @@ struct VoiceEnrollView: View {
     static let sample = "今日はいい天気ですね。朝は駅まで歩いて、電車の中でニュースを読みました。午後からは打ち合わせが二つあって、そのあと資料をまとめる予定です。夜は家でゆっくり過ごそうと思います。"
 
     var body: some View {
-        Form {
+        LLForm {
             Section {
                 Text(Self.sample)
             } header: {
@@ -129,7 +129,37 @@ struct PeopleView: View {
             .sorted { $0.seconds > $1.seconds }
     }
 
+    @ViewBuilder
+    private func tailSections() -> some View {
+            let hidden = pipeline.people.filter { $0.hidden == true }
+            if !hidden.isEmpty {
+                Section {
+                    ForEach(hidden) { row($0) }
+                } header: {
+                    Text("記録に出さない声")
+                } footer: {
+                    Text("この人の声とされた行は、記録にもドキュメントにも書かず、「記録の掃除」の「消した行」に30日間残します。")
+                }
+            }
+            Section {
+                Button(rebuilding ? "作り直しています…" : "記録から人と声を作り直す") {
+                    rebuilding = true
+                    Task {
+                        rebuildResult = await pipeline.rebuildPeople { rebuildResult = $0 }
+                        rebuilding = false
+                    }
+                }
+                .disabled(rebuilding)
+                if !rebuildResult.isEmpty {
+                    Text(rebuildResult).font(.callout).foregroundStyle(LL.dim)
+                }
+            } footer: {
+                Text("覚えている人が消えてしまったときに。これまでの記録に残っている名前（自分を含む）から人を作り直し、その人が話していた録音から声を取り直します。手元に無い録音はドライブから取ってくるので、Wi-Fi のときに。")
+            }
+    }
+
     var body: some View {
+        // 中身が大きいので LLList に包まない（2026-11-21。型の決まりが時間切れになった）
         List {
             PeoplePagesSection()  // 人のページ（2026-11-15。強化案 53。PagesFeeds.swift。写しがあるときだけ）
             // 自分の声（声を足す・まとめた人を分け直す）
@@ -214,32 +244,10 @@ struct PeopleView: View {
                     Text("名前を付けていない声は、2週間聞かなければ自動で忘れます。")
                 }
             }
-            let hidden = pipeline.people.filter { $0.hidden == true }
-            if !hidden.isEmpty {
-                Section {
-                    ForEach(hidden) { row($0) }
-                } header: {
-                    Text("記録に出さない声")
-                } footer: {
-                    Text("この人の声とされた行は、記録にもドキュメントにも書かず、「記録の掃除」の「消した行」に30日間残します。")
-                }
-            }
-            Section {
-                Button(rebuilding ? "作り直しています…" : "記録から人と声を作り直す") {
-                    rebuilding = true
-                    Task {
-                        rebuildResult = await pipeline.rebuildPeople { rebuildResult = $0 }
-                        rebuilding = false
-                    }
-                }
-                .disabled(rebuilding)
-                if !rebuildResult.isEmpty {
-                    Text(rebuildResult).font(.callout).foregroundStyle(.secondary)
-                }
-            } footer: {
-                Text("覚えている人が消えてしまったときに。これまでの記録に残っている名前（自分を含む）から人を作り直し、その人が話していた録音から声を取り直します。手元に無い録音はドライブから取ってくるので、Wi-Fi のときに。")
-            }
+            // 下の 2 つの節は別の関数に分けた（型の決まりが時間切れになったため。2026-11-21）
+            tailSections()
         }
+        .llListBackground()
         .navigationTitle("話した相手")
         .countsOpen("people")
         .toolbar {
@@ -307,16 +315,16 @@ struct PeopleView: View {
                     if let list = places.byPerson[person.id], !list.isEmpty {
                         Text(list.prefix(3).map(\.place).joined(separator: "・"))
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(LL.dim)
                             .lineLimit(1)
                     }
                     // ▶︎で鳴る声が、いつ何を話したところか（声だけでは分かりにくいので）
                     if let sample = person.samples.last, let info = sampleInfo[sample] {
-                        Text("▶︎「\(info.text)」\(info.caption)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        Text("▶︎「\(info.text)」\(info.caption)").font(.caption).foregroundStyle(LL.dim).lineLimit(2)
                     }
                     // 名前の無い声は、呼ばれた名前を添える
                     if let top = clues[person.id]?.candidates.first {
-                        Text("もしかして: \(top.name)").font(.caption).foregroundStyle(Color.accentColor)
+                        Text("もしかして: \(top.name)").font(.caption).foregroundStyle(LL.accent)
                     }
                 }
             }
@@ -399,12 +407,12 @@ struct PersonView: View {
     }()
 
     var body: some View {
-        Form {
+        LLForm {
             // まとめた・消した声を開いたとき、中身が何も無く真っ黒な画面になっていた（2026-11-07）
             if person == nil {
                 Section {
                     Text("この声は、もうありません（ほかの人にまとめたか、消した声です）。")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LL.dim)
                 }
             }
             if let person {
@@ -475,11 +483,11 @@ struct PersonView: View {
                                 // どの声を拾ったか分かるよう、その時に話していた文と、いつ・どこか・記録での名前を出す
                                 if let info = sampleInfo[sample] {
                                     Text("「\(info.text)」").lineLimit(3)
-                                    Text(info.caption).font(.caption).foregroundStyle(.secondary)
+                                    Text(info.caption).font(.caption).foregroundStyle(LL.dim)
                                     let elsewhere = info.speakers.filter { $0 != person.displayName }
                                     if !elsewhere.isEmpty {
                                         Text("記録では「\(elsewhere.joined(separator: "」「"))」の行（ほかの人の声を拾っているかもしれません）")
-                                            .font(.caption).foregroundStyle(.orange)
+                                            .font(.caption).foregroundStyle(LL.warn)
                                     }
                                     if !elsewhere.isEmpty || info.media {
                                         NavigationLink("見直す") { VoiceReviewView(only: id) }
@@ -488,7 +496,7 @@ struct PersonView: View {
                                 } else {
                                     Text("声のひとこま \(person.samples.count - i)")
                                     if let place = places.byAudio[sample.audio] {
-                                        Text(place).font(.caption).foregroundStyle(.secondary)
+                                        Text(place).font(.caption).foregroundStyle(LL.dim)
                                     }
                                 }
                             }
@@ -536,19 +544,19 @@ struct PersonView: View {
                                     SampleButton(player: player, sample: item.sample, key: "aside-" + item.id)
                                 } else {
                                     // 声の特徴だけを外したもの（聞ける音のひとこまは無い）
-                                    Image(systemName: "person.wave.2").foregroundStyle(.secondary).frame(width: 32)
+                                    Image(systemName: "person.wave.2").foregroundStyle(LL.dim).frame(width: 32)
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
                                     if item.hasClip {
                                         if let info = asideInfo[item.sample] {
                                             Text("「\(info.text)」").lineLimit(3)
-                                            Text(info.caption).font(.caption).foregroundStyle(.secondary)
+                                            Text(info.caption).font(.caption).foregroundStyle(LL.dim)
                                         }
-                                        Text("記録では\(item.reason)だった").font(.caption).foregroundStyle(.secondary)
+                                        Text("記録では\(item.reason)だった").font(.caption).foregroundStyle(LL.dim)
                                     } else {
                                         Text(item.reason).font(.caption)
                                         Text("\(item.at.formatted(date: .abbreviated, time: .shortened))に外した（聞ける音はありません）")
-                                            .font(.caption).foregroundStyle(.secondary)
+                                            .font(.caption).foregroundStyle(LL.dim)
                                     }
                                     Button(item.hasClip ? "この人の声だった（戻す）" : "この人の声だった（\(item.voices.count) 個を戻す）") {
                                         Task {
@@ -576,7 +584,7 @@ struct PersonView: View {
                                 .disabled(removingLines)
                         }
                         if let removedMessage {
-                            Text(removedMessage).font(.footnote).foregroundStyle(.secondary)
+                            Text(removedMessage).font(.footnote).foregroundStyle(LL.dim)
                         }
                     } header: {
                         Text("記録に出さない")
@@ -608,12 +616,12 @@ struct PersonView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("「\(record.sourceName)」を戻す")
                                 Text("\(Self.mergeDate.string(from: record.date)) に\(record.automatic == true ? "自動で" : "")まとめた・\(record.lines.count) 行")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.caption).foregroundStyle(LL.dim)
                             }
                         }
                     }
                     NavigationLink("ドキュメントの履歴から探す") { PastMergesView(target: id) }
-                    if let undoMessage { Text(undoMessage).font(.footnote).foregroundStyle(.secondary) }
+                    if let undoMessage { Text(undoMessage).font(.footnote).foregroundStyle(LL.dim) }
                 } header: {
                     Text("まとめた人を分け直す")
                 } footer: {
@@ -779,11 +787,11 @@ struct PastMergesView: View {
     private var targetName: String { pipeline.people.first { $0.id == target }?.displayName ?? "" }
 
     var body: some View {
-        Form {
+        LLForm {
             Section {
                 Button(working ? "探しています…" : (searched ? "もう一度探す" : "探す")) { search() }
                     .disabled(working)
-                if let status { Text(status).font(.footnote).foregroundStyle(.secondary) }
+                if let status { Text(status).font(.footnote).foregroundStyle(LL.dim) }
             } footer: {
                 Text("いま「\(targetName)」になっている行のうち、ドライブの日ごとのドキュメントの前の版で「人物N」だった行を、番号ごとに集めます。行の話者を手で直したところも混ざるので、中身を見て選んでください。記録はまだ変えません。")
             }
@@ -791,12 +799,12 @@ struct PastMergesView: View {
                 Section {
                     ForEach(Array(past.lines.prefix(4).enumerated()), id: \.offset) { _, item in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(Self.lineTime.string(from: item.line.time)).font(.caption).foregroundStyle(.secondary)
+                            Text(Self.lineTime.string(from: item.line.time)).font(.caption).foregroundStyle(LL.dim)
                             Text(item.line.text).lineLimit(2)
                         }
                     }
                     if past.lines.count > 4 {
-                        Text("ほか \(past.lines.count - 4) 行").font(.caption).foregroundStyle(.secondary)
+                        Text("ほか \(past.lines.count - 4) 行").font(.caption).foregroundStyle(LL.dim)
                     }
                     Button("「\(past.name)」に戻す") { confirming = past }
                         .disabled(working)
@@ -855,7 +863,7 @@ struct PersonPicker: View {
         let people = pipeline.people.filter { $0.id != exclude && (includeSelf || !$0.isSelf) }
         let named = people.filter { $0.isNamed && !$0.isSelf }
         let order: [SpeakerLabeler.Context?] = context == .other ? [.other, nil, .work] : [.work, nil, .other]
-        List {
+        LLList {
             if includeSelf {
                 Button(SpeakerLabeler.selfName) { onPick(SpeakerLabeler.selfID) }
             }
@@ -877,7 +885,7 @@ struct PersonPicker: View {
                                 // どこで聞いた声か（名前の無い声を見分ける手がかり）
                                 if let list = places.byPerson[p.id], !list.isEmpty {
                                     Text(list.prefix(3).map(\.place).joined(separator: "・"))
-                                        .font(.caption).foregroundStyle(.secondary)
+                                        .font(.caption).foregroundStyle(LL.dim)
                                 }
                             }
                         }
@@ -897,7 +905,7 @@ struct RegisterPersonView: View {
     @State private var context: SpeakerLabeler.Context? = nil
 
     var body: some View {
-        Form {
+        LLForm {
             Section {
                 TextField("名前", text: $name)
                 Picker("会う場", selection: $context) {
@@ -949,7 +957,7 @@ struct SpeakerFixView: View {
         NavigationStack {
             VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(line.speaker.map { "いま: \($0)" } ?? "いま: 話者なし").font(.caption).foregroundStyle(.secondary)
+                Text(line.speaker.map { "いま: \($0)" } ?? "いま: 話者なし").font(.caption).foregroundStyle(LL.dim)
                 Text(line.text).lineLimit(3)
                 Picker("直す範囲", selection: $scope) {
                     Text("この行だけ").tag(Pipeline.SpeakerFix.line)
@@ -959,7 +967,7 @@ struct SpeakerFixView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                Text(scopeHint).font(.caption).foregroundStyle(.secondary)
+                Text(scopeHint).font(.caption).foregroundStyle(LL.dim)
             }
             .padding(.horizontal)
             PersonPicker(exclude: line.speakerID, context: context) { id in apply(id) }
@@ -1033,7 +1041,7 @@ struct SelfMergeView: View {
     }
 
     var body: some View {
-        List {
+        LLList {
             Section {
                 ForEach(others) { person in
                     HStack {
@@ -1048,15 +1056,15 @@ struct SelfMergeView: View {
                                     Text(person.displayName)
                                     Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))"
                                          + (workOnly ? "・職場で \(workLines[person.id] ?? 0) 行" : ""))
-                                        .font(.caption).foregroundStyle(.secondary)
+                                        .font(.caption).foregroundStyle(LL.dim)
                                     if let sample = person.samples.last, let info = sampleInfo[sample] {
                                         Text("▶︎「\(info.text)」\(info.caption)")
-                                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                            .font(.caption).foregroundStyle(LL.dim).lineLimit(2)
                                     }
                                 }
                                 Spacer()
                                 Image(systemName: chosen.contains(person.id) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(chosen.contains(person.id) ? Color.accentColor : Color.secondary)
+                                    .foregroundStyle(chosen.contains(person.id) ? LL.accent : LL.dim)
                             }
                         }
                         .tint(.primary)
@@ -1136,7 +1144,7 @@ struct UnnamedVoicesView: View {
         // body-read-ok: この日の 1 日だけを 1 回（前は行ごとにも読み直していた。2026-11-16）
         let talks = pipeline.conversations(on: day)
         let list = unnamed(talks)
-        List {
+        LLList {
             ForEach(list) { item in
                 Section {
                     HStack {
@@ -1145,7 +1153,7 @@ struct UnnamedVoicesView: View {
                         }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.lines.last?.text ?? "").lineLimit(2)
-                            Text(dayCaption(item, talks)).font(.caption).foregroundStyle(.secondary)
+                            Text(dayCaption(item, talks)).font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                     if working == item.person.id {

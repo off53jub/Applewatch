@@ -17,7 +17,7 @@ struct WorkDigestListView: View {
 
     var body: some View {
         let groups = pipeline.workDigests.byDay
-        List {
+        LLList {
             Section {
                 Button("取り込む（写真・スクショ・貼り付け）", systemImage: "square.and.arrow.down") { importing = true }
                 // 職場の Claude への頼み方を、今日の日付にしてコピーする（2026-11-10）
@@ -44,7 +44,7 @@ struct WorkDigestListView: View {
                 .onChange(of: remindMinute) { pipeline.scheduleWorkDigestReminder() }
             }
             if let note {
-                Section { Text(note).font(.footnote).foregroundStyle(.secondary) }
+                Section { Text(note).font(.footnote).foregroundStyle(LL.dim) }
             }
             // 週ごと・案件ごとに読む（2026-11-10。言語モデルは使わない）
             if !groups.isEmpty {
@@ -67,7 +67,7 @@ struct WorkDigestListView: View {
                 }
             }
             if groups.isEmpty {
-                Section { Text("まだありません").foregroundStyle(.secondary) }
+                Section { Text("まだありません").foregroundStyle(LL.dim) }
             }
             ForEach(groups, id: \.day) { group in
                 Section {
@@ -78,7 +78,7 @@ struct WorkDigestListView: View {
                             WorkDigestRow(entry: entry)
                         }
                         .swipeActions(edge: .trailing) {
-                            Button("消す") { deleting = entry }.tint(.red)
+                            Button("消す") { deleting = entry }.tint(LL.danger)
                         }
                     }
                 } header: {
@@ -113,7 +113,7 @@ struct WorkDigestRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(headline).lineLimit(2)
-            Text(caption).font(.caption).foregroundStyle(.secondary)
+            Text(caption).font(.caption).foregroundStyle(LL.dim)
         }
     }
 
@@ -147,7 +147,7 @@ struct WorkDigestDetailView: View {
     let entry: WorkDigest.Entry
 
     var body: some View {
-        List {
+        LLList {
             Section {
                 LabeledContent("日付", value: Pipeline.workDigestDayTitle(entry.day))
                 LabeledContent("取り込み", value: entry.addedAt.formatted(date: .abbreviated, time: .shortened) + "・"
@@ -165,7 +165,7 @@ struct WorkDigestDetailView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.element.text).textSelection(.enabled)
                                 if !item.element.source.isEmpty {
-                                    Text("出どころ: " + item.element.source).font(.caption).foregroundStyle(.secondary)
+                                    Text("出どころ: " + item.element.source).font(.caption).foregroundStyle(LL.dim)
                                 }
                             }
                         }
@@ -215,14 +215,14 @@ struct WorkDigestImportView: View {
         let hasText: Bool = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         // 何日分かをまとめて貼ったとき（【日付】が2つ以上）は、日ごとに分けて入れる（2026-11-10）
         let days: [(day: String, text: String)] = WorkDigestParser.splitDays(text)
-        Form {
+        LLForm {
             // 職場の Claude に貼る頼み方を、取り込む画面からもコピーできる（2026-11-12。下の日付の日の分）
             Section {
                 Button("職場の Claude への頼み方をコピー", systemImage: "doc.on.doc") {
                     UIPasteboard.general.string = WorkDigestPrompt.full(day: TaskBook.dayFormat.string(from: date))
                     promptCopied = "コピーしました。職場の Claude に貼ってください。"
                 }
-                if let promptCopied { Text(promptCopied).font(.footnote).foregroundStyle(.secondary) }
+                if let promptCopied { Text(promptCopied).font(.footnote).foregroundStyle(LL.dim) }
             } header: {
                 Text("まず、職場の Claude に聞く")
             } footer: {
@@ -244,7 +244,7 @@ struct WorkDigestImportView: View {
                     HStack { ProgressView(); Text(reading) }
                 }
                 if let problem {
-                    Text(problem).foregroundStyle(.red)
+                    Text(problem).foregroundStyle(LL.danger)
                 }
             } header: {
                 Text("読み取る")

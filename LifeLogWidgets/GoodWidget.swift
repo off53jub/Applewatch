@@ -8,7 +8,7 @@ struct GoodWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: WidgetState.goodKind, provider: StatusProvider()) { entry in
             GoodView(entry: entry)
-                .containerBackground(.fill.tertiary, for: .widget)
+                .containerBackground(for: .widget) { LLWidgetBackground() }
                 // 押すといいこと帳を開く（2026-11-12。LifeLog の NoticeRoute.route(url:)）
                 .widgetURL(URL(string: "lifelog://good"))
         }
@@ -39,7 +39,7 @@ private struct GoodView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Label("今週のいいこと帳", systemImage: "hand.thumbsup")
                     .font(.caption.bold())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LL.dim)
                 Text("お礼 \(week.thanks)").font(.title3.bold())
                 Text("ほめ言葉 \(week.praise)").font(.title3.bold())
                 Spacer(minLength: 0)

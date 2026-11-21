@@ -157,7 +157,7 @@ struct MothershipAnswerSections: View {
             Section("もとにした記録（母艦）") {
                 ForEach(answer.sources) { source in
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("[\(source.n)] " + source.caption).font(.caption).foregroundStyle(.secondary)
+                        Text("[\(source.n)] " + source.caption).font(.caption).foregroundStyle(LL.dim)
                         Text(source.text)
                     }
                 }

@@ -138,7 +138,7 @@ struct ListenQualityView: View {
     }
 
     var body: some View {
-        Form {
+        LLForm {
             Section {
                 ForEach(quality.devices) { qualityRow($0) }
             } header: {
@@ -151,7 +151,7 @@ struct ListenQualityView: View {
             }
             if noise.devices.isEmpty {
                 Section {
-                    Text("まだ測った区切りがありません。これから文字にする区切りから測ります。").foregroundStyle(.secondary)
+                    Text("まだ測った区切りがありません。これから文字にする区切りから測ります。").foregroundStyle(LL.dim)
                 } header: {
                     Text("周りの音")
                 }
@@ -182,7 +182,7 @@ struct ListenQualityView: View {
         VStack(alignment: .leading, spacing: 2) {
             LabeledContent(row.label, value: "\(row.lines) 行")
             Text("？ \(Self.percent(row.uncertain, row.lines))・直した \(Self.percent(row.fixed, row.lines))・騒がしい所 \(Self.percent(row.noisy, row.lines))")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(LL.dim)
         }
     }
 
@@ -192,7 +192,7 @@ struct ListenQualityView: View {
             Text(String(format: "底 %.0f dB", row.floor)
                  + (row.margin.map { String(format: "・声との差 %.0f dB", $0) } ?? "")
                  + "・騒がしい \(Self.percent(row.noisy, row.count))")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(LL.dim)
         }
     }
 }

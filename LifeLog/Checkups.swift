@@ -650,7 +650,7 @@ struct CheckupsView: View {
     var body: some View {
         let book = CheckupBook.shared
         let list: [CheckupItem] = book.queue(pipeline)
-        List {
+        LLList {
             ForEach(list) { item in
                 CheckupCard(item: item, note: notes[item.id], text: Binding(get: { texts[item.id] ?? "" }, set: { texts[item.id] = $0 }),
                             busy: busy == item.id,
@@ -660,7 +660,7 @@ struct CheckupsView: View {
             }
             if list.isEmpty {
                 Section {
-                    Text("今日の答え合わせは、ここまでです。").foregroundStyle(.secondary)
+                    Text("今日の答え合わせは、ここまでです。").foregroundStyle(LL.dim)
                 } footer: {
                     Text("1 日 5 問までです。答えると、次から同じ所・同じ人に使います。")
                 }
@@ -697,14 +697,14 @@ struct CheckupCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(item.title).font(.headline)
                 if !item.detail.isEmpty {
-                    Text(item.detail).font(.caption).foregroundStyle(.secondary)
+                    Text(item.detail).font(.caption).foregroundStyle(LL.dim)
                 }
                 if item.source == "night" {
-                    Text("夜に見つけた繋がりの候補です").font(.caption2).foregroundStyle(.secondary)
+                    Text("夜に見つけた繋がりの候補です").font(.caption2).foregroundStyle(LL.dim)
                 }
             }
             if let note {
-                Text(note).font(.footnote).foregroundStyle(.secondary)
+                Text(note).font(.footnote).foregroundStyle(LL.dim)
             } else if busy {
                 HStack { ProgressView(); Text("送っています…") }
             } else if item.kind == "place_unnamed" {
@@ -740,9 +740,9 @@ struct UnnamedPlacesView: View {
 
     var body: some View {
         let stays: [UnnamedStay] = CheckupBook.shared.unknownStays()
-        List {
+        LLList {
             if stays.isEmpty {
-                Text("名前のない所は、もうありません。").foregroundStyle(.secondary)
+                Text("名前のない所は、もうありません。").foregroundStyle(LL.dim)
             }
             ForEach(stays) { stay in
                 Section {

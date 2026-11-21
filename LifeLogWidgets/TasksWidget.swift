@@ -8,7 +8,7 @@ struct TasksWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: WidgetState.tasksKind, provider: StatusProvider()) { entry in
             TasksView(entry: entry)
-                .containerBackground(.fill.tertiary, for: .widget)
+                .containerBackground(for: .widget) { LLWidgetBackground() }
                 // 押すと「タスク」タブを開く（2026-11-12。LifeLog の NoticeRoute.route(url:)）
                 .widgetURL(URL(string: "lifelog://tasks"))
         }
@@ -53,10 +53,10 @@ private struct TasksView: View {
                     Image(systemName: "checklist")
                     Text(header).font(.caption.bold())
                 }
-                .foregroundStyle((state?.tasksOverdue ?? 0) > 0 ? Color.orange : Color.secondary)
+                .foregroundStyle((state?.tasksOverdue ?? 0) > 0 ? LL.warn : LL.dim)
                 if titles.isEmpty {
                     Text(state == nil ? WidgetText.unknown : "まだのものはありません")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(LL.dim)
                 }
                 ForEach(Array(titles.enumerated()), id: \.offset) { item in
                     Text("・" + item.element)

@@ -9,7 +9,7 @@ struct ImportView: View {
     var body: some View {
         let importer = pipeline.importer
         let selected = importer.items.filter(\.include).count
-        List {
+        LLList {
             Section {
                 Button("ファイル・フォルダを選ぶ") { picking = true }
                     .disabled(importer.working)
@@ -20,7 +20,7 @@ struct ImportView: View {
                 Section {
                     HStack {
                         if importer.working { ProgressView() }
-                        Text(importer.status).foregroundStyle(.secondary)
+                        Text(importer.status).foregroundStyle(LL.dim)
                     }
                 }
             }
@@ -41,7 +41,7 @@ struct ImportView: View {
                                 Text(item.name).lineLimit(1)
                                 Text(item.alreadyImported ? "取り込み済み" : "時刻: " + item.source)
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(LL.dim)
                             }
                             DatePicker("録音を始めた時刻",
                                        selection: Binding(get: { item.start ?? .now },

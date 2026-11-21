@@ -529,6 +529,8 @@ extension Pipeline {
         if let night = PCDiag.nightlyDoneFor { state["nightlyDoneFor"] = night }
         // 文字になるまでの区間ごとの中央値（直近24時間。秒。版 8。docs/v8-latency.md の 1。Latency.swift）
         if let latency = Latency.summary() { state["latency"] = latency.json }
+        // 体験の数字（答えるまでの秒・開かれた通知・止めた種類。どれも省ける。2026-11-21。s20 の 体38。S20Book.swift）
+        for (key, value) in S20Book.todayUX() { state[key] = value }
         return state
     }
 
@@ -623,7 +625,7 @@ struct PCLinkSection: View {
             }
             .disabled(sending || !diagOn)
             if let note {
-                Text(note).font(.caption).foregroundStyle(.secondary)
+                Text(note).font(.caption).foregroundStyle(LL.dim)
             }
         } header: {
             Text("実機の様子・見えない通知・PC で直す")

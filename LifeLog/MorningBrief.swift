@@ -428,7 +428,7 @@ struct MorningBriefSection: View {
                     }
                     .disabled(store.making)
                     Text(record.made.formatted(date: .abbreviated, time: .shortened) + " に作りました")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(LL.dim)
                 } label: {
                     Label(record.day == today ? "昨日と今日" : "昨日と今日（明日の分）", systemImage: "sun.horizon")
                 }
@@ -477,14 +477,14 @@ struct TodayPickRow: View {
     var body: some View {
         Button { showing = true } label: {
             HStack(alignment: .top, spacing: 8) {
-                Text("\(number).").foregroundStyle(.secondary)
+                Text("\(number).").foregroundStyle(LL.dim)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(pick.text).foregroundStyle(.primary).multilineTextAlignment(.leading)
                     if !pick.why.isEmpty {
-                        Text(pick.why).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.leading)
+                        Text(pick.why).font(.caption).foregroundStyle(LL.dim).multilineTextAlignment(.leading)
                     }
                     if let first = pick.how.first {
-                        Text("まず: " + first).font(.caption).foregroundStyle(.blue).multilineTextAlignment(.leading)
+                        Text("まず: " + first).font(.caption).foregroundStyle(LL.accent).multilineTextAlignment(.leading)
                     }
                 }
                 Spacer(minLength: 0)
@@ -511,10 +511,10 @@ struct PickHowToView: View {
     var body: some View {
         let task: TaskBook.Item? = pick.taskID.flatMap { id in pipeline.tasks.items.first { $0.id == id } }
         let home: MothershipTodo? = pick.homeID.flatMap { id in pipeline.mothership.export?.items.first { $0.id == id } }
-        Form {
+        LLForm {
             Section {
                 Text(pick.text).font(.headline)
-                if !pick.why.isEmpty { Text(pick.why).foregroundStyle(.secondary) }
+                if !pick.why.isEmpty { Text(pick.why).foregroundStyle(LL.dim) }
             } header: {
                 Text("やること")
             }
@@ -522,7 +522,7 @@ struct PickHowToView: View {
                 Section("解き方") {
                     ForEach(Array(pick.how.enumerated()), id: \.offset) { i, step in
                         HStack(alignment: .top, spacing: 8) {
-                            Text("\(i + 1).").foregroundStyle(.secondary)
+                            Text("\(i + 1).").foregroundStyle(LL.dim)
                             Text(step)
                         }
                     }
@@ -568,7 +568,7 @@ struct PickHowToView: View {
             }
             if !pick.hasHowTo {
                 Section {
-                    Text("解き方はまだありません。家の PC が今の様子と照らして選んだ日に出ます。").foregroundStyle(.secondary)
+                    Text("解き方はまだありません。家の PC が今の様子と照らして選んだ日に出ます。").foregroundStyle(LL.dim)
                 }
             }
         }

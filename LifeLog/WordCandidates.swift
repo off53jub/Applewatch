@@ -302,7 +302,7 @@ struct WordCandidateRow: View {
                 if !note.isEmpty {
                     Text(note)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LL.dim)
                 }
             }
             Spacer()
@@ -333,7 +333,7 @@ struct WordCandidateListView: View {
         let all: [WordCandidate] = pipeline.openWordCandidates(fromDigest: fromDigest)
         let categories: [String] = Self.categories(all)
         let shown: [WordCandidate] = category.isEmpty ? all : all.filter { $0.category == category }
-        List {
+        LLList {
             Section {
                 Picker("足す組", selection: $group) {
                     ForEach(Vocabulary.Group.allCases) { Text($0.label).tag($0) }

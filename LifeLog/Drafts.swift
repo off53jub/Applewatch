@@ -148,10 +148,10 @@ struct DraftSection: View {
                             Text(line.time.formatted(date: .omitted, time: .shortened))
                                 .font(.caption)
                                 .monospacedDigit()
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(LL.dim)
                             Text(line.text)
                                 .font(.callout)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(LL.dim)
                         }
                     }
                 }

@@ -11,7 +11,7 @@ struct WidgetEventLine: View {
     var body: some View {
         HStack(spacing: 3) {
             if showsIcon {
-                Image(systemName: "calendar").foregroundStyle(.secondary)
+                Image(systemName: "calendar").foregroundStyle(LL.dim)
             }
             if let event = WidgetText.event(state, at: date) {
                 Text(event.time).monospacedDigit()
@@ -32,7 +32,7 @@ struct WidgetIconText: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            Image(systemName: symbol).foregroundStyle(tint ?? Color.secondary)
+            Image(systemName: symbol).foregroundStyle(tint ?? LL.dim)
             Text(text)
         }
     }

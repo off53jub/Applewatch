@@ -13,7 +13,7 @@ struct VocabularyView: View {
 
     var body: some View {
         let vocabulary = pipeline.vocabulary
-        Form {
+        LLForm {
             Section {
                 Picker("組", selection: $group) {
                     ForEach(Vocabulary.Group.allCases) { Text($0.label).tag($0) }
@@ -47,7 +47,7 @@ struct VocabularyView: View {
                                 Text(candidate.edited ? "手で直した言葉（\(candidate.count) 回）"
                                      : "\(candidate.days) 日・\(candidate.count) 回の会話に出てきた")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(LL.dim)
                             }
                             Spacer()
                             Button("「\(group.label)」に足す") {
@@ -165,9 +165,9 @@ struct AddWordView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            LLForm {
                 Section {
-                    Text(line.text).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text(line.text).foregroundStyle(LL.dim).textSelection(.enabled)
                 } header: {
                     Text("この行")
                 }
@@ -209,7 +209,7 @@ struct TopicView: View {
     private var topic: Vocabulary.Topic? { pipeline.vocabulary.topics.first { $0.id == id } }
 
     var body: some View {
-        Form {
+        LLForm {
             if let topic {
                 Section("名前") {
                     TextField("話題の名前", text: Binding(

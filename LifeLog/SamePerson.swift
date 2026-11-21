@@ -444,10 +444,10 @@ struct SamePersonMemberLine: View {
                 }
                 .buttonStyle(.borderless)
             } else {
-                Image(systemName: "speaker.slash").foregroundStyle(.secondary)
+                Image(systemName: "speaker.slash").foregroundStyle(LL.dim)
             }
             VStack(alignment: .leading, spacing: 1) {
-                Text("\(member.name)（\(member.lines) 行）").font(.caption).foregroundStyle(.secondary)
+                Text("\(member.name)（\(member.lines) 行）").font(.caption).foregroundStyle(LL.dim)
                 if let sample, !sample.text.isEmpty {
                     Text("「\(sample.text)」").font(.callout).lineLimit(2)
                 }
@@ -486,13 +486,13 @@ struct SamePersonGroupRow: View {
             Text(dayLabel + "　" + group.people.map(\.name).joined(separator: "・"))
                 .font(.subheadline.bold())
             if let days = group.days, days.count >= 2 {
-                Text("別の日の声どうしです").font(.caption).foregroundStyle(.secondary)
+                Text("別の日の声どうしです").font(.caption).foregroundStyle(LL.dim)
             }
             ForEach(group.people) { member in
                 SamePersonMemberLine(member: member, key: "same-" + group.id + "-" + member.id, player: player)
             }
             if let note {
-                Text(note).font(.caption).foregroundStyle(.secondary)
+                Text(note).font(.caption).foregroundStyle(LL.dim)
             } else {
                 HStack {
                     Button("同じ人") { answer(true) }
@@ -531,7 +531,7 @@ struct SamePersonMaybeRow: View {
                 .font(.subheadline.bold())
             SamePersonMemberLine(member: item.person, key: "maybe-" + item.id, player: player)
             if let note {
-                Text(note).font(.caption).foregroundStyle(.secondary)
+                Text(note).font(.caption).foregroundStyle(LL.dim)
             } else {
                 HStack {
                     Button("同じ人") { answer(true) }
@@ -597,7 +597,7 @@ struct SamePersonListView: View {
     var body: some View {
         let list: [SamePersonGroup] = pipeline.samePersonGroups
         let maybes: [SamePersonMaybe] = pipeline.samePersonMaybes
-        List {
+        LLList {
             // 2026-11-16（強化案 71）
             Section {
                 Toggle("別の日の同じ声は自動でまとめる", isOn: $autoMerge)
@@ -616,7 +616,7 @@ struct SamePersonListView: View {
             }
             Section {
                 if list.isEmpty && maybes.isEmpty {
-                    Text("確かめるものはありません").foregroundStyle(.secondary)
+                    Text("確かめるものはありません").foregroundStyle(LL.dim)
                 }
                 ForEach(list) { group in
                     SamePersonGroupRow(group: group, player: player)

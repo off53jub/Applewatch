@@ -7,7 +7,7 @@ struct NoiseSettingsView: View {
 
     var body: some View {
         @Bindable var filter = pipeline.officeFilter
-        Form {
+        LLForm {
             Section {
                 Picker("使うとき", selection: $filter.mode) {
                     ForEach(OfficeFilter.Mode.allCases) { Text($0.label).tag($0) }
@@ -60,7 +60,7 @@ struct IntegrationsView: View {
         @Bindable var motion = pipeline.motion
         @Bindable var sleep = pipeline.sleep
         @Bindable var health = pipeline.health
-        Form {
+        LLForm {
             Section {
                 if calendar.authorized {
                     Toggle("カレンダーを使う", isOn: $calendar.enabled)
@@ -106,7 +106,7 @@ struct IntegrationsView: View {
 
             Section {
                 if !motion.available {
-                    Text("この iPhone では使えません").foregroundStyle(.secondary)
+                    Text("この iPhone では使えません").foregroundStyle(LL.dim)
                 } else if motion.authorized {
                     Toggle("移動の様子を使う", isOn: $motion.enabled)
                 } else {
@@ -124,7 +124,7 @@ struct IntegrationsView: View {
                 } else {
                     Button("ヘルスケアを使えるようにする") { Task { await health.requestAccess() } }
                 }
-                if !health.note.isEmpty { Text(health.note).font(.footnote).foregroundStyle(.secondary) }
+                if !health.note.isEmpty { Text(health.note).font(.footnote).foregroundStyle(LL.dim) }
             } header: {
                 Text("ヘルスケア")
             } footer: {
@@ -157,7 +157,7 @@ private struct CalendarsView: View {
 
     var body: some View {
         let link = pipeline.calendar
-        List {
+        LLList {
             ForEach(link.calendarsByAccount, id: \.account) { group in
                 Section(group.account) {
                     ForEach(group.calendars, id: \.calendarIdentifier) { cal in
@@ -165,7 +165,7 @@ private struct CalendarsView: View {
                         let used = !link.ignoredCalendars.contains(id)
                         HStack {
                             Circle().fill(Color(cgColor: cal.cgColor)).frame(width: 10, height: 10)
-                            Text(cal.title).foregroundStyle(used ? Color.primary : Color.secondary)
+                            Text(cal.title).foregroundStyle(used ? Color.primary : LL.dim)
                             Spacer()
                             if used {
                                 Button {
@@ -179,9 +179,9 @@ private struct CalendarsView: View {
                                         .font(.caption.bold())
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 3)
-                                        .background(link.workCalendars.contains(id) ? Color.accentColor : Color.secondary.opacity(0.15),
+                                        .background(link.workCalendars.contains(id) ? LL.accent : LL.dim.opacity(0.15),
                                                     in: Capsule())
-                                        .foregroundStyle(link.workCalendars.contains(id) ? Color.white : Color.secondary)
+                                        .foregroundStyle(link.workCalendars.contains(id) ? Color.white : LL.dim)
                                 }
                                 .buttonStyle(.borderless)
                             }
@@ -205,7 +205,7 @@ private struct CalendarsView: View {
         .safeAreaInset(edge: .bottom) {
             Text("右のスイッチを切ったカレンダー（家族の共有カレンダーなど、自分の予定ではないもの）は使いません。「職場」を付けたカレンダーの予定の時間は、職場とみなします。")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(LL.dim)
                 .padding()
                 .background(.bar)
         }
@@ -219,7 +219,7 @@ struct NightlyView: View {
     @AppStorage(Pipeline.nightRecheckAllKey) private var all = false
 
     var body: some View {
-        Form {
+        LLForm {
             Section {
                 Toggle("家の PC で書けた区切りも聞き直す", isOn: $all)
             } footer: {
@@ -235,7 +235,7 @@ struct NightlyView: View {
                     Button("今すぐ聞き直す") { Task { await pipeline.runNightly(force: true) } }
                 }
                 if !pipeline.nightlyResult.isEmpty {
-                    Text(pipeline.nightlyResult).font(.callout).foregroundStyle(.secondary)
+                    Text(pipeline.nightlyResult).font(.callout).foregroundStyle(LL.dim)
                 }
             } footer: {
                 Text("夜（22時〜6時）に充電しているとき、iPhone に残っている1日分の音声を聞き直します。その日に出た名前・話題・予定の言葉をヒントにし、Haas-ja で書けていなかった区切り（電池優先のときなど）は Haas-ja で書き直して、前より良くなった行だけ差し替えます。確かさの低い行は、2つの聞き取りを見比べて直します。手で直した行は変えず、差し替えた行の元の文は「直す前」として残ります。")
@@ -248,7 +248,7 @@ struct NightlyView: View {
 /// ロック画面・コントロールセンター・アクションボタン・時計の文字盤から使う方法。
 struct ShortcutsHelpView: View {
     var body: some View {
-        Form {
+        LLForm {
             Section("ロック画面・コントロールセンター") {
                 Text("コントロールセンターを開いて左上の「＋」→「コントロールを追加」で「LifeLog」を探すと、「録音を始める・止める」と「印を付ける」があります。ロック画面の下の2つのボタンも、ロック画面を長押し→「カスタマイズ」から同じものに替えられます。")
             }
@@ -260,9 +260,9 @@ struct ShortcutsHelpView: View {
             }
             Section {
                 Text("「録音を始める・止める」は、LifeLog を開かず、ロックしたまま（Face ID なし）で動きます。iOS の決まりで、こうして始めた録音のあいだは、ロック画面と Dynamic Island に「LifeLog 録音中」が出ます（そこからも止められます）。この表示は8時間で iOS に消されることがあるので、録音中に LifeLog を開くと出し直します。録音が止まったときは、いつもの通知で知らせます。")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LL.dim)
                 Text("「印を付ける」は、押すと LifeLog が開いて動きます。")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LL.dim)
             }
         }
         .navigationTitle("ほかの場所から使う")
@@ -288,12 +288,12 @@ struct OverRemovedView: View {
     }()
 
     var body: some View {
-        List {
+        LLList {
             Section {
                 if !loaded {
                     ProgressView()
                 } else if items.isEmpty {
-                    Text("戻す行はありません").foregroundStyle(.secondary)
+                    Text("戻す行はありません").foregroundStyle(LL.dim)
                 } else {
                     LabeledContent("戻す行", value: "\(items.count) 行・\(Set(items.map(\.day)).count) 日")
                     if running {
@@ -306,7 +306,7 @@ struct OverRemovedView: View {
                         }
                     }
                 }
-                if let result { Text(result).font(.footnote).foregroundStyle(.secondary) }
+                if let result { Text(result).font(.footnote).foregroundStyle(LL.dim) }
             } footer: {
                 Text("「周りの声」として外した行のうち、名前を付けた人の声と、登録した職場にいない・仕事の予定の最中でもないときの声です（11/5 に、この2つは外さない決まりに直しました）。戻した会話は、見出しと要点を作り直します。1行ずつドキュメントに入れるので、多いと時間がかかります。途中で止まっても、もう一度押せば続きから戻します。")
             }
@@ -316,7 +316,7 @@ struct OverRemovedView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.line.text).font(.callout).lineLimit(3)
                             Text(Self.time.string(from: item.line.time) + (item.line.speaker.map { "・" + $0 } ?? ""))
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                     if items.count > 30 && !showAll {

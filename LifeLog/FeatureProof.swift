@@ -394,7 +394,7 @@ struct PCFeatureNotice: View {
                 Label("家の PC の LifeLog PC が古いようです", systemImage: "arrow.triangle.2.circlepath")
                 Text("次の働きは、LifeLog PC を新しくするまで使えません: " + missing.map(\.name).joined(separator: "・"))
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LL.dim)
             } header: {
                 Text("家の PC を新しく")
             } footer: {

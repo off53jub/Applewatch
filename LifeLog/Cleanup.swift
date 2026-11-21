@@ -5,6 +5,8 @@ import Foundation
 enum Junk {
     enum Kind: String, CaseIterable, Codable, Identifiable {
         case filler, streak, broken, custom, unheard, background, asleep, unmatched, hidden
+        /// 1 日の帯で時間を選んで消した（2026-11-21。s20 の 次11。S20RecordViews.swift）
+        case forgotten
         var id: String { rawValue }
 
         var label: String {
@@ -18,6 +20,7 @@ enum Junk {
             case .asleep: "寝ているあいだ"
             case .unmatched: "端末内と合わなかった文"
             case .hidden: "記録に出さない人"
+            case .forgotten: "時間を選んで消した"
             }
         }
 
@@ -32,6 +35,7 @@ enum Junk {
             case .asleep: "寝ているあいだに聞こえた、短い文や小さな声として、書かなかった行"
             case .unmatched: "クラウドの文字起こしで、iPhone の中の聞き取りに似た音が無かったので書かなかった行（雑音に作られた文のことが多いが、騒がしい所の小さな声のこともある）"
             case .hidden: "「記録に出さない」にした人の声として、書かなかった行"
+            case .forgotten: "1 日の帯で時間を選んで消した行"
             }
         }
     }

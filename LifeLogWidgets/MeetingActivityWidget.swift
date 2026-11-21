@@ -9,7 +9,8 @@ struct MeetingLiveActivity: Widget {
         ActivityConfiguration(for: MeetingActivityAttributes.self) { context in
             MeetingLockView(state: context.state)
                 .padding()
-                .activityBackgroundTint(nil)
+                .activityBackgroundTint(LL.bg.opacity(0.92))
+                .activitySystemActionForegroundColor(LL.accent)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
@@ -25,7 +26,7 @@ struct MeetingLiveActivity: Widget {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(MeetingWidgetText.counts(context.state))
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(LL.dim)
                         ForEach(Array(context.state.lines.prefix(2).enumerated()), id: \.offset) { _, line in
                             Text(line).font(.caption).lineLimit(1)
                         }
@@ -37,8 +38,9 @@ struct MeetingLiveActivity: Widget {
                 Text(MeetingWidgetText.short(context.state))
                     .font(.caption2.monospacedDigit())
             } minimal: {
-                Image(systemName: "person.3.sequence")
+                Image(systemName: "person.3.sequence").foregroundStyle(LL.accent)
             }
+            .keylineTint(LL.accent)
         }
     }
 }
@@ -55,15 +57,15 @@ struct MeetingLockView: View {
                 Spacer()
                 Text(state.started, style: .timer)
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LL.dim)
             }
             Text(MeetingWidgetText.counts(state))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(LL.dim)
             if state.lines.isEmpty {
                 Text(state.updated == nil ? "まだ作っていません（1 分に 1 回まで）" : "新しく出たものはありません")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LL.dim)
             } else {
                 ForEach(Array(state.lines.prefix(2).enumerated()), id: \.offset) { _, line in
                     Text(line).font(.callout).lineLimit(2)

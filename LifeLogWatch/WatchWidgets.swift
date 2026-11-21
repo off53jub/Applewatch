@@ -1,4 +1,5 @@
 import Foundation
+import WatchKit
 
 /// 時計の文字盤（ウィジェット）に出す中身を作って、時計の App Group に書く（2026-11-07）。
 /// 録音中か・iPhone に送っていない録音の数・今日までの頼まれごと・次の予定（頼まれごとと予定は iPhone から届いた WatchInfo から）。
@@ -7,8 +8,15 @@ import Foundation
 /// App Group が使えない入れ方では何も書かない（文字盤は「—」を出す）。
 extension WatchRecorder {
     func updateWidgets() {
-        let state = WatchWidgets.state(recording: isRecording, unsent: unsent, lowPower: lowPower, info: board.info,
+        var state = WatchWidgets.state(recording: isRecording, unsent: unsent, lowPower: lowPower, info: board.info,
                                        due: board.dueCounts, open: board.openCount)
+        // あと何時間録れるか・確かめ待ちの数（2026-11-21。s20 の 体22）
+        let device = WKInterfaceDevice.current()
+        device.isBatteryMonitoringEnabled = true
+        let samples = UserDefaults.standard.array(forKey: WatchSender.batterySamplesKey) as? [[Double]] ?? []
+        state.watchHoursLeft = WatchFaceRules.hoursLeft(battery: device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil,
+                                                        drainPerHour: HolidayRules.drainPerHour(samples, holding: false))
+        state.reviewWaiting = board.info?.reviewWaiting
         WidgetPublisher.shared.publish(state, kind: WidgetState.watchKind)
     }
 }

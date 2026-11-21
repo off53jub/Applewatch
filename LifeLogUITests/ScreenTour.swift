@@ -465,4 +465,90 @@ final class ScreenTour: XCTestCase {
             }
         }
     }
+
+    // MARK: - s20 のデザイン（夜の青。2026-11-21）
+
+    /// 見た目を決めて起動する（"dark"・"light"）。設定の @AppStorage("llAppearance") に起動の引数で入れる
+    private func launch(appearance: String) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotDemo", "-AppleLanguages", "(ja)", "-AppleLocale", "ja_JP", "-llAppearance", appearance]
+        app.launch()
+        dismissAlerts()
+        return app
+    }
+
+    /// タブ（と歯車の中の切り替え）を開いて、行を押して撮る。行が無ければ「見つからない」の写真になる
+    private func s20Shot(_ appearance: String, tab: String, settings: Bool = false, segment: String? = nil,
+                         row: String?, name: String, swipes: Int = 0, band: Bool = false) {
+        let app = launch(appearance: appearance)
+        openTab(app, tab)
+        if settings { guard openSettings(app) else { return } }
+        if let segment { openSegment(app, segment) }
+        let place = "s20 " + (appearance == "dark" ? "暗" : "明") + " " + name
+        if let row {
+            if tapFinding(app, row, swipes: 6, place: place) {
+                if band { s20Band(app, place: place) }
+                for i in 0...swipes {
+                    snap(app, place + (i == 0 ? "" : " \(i + 1)"))
+                    if i < swipes {
+                        app.swipeUp()
+                        sleep(1)
+                    }
+                }
+            }
+        } else {
+            for i in 0...swipes {
+                snap(app, place + (i == 0 ? "" : " \(i + 1)"))
+                if i < swipes {
+                    app.swipeUp()
+                    sleep(1)
+                }
+            }
+        }
+        app.terminate()
+    }
+
+    /// 1 日の帯をなぞって範囲を選び、「消す」の確かめの画面を撮る（確かめの画面の「消す」は押さない。見本の記録だけ）
+    private func s20Band(_ app: XCUIApplication, place: String) {
+        let band = app.descendants(matching: .any).matching(identifier: "dayBand").firstMatch
+        guard band.waitForExistence(timeout: 5) else { return }
+        let from = band.coordinate(withNormalizedOffset: CGVector(dx: 0.30, dy: 0.5))
+        let to = band.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.5))
+        from.press(forDuration: 0.3, thenDragTo: to)
+        sleep(1)
+        snap(app, place + " - 選んだ")
+        let forget = app.buttons["消す"].firstMatch
+        if forget.exists && forget.isHittable {
+            forget.tap()
+            sleep(2)
+            snap(app, place + " - 消すときの安心")
+        }
+    }
+
+    /// 新しい画面と変えた画面を、暗い画面と明るい画面の両方で撮る（押すのは開く行だけ。○×・消す・場面のボタンは押さない）
+    func testTourS20Design() {
+        for appearance in ["dark", "light"] {
+            let full = appearance == "dark"
+            s20Shot(appearance, tab: "今日", row: nil, name: "今日", swipes: full ? 2 : 0)
+            s20Shot(appearance, tab: "直す", row: "確かめる（○×）", name: "確かめる", swipes: full ? 1 : 0)
+            s20Shot(appearance, tab: "ふり返り", row: nil, name: "ふり返り")
+            s20Shot(appearance, tab: "ふり返り", row: "検品表（通信簿）", name: "検品表")
+            s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: nil, name: "設定（場面のセット）", swipes: full ? 1 : 0)
+            s20Shot(appearance, tab: "記録", segment: "日ごと", row: "1 日の帯で選ぶ", name: "1 日の帯", band: true)
+            s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: "知らせの便りと履歴", name: "知らせの履歴")
+            if full {
+                s20Shot(appearance, tab: "記録", segment: "日ごと", row: "探す（人・場所", name: "探す")
+                s20Shot(appearance, tab: "ふり返り", row: "今月の物語", name: "今月の物語", swipes: 1)
+                s20Shot(appearance, tab: "ふり返り", row: "休日のページ", name: "休日のページ")
+                s20Shot(appearance, tab: "ふり返り", row: "面談の 1 枚", name: "面談の 1 枚")
+                s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: "見た目（暗い", name: "見た目")
+                s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: "寝ているあいだは録音を休む", name: "寝ているあいだ")
+                s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: "一緒にいる人に見せる", name: "一緒にいる人に")
+                s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: "守りの 1 枚", name: "守りの 1 枚")
+                s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: "新しく入ったもの", name: "新しく入ったもの")
+                s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: "言葉の一覧", name: "言葉の一覧")
+            }
+        }
+        XCTAssertGreaterThan(shot, 10, "s20 の写真が少なすぎる")
+    }
 }

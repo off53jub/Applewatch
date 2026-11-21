@@ -14,7 +14,7 @@ struct MeetingButton: View {
                 Label("会議モードを終える（\(meeting.start.formatted(date: .omitted, time: .shortened)) から"
                       + (meeting.title.map { "・\($0)" } ?? "") + "）", systemImage: "person.3.fill")
             }
-            .tint(.orange)
+            .tint(LL.warn)
             // 会議の相棒（その場版）: 自分の宿題・聞き忘れ・決まったこと（2026-11-15。MeetingLive.swift）
             MeetingLiveRows()
         } else {
@@ -36,7 +36,7 @@ struct RecordingMapView: View {
         let start = Calendar.current.date(byAdding: .day, value: -dayOffset, to: Calendar.current.startOfDay(for: .now)) ?? .now
         let map = pipeline.ledger.map(for: start)
         let counts = pipeline.ledger.counts(for: start)
-        List {
+        LLList {
             Section {
                 Picker("日", selection: $dayOffset) {
                     Text("今日").tag(0)
@@ -47,10 +47,10 @@ struct RecordingMapView: View {
                 DayBand(start: start, spans: map.spans)
                     .frame(height: 28)
                 HStack(spacing: 12) {
-                    legend(.green, "録れた")
-                    legend(.gray.opacity(0.5), "静かで休み")
-                    legend(.blue.opacity(0.5), "休む場所")
-                    legend(.red, "抜け")
+                    legend(.llGood, "録れた")
+                    legend(.llDim.opacity(0.5), "静かで休み")
+                    legend(.llAccent.opacity(0.5), "休む場所")
+                    legend(.llDanger, "抜け")
                 }
                 .font(.caption2)
             } footer: {
@@ -58,12 +58,12 @@ struct RecordingMapView: View {
             }
             Section("録れていなかった時間") {
                 if map.gaps.isEmpty {
-                    Text("10分以上の抜けはありません").foregroundStyle(.secondary)
+                    Text("10分以上の抜けはありません").foregroundStyle(LL.dim)
                 }
                 ForEach(map.gaps) { gap in
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(gap.start.formatted(date: .omitted, time: .shortened))〜\(gap.end.formatted(date: .omitted, time: .shortened))（\(gap.minutes)分）")
-                        Text(gap.reason).font(.caption).foregroundStyle(.secondary)
+                        Text(gap.reason).font(.caption).foregroundStyle(LL.dim)
                     }
                 }
             }
@@ -103,7 +103,7 @@ private struct DayBand: View {
         GeometryReader { geo in
             let width = geo.size.width
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.1))
+                RoundedRectangle(cornerRadius: 4).fill(LL.dim.opacity(0.1))
                 ForEach(Array(spans.enumerated()), id: \.offset) { _, span in
                     let x = width * span.start.timeIntervalSince(start) / (24 * 3600)
                     let w = max(1, width * span.end.timeIntervalSince(span.start) / (24 * 3600))
@@ -116,10 +116,10 @@ private struct DayBand: View {
 
     private func color(_ kind: RecordingLedger.Span.Kind) -> Color {
         switch kind {
-        case .recorded: .green
-        case .quiet: .gray.opacity(0.5)
-        case .held: .blue.opacity(0.5)
-        case .gap: .red
+        case .recorded: .llGood
+        case .quiet: .llDim.opacity(0.5)
+        case .held: .llAccent.opacity(0.5)
+        case .gap: .llDanger
         }
     }
 }
@@ -148,7 +148,7 @@ struct NewVoicesSection: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 label(note, name: name)
                                 Text("この声は、もうありません（ほかの人にまとめたか、消した声です）。左へ払って消してください。")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.caption).foregroundStyle(LL.dim)
                             }
                         }
                         if let other = note.pcSuggests, pipeline.people.contains(where: { $0.id == other }) {
@@ -184,7 +184,7 @@ struct NewVoicesSection: View {
                      ?? "初めての人の印のころに話した 人物\(note.personID)")
             }
             Text("\(note.time.formatted(date: .abbreviated, time: .shortened))「\(note.quote.prefix(40))」")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(LL.dim)
         }
     }
 }
@@ -216,11 +216,11 @@ struct CarDevicesView: View {
     private let seen = CarAudioLog.seen
 
     var body: some View {
-        List {
+        LLList {
             Section {
                 if seen.isEmpty {
                     Text("まだ Bluetooth の機器につないだことがありません。車につないでから開いてください。")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LL.dim)
                 }
                 ForEach(seen, id: \.self) { name in
                     Toggle(isOn: Binding(
@@ -230,7 +230,7 @@ struct CarDevicesView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(name)
                             Text(chosen[name] == nil ? "名前で決めています" : "自分で選びました")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                 }

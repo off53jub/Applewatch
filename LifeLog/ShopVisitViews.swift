@@ -16,7 +16,7 @@ struct ShopVisitsView: View {
     var body: some View {
         let book = pipeline.shopVisits
         let days = Self.days(book.visits)
-        List {
+        LLList {
             if book.isOn && pipeline.places.authorization != .authorizedAlways {
                 Section {
                     Text("お店に寄ったことを知るには、設定アプリ →「LifeLog」→「位置情報」を「常に」にしてください。「正確な位置情報」もオンにすると、当たりやすくなります。")
@@ -30,7 +30,7 @@ struct ShopVisitsView: View {
             if days.isEmpty {
                 Section {
                     Text(book.isOn ? "まだありません。お店に3分以上いて出ると、ここに出ます。" : "下のスイッチをオンにすると、寄ったお店をここに出します。")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LL.dim)
                 }
             }
             ForEach(days) { group in
@@ -90,30 +90,30 @@ private struct ShopVisitRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(ShopTime.range(visit)).font(.caption).foregroundStyle(.secondary)
+            Text(ShopTime.range(visit)).font(.caption).foregroundStyle(LL.dim)
             switch visit.state {
             case .confirmed:
                 Text(visit.confirmedName ?? "")
             case .notShop:
-                Text("お店ではない").foregroundStyle(.secondary)
+                Text("お店ではない").foregroundStyle(LL.dim)
             case .guessed:
                 HStack(spacing: 6) {
                     Text("たぶん")
                         .font(.caption2.bold())
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
-                        .background(Color.orange.opacity(0.2), in: Capsule())
+                        .background(LL.warn.opacity(0.2), in: Capsule())
                     Text(visit.guess?.name ?? "（名前は消えました）")
                 }
                 let others = visit.candidates.filter { $0.id != visit.guessID }.compactMap(\.name).prefix(2)
                 if !others.isEmpty {
-                    Text("ほかに: " + others.joined(separator: "、")).font(.caption).foregroundStyle(.secondary)
+                    Text("ほかに: " + others.joined(separator: "、")).font(.caption).foregroundStyle(LL.dim)
                 }
             case .waiting:
-                Text(visit.departure == nil ? "いる途中" : "まだ調べていません").foregroundStyle(.secondary)
+                Text(visit.departure == nil ? "いる途中" : "まだ調べていません").foregroundStyle(LL.dim)
             }
             if let paid {
-                Text("PayPay: \(paid.shop)　\(paid.amount.formatted())円").font(.caption).foregroundStyle(.secondary)
+                Text("PayPay: \(paid.shop)　\(paid.amount.formatted())円").font(.caption).foregroundStyle(LL.dim)
             }
         }
     }
@@ -130,15 +130,15 @@ private struct ShopVisitDetailView: View {
     var body: some View {
         let book = pipeline.shopVisits
         if let visit = book.visits.first(where: { $0.id == visitID }) {
-            List {
+            LLList {
                 Section {
                     LabeledContent("時間", value: ShopTime.range(visit))
                     LabeledContent("いまの答え", value: answer(visit))
                     if visit.skippedAudio == true {
-                        Text("仕事の時間（または職場）なので、会話は読んでいません。").font(.caption).foregroundStyle(.secondary)
+                        Text("仕事の時間（または職場）なので、会話は読んでいません。").font(.caption).foregroundStyle(LL.dim)
                     } else if let n = visit.linesRead, n > 0 {
                         Text("この時間の会話 \(n) 行も手がかりにしました（iPhone の中だけで読みました）。")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(LL.dim)
                     }
                 }
                 if visit.state == .guessed, visit.guess?.name != nil {
@@ -195,7 +195,7 @@ private struct ShopVisitDetailView: View {
                 Button("キャンセル", role: .cancel) {}
             }
         } else {
-            Text("この立ち寄りはありません").foregroundStyle(.secondary)
+            Text("この立ち寄りはありません").foregroundStyle(LL.dim)
         }
     }
 
@@ -220,16 +220,16 @@ private struct CandidateRow: View {
                 Text(candidate.name ?? "")
                 let source = candidate.source == .google ? "Google" : (candidate.source == .apple ? "Apple の地図" : "前に決めた")
                 let detail = "\(candidate.kind.label)・\(Int(candidate.distance.rounded())) m・\(source)"
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                Text(detail).font(.caption).foregroundStyle(LL.dim)
                 if let clues = candidate.clues, !clues.isEmpty {
-                    Text(clues.joined(separator: "・")).font(.caption).foregroundStyle(.secondary)
+                    Text(clues.joined(separator: "・")).font(.caption).foregroundStyle(LL.dim)
                 }
             }
             Spacer()
             if chosen {
                 Image(systemName: "checkmark").foregroundStyle(.tint)
             } else if best {
-                Text("たぶん").font(.caption).foregroundStyle(.orange)
+                Text("たぶん").font(.caption).foregroundStyle(LL.warn)
             }
         }
     }

@@ -97,6 +97,7 @@ enum DemoData {
         installActions(base: base, now: now, day: f.string(from: now))  // 返事の下書き・時間の家計簿（DraftActions.swift）
         installPages(base: base, now: now, day: f.string(from: now), yesterday: f.string(from: now.addingTimeInterval(-86400)),
                      tomorrow: f.string(from: now.addingTimeInterval(86400)))
+        installS20(base: base, now: now)  // s20 の確かめ待ち・検品表・知らせの履歴など（DemoDataS20.swift）
         // 効き目の数の見本
         Tally.add("fix.proposed", 6)
         Tally.add("fix.kept", 4)

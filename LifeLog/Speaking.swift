@@ -184,7 +184,7 @@ struct SpeakingView: View {
     }
 
     var body: some View {
-        List {
+        LLList {
             // 今夜のコーチ（家の PC が毎晩選ぶ よかった一言・直すとよい一言と週の数。2026-11-15。強化案 51。CoachTension.swift）
             CoachSection()
             SpeakingScoreSection(now: SpeakStats.score(report.month), before: SpeakStats.score(report.lastMonth))
@@ -225,7 +225,7 @@ struct SpeakingView: View {
                 }
                 .disabled(thinking)
                 ForEach(advice, id: \.self) { Text("・" + $0) }
-                if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }
+                if let note { Text(note).font(.footnote).foregroundStyle(LL.dim) }
             } footer: {
                 Text("上の数字だけを言語モデルに渡して、良かったところ・気をつけるとよいところ・次に試すことを短く返してもらいます（会話の中身は渡しません）。")
             }
@@ -238,7 +238,7 @@ struct SpeakingView: View {
     private func row(_ label: String, _ s: SpeakStats) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
-            Text(s.conversations > 0 ? Self.summary(s) : "まだありません").font(.caption).foregroundStyle(.secondary)
+            Text(s.conversations > 0 ? Self.summary(s) : "まだありません").font(.caption).foregroundStyle(LL.dim)
         }
     }
 }
@@ -261,7 +261,7 @@ private struct SpeakingScoreSection: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("話し方の点（直近30日）").font(.subheadline)
                     Text(SpeakStats.scoreChange(now: now, before: before) ?? "先月の分はまだありません")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(LL.dim)
                 }
             }
         } footer: {

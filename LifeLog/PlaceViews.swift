@@ -19,7 +19,7 @@ struct PlacesView: View {
 
     var body: some View {
         let places = pipeline.places
-        List {
+        LLList {
             if places.authorization != .authorizedAlways {
                 Section {
                     Text("画面を閉じているあいだも場所を残すには、設定アプリ →「LifeLog」→「位置情報」を「常に」にしてください。")
@@ -46,10 +46,10 @@ struct PlacesView: View {
                                          set: { places.setWork(place.id, $0) })) {
                         Text(place.name)
                         if place.isWork == true {
-                            Text("職場").font(.caption).foregroundStyle(.secondary)
+                            Text("職場").font(.caption).foregroundStyle(LL.dim)
                         }
                         if place.pausesRecording == true {
-                            Text("ここでは録音を休む").font(.caption).foregroundStyle(.secondary)
+                            Text("ここでは録音を休む").font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                     .contextMenu {
@@ -66,7 +66,7 @@ struct PlacesView: View {
                             renameText = place.name
                             renaming = place
                         }
-                        .tint(.blue)
+                        .tint(LL.accent)
                     }
                 }
                 .onDelete { places.removePlaces(at: $0) }
@@ -75,7 +75,7 @@ struct PlacesView: View {
                     adding = true
                 }
                 if !status.isEmpty {
-                    Text(status).foregroundStyle(.secondary)
+                    Text(status).foregroundStyle(LL.dim)
                 }
             } footer: {
                 Text("登録した場所から300 m 以内で話した会話は、見出しにその名前が出ます。それ以外は「〇〇駅近く」「〇〇付近」と出ます。位置は大きく移動したときだけ記録するので、電池はほとんど使いません。\n\n場所を長押しして「ここでは録音を休む」を選ぶと、そこから離れるまで、iPhone と時計は書くのを休みます（マイクは聞き続けるだけで、離れると自動で書き始めます）。家の iPad が録音するときに使います。\n\nスイッチをオンにした場所は「職場」です。職場にいるあいだは職場の人の声を、それ以外では職場以外の人の声を先に照らし合わせるので、聞き分けが正確になります。")

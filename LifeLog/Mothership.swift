@@ -605,25 +605,25 @@ struct MothershipRow: View {
                 if let waiting = item.waitingLine {
                     Label(waiting, systemImage: "hourglass")
                         .font(.caption.weight(item.isWaitedLong ? .bold : .regular))
-                        .foregroundStyle(item.isWaitedLong ? Color.red : Color.orange)
+                        .foregroundStyle(item.isWaitedLong ? LL.danger : LL.warn)
                 }
                 HStack(spacing: 6) {
                     if let due = MothershipExport.dueDate(item.due) {
                         let text = Pipeline.taskDueText(due)
-                        Text(text).foregroundStyle(text.hasSuffix("過ぎ") || text == "今日まで" ? Color.red : Color.orange)
+                        Text(text).foregroundStyle(text.hasSuffix("過ぎ") || text == "今日まで" ? LL.danger : LL.warn)
                     }
                     if let project = item.project, !project.isEmpty { Text(project) }
                     if item.work != true {
-                        Label("仕事以外", systemImage: "house").labelStyle(.titleAndIcon).foregroundStyle(.green)
+                        Label("仕事以外", systemImage: "house").labelStyle(.titleAndIcon).foregroundStyle(LL.good)
                     }
                     if let added = item.added, added.count == 10 {
                         Text(String(added.suffix(5)).replacingOccurrences(of: "-", with: "/") + " に足した")
                     }
                 }
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(LL.dim)
                 // 「もう済んだかも」とされた（2026-11-09）
                 if book.asksDone(item), let reason = item.maybeDone {
-                    Text("済みでは？ " + reason).font(.caption).foregroundStyle(.orange)
+                    Text("済みでは？ " + reason).font(.caption).foregroundStyle(LL.warn)
                     HStack(spacing: 16) {
                         Button("済み") { Task { await book.markDone(item, pc: pipeline.homePC) } }
                         if book.acceptsKinds(pipeline.homePC) {
@@ -639,10 +639,10 @@ struct MothershipRow: View {
         // アプリのタスクと同じく、左へ払うと「済み」。その隣に「違う」（タスクではない。古い LifeLog PC には送れないので出さない）
         .swipeActions(edge: .trailing) {
             Button("済み") { Task { await pipeline.mothership.markDone(item, pc: pipeline.homePC) } }
-                .tint(.green)
+                .tint(LL.good)
             if book.acceptsKinds(pipeline.homePC) {
                 Button("違う") { Task { await book.markWrong(item, pc: pipeline.homePC) } }
-                    .tint(.red)
+                    .tint(LL.danger)
             }
         }
         .sheet(isPresented: $showing) {
@@ -660,7 +660,7 @@ struct MothershipDetailView: View {
 
     var body: some View {
         let book = pipeline.mothership
-        Form {
+        LLForm {
             Section {
                 Text(item.text)
                 if let due = item.due, !due.isEmpty { LabeledContent("期限", value: due) }
@@ -702,7 +702,7 @@ struct MothershipListView: View {
     var body: some View {
         let items = pipeline.mothership.extra(scope, tasks: pipeline.tasks.items)
             .filter { OneTaskList.bucket($0, now: .now) == .someday }
-        List {
+        LLList {
             ForEach(items) { MothershipRow(item: $0) }
         }
         .navigationTitle("期限なし")

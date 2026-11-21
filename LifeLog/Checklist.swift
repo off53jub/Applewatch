@@ -129,11 +129,11 @@ struct ChecklistView: View {
     @State private var open: String?
 
     var body: some View {
-        List {
+        LLList {
             let left: [Checklist.Item] = Checklist.items.filter { finished[$0.id] == nil }
             let ended: [Checklist.Item] = Checklist.items.filter { finished[$0.id] != nil }
             Section {
-                if left.isEmpty { Text("全部確かめました").foregroundStyle(.secondary) }
+                if left.isEmpty { Text("全部確かめました").foregroundStyle(LL.dim) }
                 ForEach(left) { item in row(item) }
             } header: {
                 Text("まだ（\(left.count)）")
@@ -145,7 +145,7 @@ struct ChecklistView: View {
                     ForEach(ended) { item in
                         HStack {
                             Image(systemName: finished[item.id] == "ok" ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                .foregroundStyle(finished[item.id] == "ok" ? Color.green : Color.red)
+                                .foregroundStyle(finished[item.id] == "ok" ? LL.good : LL.danger)
                             Text(item.title)
                             Spacer()
                             Button("戻す") { set(item.id, nil) }.font(.caption).buttonStyle(.borderless)
@@ -165,12 +165,12 @@ struct ChecklistView: View {
                 HStack {
                     Text(item.title).foregroundStyle(.primary)
                     Spacer()
-                    Image(systemName: open == item.id ? "chevron.up" : "chevron.down").foregroundStyle(.secondary)
+                    Image(systemName: open == item.id ? "chevron.up" : "chevron.down").foregroundStyle(LL.dim)
                 }
             }
             .buttonStyle(.borderless)
             if open == item.id {
-                Text(item.how).font(.callout).foregroundStyle(.secondary)
+                Text(item.how).font(.callout).foregroundStyle(LL.dim)
                 HStack(spacing: 20) {
                     Button("確かめた", systemImage: "checkmark") { set(item.id, true) }
                     Button("動かなかった", systemImage: "xmark", role: .destructive) { set(item.id, false) }

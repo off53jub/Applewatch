@@ -208,10 +208,10 @@ enum SettleFeeds {
 
     static func statusColor(_ status: String) -> Color {
         switch status {
-        case "live": return .green
-        case "broken": return .red
-        case "retire_candidate": return .orange
-        case "unused": return .yellow
+        case "live": return .llGood
+        case "broken": return .llDanger
+        case "retire_candidate": return .llWarn
+        case "unused": return .llWarn
         default: return .secondary
         }
     }
@@ -364,7 +364,7 @@ struct SettleCheckSection: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("入れた施策の様子")
-                            Text(SettleFeeds.statusSummary(rollout.items)).font(.caption).foregroundStyle(.secondary)
+                            Text(SettleFeeds.statusSummary(rollout.items)).font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                 }
@@ -374,7 +374,7 @@ struct SettleCheckSection: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Claude の費用")
-                            Text(SettleFeeds.costLine(costs)).font(.caption).foregroundStyle(.secondary)
+                            Text(SettleFeeds.costLine(costs)).font(.caption).foregroundStyle(LL.dim)
                         }
                     }
                 }
@@ -393,9 +393,9 @@ struct RolloutView: View {
 
     var body: some View {
         let items: [RolloutItem] = SettleBook.shared.rollout?.items ?? []
-        List {
+        LLList {
             if items.isEmpty {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(.secondary)
+                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
             }
             ForEach(SettleFeeds.rolloutStatuses, id: \.self) { status in
                 let rows: [RolloutItem] = items.filter { $0.status == status }
@@ -409,7 +409,7 @@ struct RolloutView: View {
             }
             if let at = SettleBook.shared.rollout?.generated_at, !at.isEmpty {
                 Section {
-                    Text("作った時刻: " + at).font(.caption).foregroundStyle(.secondary)
+                    Text("作った時刻: " + at).font(.caption).foregroundStyle(LL.dim)
                 }
             }
         }
@@ -433,9 +433,9 @@ struct RolloutRow: View {
                     .padding(.vertical, 2)
                     .background(SettleFeeds.statusColor(item.status).opacity(0.2), in: Capsule())
             }
-            Text(detail).font(.caption).foregroundStyle(.secondary)
+            Text(detail).font(.caption).foregroundStyle(LL.dim)
             if !item.evidence.isEmpty {
-                Text(item.evidence).font(.caption).foregroundStyle(.secondary)
+                Text(item.evidence).font(.caption).foregroundStyle(LL.dim)
             }
         }
     }
@@ -454,7 +454,7 @@ struct CostsView: View {
     @Environment(Pipeline.self) private var pipeline
 
     var body: some View {
-        List {
+        LLList {
             if let costs = SettleBook.shared.costs {
                 Section {
                     LabeledContent("今月（" + costs.month + "）", value: ClaudeUsage.dollars(costs.month_usd))
@@ -465,7 +465,7 @@ struct CostsView: View {
                 }
                 Section("今日") {
                     if costs.today.isEmpty {
-                        Text("今日はまだ使っていません。").foregroundStyle(.secondary)
+                        Text("今日はまだ使っていません。").foregroundStyle(LL.dim)
                     }
                     ForEach(costs.today) { row in
                         CostTodayRow(row: row)
@@ -478,7 +478,7 @@ struct CostsView: View {
                     }
                 }
             } else {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(.secondary)
+                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
             }
         }
         .navigationTitle("Claude の費用")
@@ -495,7 +495,7 @@ struct CostTodayRow: View {
         VStack(alignment: .leading, spacing: 2) {
             LabeledContent(ClaudeJob.label(row.purpose), value: ClaudeUsage.dollars(row.usd))
             if let note = note {
-                let color: Color = row.stopped || row.capped ? Color.orange : Color.secondary
+                let color: Color = row.stopped || row.capped ? LL.warn : LL.dim
                 Text(note).font(.caption).foregroundStyle(color)
             }
         }
@@ -517,14 +517,14 @@ struct ClaudeCostRows: View {
         Text(SettleFeeds.costLine(costs)).font(.caption)
         let top: String = SettleFeeds.topTodayText(costs)
         if !top.isEmpty {
-            Text("今日の多い用途: " + top).font(.caption).foregroundStyle(.secondary)
+            Text("今日の多い用途: " + top).font(.caption).foregroundStyle(LL.dim)
         }
         let off = SettleFeeds.offNames(costs)
         if !off.stopped.isEmpty {
-            Text("止めてある用途: " + off.stopped.joined(separator: "・")).font(.caption).foregroundStyle(.secondary)
+            Text("止めてある用途: " + off.stopped.joined(separator: "・")).font(.caption).foregroundStyle(LL.dim)
         }
         if !off.capped.isEmpty {
-            Text("今日の上限に届いた用途: " + off.capped.joined(separator: "・")).font(.caption).foregroundStyle(.orange)
+            Text("今日の上限に届いた用途: " + off.capped.joined(separator: "・")).font(.caption).foregroundStyle(LL.warn)
         }
     }
 }
@@ -543,9 +543,9 @@ struct CheckClaimSection: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(item.claim)
                     if !item.evidence.isEmpty {
-                        Text("根拠: " + item.evidence).font(.caption).foregroundStyle(.secondary)
+                        Text("根拠: " + item.evidence).font(.caption).foregroundStyle(LL.dim)
                     }
-                    Text(SettleFeeds.sourceLabel(item.source) + "・" + item.day).font(.caption2).foregroundStyle(.secondary)
+                    Text(SettleFeeds.sourceLabel(item.source) + "・" + item.day).font(.caption2).foregroundStyle(LL.dim)
                 }
                 HStack(spacing: 12) {
                     Button("合ってる") { answer(item, "right") }

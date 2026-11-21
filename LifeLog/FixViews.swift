@@ -22,6 +22,8 @@ extension Pipeline {
             ("合ってる？", pendingCheckCount),
             // 自分を知る（2026-11-19。s18。KnowMe.swift。今日の問い・今週の見立て・抜き打ちのまだの数）
             ("自分を知る", knowMeCount),
+            // 確かめ待ちの列（2026-11-21。s20 の 次3。S20Book.swift）
+            ("確かめ待ち", S20Book.shared.waitingCount),
             ("見直したい声", reviewCount),
             ("名前を付けてほしい声", namelessVoiceCount),
             ("割れやすい言葉", splitWordCandidates().count),
@@ -94,7 +96,9 @@ struct FixView: View {
         // body-read-ok: 今日の 1 日だけ（アプリが書いたあとは中の写しを使い、ファイルは書いた時刻を見るだけ）
         let todayIDs = Set(pipeline.conversations(on: day).flatMap(\.lines).compactMap(\.speakerID))
         let unnamedToday = pipeline.people.filter { !$0.isNamed && !$0.isSelf && todayIDs.contains($0.id) }.count
-        List {
+        LLList {
+            // 確かめ待ちを 1 つの列で ○×（2026-11-21。s20 の 次3・体11〜15。S20ReviewViews.swift）
+            ReviewDeckEntrySection()
             if total == 0 {
                 Section {
                     ContentUnavailableView("今は直すものはありません", systemImage: "checkmark.circle",
@@ -103,7 +107,7 @@ struct FixView: View {
             } else {
                 Section {
                     Text("1日に上から\(Self.dailyCap)つまでで十分です（5分ほど）。残りは明日に回して大丈夫です。タブの数字も、今日の\(Self.dailyCap)つまでを数えています（全部で \(total)）。")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.footnote).foregroundStyle(LL.dim)
                 }
             }
             // タスクの候補は「タスク」タブで片づける（ここからは移るだけ）

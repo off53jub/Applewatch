@@ -137,7 +137,7 @@ struct PaidVoteView: View {
     @State private var hasKey = PaidVote.key != nil
 
     var body: some View {
-        Form {
+        LLForm {
             Section {
                 Toggle("食い違いの大きい行だけ ElevenLabs にも聞く（有料）", isOn: $on)
                 Stepper("月に \(cap) 分まで", value: $cap, in: 10...600, step: 10)

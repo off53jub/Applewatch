@@ -89,6 +89,18 @@ extension Pipeline {
         state.nextEvent = WidgetBridge.nextEvent(calendar.dayEvents(from: now, to: now.addingTimeInterval(12 * 3600)), now: now)
         state.lastProcessed = ledger.chunks.lazy.compactMap(\.transcribed).max()
         state.pcOK = homePC.isConfigured ? homePC.downSince == nil : nil
+        // 確かめ待ちの数と、充電中の 1 枚「今日のまとめ」（2026-11-21。s20 の 体22・追3）
+        state.reviewWaiting = S20Book.shared.waitingCount
+        let dayStart = Calendar.current.startOfDay(for: now)
+        let dayKey = ReviewRules.dayKey(now)
+        state.todayTalks = conversations(on: dayKey).count
+        var seconds = 0.0
+        for c in ledger.chunks where c.start >= dayStart && c.source != "import" {
+            seconds += (c.end ?? c.start.addingTimeInterval(ChunkCutter.longest)).timeIntervalSince(c.start)
+        }
+        state.todayHours = (seconds / 360).rounded() / 10
+        let three = todayThree(on: now).prefix(3).map { String($0.text.prefix(24)) }
+        state.todayThree = three.isEmpty ? nil : Array(three)
         return state
     }
 }

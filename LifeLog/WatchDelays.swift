@@ -134,7 +134,7 @@ struct WatchDelayView: View {
         let arrivals = recent.map(\.arrival)
         let waits = recent.compactMap(\.waiting)
         let dropped = recent.compactMap(\.dropped).reduce(0, +)
-        Form {
+        LLForm {
             Section {
                 LabeledContent("届いた区切り", value: "\(recent.count) 個")
                 if !arrivals.isEmpty {

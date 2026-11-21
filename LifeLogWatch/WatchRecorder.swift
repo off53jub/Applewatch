@@ -183,7 +183,14 @@ final class WatchRecorder: NSObject {
     }
 
     func toggle() async {
-        if isRecording { stopByUser() } else { await start() }
+        // 振動の型（始まった・止まった。2026-11-21。s20 の 体21。WatchDesign.swift）
+        if isRecording {
+            stopByUser()
+            LLHaptic.stopped.play()
+        } else {
+            await start()
+            if isRecording { LLHaptic.started.play() }
+        }
     }
 
     /// 始めている途中（起動したときの再開と、画面を開いたときの再開が重なっても1回だけ始める。2026-11-20）
@@ -421,7 +428,7 @@ final class WatchRecorder: NSObject {
                                   forKey: WatchSender.crowdUntilKey)
         crowdOn = on
         if on { sender.newPerson(.now) }
-        WKInterfaceDevice.current().play(on ? .start : .stop)
+        (on ? LLHaptic.started : LLHaptic.stopped).play()
         message = on ? "初めての人が多いモード: 区切りごとに印を付けます（4 時間で終わります）" : "初めての人が多いモードを終えました"
     }
 
@@ -433,7 +440,7 @@ final class WatchRecorder: NSObject {
         UserDefaults.standard.set(count, forKey: key)
         drinksToday = count
         sender.drink(now)
-        WKInterfaceDevice.current().play(.success)
+        LLHaptic.confirm.play()
         message = "お酒 \(count) 杯目を残しました"
     }
 
@@ -445,14 +452,14 @@ final class WatchRecorder: NSObject {
     /// 大事なところに印を付ける（前後1分の行に★が付く）。
     func mark() {
         sender.mark(.now)
-        WKInterfaceDevice.current().play(.success)
+        LLHaptic.confirm.play()
         message = "\(Date.now.formatted(date: .omitted, time: .shortened)) に印を付けました"
     }
 
     /// 「いま初めての人と話している」の印（その前後の知らない声を、iPhone の確かめ待ちに出す）
     func markNewPerson() {
         sender.newPerson(.now)
-        WKInterfaceDevice.current().play(.success)
+        LLHaptic.confirm.play()
         message = "\(Date.now.formatted(date: .omitted, time: .shortened)) 初めての人の印を付けました"
     }
 
@@ -461,7 +468,7 @@ final class WatchRecorder: NSObject {
         let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !said.isEmpty else { return }
         sender.voiceFix(String(said.prefix(200)), at: .now)
-        WKInterfaceDevice.current().play(.success)
+        LLHaptic.confirm.play()
         message = "「" + String(said.prefix(20)) + "」を iPhone に送りました"
     }
 
@@ -470,13 +477,13 @@ final class WatchRecorder: NSObject {
         meetingOn.toggle()
         UserDefaults.standard.set(meetingOn, forKey: "meetingOn")
         sender.meeting(meetingOn)
-        WKInterfaceDevice.current().play(meetingOn ? .start : .stop)
+        (meetingOn ? LLHaptic.started : LLHaptic.stopped).play()
         message = meetingOn ? "会議モードを始めました（音質を上げて録ります）" : "会議モードを終えました"
     }
 
     /// iPhone からの知らせを、震わせて画面に出す
     private func alert(_ text: String) {
-        WKInterfaceDevice.current().play(.notification)
+        LLHaptic.confirm.play()
         message = text
     }
 
@@ -536,7 +543,7 @@ final class WatchRecorder: NSObject {
     private func stopWithAlert(_ reason: String) {
         stop()
         message = reason
-        WKInterfaceDevice.current().play(.failure)
+        LLHaptic.failed.play()
         let content = UNMutableNotificationContent()
         content.title = "LifeLog の録音が止まりました"
         content.body = reason

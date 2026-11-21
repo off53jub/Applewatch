@@ -40,6 +40,14 @@ struct WidgetState: Codable, Equatable {
     /// 今週のお礼・ほめ言葉の数（iPhone だけ。いいこと帳のウィジェット用。2026-11-12）
     var goodThanks: Int?
     var goodPraise: Int?
+    /// 確かめ待ちの数（時計は iPhone から届いた分。2026-11-21。s20 の 体22）
+    var reviewWaiting: Int?
+    /// 時計であと何時間録れるか（時計だけ。電池と減り方から。仮）
+    var watchHoursLeft: Double?
+    /// 今日のまとめ（充電中の 1 枚。iPhone だけ。2026-11-21。s20 の 追3）: 会話の数・録った時間（時間）・今日の三つの頭
+    var todayTalks: Int?
+    var todayHours: Double?
+    var todayThree: [String]?
 
     static let suiteName = "group.com.off53jub.lifelog"
     static let key = "widgetState"
@@ -49,6 +57,8 @@ struct WidgetState: Codable, Equatable {
     static let tasksKind = "com.off53jub.lifelog.tasks"
     /// iPhone の「LifeLog のいいこと帳」の種類の名前（2026-11-12。同じ中身を読む）
     static let goodKind = "com.off53jub.lifelog.good"
+    /// 「LifeLog の今日のまとめ」（充電中の StandBy 向け。2026-11-21。s20 の 追3。同じ中身を読む）
+    static let todayKind = "com.off53jub.lifelog.today"
     /// 時計の文字盤の LifeLog の種類の名前。前からある「開くボタン」と同じ（変えると文字盤から消える）
     static let watchKind = "com.off53jub.lifelog.watch.launcher"
     /// ウィジェットが自分で中身を読み直すまでの長さ（アプリからの読み直しが届かなかったとき用）
@@ -95,6 +105,9 @@ struct WidgetState: Codable, Equatable {
         old.lastProcessed = nil
         new.watchUnsent = nil
         old.watchUnsent = nil
+        // 録った時間は区切りごとに少しずつ増えるので、急がない（2026-11-21。s20 の 追3）
+        new.todayHours = nil
+        old.todayHours = nil
         return new == old
     }
 

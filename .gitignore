@@ -6,3 +6,6 @@ Vendor/
 LifeLog/Haas/
 LifeLogWidgets/Info.plist
 LifeLogWatchWidgets/Info.plist
+
+# s20 の画面の写真（CI の成果物から落として見るだけ。コミットしない）
+docs/s20-screens/
