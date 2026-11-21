@@ -41,8 +41,20 @@ def read_review(base: Path) -> dict:
     out = _read(base, REVIEW, "確かめ待ちの列")
     if out.get("available"):
         items = out.get("items")
-        out["items"] = [i for i in items if isinstance(i, dict) and appfeeds._id(i.get("id")) is not None
-                        and isinstance(i.get("question"), str)][:REVIEW_LIMIT] if isinstance(items, list) else []
+        rows = []
+        # アプリは 1 行でも形が違うと列ごと読めないので、ここで落とす（kind・answer・evidence の text が文であること）
+        for i in items if isinstance(items, list) else []:
+            if not isinstance(i, dict) or appfeeds._id(i.get("id")) is None or not isinstance(i.get("question"), str) \
+                    or not isinstance(i.get("kind"), str):
+                continue
+            row = {**i, "answer": i.get("answer") if isinstance(i.get("answer"), str) else "yesno"}
+            ev = i.get("evidence")
+            row["evidence"] = [e for e in ev if isinstance(e, dict) and isinstance(e.get("text"), str)] if isinstance(ev, list) else []
+            ch = i.get("choices")
+            if ch is not None and not (isinstance(ch, list) and all(isinstance(c, str) for c in ch)):
+                row.pop("choices")
+            rows.append(row)
+        out["items"] = rows[:REVIEW_LIMIT]
     return out
 
 
