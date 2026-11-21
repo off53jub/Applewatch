@@ -9,7 +9,7 @@ iPhone が送ってきた文字起こしの行を、この PC の中で動く Ol
 id が "digest|" で始まる行がそれ（見出しは speaker の欄、時刻は 0、会話は無し、work は true）。表は変えない。
 探すときは include_digest が true のときだけ出し（古い iPhone には今までと同じ答え）、出す行は
 {"id", "kind": "work-digest", "day", "heading", "text", "work": true, "score"}（時刻・話し手・前後の行は無し）。
-索引への置き直しは、ファイルの更新が変わったときだけ、5 分ごとの裏の仕事で（文が同じ行は作り直さない）。
+索引への置き直しは、ファイルの更新が変わったときだけ、15 分ごと（s21 から）の裏の仕事で（文が同じ行は作り直さない）。
 """
 
 from __future__ import annotations
@@ -27,6 +27,8 @@ from urllib.parse import urlparse
 
 import numpy as np
 
+import jobfirst  # s21 速3: 新しい区切りが待っているあいだは、仕事のまとめの索引を見送る
+
 EMBED_MODEL = "bge-m3"
 INDEX_LIMIT = 500        # 1回の /index で受ける行の数の上限
 TEXT_MAX = 8000          # 1行の文の長さの上限（文字）
@@ -40,7 +42,7 @@ K_DEFAULT = 20
 K_MAX = 200
 CONTEXT = 2              # 前後に付ける行の数
 DIGEST_PREFIX = "digest|"  # 仕事のまとめの行の id の頭
-DIGEST_EVERY = 300.0     # 仕事のまとめのファイルが変わったか見る間（秒）
+DIGEST_EVERY = 900.0     # 仕事のまとめのファイルが変わったか見る間（秒。s21 速4 で 5 分 → 15 分。まとめは 1 日に数回しか変わらない）
 DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -426,7 +428,7 @@ class SemanticIndex:
 
     def digest_tick(self, read: Callable[[], dict | None]) -> int | None:
         """仕事のまとめのファイルが変わっていたら置き直す。何もしなかったら None。read は mothership.read_digests の形の答え"""
-        if not self.enabled:
+        if not self.enabled or jobfirst.busy():
             return None
         found = read()
         if found is None or found["stamp"] == self._digest_stamp:

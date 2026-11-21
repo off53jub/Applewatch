@@ -28,6 +28,18 @@ iPhone は録音の区切りを1つずつ裏で送っておき、PC が文字に
   あれば 200・Content-Type audio/mp4・Content-Length・音声そのまま（256KB ずつ送る）。名前が決まりに合わない・知らない・音声がもう
   無いときは 404 {"error": "not found"}。探す順は、仕事の置き場の音声（.audio）→ 残してある音声（records の audio/<日>/<名前>）。
   渡したら記録に 1 行書き、quality-daily.json の audio_pulled を 1 足す。時計の外の道（/w/…）からは出さない。
+
+2026-11-22（s21。docs/s21-pc.md）:
+- 速1・速3: 次に文字にする順を「待ち合わせで待っている人がいる仕事 → 録ってから FRESH_AGE（2 時間）以内の新しい区切り →
+  それより古い区切り（時計が何日か分をまとめて送ってきたものなど）」にした。新しい区切りの中では今までどおり新しい順
+  （15 分より長く待ったものは先）。古い区切りは BACKLOG_STARVE（3 時間）より長く待ったら先にする（ずっと後回しにしない）。
+  前は 15 分の決まりが古い区切りにも効き、時計のまとめ送りがあると新しい区切りまで古い順になり、待ち合わせ（25 分）が切れていた。
+- 速1: 待ち合わせ（wait=1）で頼まれた仕事に "wait": true を残し、latency() に頼まれた数（"waited"）・時計の外の道の数（"watch"）を足す。
+  「渡した」の割合は、頼まれた数で割る（前は時計の仕事＝待ち合わせをしない仕事も分母に入っていた）。
+- 速8: 失敗を理由ごとに on_failed(理由) で知らせる（s21pc.py が日ごとに数える）。受け取りの途中で送り手が切ったものは
+  「送り手が途中で切った」として数え、切れたつながりに 500 を書こうとしない。
+- 精7: POST /jobs・/w/jobs の sampleNoVoice=1（時計が「声が無い」と捨てるはずの区切りに印を付けて送ったもの）を
+  params["sample_no_voice"] に残す。でき上がったら on_result(名前, 状態) で知らせる（数えるのは s21pc.py）。
 """
 
 from __future__ import annotations
@@ -57,6 +69,15 @@ STARVE_AFTER = 15 * 60
 # 2026-11-07 の落ち方への守り: 同じ仕事を文字にしている最中に、これだけ止まったら GPU のモデルを使わない・飛ばす
 CRASH_CPU_ONLY = 2
 CRASH_SKIP = 3
+# s21 速1・速3: 録ってからこれより新しい区切りを先にする（秒）。古い区切りも、これより長く待ったら先にする
+FRESH_AGE = 2 * 3600
+BACKLOG_STARVE = 3 * 3600
+CHUNK_TIME = re.compile(r"(\d{8})-(\d{6})")
+# s21 速8: 失敗の理由の分け方（左から順に見て、最初に合ったもの）
+FAIL_REASONS = (("InvalidData", "音声を読めない"), ("音声がありません", "音声がない"), ("止まった", "PC が途中で止まった"),
+                ("答えを保存できません", "答えを保存できない"), ("Timeout", "時間切れ"), ("timed out", "時間切れ"),
+                ("ConnectionAborted", "送り手が途中で切った"), ("ConnectionReset", "送り手が途中で切った"),
+                ("BrokenPipe", "送り手が途中で切った"), ("途中で切れました", "送り手が途中で切った"))
 
 
 def _env_seconds(name: str, default: float) -> float:
@@ -78,6 +99,29 @@ CLIENT_TIMES = ("chunk_start", "chunk_end", "arrived", "sent")
 # 版 10: 時計の外の道から預かるもの。5 分の区切り（約 1.2MB）には十分な大きさの上限と、時計の区切りの名前の形
 WATCH_BODY_LIMIT = 8 * 1024 * 1024
 WATCH_NAME = re.compile(r"\d{8}-\d{6}[A-Za-z0-9._-]*-w\.m4a")
+
+
+def fail_reason(error: str | None) -> str:
+    """s21 速8: 失敗の文から、数えるための短い理由（文の中身は数えない）"""
+    text = str(error or "")
+    for key, label in FAIL_REASONS:
+        if key in text:
+            return label
+    return "そのほか"
+
+
+def recorded_at(meta: dict) -> float:
+    """s21: その区切りを録った時刻（iPhone の chunk_start → 名前の頭の年月日-時分秒 → 受けた時刻）"""
+    start = (meta.get("times") or {}).get("chunk_start")
+    if isinstance(start, (int, float)) and not isinstance(start, bool) and start > 0:
+        return float(start)
+    match = CHUNK_TIME.match(str(meta.get("id") or ""))
+    if match:
+        try:
+            return time.mktime(time.strptime(match[1] + match[2], "%Y%m%d%H%M%S"))
+        except (ValueError, OverflowError):
+            pass
+    return float(meta.get("queued_at") or time.time())
 
 
 def valid_name(name) -> bool:
@@ -216,6 +260,9 @@ class JobQueue:
         self.held: dict[str, dict] = {}
         # 版 8: runner が下書きの口（4つ目の引数）を受けるか
         self.runner_drafts = _takes_four(runner)
+        # s21 速8・精7: 失敗の理由（on_failed(理由)）と、でき上がり・失敗のたび（on_result(名前, 状態)）に呼ぶ口
+        self.on_failed: Callable[[str], None] | None = None
+        self.on_result: Callable[[str, dict], None] | None = None
         self.load()
 
     # MARK: 置き場所（ファイルの名前は区切りの名前のハッシュ。Windows の決まった名前や大文字小文字の違いでぶつからないように）
@@ -320,7 +367,7 @@ class JobQueue:
         return self.audio_path(name).with_name(self.audio_path(name).name + ".part")
 
     def commit(self, name: str, params: dict, size: int, times: dict | None = None,
-               origin: str | None = None) -> dict:
+               origin: str | None = None, wait: bool = False) -> dict:
         """受け取った音声を待ちの最後に加える。失敗していた同じ名前のものは置き換える。
         版 8: times は iPhone の時刻（parse_times の答え）。queued_at が received（受け終わり）になる。
         版 10: origin は、どこから預かったか（時計の外の道なら "watch"。iPhone からなら付けない）。"""
@@ -336,6 +383,8 @@ class JobQueue:
                 meta["times"] = dict(times)
             if origin:
                 meta["origin"] = origin
+            if wait:  # s21 速1: 待ち合わせで頼まれた（渡せた割合の分母）
+                meta["wait"] = True
             self.jobs[name] = meta
             _write_json(self.meta_path(name), meta)
             self.changed.notify_all()
@@ -417,7 +466,10 @@ class JobQueue:
                               ("to_pc", sent, received)):
                 if a and b and float(b) >= float(a) - 5:
                     spans[key].append(max(0.0, float(b) - float(a)))
-        out: dict = {"count": len(metas), "handed": sum(1 for m in metas if m.get("handed"))}
+        out: dict = {"count": len(metas), "handed": sum(1 for m in metas if m.get("handed")),
+                     # s21 速1: 待ち合わせで頼まれた数（"wait" を残し始めた s21 より前の仕事は、渡せたものだけ数える）と時計の外の道の数
+                     "waited": sum(1 for m in metas if m.get("wait") or m.get("handed")),
+                     "watch": sum(1 for m in metas if m.get("origin") == "watch")}
         for key, values in spans.items():
             out[key] = {"median": round(statistics.median(values), 2), "max": round(max(values), 2),
                         "count": len(values)} if values else None
@@ -606,15 +658,37 @@ class JobQueue:
 
     def next_job(self) -> tuple[str, dict] | None:
         """待っているもののうち、次に文字にするもの（self.lock を持って呼ぶ）。
-        版 8: 2つ以上待っていれば、いちばん新しく受けたもの（遅れているときは新しい区切りから。古いものはあとで）"""
+        版 8: 2つ以上待っていれば、いちばん新しく受けたもの（遅れているときは新しい区切りから。古いものはあとで）
+        s21 速1・速3: 待ち合わせで待っている人がいる仕事 → 録って 2 時間以内の区切り → 古い区切り の順"""
         waiting = [m for m in self.jobs.values() if m.get("status") == "queued"]
         if self.paused or not waiting:
             return None
+        now = time.time()
+
+        def newest(metas: list[dict]) -> dict:
+            return max(metas, key=lambda m: int(m.get("seq") or 0))
+
+        def waited_long(meta: dict, limit: float) -> bool:
+            return now - float(meta.get("queued_at") or now) > limit
+
+        waited = [m for m in waiting if self.waiters.get(m["id"], 0) > 0]
+        if waited:
+            meta = newest(waited)
+            return meta["id"], meta
+        fresh = [m for m in waiting if now - recorded_at(m) <= FRESH_AGE]
+        pool = fresh
+        if not fresh:
+            pool = waiting  # 新しい区切りが無ければ、古い区切りどうしで今までの決まり
+        else:
+            backlog = [m for m in waiting if now - recorded_at(m) > FRESH_AGE]
+            stale = min(backlog, key=lambda m: int(m.get("seq") or 0)) if backlog else None
+            if stale is not None and waited_long(stale, BACKLOG_STARVE):
+                return stale["id"], stale
         # 新しい区切りが次々来ても、古いものがずっと後回しにならないよう、15分より長く待ったものは先にする
-        oldest = min(waiting, key=lambda m: int(m.get("seq") or 0))
-        if time.time() - float(oldest.get("queued_at") or time.time()) > STARVE_AFTER:
+        oldest = min(pool, key=lambda m: int(m.get("seq") or 0))
+        if waited_long(oldest, STARVE_AFTER):
             return oldest["id"], oldest
-        meta = max(waiting, key=lambda m: int(m.get("seq") or 0))
+        meta = newest(pool)
         return meta["id"], meta
 
     def loop(self) -> None:
@@ -699,7 +773,26 @@ class JobQueue:
         # 版 7（ops）: 終わったことを知らせる（見えない通知など）。失敗しても裏の仕事は止めない
         if not waiting:
             self._call_done(name, finished)
+        # s21 速8・精7: 失敗の理由と、でき上がりを数える口（数えられなくても裏の仕事は止めない）
+        self._notify(finished)
         return True
+
+    def _notify(self, finished: dict) -> None:
+        try:
+            if finished.get("status") == "failed" and self.on_failed is not None:
+                self.on_failed(fail_reason(finished.get("error")))
+            if self.on_result is not None:
+                self.on_result(str(finished.get("id") or ""), finished)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def note_receive_failed(self, error: BaseException) -> None:
+        """s21 速8: 受け取りの途中でつまずいた（送り手が切ったなど）"""
+        try:
+            if self.on_failed is not None:
+                self.on_failed("受け取り: " + fail_reason(repr(error)))
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # MARK: - 受け付け（lifelog_pc.py の Handler から呼ぶ。合言葉は確かめてある）
@@ -766,6 +859,9 @@ def parse_params(query: dict) -> dict:
     work = flag("work")
     if work is not None:
         params["work"] = work
+    # s21 精7: 時計が「声が無い」と捨てるはずの区切りに印を付けて送ったもの（1 割だけ。本当に声が無かったかを数える）
+    if flag("sampleNoVoice"):
+        params["sample_no_voice"] = True
     return params
 
 
@@ -832,14 +928,22 @@ def http_post(handler, queue: JobQueue | None, query_text: str, length: int, ori
             # 預けてすぐ終わっても「待っている人がいる」と分かるよう、預ける前から待ち合わせに入る
             queue.enter_wait(name)
             entered = True
-        reply = queue.commit(name, parse_params(query), length, parse_times(query), origin=origin)
+        reply = queue.commit(name, parse_params(query), length, parse_times(query), origin=origin, wait=wait)
     except Exception as error:  # noqa: BLE001 — 何があっても受け付けは続ける
         if entered:
             queue.leave_wait(name, False)
         queue.abort(name)
-        queue.log(f"後で受け取る文字起こし {name}: 預かれませんでした: {error!r}")
         handler.close_connection = True
-        handler.send_json(500, {"error": f"預かれませんでした: {error}"})
+        queue.note_receive_failed(error)
+        if isinstance(error, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, TimeoutError)):
+            # s21 速8: 送り手が途中で切った（時計のまとめ送りで多い）。送り直されるので、切れたつながりには書かない
+            queue.log(f"後で受け取る文字起こし {name}: 送り手が途中で切りました（送り直しを待ちます）: {type(error).__name__}")
+            return None
+        queue.log(f"後で受け取る文字起こし {name}: 預かれませんでした: {error!r}")
+        try:
+            handler.send_json(500, {"error": f"預かれませんでした: {error}"})
+        except OSError:
+            pass
         return None
     if wait:
         wait_and_answer(handler, queue, name, entered=True)

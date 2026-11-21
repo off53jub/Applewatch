@@ -35,7 +35,7 @@ ZIP_NAME = "LifeLogPC.zip"
 SHA_NAME = "LifeLogPC.zip.sha256"
 EXE_NAME = "LifeLogPC.exe"
 FIRST_CHECK = 600.0          # 起動してから 10 分後に1回目
-CHECK_EVERY = 6 * 3600.0     # そのあとは 6 時間ごと
+CHECK_EVERY = 3600.0         # そのあとは 1 時間ごと（s21 使12。前は 6 時間。GitHub の数の枠は 1 時間 60 回）
 IDLE_RETRY = 30.0            # 文字にしている最中なら、この間をおいて待つ
 DOWNLOAD_MAX = 3_000_000_000
 TAG = re.compile(r"pc-v(\d+)-(\d+)")
@@ -341,7 +341,7 @@ class Updater:
             raise
 
     def start(self) -> None:
-        """起動して 10 分後に1回、そのあとは 6 時間ごとに確かめる（auto_update が false なら確かめない）"""
+        """起動して 10 分後に1回、そのあとは 1 時間ごとに確かめる（auto_update が false なら確かめない）"""
         if not self.auto:
             self.state = "自動の更新はオフです（見守りの画面のボタンで確かめられます）"
             self.log("自動の更新はオフです")
