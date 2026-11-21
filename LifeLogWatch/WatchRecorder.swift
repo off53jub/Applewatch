@@ -178,8 +178,13 @@ final class WatchRecorder: NSObject {
         if isRecording { stopByUser() } else { await start() }
     }
 
+    /// 始めている途中（起動したときの再開と、画面を開いたときの再開が重なっても1回だけ始める。2026-11-20）
+    @ObservationIgnored private var starting = false
+
     private func start() async {
-        guard !isRecording else { return }
+        guard !isRecording, !starting else { return }
+        starting = true
+        defer { starting = false }
         guard await AVAudioApplication.requestRecordPermission() else {
             message = "マイクが許可されていません"
             return
@@ -398,8 +403,14 @@ final class WatchRecorder: NSObject {
         message = text
     }
 
+    /// 流し直しに失敗したとき、あと何回・何秒ごとに試すか（仮。2026-11-20）
+    private static let restartRetries = 4
+    private static let restartRetryEvery: TimeInterval = 30
+
     /// 割り込みなどで止まったマイクを流し直す。
-    private func restartEngine() {
+    /// 2026-11-20: アラームのあと、音を使う許可（オーディオセッション）を取り直さずにマイクを流そうとして失敗し、
+    /// 1回で諦めて録音を止めていた（14:16〜18:23 に止まった）。許可を取り直し、だめなら 30 秒ごとに 4 回まで試す
+    private func restartEngine(attempt: Int = 0) {
         interruptedSince = nil
         guard isRecording else { return }
         // 割り込みの始まりで区切りを閉じたが、マイクは止まっていなかったとき、前はここで何もせず、
@@ -408,12 +419,31 @@ final class WatchRecorder: NSObject {
             reopenIfNeeded()
             return
         }
-        do {
-            stopEngine()
-            try startEngine()
-        } catch {
-            stopWithAlert("電話や Siri で止まりました。アプリを開いて再開してください。")
+        Task { @MainActor in
+            guard self.isRecording else { return }
+            do {
+                self.stopEngine()
+                try await AVAudioSession.sharedInstance().activate()
+                try self.startEngine()
+            } catch {
+                guard attempt < Self.restartRetries else {
+                    self.stopWithAlert("アラームや電話のあとで録音を再開できませんでした。LifeLog を開くと再開します。")
+                    return
+                }
+                // 試しているあいだは、マイクの見張りに「止まっている」と数えさせない
+                self.interruptedSince = .now
+                try? await Task.sleep(for: .seconds(Self.restartRetryEvery))
+                self.restartEngine(attempt: attempt + 1)
+            }
         }
+    }
+
+    /// 止めるボタンを押さずに録音が止まっていたら、始め直す（画面を開いたとき。2026-11-20）。
+    /// 前はアプリが一から起動したときだけ再開していて、裏に残っていたアプリを開き直しても再開しなかった
+    func resumeIfWanted() async {
+        guard !isRecording, UserDefaults.standard.bool(forKey: Self.wasRecordingKey) else { return }
+        await start()
+        if isRecording { message = "止まっていた録音を再開しました" }
     }
 
     /// 録音が止まったことを、手首の振動と通知で知らせる。

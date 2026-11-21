@@ -24,7 +24,11 @@ struct WatchContentView: View {
             if !Task.isCancelled { WatchPages.add(current) }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { recorder.refreshStatus() }
+            if phase == .active {
+                recorder.refreshStatus()
+                // 止めるボタンを押さずに止まっていた録音を始め直す（アラームのあとなど。2026-11-20）
+                Task { await recorder.resumeIfWanted() }
+            }
         }
         .onAppear { recorder.refreshStatus() }
     }
