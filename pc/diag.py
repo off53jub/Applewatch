@@ -274,7 +274,12 @@ def pc_latency(stats: dict | None) -> list[str]:
         value = stats.get(key)
         if value:
             lines.append(f"{label}: 中央値 {_secs(value['median'])}・いちばん長い {_secs(value['max'])}（{value['count']} 件）")
-    lines.append(f"待ち合わせで渡した: {stats.get('handed', 0)} / {stats['count']} 件")
+    # s21 速1: 分母は待ち合わせを頼まれた数（時計の外の道の仕事は待ち合わせをしないので分母に入れない）
+    if "waited" in stats:
+        lines.append(f"待ち合わせで渡した: {stats.get('handed', 0)} / {stats['waited']} 件（待ち合わせを頼まれた分。"
+                     f"でき上がり {stats['count']} 件のうち、時計から直接の {stats.get('watch', 0)} 件は待ち合わせをしない）")
+    else:
+        lines.append(f"待ち合わせで渡した: {stats.get('handed', 0)} / {stats['count']} 件")
     return lines
 
 

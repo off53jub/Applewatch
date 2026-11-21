@@ -18,6 +18,9 @@
   30 分に 1 回、今日と昨日の新しい区間だけを測り（3 分まで）作り直す。1 日の組（sameperson.py）は置いてある特徴を使い、
   無い区間だけを測る。GET /same-person に "across"・"maybe" を足して返す。quality-daily.json に省ける
   "same_person_across"・"same_person_maybe"（数）を足す。
+- 2026-11-22（s21。s21pc.py・plaudmatch.py）: 省ける "plaud_match"（PLAUD と記録の行の文字の合い方 0〜1・null は測れない）・
+  "plaud_match_lines"（比べた行の数）・"novoice_sampled"・"novoice_had_voice"（時計が「声が無い」と捨てるはずの区切りの印つきの数と、
+  そのうち本当は声があった数。add_today で足す）。新しい区切りが待っているあいだは夜の流れを 1 分おく（jobfirst.py）。
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ from typing import Callable
 from urllib.parse import parse_qs
 
 import claude
+import jobfirst  # s21 速3: 新しい区切りが待っているあいだは譲る
 import judgecheck
 import nightreview
 import sameperson
@@ -274,6 +278,9 @@ def voices_tick(moment: datetime.datetime | None = None) -> dict | None:
 
 def _loop() -> None:
     while True:
+        if jobfirst.busy():  # s21 速3: 新しい区切りを先に。1 分おいて見直す
+            time.sleep(60)
+            continue
         try:
             if in_window(datetime.datetime.now()):
                 run_night()

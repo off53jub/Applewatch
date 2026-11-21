@@ -607,8 +607,8 @@ def check_auto_samples(main) -> int:
                 {"start": 14.0, "end": 17.0, "text": "来週は出張です", "confidence": 0.7,
                  "votes": {"haas": "来週は出張です", "reazon": "来週は出張です", "whisper": ""}},          # 黙った
             ]
-            failed += say(main.auto_samples(audio, lines, "job-1", {}) == 0 and not main.PERSONAL_DATA.exists(),
-                          "自動の材料: 既定（config.json に auto_samples が無い）では足さない")
+            failed += say(main.auto_samples(audio, lines, "job-1", {"auto_samples": False}) == 0 and not main.PERSONAL_DATA.exists(),
+                          "自動の材料: config.json の auto_samples が false なら足さない（s21 から既定で足す）")
             added = main.auto_samples(audio, lines, "job-1", {"auto_samples": True})
             rows = main.read_samples(main.PERSONAL_DATA)
             source = rows[0].get("source") if rows else {}

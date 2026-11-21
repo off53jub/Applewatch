@@ -418,6 +418,14 @@ def write_summary(now: float | None = None) -> Path | None:
         return None
     now = O.clock() if now is None else now
     worries, devices = O.diag.summary_lines(now)
+    # s21（2026-11-22）: 精度・速さ・電池・止まらないの数（s21pc.py）。版のずれは気になる所にも出す
+    try:
+        import s21pc
+
+        s21_worries, s21_lines = s21pc.summary_lines(O.diag, now)
+    except Exception as error:  # noqa: BLE001 — 数えられなくても、ほかは書く
+        s21_worries, s21_lines = [], [f"- （s21 の数を書けませんでした: {type(error).__name__}）"]
+    worries = worries + s21_worries
     lines = ["# LifeLog の実機の様子（家の PC の LifeLog PC が書き直します）", "",
              f"書いた時刻: {time.strftime('%Y-%m-%d %H:%M', time.localtime(now))}（この PC の時刻）。"
              "iPhone が POST /diag で送った様子・TestFlight の報告・通知・学び直しの様子をまとめたものです。",
@@ -432,6 +440,9 @@ def write_summary(now: float | None = None) -> Path | None:
     except Exception:  # noqa: BLE001
         stats = None
     lines.extend(f"- {text}" for text in diag.pc_latency(stats))
+    if s21_lines:
+        lines += ["", "## s21 の数（精度・速さ・電池・止まらない。docs/s21-pc.md）", ""]
+        lines.extend(s21_lines)
     lines += ["", "## 端末ごと", ""]
     lines.extend(devices or ["（まだ様子が届いていません）", ""])
     lines += ["## TestFlight の報告（新しい 10 件）", ""]
@@ -455,7 +466,8 @@ def write_summary(now: float | None = None) -> Path | None:
     auto = O.trainer.status()
     last = auto.get("last") or {}
     lines.append(f"- 自動の学び直し: {auto['state']}・時間帯 {auto['window']}・次 {diag.clock(diag.parse_time(auto['next']))}・"
-                 f"材料 {auto['count']} 個（前回から +{auto['since_last']}）・部品 {auto['runtime']}")
+                 f"材料 {auto['count']} 個（前回から +{auto['since_last']}）・部品 {auto['runtime']}"
+                 + (f"・あと {auto['need']} 個で始められます" if auto.get("need") else ""))
     if last:
         lines.append(f"- 前回: {diag.clock(diag.parse_time(last.get('at')))} {trainer.AutoTrainer.result_line(last)}")
     plan = O.gpu.status()

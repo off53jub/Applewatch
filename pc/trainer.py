@@ -13,6 +13,14 @@
 - 子のプロセスには SSLKEYLOGFILE を渡さない（Avast などが入れていると、Python の HTTPS が落ちるため）。
 - 子のプロセスは、LifeLog PC が終わると一緒に終わる（Windows のジョブ）。途中で終わった学び直しは、次の時間帯にやり直す。
 記録（log.txt）には、始めた・終わった・誤りの割合・理由だけを書く（子のプロセスの出力は <home>/personal/train-log.txt）。
+
+2026-11-22（s21 精6。docs/s21-pc.md）: 11/22 02:00 の時間帯に動かなかったのは、材料が 46 個（300 個に足りない）で
+「材料を待っています」のまま、部品の用意もその手前で止まっていたため（材料は 11/14 から増えていなかった。自動の材料は既定で切れていた）。
+- 部品（約 5GB。本人の承認 2026-11-22）は、材料が PREPARE_AHEAD 個（30）を超えたら、材料がそろう前でも用意しておく。
+  用意してよいのは 01:00〜05:00 だけ（重い仕事の時間帯の決まり。前は学び直しの時間帯の 06:00 までだった）。
+  config.json の "autotrain": {"prepare_ahead": false} で前と同じ（材料がそろってから）にできる。
+- 学び直しの時間帯の終わりの既定を 06:00 → 05:00 にした（重い仕事は 00:00〜05:00 の決まり）。
+- status() に、あと何個で始められるか（"need"）を足した（summary.md に出す）。
 """
 
 from __future__ import annotations
@@ -44,10 +52,12 @@ PIP_INDEX = "https://pypi.org/simple"
 NEED_DISK = 12_000_000_000       # 用意するときに要る空き（部品 約 5GB・取ってくる途中の分・元のモデル）
 PREPARE_RETRY = 6 * 3600.0       # 用意に失敗したら、これだけおいてやり直す
 PREPARE_TIMEOUT = 3 * 3600.0
+PREPARE_AHEAD = 30               # s21 精6: 材料がこれより多ければ、そろう前でも部品を用意しておく
+PREPARE_HOURS = (1, 5)           # s21 精6: 部品を用意してよい時（01:00〜05:00。重い仕事の時間帯の決まり）
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 DAY_JA = dict(zip(DAYS, "月火水木金土日"))
-DEFAULTS = {"enabled": True, "days": ["sun"], "start": "02:00", "end": "06:00", "min_samples": 300, "min_new": 50,
-            "max_hours": 6.0, "args": None}
+DEFAULTS = {"enabled": True, "days": ["sun"], "start": "02:00", "end": "05:00", "min_samples": 300, "min_new": 50,
+            "max_hours": 6.0, "args": None, "prepare_ahead": True}
 # GPU のメモリが足りないと言われたら、次は小さく学ぶ（train_personal.py の案内のとおり）
 SMALLER = [[], ["--batch", "2", "--accumulate", "4"], ["--batch", "1", "--accumulate", "8"]]
 ARG = re.compile(r"--(epochs|batch|accumulate|lr|rank|seed)")
@@ -355,6 +365,7 @@ def train_config(config: dict) -> dict:
         return out
     value = value if isinstance(value, dict) else {}
     out["enabled"] = value.get("enabled", True) is not False
+    out["prepare_ahead"] = value.get("prepare_ahead", True) is not False
     out["days"] = parse_days(value.get("days", DEFAULTS["days"]))
     out["start"] = "%02d:%02d" % gpu.parse_clock(value.get("start"), DEFAULTS["start"])
     out["end"] = "%02d:%02d" % gpu.parse_clock(value.get("end"), DEFAULTS["end"])
@@ -459,19 +470,18 @@ class AutoTrainer:
         if self.running or not self.available():
             return
         count = self.count_samples()
-        if count < self.config["min_samples"] or count - self.base_count() < self.config["min_new"]:
+        enough = count >= self.config["min_samples"] and count - self.base_count() >= self.config["min_new"]
+        if not enough:
             self.waiting = "材料を待っています"
+            # s21 精6: 材料がそろう前でも、部品は前もって用意しておく（01:00〜05:00 だけ）
+            if self.config.get("prepare_ahead", True) and count >= PREPARE_AHEAD and not self.runtime.ready():
+                self._prepare_if_time(now)
             return
         window = next_window(now, self.config["days"], self.config["start"], self.config["end"])
         inside = window is not None and window[0] <= now < window[1]
         if not self.runtime.ready():
-            hour = time.localtime(now).tm_hour
-            failed = float(self.state.get("prepare_failed_at") or 0)
-            if not self.runtime.preparing and (inside or 1 <= hour < 6) and now - failed >= PREPARE_RETRY:
-                self.waiting = "学び直しの部品を用意しています"
-                threading.Thread(target=self._prepare, name="train-prepare", daemon=True).start()
-            elif not self.runtime.preparing:
-                self.waiting = "学び直しの部品を用意する時を待っています（夜 1:00〜6:00）"
+            if not self._prepare_if_time(now) and not self.runtime.preparing:
+                self.waiting = "学び直しの部品を用意する時を待っています（夜 1:00〜5:00）"
             return
         if not inside:
             self.waiting = "学び直しの時間帯を待っています"
@@ -485,6 +495,17 @@ class AutoTrainer:
         self.state["attempted"] = window[0]
         self.save()
         self.start(count)
+
+    def _prepare_if_time(self, now: float) -> bool:
+        """決まった時（01:00〜05:00）で、用意している最中でなく、前の失敗から 6 時間たっていれば、裏で部品を用意し始める"""
+        hour = time.localtime(now).tm_hour
+        failed = float(self.state.get("prepare_failed_at") or 0)
+        if self.runtime.preparing or not (PREPARE_HOURS[0] <= hour < PREPARE_HOURS[1]) or now - failed < PREPARE_RETRY:
+            return False
+        if self.waiting != "材料を待っています":
+            self.waiting = "学び直しの部品を用意しています"
+        threading.Thread(target=self._prepare, name="train-prepare", daemon=True).start()
+        return True
 
     def _prepare(self) -> None:
         try:
@@ -692,6 +713,8 @@ class AutoTrainer:
                 "next": diag.iso(upcoming[0]) if upcoming else None, "in_window": inside,
                 "started": diag.iso(self.started) if self.started else None,
                 "count": count, "since_last": count - self.base_count(),
+                # s21 精6: あと何個で始められるか（数とふえた分の両方の決まり）
+                "need": max(0, self.config["min_samples"] - count, self.config["min_new"] - (count - self.base_count())),
                 "min_samples": self.config["min_samples"], "min_new": self.config["min_new"],
                 "runtime": self.runtime.status(), "runtime_error": self.state.get("prepare_error"),
                 "last": last}

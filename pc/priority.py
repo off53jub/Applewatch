@@ -6,7 +6,7 @@
 
 - 名前が ollama.exe・ollama app.exe・llama-server.exe のプロセスのうち、優先度が「通常」のものだけを下げる
   （本人が手で変えたもの・ほかの値のものには触らない）。Windows では、「通常以下」のプロセスが作る子プロセスも
-  「通常以下」になるので、Ollama がモデルを読み込み直すたびに作る llama-server も下がる。念のため 1 分ごとに見直す。
+  「通常以下」になるので、Ollama がモデルを読み込み直すたびに作る llama-server も下がる。念のため 5 分ごとに見直す（s21 速4 で 1 分から伸ばした）。
 - config.json の "ollama_priority": "below_normal"（既定）・"idle"（もっと下げる）・"normal"（何もしない＝前と同じ）。
 - Windows のほかでは何もしない。下げられなくても（権限など）受け付けは続ける。記録には、下げたときだけ 1 行書く。
 """
@@ -19,7 +19,7 @@ import time
 from typing import Callable
 
 NAMES = ("ollama.exe", "ollama app.exe", "llama-server.exe")
-EVERY = 60.0
+EVERY = 300.0   # s21 速4: 1 分 → 5 分（Ollama のプロセスはめったに入れ替わらない。毎回すべてのプロセスの一覧を取るので間を伸ばした）
 NORMAL = 0x00000020
 BELOW_NORMAL = 0x00004000
 IDLE = 0x00000040
@@ -125,7 +125,7 @@ _started = False
 
 
 def start(config: Callable[[], dict], log: Callable[[str], None], every: float = EVERY) -> None:
-    """裏で 1 分ごとに sweep する（1 回だけ始める。Windows のほかでは何もしない）"""
+    """裏で 5 分ごと（s21 から）に sweep する（1 回だけ始める。Windows のほかでは何もしない）"""
     global _started
     if _started or os.name != "nt":
         return

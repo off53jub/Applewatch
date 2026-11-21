@@ -131,7 +131,7 @@ Haas-ja と ReazonSpeech にも「ホットワード」として効かせます�
   「再起動」: LifeLog PC を終えて、タスク スケジューラの Lifelog-HomePC-Autostart で起動し直します
   （そのタスクが無ければ、同じ引数で起動し直します）。
   「更新を確かめる」: 下の「自分で新しい版に入れ替える」を、今すぐ行います（自動の更新をオフにしていても行います）。
-・自分で新しい版に入れ替える: 起動して 10 分後と、そのあと 6 時間ごとに、GitHub（off53jub/Applewatch）のリリースの
+・自分で新しい版に入れ替える: 起動して 10 分後と、そのあと 1 時間ごとに（s21 から。前は 6 時間ごと）、GitHub（off53jub/Applewatch）のリリースの
   「pc-v6-番号」を見て、今より新しい版があれば取ってきて（数百 MB）、ハッシュ（SHA-256）を確かめてから入れ替えます。
   入れ替えるのは、文字にしている最中のものが無いときだけです。入れ替えの手順:
     1. 新しい版を、LifeLog PC のフォルダの隣の「<フォルダの名前> 新しい版」に展開します
@@ -351,7 +351,7 @@ GPU のメモリーに余裕を作る（2026-11-07。8GB の GPU に large-v3 �
   あれば GPU に置きます（2026-11-15。CPU だけでは 1 まとまり約 1.2 秒・8 コア中 3 コア強を使っていたため）。いったん GPU に
   置いたら、空きが残しておく分を割るまでは GPU のまま。文字起こしのモデルを載せる前・読み込み中は CPU に戻して決め直します。
   言語モデル（qwen3:8b など）は今までどおり CPU だけ。config.json の "embed_gpu": false で前と同じにできます。
-・この PC の Ollama（ollama.exe・llama-server.exe）の優先度を「通常以下」にします（2026-11-15。速さは削らず、PC で
+・この PC の Ollama（ollama.exe・llama-server.exe）の優先度を「通常以下」にします（2026-11-15。5 分ごとに見ます。速さは削らず、PC で
   ほかの仕事があればそちらを先に通します）。config.json の "ollama_priority": "below_normal"（既定）・"idle"・"normal"（前と同じ）。
 ・確かめるとき:  python pc/v16checks_ollama.py（作り物の空きと作り物のプロセスで。本物の GPU・Ollama の優先度は変えません）
 ・時計の音声を渡す口（2026-11-15。features に "jobaudio"。iPhone が PC から時計の音声を受け取るため）: GET /jobs/<名前>/audio。
@@ -453,9 +453,9 @@ GPU が使えないと CPU で動くので、答えが返るまで数十秒〜�
    1日に頼む回数は 400 回まで（"judge_daily"）。やめるときは "judge": false。記録には数だけを書きます
    （「Claude の審判: 食い違いの大きい行 N のうち M 行を見て、K 行を替えました」）。
    iPhone が /jobs に work=0|1 を付けると、職場かどうかが分かります（付けなければ「分からない」）。
-6. 自動の材料（精7・仮。いまは使いません）:
+6. 自動の材料（精7・仮。s21 から既定で使います）:
    全部のモデル（3つ以上、どれも黙っていない）がほぼ同じ文を書いた 2 秒以上の行を、あなた向けのモデルの材料に足します。
-   config.json（claude-config.json ではなく、いつもの config.json）に "auto_samples": true を足したときだけです。
+   config.json（claude-config.json ではなく、いつもの config.json）の "auto_samples": false で止めます（s21 の前は true のときだけでした）。
    しきい値は仮です: どのモデルの組も近さ 0.95 以上・1日 30 個まで・自動の材料は全部で 1500 個まで。
    材料には "source": {"origin": "pc-auto", "auto": true} の印を付けるので、あとで外せます。
    学び直しの試験（誤りの割合を測る分）には、自動の材料は使いません（正しい文が人の確かめたものではないため）。
@@ -661,3 +661,39 @@ iPhone のタスクの「母艦のやること」に、母艦（D:\Lifelog）の
 ・PLAUD と食い違った行（plauddoubt.py）: 母艦の misheard_pairs.json の行を「聞いて直す」に「PLAUD と食い違う」で出します。
   GET /plaud-doubts。features "plauddoubt"
 ・どれも log.txt には数だけを書きます。確かめ: python v21checks_knowme.py（一時フォルダと作り物の Claude で）
+
+
+■ s21 の分（2026-11-22。精度・速さ・電池・止まらない。中身は s21pc.py ほか。docs\s21-pc.md）
+・どれも数えるだけか、順と間の決まりを変えただけです。言語モデルの呼び出しは足していません。log.txt には数だけを書きます。
+・summary.md に「## s21 の数」の節を足しました: PLAUD との文字の合い方（7 日）・モデルごとの当たり率と重み・正解集の点数（版ごと）・
+  人物N の日ごとの人数と新しい番号の数・時計が「声が無い」と捨てるはずの区切り（印つき）・PC の仕事の失敗（理由ごと）・
+  CPU を使った糸の上位・log.txt と semantic.db の大きさ・振って送られた「いまの画面が変」の数・時計の電池の 1 時間あたりの減り
+  （送り方の実験の組と並べて）・時計の止まりかけ（3 日）・iPhone と時計の版（ずれていれば「気になる所」にも）。
+  アプリがまだ送っていない値は、黙って出しません。
+・次に文字にする順（jobqueue.py）: 待ち合わせで待っている人がいる仕事 → 録って 2 時間以内の区切り（新しい順）→ それより古い区切り
+  （時計がまとめて送ってきた分など。3 時間より長く待ったら先にします）。
+・新しい区切りを先に（jobfirst.py）: 録って 2 時間以内の区切りが待っているあいだは、夜の流れ・自分を知る見回りの重い所・
+  母艦の索引づくり・仕事のまとめの索引を譲り、00:00〜06:00 の /transcribe（iPhone の夜の聞き直し）は頭で 30 秒まで待ちます。
+  config.json の "jobs_first": false で前と同じ。
+・待ち合わせ（wait=1）で頼まれた仕事に "wait": true を残し、「待ち合わせで渡した」は頼まれた数で割ります（時計から直接の仕事は分けて出す）。
+・POST /jobs・/w/jobs の sampleNoVoice=1: 時計が「声が無い」と捨てるはずの区切りの印。文字になったら quality-daily.json の今日の
+  "novoice_sampled"・"novoice_had_voice"（本当は声があった数）に足します。features "novoicesample"。
+・POST /feedback の kind "shake" {"kind":"shake","screen","note"?,"at"?}: 母艦の inbox\app_feedback.jsonl に 1 行。features "shake"。
+・PLAUD との文字の合い方（plaudmatch.py）: 毎晩 01:00〜05:00 に、昨日〜3 日前の記録の行と PLAUD の文を文字で比べ、
+  quality-daily.json の "plaud_match"（0〜1）・"plaud_match_lines" に書きます。
+・モデルごとの当たり率（plaudmatch.py）: 週 1 回（00:00〜05:00）、直近 7 日の票を PLAUD と比べて engine-weights.json に。
+  当たり率の重み（0.8〜1.2・仮）を、後で受け取る文字起こしで iPhone の重みに掛けます。"engine_weights": false で掛けません。
+・正解集（goldset.py）: 本人が直した材料（自動の材料は除く）を、PC の版が変わったら重い仕事の時間帯に今のモデルで文字にして、
+  誤りの割合を goldset-scores.json に。"goldset": false で止めます。
+・CPU を使った糸（threadcpu.py）: 10 分ごとに load-threads.json へ。"load_meter": false で止めます。
+・失敗の理由（s21pc.py）: job-failures.json（14 日）。受け取りの途中で送り手が切ったものは「送り手が途中で切った」として数えます。
+・log.txt を回す（housekeep.py）: 8MB を超えたら 15 日より前の行を logs\log-<時刻>.txt.gz に縮めて移します（100 個まで）。
+  semantic.db は空きが 10% 以上のときだけ週 1 回 00:00〜05:00 に詰めます。"housekeep": false で止めます。
+・自動の学び直し（trainer.py）: 材料が 30 個を超えたら、そろう前でも 01:00〜05:00 に部品（約 5GB）を用意します
+  （"autotrain": {"prepare_ahead": false} で前と同じ）。時間帯の既定は 日曜 02:00〜05:00 になりました。
+  自動の材料（"auto_samples"）は既定で使います（false で止める）。手で直した材料だけでは 11/14 から増えなかったためです。
+・LINE に「今日」「きのう」とだけ送ると、母艦の日のまとめ（digests\daily）の「サマリ」「主要な出来事」を短く切って返します（本人だけ）。
+・会う人の名前をヒントに（hintpolicy.py）: config.json の "people_hints": true のときだけ、その日の予定に出てくる人の名前（people-index.md。
+  読むだけ）を 4 人まで足します。既定はオフ（地名と同じく、測ってから本人が決めます）。
+・新しい版の確かめは 1 時間ごと、Ollama の優先度の見回りは 5 分ごと、仕事のまとめの索引の見回りは 15 分ごとになりました。
+・確かめ: python v24checks_s21.py（v24checks_s20.py の最後でも動きます。一時フォルダと作り物の記録・母艦・LINE で）

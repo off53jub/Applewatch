@@ -632,6 +632,10 @@ def main() -> int:
     failed = 0
     for check in (check_split_and_self, check_knowapp, check_forget, check_line, check_s20feeds):
         failed += check()
+    # 2026-11-22（s21）: CI の手順（.github は別の担当）を増やさずに、s21 の家の PC の分もここで確かめる
+    import v24checks_s21
+
+    failed += v24checks_s21.run_all()
     print("ぜんぶ OK" if not failed else f"NG の数: {failed}", flush=True)
     return failed
 

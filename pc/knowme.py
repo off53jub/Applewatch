@@ -30,6 +30,7 @@ import asrlearn
 import forget  # s20 次11（控えの掃除だけ）
 import holidaymarks
 import honne
+import jobfirst  # s21 速3: 新しい区切りが待っているあいだは、重い所をしない
 import plauddoubt
 import selflines  # s20 次6
 import selfvoice
@@ -102,7 +103,7 @@ def tick(now: datetime.datetime | None = None) -> dict:
         have = sorted(d["day"] for d in State.store.days())[-FIRST_DAYS:]
         voicetone.run(State.home, State.store, base, State.log, have, mother_copy=copy)
         State.first_done = True
-    heavy = voices.heavy_ok(now) and State.load_audio is not None
+    heavy = voices.heavy_ok(now) and State.load_audio is not None and not jobfirst.busy()
     holidaymarks.CONFIG = config
     steps = (
         ("voicetone", lambda: voicetone.run(State.home, State.store, base, State.log,

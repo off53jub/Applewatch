@@ -45,6 +45,7 @@ from typing import Callable, Iterable
 
 import numpy as np
 
+import jobfirst  # s21 速3: 新しい区切りが待っているあいだは、ゆっくりのほう
 import mothersearch_extra  # 2026-11-16（強化案 128）: 場所・予定・支払い・写真の読み取りも
 import presence  # 2026-11-15: PC を使っているあいだは重い取り込みを譲る
 import semantic
@@ -342,7 +343,7 @@ class MotherIndex:
         """いま重く回してよいか。重い時間でも、PC を使っているあいだは False（軽いほう）。
         譲り始めたとき（1 時間に 1 回まで）だけ、記録に 1 行書く"""
         moment = self.clock()
-        if not heavy_now(moment):
+        if not heavy_now(moment) or jobfirst.busy():
             return False
         try:
             config = self.config() or {}

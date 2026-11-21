@@ -27,6 +27,8 @@
 - POST /app-usage（"appusage"）{"at", "app", "event"} → inbox/app_usage.jsonl（ショートカットのオートメーションから。8）。
   iPhone の「スクリーンタイム」と Safari の履歴は、ほかのアプリからは読めない（Apple の決まり）ので、この口にした。
 2026-11-15: 提案の kind "wish"（49）・POST /feedback の kind "check"（41）・通信簿の週の省ける "check_right"（41）。
+2026-11-22（s21 使10）: POST /feedback の kind "shake"（振って「いまの画面が変」）{"kind":"shake","screen":str,"note":str?,"at":iso}
+  → inbox/app_feedback.jsonl に {"kind":"shake","screen","note"?,"sent_at"?,"at"}。数は summary.md（s21pc.py）。features "shake"。
   GET /rollout・/checks・/costs は settle.py。
 どれも読むだけ（POST は1行足すだけ）。型・長さ・形を確かめ、おかしな行は落とす。無い・読めないときは {"available": false, "reason": …}。
 中身（文・ファイル名・アプリの名前・気分の値）は記録（log.txt）に書かない。
@@ -633,6 +635,8 @@ def parse_feedback(data: bytes) -> dict:
     kind = body.get("kind")
     if kind == "review":  # s20: 確かめ待ちの答え {"kind":"review","id","answer","at"}（母艦の Build-ReviewQueue.py が読む）
         return parse_review(body)
+    if kind == "shake":  # s21 使10: 振って「いまの画面が変」
+        return parse_shake(body)
     if not isinstance(kind, str) or kind not in FEEDBACK:
         raise ValueError("kind は " + "・".join(FEEDBACK) + " のどれかです")
     if body.get("value") not in FEEDBACK[kind]:
@@ -645,6 +649,28 @@ def parse_feedback(data: bytes) -> dict:
 
 
 REVIEW_ANSWER = 200
+SHAKE_SCREEN = 100
+SHAKE_NOTE = 500
+
+
+def parse_shake(body: dict) -> dict:
+    """POST /feedback の kind "shake"（s21 使10）。screen は 1〜100 文字・note は 500 文字まで（省ける）・at は ISO 8601（省ける）"""
+    screen = body.get("screen")
+    if not isinstance(screen, str) or not _text(screen, SHAKE_SCREEN) or len(screen) > SHAKE_SCREEN:
+        raise ValueError(f"screen は 1〜{SHAKE_SCREEN} 文字の文です")
+    row = {"kind": "shake", "screen": _text(screen, SHAKE_SCREEN)}
+    note = body.get("note")
+    if note is not None:
+        if not isinstance(note, str) or len(note) > SHAKE_NOTE:
+            raise ValueError(f"note は {SHAKE_NOTE} 文字までの文です")
+        if _text(note, SHAKE_NOTE):
+            row["note"] = _text(note, SHAKE_NOTE)
+    at = body.get("at")
+    if at is not None and _iso(at) is None:
+        raise ValueError("at は ISO 8601 の日時です")
+    if at:
+        row["sent_at"] = at
+    return row
 
 
 def parse_review(body: dict) -> dict:
@@ -731,7 +757,7 @@ def _http_inbox(handler, base: Path, data: bytes, log, parse, rel: Path, label: 
 
 def http_post_feedback(handler, base: Path, data: bytes, log) -> None:
     _http_inbox(handler, base, data, log, parse_feedback, FEEDBACK_FILE, "使われ方の記録", True,
-                lambda r: f"{r['kind']} {r.get('value', '答え')}")
+                lambda r: r["kind"] if r["kind"] in ("shake", "review") else f"{r['kind']} {r.get('value', '答え')}")
 
 
 def http_post_mood(handler, base: Path, data: bytes, log) -> None:

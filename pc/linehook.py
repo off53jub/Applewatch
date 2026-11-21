@@ -14,6 +14,11 @@ POST /line/webhook（外の道＝Tailscale Funnel の URL に載る。watchroute
   返事に使うアクセストークンは母艦と同じ LINE_CHANNEL_ACCESS_TOKEN（環境変数・Windows のユーザー環境変数）か HOME/line-token.txt。
   無ければ記録だけして返事はしない。
 記録（log.txt）には数だけ（文字・userId は書かない）。
+
+2026-11-22（s21 使13）: 本人が「今日」「きょう」「きのう」「昨日」とだけ送ったら、記録には足さず、その日のまとめを返事にする。
+- まとめは母艦の digests/daily/<日>.md（もうある日のまとめ）の「サマリ」と「主要な出来事」の節を、そのまま短く切ったもの
+  （[[…]] の印・(source: …) を外し、DAY_REPLY_MAX 字まで）。言語モデルは呼ばない（0 円）。無ければ「まだありません」と返す。
+- 返すのは本人（上の userId の決まり）だけ。返事は reply token の 1 言（push は使わない）。記録（log.txt）には数だけ。
 """
 
 from __future__ import annotations
@@ -42,6 +47,11 @@ REPLY_URL = "https://api.line.me/v2/bot/message/reply"
 REPLY_TEXT = "記録しました"
 EVENTS_KEEP = 500
 USER_ID = re.compile(r"U[0-9a-f]{32}")
+# s21 使13: 日のまとめを返す言葉 → 何日前か
+DAY_WORDS = {"今日": 0, "きょう": 0, "きのう": 1, "昨日": 1}
+DAY_SECTIONS = ("サマリ", "主要な出来事")
+DAY_REPLY_MAX = 1000
+DAILY = Path("digests") / "daily"
 
 _lock = threading.Lock()
 _seen: "collections.OrderedDict[str, bool]" = collections.OrderedDict()
@@ -135,8 +145,43 @@ def append_note(mother: Path, text: str, now: datetime.datetime | None = None) -
         handle.write(line + "\n")
 
 
+def day_word(text: str) -> int | None:
+    """「今日」「きのう」などだけの文なら何日前か（句読点・空白・「は？」は見ない）。違えば None"""
+    import unicodedata
+
+    bare = re.sub(r"[\s。、！？!?.]+", "", unicodedata.normalize("NFKC", text or ""))
+    bare = re.sub(r"(の)?まとめ(は)?$|は$", "", bare)
+    return DAY_WORDS.get(bare)
+
+
+def day_summary(mother: Path, day: str, limit: int = DAY_REPLY_MAX) -> str | None:
+    """母艦の日のまとめ（digests/daily/<日>.md）の「サマリ」「主要な出来事」を短く切った文。無ければ None"""
+    try:
+        text = (Path(mother) / DAILY / f"{day}.md").read_text(encoding="utf-8-sig")
+    except OSError:
+        return None
+    parts: list[str] = []
+    current = None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current = line[3:].strip() if line[3:].strip() in DAY_SECTIONS else None
+            if current:
+                parts.append(f"【{current}】")
+            continue
+        if current and line.strip():
+            clean = re.sub(r"\[\[(?:[^\]|]*\|)?([^\]]*)\]\]", r"\1", line.strip())
+            clean = re.sub(r"\s*\(source:[^)]*\)", "", clean)
+            parts.append(clean)
+    if not parts:
+        return None
+    body = f"{day} のまとめ\n" + "\n".join(parts)
+    return body if len(body) <= limit else body[:limit - 1] + "…"
+
+
 def handle(body: bytes, signature: str | None, home: Path, config: dict, mother: Path | None,
-           log: Callable[[str], None], sender: Callable[[str, str], bool] | None = None) -> tuple[int, dict]:
+           log: Callable[[str], None], sender: Callable[[str, str], bool] | None = None,
+           day_sender: Callable[[str, str, str], bool] | None = None,
+           today: datetime.date | None = None) -> tuple[int, dict]:
     """(HTTP の状態, 答え)。署名が合わなければ中身は見ない"""
     if not secret(home):
         return 503, {"error": "LINE のチャネルシークレットが置かれていません"}
@@ -152,8 +197,9 @@ def handle(body: bytes, signature: str | None, home: Path, config: dict, mother:
     events = data.get("events") if isinstance(data, dict) else None
     if not isinstance(events, list):
         return 200, {"ok": True}
-    noted = ignored = replied = 0
+    noted = ignored = replied = days = 0
     send = sender or (lambda tok, rt: reply(tok, rt))
+    send_day = day_sender or (lambda tok, rt, text: reply(tok, rt, text))
     for event in events[:50]:
         message = event.get("message") if isinstance(event, dict) else None
         source = event.get("source") if isinstance(event, dict) else None
@@ -171,6 +217,15 @@ def handle(body: bytes, signature: str | None, home: Path, config: dict, mother:
         if not text or mother is None or not Path(mother).is_dir():
             ignored += 1
             continue
+        back = day_word(text)
+        if back is not None:  # s21 使13: 日のまとめを返す（記録には足さない）
+            day = ((today or datetime.date.today()) - datetime.timedelta(days=back)).isoformat()
+            answer = day_summary(mother, day) or f"{day} のまとめはまだありません（ふつうは次の朝にできます）"
+            token, reply_token = access_token(home), event.get("replyToken")
+            days += 1
+            if token and isinstance(reply_token, str) and reply_token and send_day(token, reply_token, answer):
+                replied += 1
+            continue
         try:
             append_note(mother, text)
         except OSError as error:
@@ -180,6 +235,6 @@ def handle(body: bytes, signature: str | None, home: Path, config: dict, mother:
         token, reply_token = access_token(home), event.get("replyToken")
         if token and isinstance(reply_token, str) and reply_token and send(token, reply_token):
             replied += 1
-    if noted or ignored:
-        log(f"LINE の webhook: 記録 {noted}・返事 {replied}・捨てた {ignored}")
+    if noted or ignored or days:
+        log(f"LINE の webhook: 記録 {noted}・日のまとめ {days}・返事 {replied}・捨てた {ignored}")
     return 200, {"ok": True}

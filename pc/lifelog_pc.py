@@ -98,7 +98,7 @@ iPhone のアプリは、声のある区間（端末内の文字起こしで決�
 - GET /weekly・/prep・/brief-compare・/accuracy・/unused・POST /feedback・/mood・/app-usage（母艦の写しと inbox。施策 1〜21 の
   アプリ側。features は appfeeds.FEATURES。確かめは --check-v11 の中の feedschecks.py）
 - 後で受け取る文字起こしの食い違いの大きい行は、Claude に候補の番号を選んでもらう（精6。文は書かせない）
-- そろった行を、あなた向けのモデルの材料に自動で足す（精7・仮。config.json の "auto_samples": true のときだけ）
+- そろった行を、あなた向けのモデルの材料に自動で足す（精7・仮。s21 から既定で使う。config.json の "auto_samples": false で止める）
     LifeLogPC.exe --check-v11  これを、一時フォルダと作り物の Claude で確かめる（本物の鍵もネットも使わない）
 2026-11-13（施策 13・15。中身は promises.py・askmother.py。features に "promisesnow"・"askmother"）:
 - 会話が終わって 10 分たったら約束・頼まれごとだけを Claude で拾い、目に見える通知（kind "promise"）。
@@ -198,6 +198,9 @@ import livecoach  # 2026-11-15（強化案 50〜52）: 会議の相棒（その�
 import forget  # s20 次11: 時間を選んで記録と音声を消す
 import knowme  # 2026-11-19（s18 の 45・47・63・69〜73・78）: 自分を知ってもらう分（中身は knowme.py ほか）
 import quality  # 2026-11-13（施策 9・10・11）: 品質の記録・夜の流れ・同じ人かも・夜の読み直し（中身は quality.py ほか）
+import plaudmatch  # s21 精1・精10: PLAUD との文字の合い方・モデルごとの当たり率と重み（仮）
+import jobfirst  # s21 速3: 新しい区切りを先に（/transcribe の夜の待ち）
+import s21pc  # s21（2026-11-22）: 精1・精7・精10・精11・精15・速4・速8・速9・電1・電2・守1・守5（中身は s21pc.py ほか）
 
 VERSION = 10
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
@@ -274,12 +277,15 @@ def isolate_home() -> Path:
     return root
 
 
+LOG_LOCK = threading.Lock()  # s21 速9: log.txt を回す（housekeep.py）ときに、書いている行が切れないように
+
+
 def log(message: str) -> None:
     line = time.strftime("%Y-%m-%d %H:%M:%S ") + message
     print(line, flush=True)
     try:
         HOME.mkdir(parents=True, exist_ok=True)
-        with LOG.open("a", encoding="utf-8") as f:
+        with LOG_LOCK, LOG.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
     except OSError:
         pass
@@ -2243,6 +2249,7 @@ def features(engines: list | None = None) -> list[str]:
     # 版 7（ops）: diag（POST /diag）・push（見えない通知を送れるとき）・autotrain（自動の学び直しができるとき）
     found.extend(ops.features())
     found.extend(quality.features())  # "sameperson"・"nightreview"（2026-11-13。quality.py）
+    found.extend(s21pc.FEATURES)  # s21: "shake"（POST /feedback の kind shake）・"novoicesample"（sampleNoVoice=1）
     # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
     if watchroute.running():
         found.append("watchroute")
@@ -2347,10 +2354,13 @@ def place_hints_for(name: str, params: dict) -> tuple[list[str], int]:
     """仕事のヒント（アプリから届いた登録語）に、地名を足したもの。足した数も返す"""
     hints = list(params.get("hints") or [])
     config = load_config()
+    # s21 精12: その日の予定に出てくる人の名前（"people_hints": true のときだけ。既定はオフ）
+    hints, people = hintpolicy.add_people(hints, hintpolicy.epoch_of(name), mothership.home(config), config)
     if not hintpolicy.place_hints_on(config):
-        return hints, 0
+        return hints, people
     extra = [params["place"]] if isinstance(params.get("place"), str) else None
-    return hintpolicy.augment(hints, hintpolicy.epoch_of(name), mothership.home(config), HOME, config, extra)
+    got, placed = hintpolicy.augment(hints, hintpolicy.epoch_of(name), mothership.home(config), HOME, config, extra)
+    return got, placed + people
 
 
 def find_voice(audio: np.ndarray, threads: int = 1) -> list[tuple[float, float]]:
@@ -2372,8 +2382,10 @@ def run_job(path: Path, params: dict, name: str, draft=None) -> tuple[dict, dict
     cpu_only = bool(params.get("cpu_only"))
     # 2026-11-16（99）: 設定でオンのときだけ、その時間・その日の地名をヒントの先頭に足す（既定はオフ）
     hints, _placed = place_hints_for(name, params)
+    # s21 精10: iPhone の重みに、PLAUD と比べた週 1 の当たり率の重み（仮）を掛ける（"engine_weights": false で使わない）
+    weights = plaudmatch.merge(parse_weights(params.get("weights")), HOME, load_config())
     reply, numbers = transcribe_reply(Handler.engine, audio, segments, hints, None,
-                                      parse_weights(params.get("weights")), bool(enhance), False,
+                                      weights, bool(enhance), False,
                                       f"後で受け取る文字起こし {name}: " + ("（CPU のモデルだけ）" if cpu_only else ""), "job",
                                       started, on_draft=draft, cpu_only=cpu_only)
     lines = reply.get("lines") or []
@@ -2403,7 +2415,9 @@ def judge_job(lines: list[dict], hints: list[str], work, name: str) -> dict | No
     return result
 
 
-# 精7（仮。2026-11-13）: 手をかけずに作る、あなた向けのモデルの材料。config.json の "auto_samples": true のときだけ
+# 精7（仮。2026-11-13）: 手をかけずに作る、あなた向けのモデルの材料。
+# s21 精6（2026-11-22）: 既定で使う（config.json の "auto_samples": false で止める）。手で直した材料だけでは 11/14 から
+# 46 個のまま増えず、学び直し（300 個から）がいつまでも始まらなかったため。試験には自動の材料を使わない（train_personal.py）
 AUTO_AGREE = 0.95        # 仮: どのモデルの組も、読みの近さがこれ以上（言いよどみ・数字の書き方の違いは数えない）
 AUTO_ENGINES = 3         # 仮: 何か書いたモデル（雑音を除いた票は同じモデルとして数える）がこれ以上、1つも黙っていない
 AUTO_MIN_SECONDS = 2.0   # 仮: これより短い行は使わない
@@ -2441,7 +2455,7 @@ def auto_samples(audio: np.ndarray, lines: list[dict], name: str, config: dict |
     """精7（仮）: そろった行の声と文を材料に足す（"source": {"origin": "pc-auto", "auto": true, …} で、あとで外せる）。
     足した数を返す。config.json の "auto_samples" が true のときだけ。失敗しても続ける"""
     config = load_config() if config is None else config
-    if config.get("auto_samples") is not True:
+    if config.get("auto_samples") is False:
         return 0
     try:
         rows = read_samples(PERSONAL_DATA)
@@ -2561,6 +2575,10 @@ def start_v6(threads: int) -> None:
     except Exception as error:  # noqa: BLE001
         App.jobs = None
         log(f"後で受け取る文字起こしを始められませんでした: {error!r}")
+    try:  # s21（2026-11-22）: 新しい区切りを先に・失敗の理由・声が無いはずの区切り・夜の数・記録を回す（s21pc.py）
+        s21pc.start(sys.modules[__name__])
+    except Exception as error:  # noqa: BLE001
+        log(f"s21 の見回りを始められませんでした: {type(error).__name__}")
     # 2026-11-13（施策 9・10・11）: 夜の流れ（品質の記録・同じ人かも・夜の読み直し。quality.py）
     quality.start(HOME, App.records, App.jobs, lambda: mothership.home(load_config()),
                   lambda p, r: extra_model("speaker", 1).embed(load_audio(p.read_bytes()), r), log)
@@ -3240,6 +3258,8 @@ class Handler(BaseHTTPRequestHandler):
         if App.closing:
             self.send_json(503, {"error": "PC を起動し直すところです。少し待ってから送ってください"})
             return
+        # s21 速3: 00:00〜06:00 の /transcribe（iPhone の夜の聞き直しがほとんど）は、新しい区切りが待っていれば 30 秒まで先に通す
+        jobfirst.wait_at_night()
         started = time.time()
         with App.lock:
             App.transcribing += 1

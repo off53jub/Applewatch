@@ -631,7 +631,7 @@ def check_trainer(folder: Path, main) -> int:
         and friday == (local(2026, 11, 8, 2, 0), local(2026, 11, 8, 6, 0)) \
         and inside == (local(2026, 11, 8, 2, 0), local(2026, 11, 8, 6, 0)) \
         and after == (local(2026, 11, 15, 2, 0), local(2026, 11, 15, 6, 0)) \
-        and trainer.window_text(trainer.train_config({})) == "日曜 02:00〜06:00"
+        and trainer.window_text(trainer.train_config({})) == "日曜 02:00〜05:00"
     failed += say(ok, f"学び直しの時間帯: 金曜 10:00 → {time.strftime('%m/%d %H:%M', time.localtime(friday[0]))}・"
                       f"日曜 7:00 → {time.strftime('%m/%d %H:%M', time.localtime(after[0]))}・設定 {parsed['days']}")
     if os.name != "nt":
