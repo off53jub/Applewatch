@@ -278,6 +278,20 @@ def pc_latency(stats: dict | None) -> list[str]:
     return lines
 
 
+STALL_WHY = {"mic": "マイクの音が来ない", "open": "ファイルを開けない", "restart": "流し直せない", "write": "書けない",
+             "alarm": "アラーム・電話のあと戻れない"}
+
+
+def stall_text(value) -> str:
+    """時計の「秒|理由」を「11/22 01:23 マイクの音が来ない」に（形が違えば —）"""
+    try:
+        sec, code = str(value).split("|", 1)
+        at = datetime.datetime.fromtimestamp(int(sec)).strftime("%m/%d %H:%M")
+    except (ValueError, OverflowError, OSError):
+        return "—"
+    return f"{at} {STALL_WHY.get(code, code[:20])}"
+
+
 def state_lines(record: dict) -> list[str]:
     """state の中身を、人が読む行にする"""
     state = record.get("state") if isinstance(record.get("state"), dict) else {}
@@ -292,6 +306,10 @@ def state_lines(record: dict) -> list[str]:
                 f"返事待ち {state.get('watchKept', '—')}・最後に区切った {when('watchLastCut')}・"
                 f"休む場所 {_yes(state.get('watchHeld'))}・録音しているつもり {_yes(state.get('watchWanted'))}"]
                if 'watchPending' in state else []),
+             # 2026-11-22: 時計の録音が止まりかけた回数・自動で戻せた回数・最後の理由（mic・open・restart・write・alarm）
+             *([f"時計の止まりかけ（今日）: {state.get('watchStalls')} 回・自動で戻せた {state.get('watchAutoResumed', '—')} 回・"
+                f"最後 {stall_text(state.get('watchLastStall'))}"]
+               if isinstance(state.get('watchStalls'), int) else []),
              f"待ち: 取り込み {state.get('queue', '—')}・PC の仕事 {state.get('jobsPending', '—')}・"
              f"最後に文字にした {when('lastProcessedAt')}・最後の区切り {when('lastChunkAt')}・"
              f"夜の処理 {state.get('nightlyDoneFor') or '—'} の分まで"]

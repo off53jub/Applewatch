@@ -219,6 +219,11 @@ final class WatchSender: NSObject, WCSessionDelegate {
         let counts = defaults.dictionary(forKey: Self.holidayCountsKey) as? [String: Int] ?? [:]
         out[HolidayRules.interruptionsKey] = HolidayRules.count(counts, HolidayRules.interruptionsKey, day: today)
         out[HolidayRules.resumedKey] = HolidayRules.count(counts, HolidayRules.resumedKey, day: today)
+        // 止まりかけた回数・自動で戻せた回数・最後の理由・時計の build（2026-11-22。古い iPhone のアプリは読み飛ばす）
+        out[HolidayRules.stallsKey] = HolidayRules.count(counts, HolidayRules.stallsKey, day: today)
+        out[HolidayRules.autoResumedKey] = HolidayRules.count(counts, HolidayRules.autoResumedKey, day: today)
+        if let last = defaults.string(forKey: HolidayRules.lastStallKey) { out[HolidayRules.lastStallKey] = last }
+        if let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String { out[HolidayRules.watchBuildKey] = build }
         if let samples = defaults.array(forKey: Self.batterySamplesKey) as? [[Double]], !samples.isEmpty {
             out[HolidayRules.batteryAtKey] = samples
         }
@@ -242,6 +247,11 @@ final class WatchSender: NSObject, WCSessionDelegate {
             let saved = UserDefaults.standard.dictionary(forKey: Self.holidayCountsKey) as? [String: Int] ?? [:]
             UserDefaults.standard.set(HolidayRules.bumped(saved, name, day: HolidayRules.dayKey(now)), forKey: Self.holidayCountsKey)
         }
+    }
+
+    /// 止まりかけた時刻と理由を残す（次の様子で iPhone → 家の PC へ。2026-11-22）
+    func noteStall(_ code: String, now: Date = .now) {
+        UserDefaults.standard.set("\(Int(now.timeIntervalSince1970))|\(code)", forKey: HolidayRules.lastStallKey)
     }
 
     /// 外出モードで区切りを溜めているか（設定がオン・iPhone が「家を出ている」・充電していない。休8）

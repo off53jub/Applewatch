@@ -568,6 +568,11 @@ extension Pipeline {
         // 電池の見本と外出モード（休8）・初めての人が多いモード（休17）
         if let n = state.interruptions { detail["watchInterruptions"] = n }
         if let n = state.resumed { detail["watchResumed"] = n }
+        // 止まりかけた回数・自動で戻せた回数・最後の理由・時計の build（2026-11-22）
+        if let n = state.stalls { detail["watchStalls"] = n }
+        if let n = state.autoResumed { detail["watchAutoResumed"] = n }
+        if let last = state.lastStall { detail["watchLastStall"] = last }
+        if let build = state.build { detail["watchBuild"] = build }
         if let samples = state.batteryAt { detail["watchBatteryAt"] = samples }
         if let holding = state.awayHolding { detail["watchAwayHolding"] = holding }
         if let crowd = state.crowd { detail["watchCrowd"] = crowd }
