@@ -8,8 +8,55 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 同じ PR に続けて push したら、古い実行は止める（main への push は止めない）
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # 変更されたファイルを見て、関係ない変更（pc/・docs/・文書・ほかの workflow だけ）なら重い検査を飛ばす（速10）。
+  # 飛ばしたジョブは Skipped になり、必須の検査としては通る。判定に失敗したときは、必ず動かす側に倒す。
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      app: ${{ steps.f.outputs.app }}
+      ui: ${{ steps.f.outputs.ui }}
+    steps:
+      - id: f
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          IGNORE='^(pc/|docs/|LifeLogUITests/)|\.md$|^\.github/workflows/(pc|testflight)\.yml$|^\.github/scripts/screens\.py$'
+          files=""
+          ok=false
+          if [ "$EVENT" = "pull_request" ]; then
+            files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[] | .filename, (.previous_filename // empty)') && ok=true
+          elif [ "$EVENT" = "push" ] && [ "${BEFORE#0000000}" = "$BEFORE" ]; then
+            files=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" --jq '.files[] | .filename, (.previous_filename // empty)') && ok=true
+            # compare は 300 ファイルまで。それ以上は全部動かす
+            [ "$(echo "$files" | wc -l)" -ge 300 ] && ok=false
+          fi
+          [ -n "$files" ] || ok=false
+          echo "変更したファイル:"; echo "$files" | head -50
+          rest=$(echo "$files" | grep -Ev "$IGNORE" || true)
+          if [ "$ok" = "true" ] && [ -z "$rest" ]; then app=false; else app=true; fi
+          # 画面の写真の見回りには効かない変更（時計だけ・テストだけ）なら、見回りも飛ばす
+          IGNORE_UI='^(pc/|docs/|LifeLogTests/|LifeLogWatch/|LifeLogWatchWidgets/)|\.md$|^\.github/workflows/(pc|testflight)\.yml$'
+          rest_ui=$(echo "$files" | grep -Ev "$IGNORE_UI" || true)
+          if [ "$ok" = "true" ] && [ -z "$rest_ui" ]; then ui=false; else ui=true; fi
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          echo "判定 ok=$ok app=$app ui=${ui:-}"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.app != 'false' }}
     runs-on: macos-26
     timeout-minutes: 40
     steps:
@@ -48,6 +95,20 @@ jobs:
           )
           SWIFT
 
+      # 速11: 部品の作り置き（仮説: 2 回目の実行から効く）。SwiftPM の取ってきた部品と、Xcode のコンパイルの作り置き（中身は中間ファイルだけ。署名済みの成果物・鍵は入らない）
+      - name: SwiftPM の部品の作り置きを戻す
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/spm
+          key: spm-test-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-test-${{ runner.os }}-
+      - name: コンパイルの作り置きを戻す
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cc
+          key: cc-test-${{ runner.os }}-${{ github.sha }}
+          restore-keys: cc-test-${{ runner.os }}-
+
       - name: テスト用のプロジェクトを生成
         run: |
           brew install xcodegen
@@ -60,6 +121,8 @@ jobs:
           xcodebuild test \
             -project LifeLog.xcodeproj -scheme LifeLogTests \
             -destination "id=$udid" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" \
+            COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_CAS_PATH="$RUNNER_TEMP/cc" \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/test.log"
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
@@ -70,6 +133,8 @@ jobs:
   # 全部の画面を開いて写真を撮る（2026-11-06）。見本の記録（作り物）を入れたシミュレーターで、タブと設定の行を1つずつ開く。
   # 開いたとたんに落ちる画面があれば失敗にする。写真は成果物「画面の写真」に残し、main ではリリースにも一覧の画像を付ける。
   screens:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.ui != 'false' }}
     runs-on: macos-26
     timeout-minutes: 80
     permissions:
@@ -110,6 +175,20 @@ jobs:
           )
           SWIFT
 
+      # 速11: 部品の作り置き（仮説: 2 回目の実行から効く）。SwiftPM の取ってきた部品と、Xcode のコンパイルの作り置き（中身は中間ファイルだけ。署名済みの成果物・鍵は入らない）
+      - name: SwiftPM の部品の作り置きを戻す
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/spm
+          key: spm-screens-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-screens-${{ runner.os }}-
+      - name: コンパイルの作り置きを戻す
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cc
+          key: cc-screens-${{ runner.os }}-${{ github.sha }}
+          restore-keys: cc-screens-${{ runner.os }}-
+
       - name: テスト用のプロジェクトを生成
         run: |
           brew install xcodegen
@@ -121,7 +200,7 @@ jobs:
           udid=$(xcrun simctl list devices available | grep -m1 -E "^[[:space:]]+iPhone" | grep -oE "[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}")
           echo "シミュレーター: $udid"
           set +e
-          xcodebuild test             -project LifeLog.xcodeproj -scheme LifeLogUITests             -destination "id=$udid"             -resultBundlePath "$RUNNER_TEMP/screens.xcresult"             CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/ui.log" | grep -E "error:|Test Case|failed|落ちた|XCTAssert"
+          xcodebuild test             -project LifeLog.xcodeproj -scheme LifeLogUITests             -destination "id=$udid"             -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm"             COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_CAS_PATH="$RUNNER_TEMP/cc"             -resultBundlePath "$RUNNER_TEMP/screens.xcresult"             CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/ui.log" | grep -E "error:|Test Case|failed|落ちた|XCTAssert"
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             grep -E "error:|落ちた|XCTAssert" "$RUNNER_TEMP/ui.log" | sort -u | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
