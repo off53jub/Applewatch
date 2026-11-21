@@ -39,6 +39,8 @@ from typing import Callable
 
 import numpy as np
 
+import holidaymarks
+
 FOLDER = "voice-tone"
 DAILY_FILE = "voice-tone-daily.json"
 PARTNER_FILE = "voice-tone-partners.json"
@@ -383,6 +385,7 @@ def build_day(home: Path, store, day: str, mother: Path | None, find_audio=None,
                     c[key] = prev[key]
             set_trust(c)
         heavy = all(c["start_ms"] in before for c in convs)
+    holidaymarks.hold(convs, parsed, day, mother)   # s19 休12・14: 騒がしい場・メディアの音（仮）の会話は信用 low
     summary = self_summary(convs)
     summary.update(health(mother, day))
     history = {d: v.get("self") or {} for d, v in ((read_json(home / DAILY_FILE) or {}).get("days") or {}).items()}

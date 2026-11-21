@@ -225,6 +225,8 @@ def parse_record(body) -> dict:
             "movement": _str(item.get("movement")), "media": _str(item.get("media")), "program": _str(item.get("program")),
             "heartRate": _int(item.get("heartRate")), "heartRateMax": _int(item.get("heartRateMax")),
             "tense": _flag(item.get("tense")), "minutes": _str(item.get("minutes")), "closed": _flag(item.get("closed")),
+            # s19 休13: 車内の印（省略可能。iPhone が付ける。無ければ False・None）
+            "inCar": _flag(item.get("inCar")), "vehicle": _str(item.get("vehicle")),
             "lines": lines})
         count += len(lines)
     removed = body.get("removed")
