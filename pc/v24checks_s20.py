@@ -279,20 +279,27 @@ def check_knowapp() -> int:
 # MARK: - 次11
 
 
+def audio_name(day: str, h: int, m: int) -> str:
+    """日本時間 h:m の区切りの音声の名前（名前の時刻はこの PC の時刻。CI の PC は日本時間ではないので、そこに直す）"""
+    t = datetime.datetime.fromisoformat(f"{day}T{h:02d}:{m:02d}:00+09:00").astimezone()
+    return t.strftime("%Y%m%d-%H%M%S") + "-w.m4a"
+
+
 def make_forget_world():
     home = TMP / "home-f"
     logs: list[str] = []
     store = records.RecordStore(home, logs.append)
     day = "2026-11-20"
+    n10, n1050, n15 = audio_name(day, 10, 0), audio_name(day, 10, 50), audio_name(day, 15, 0)
     lines = [
         # 会話 1: 10:00〜10:02（JST）…ぜんぶ消す範囲（10:00〜11:00）に入る
-        [{"time": iso(day, 10, 0, i * 10), "text": f"一{i}", "audio": "20261120-100000-w.m4a", "offset": float(i * 10),
+        [{"time": iso(day, 10, 0, i * 10), "text": f"一{i}", "audio": n10, "offset": float(i * 10),
           "end": float(i * 10 + 5), "speaker": "自分", "speakerID": "me"} for i in range(3)],
         # 会話 2: 10:50〜11:10（範囲をまたぐ）
-        [{"time": iso(day, 10, 50 + j * 10, 0), "text": f"二{j}", "audio": "20261120-105000-w.m4a", "offset": float(j * 600),
+        [{"time": iso(day, 10, 50 + j * 10, 0), "text": f"二{j}", "audio": n1050, "offset": float(j * 600),
           "end": float(j * 600 + 5)} for j in range(3)],
         # 会話 3: 15:00（範囲の外）
-        [{"time": iso(day, 15, 0, 0), "text": "三", "audio": "20261120-150000-w.m4a", "offset": 0.0, "end": 5.0}],
+        [{"time": iso(day, 15, 0, 0), "text": "三", "audio": n15, "offset": 0.0, "end": 5.0}],
     ]
     convs = [{"start": ls[0]["time"], "end": ls[-1]["time"], "lines": ls, "title": f"題{n}", "points": [f"要点{n}"],
               "minutes": f"議事録{n}", "docIndex": n, "rev": 3} for n, ls in enumerate(lines)]
@@ -300,13 +307,13 @@ def make_forget_world():
     store.put(day, json.dumps(body, ensure_ascii=False).encode("utf-8"))
     body["conversations"][2]["title"] = "題三（更新）"
     store.put(day, json.dumps(body, ensure_ascii=False).encode("utf-8"))   # prev ができる
-    for name in ("20261120-100000-w.m4a", "20261120-105000-w.m4a", "20261120-150000-w.m4a"):
+    for name in (n10, n1050, n15):
         d = home / "audio" / day
         d.mkdir(parents=True, exist_ok=True)
         (d / name).write_bytes(b"a" * 100)
     # 声の特徴
     ds = voices.DayStore(home, day)
-    for name in ("20261120-100000-w.m4a", "20261120-150000-w.m4a"):
+    for name in (n10, n15):
         ds.vectors[f"{name}|0.00|5.00"] = np.ones(4, np.float32)
     ds.save()
     # 意味の索引
@@ -323,7 +330,7 @@ def make_forget_world():
 
     class Jobs:
         lock = threading.RLock()
-        jobs = {"20261120-100000-w.m4a": {"status": "done"}}
+        jobs: dict = {}
 
         def audio_path(self, n):
             return jobs_dir / (hashlib.sha256(n.encode()).hexdigest()[:8] + ".audio")
@@ -341,9 +348,10 @@ def make_forget_world():
             return True
 
     jobs = Jobs()
-    jobs.audio_path("20261120-100000-w.m4a").write_bytes(b"j" * 10)
-    jobs.result_path("20261120-100000-w.m4a").write_text("{}", encoding="utf-8")
-    return store, index, jobs, day, logs
+    jobs.jobs[n10] = {"status": "done"}
+    jobs.audio_path(n10).write_bytes(b"j" * 10)
+    jobs.result_path(n10).write_text("{}", encoding="utf-8")
+    return store, index, jobs, day, logs, (n10, n1050, n15)
 
 
 def jst(day: str, h: int, m: int) -> str:
@@ -352,7 +360,7 @@ def jst(day: str, h: int, m: int) -> str:
 
 def check_forget() -> int:
     failed = 0
-    store, index, jobs, day, logs = make_forget_world()
+    store, index, jobs, day, logs, (n10, n1050, n15) = make_forget_world()
     home = store.home
     before = json.loads(store.path(day).read_text(encoding="utf-8"))
     handler = Fake({"from": jst(day, 10, 0), "to": jst(day, 11, 0)}, ok=False)
@@ -382,19 +390,19 @@ def check_forget() -> int:
     failed += say("一0" not in prev_texts and "二0" not in prev_texts, "次11: 前の版（.prev.json）にも消した行を残さない")
     audio_dir = home / "audio" / day
     left = sorted(p.name for p in audio_dir.glob("*"))
-    failed += say(left == ["20261120-105000-w.m4a", "20261120-150000-w.m4a"] and r["audio_removed"] == 1 and r["audio_partial"] == 1
-                  and not jobs.jobs and not jobs.audio_path("20261120-100000-w.m4a").exists(),
+    failed += say(left == sorted([n1050, n15]) and r["audio_removed"] == 1 and r["audio_partial"] == 1
+                  and not jobs.jobs and not jobs.audio_path(n10).exists(),
                   f"次11: すっぽり入る音声（10:00）だけ消え、範囲をまたぐ音声（10:50）は残して数（audio_partial {r['audio_partial']}）を返す。jobs の音声・答えも")
     ident = r["id"]
     folder = home / forget.BACKUP_FOLDER / ident
     meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
-    failed += say((folder / "record.json").is_file() and (folder / "audio" / "20261120-100000-w.m4a").read_bytes() == b"a" * 100
+    failed += say((folder / "record.json").is_file() and (folder / "audio" / n10).read_bytes() == b"a" * 100
                   and abs(meta["until_ts"] - meta["at"] - 7 * 86400) < 1 and r["backup_until"],
                   "次11: 消す前に控え（記録・音声）を HOME/forget-backup/ に 7 日だけ残す")
     with index.lock, index.connect() as db:
         rows = [x[0] for x in db.execute("SELECT id FROM items")]
     keys = list(voices.DayStore(home, day).load().vectors)
-    failed += say(rows == ["i2"] and keys == ["20261120-150000-w.m4a|0.00|5.00"], "次11: 意味の索引のその時間の行・消した音声の声の特徴も消す")
+    failed += say(rows == ["i2"] and keys == [f"{n15}|0.00|5.00"], "次11: 意味の索引のその時間の行・消した音声の声の特徴も消す")
     text_log = " ".join(logs)
     failed += say("一0" not in text_log and "題" not in text_log, "次11: 消した中身は記録（log.txt）に書かない（日と数だけ）")
 
@@ -404,7 +412,7 @@ def check_forget() -> int:
     restored = json.loads(store.path(day).read_text(encoding="utf-8"))
     failed += say(h.sent[0] == 200 and h.sent[1]["record"] and h.sent[1]["audio"] == 1
                   and [ln["text"] for c in restored["conversations"] for ln in c["lines"]].count("一0") == 1
-                  and (audio_dir / "20261120-100000-w.m4a").is_file() and not folder.exists(),
+                  and (audio_dir / n10).is_file() and not folder.exists(),
                   "次11: 取り消すと記録と音声が戻り、控えは片付く")
     # 取り消せない（記録が変わった）
     h = Fake({"from": jst(day, 10, 0), "to": jst(day, 11, 0)})
