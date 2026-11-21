@@ -364,9 +364,10 @@ extension Pipeline {
     /// 時計の区切りが届いたとき、PC に送る（今までどおり）。時計が PC にも直接送っていたら、先に PC の答えを見て、
     /// でき上がっていれば答えを端末の中に置いて取り込みを進める（音声を PC に送り直さない）。まだなら今までどおり送る
     /// （PC は同じ名前の仕事を1つにまとめるので、二重には文字にしない。待ち合わせで答えを受け取る）
-    func sendWatchChunkToPC(_ url: URL, hints: [String], viaPC: Bool) {
+    /// car は車につないでいたあいだの区切りか（2026-11-21。s19 の 休13）
+    func sendWatchChunkToPC(_ url: URL, hints: [String], viaPC: Bool, car: Bool = false) {
         guard viaPC, homePC.shouldTry, HomePC.acceptsJobs else {
-            homePC.enqueueJob(url, hints: hints)
+            homePC.enqueueJob(url, hints: hints, car: car)
             return
         }
         let name = url.lastPathComponent
@@ -378,7 +379,7 @@ extension Pipeline {
                 Tally.add("watch.pcFirst")
                 processQueue()
             } else {
-                homePC.enqueueJob(url, hints: hints)
+                homePC.enqueueJob(url, hints: hints, car: car)
             }
         }
     }

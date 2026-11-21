@@ -212,8 +212,61 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if WatchPC.publicRefused { out["pcPublicRefused"] = true }
         // 最後に家の PC に直接送れた時刻（iPhone の「家の PC と音沙汰なし」の見張り。2026-11-15）
         if let sent = WatchPC.lastSentAt { out["pcSentAt"] = sent }
+        // 休日のライフログ（2026-11-21。s19。HolidayRules）: 今日の中断と戻れた回数（休10）・電池の見本と外出モード（休8）・
+        // 初めての人が多いモード（休17）。どれも省略できる（古い iPhone のアプリは読み飛ばす）
+        let defaults = UserDefaults.standard
+        let today = HolidayRules.dayKey(now)
+        let counts = defaults.dictionary(forKey: Self.holidayCountsKey) as? [String: Int] ?? [:]
+        out[HolidayRules.interruptionsKey] = HolidayRules.count(counts, HolidayRules.interruptionsKey, day: today)
+        out[HolidayRules.resumedKey] = HolidayRules.count(counts, HolidayRules.resumedKey, day: today)
+        if let samples = defaults.array(forKey: Self.batterySamplesKey) as? [[Double]], !samples.isEmpty {
+            out[HolidayRules.batteryAtKey] = samples
+        }
+        if awayHolding { out[HolidayRules.awayHoldingKey] = true }
+        if HolidayRules.crowdActive(until: defaults.double(forKey: Self.crowdUntilKey), now: now) { out[HolidayRules.crowdKey] = true }
         return out
     }
+
+    // MARK: - 休日のライフログ（2026-11-21。s19。HolidayRules）
+
+    /// 今日の数（"日|名前" → 回数。中断・戻れた回数）
+    static let holidayCountsKey = "holidayCounts"
+    /// 電池の見本（[[時刻, 0〜1, 溜めていたら 1]]）
+    static let batterySamplesKey = "batterySamples"
+    /// 「初めての人が多い」モードが終わる時刻（1970 からの秒。0 なら切れている）
+    static let crowdUntilKey = "crowdUntil"
+
+    /// 今日の数を 1 つ足す（中断・戻れた。WatchRecorder が呼ぶ。休10）
+    func countToday(_ name: String, now: Date = .now) {
+        lock.withLock {
+            let saved = UserDefaults.standard.dictionary(forKey: Self.holidayCountsKey) as? [String: Int] ?? [:]
+            UserDefaults.standard.set(HolidayRules.bumped(saved, name, day: HolidayRules.dayKey(now)), forKey: Self.holidayCountsKey)
+        }
+    }
+
+    /// 外出モードで区切りを溜めているか（設定がオン・iPhone が「家を出ている」・充電していない。休8）
+    var awayHolding: Bool {
+        let defaults = UserDefaults.standard
+        return HolidayRules.awayHold(mode: defaults.bool(forKey: HolidayRules.awayModeKey),
+                                     away: defaults.bool(forKey: HolidayRules.awayKey),
+                                     charging: currentBattery()?.charging ?? false)
+    }
+
+    /// 1 時間に 1 つ、電池の残りを見本に足す（外出モードの前後の減りを比べられるように。休8）
+    private func sampleBattery(now: Date = .now) {
+        guard let battery = currentBattery() else { return }
+        let holding = awayHolding
+        lock.withLock {
+            let defaults = UserDefaults.standard
+            let samples = defaults.array(forKey: Self.batterySamplesKey) as? [[Double]] ?? []
+            guard HolidayRules.batterySampleDue(last: samples.last?.first, now: now) else { return }
+            defaults.set(HolidayRules.addingSample(samples, time: now, level: battery.level, holding: holding),
+                         forKey: Self.batterySamplesKey)
+        }
+    }
+
+    /// お酒を 1 杯（休30）。iPhone が離れていても、つながったときに届く
+    func drink(_ time: Date) { queueInfo(["drink": time.timeIntervalSince1970]) }
 
     /// WatchRecorder が「録音中だった」を残す名前（WatchRecorder.wasRecordingKey と同じ）
     private static let wantedKey = "wasRecording"
@@ -240,6 +293,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
 
     /// 区切るたびに呼ぶ。iPhone は、しばらく知らせが無いと「止まっているかも」と通知する。
     func heartbeat() {
+        sampleBattery()
         publish()
         // 送れずに残っている区切りを送る（つながる前に区切った・低電力モードで溜めた・低電力モードを切った。2026-11-07）
         unstickTransfers()
@@ -418,7 +472,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// 送ってから30分たっても返事の無い区切りを、送り直す（30分ごとに3回まで。そのあとは6時間ごと。2026-11-07）。
     /// 前は送り直した時刻を残していなかったので、30分たつと3回を数分のうちに使い切り、そのあとは送らなかった
     func resendUnacknowledged() {
-        guard Self.phoneAcks, WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
+        guard Self.phoneAcks, WCSession.isSupported(), WCSession.default.activationState == .activated, !awayHolding else { return }
         let transfers = WCSession.default.outstandingFileTransfers
         // 受け渡しの列が混んでいれば、送り直しは待つ（新しい区切りを先に通す。2026-11-09）。
         // ただし、列に残り続けている古いもの（終わらない受け渡し）は、列が動いているあいだは数えない（2026-11-16。
@@ -539,6 +593,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
 
     /// 書き終わった区切りを送る。低電力モードなら、溜まるか、いちばん古いものが15分待つまで待ってからまとめて送る。
     func deliver(_ url: URL) {
+        // 外出モードで溜めているあいだは送らない（2026-11-21。s19 の 休8。家に戻るか充電を始めたら flushIfDue が送る）
+        if awayHolding { return }
         if ProcessInfo.processInfo.isLowPowerModeEnabled {
             flushIfDue()
         } else {
@@ -567,6 +623,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
 
     /// held は、まとめて送るときに先に数えた「待つ区切り」（無ければここで数える）
     func send(_ url: URL, held: Set<String>? = nil) {
+        // 外出モードで溜めているあいだは、iPhone にも家の PC にも送らない（家に戻るか充電を始めたら送る。2026-11-21。s19 の 休8）
+        if awayHolding { return }
         let active = WCSession.default.activationState == .activated
         if active, WCSession.default.outstandingFileTransfers.contains(where: { $0.file.fileURL == url }) { return }
         let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
@@ -703,6 +761,9 @@ final class WatchSender: NSObject, WCSessionDelegate {
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
         Self.readSettings(applicationContext)
         if let info = applicationContext["watchInfo"] as? Data { onInfo?(info) }
+        // 家に戻った・外出モードを切った（2026-11-21。休8）: 溜めていた区切りを送る
+        if !awayHolding { flushIfDue() }
+        onChange?()
     }
 
     static func readSettings(_ context: [String: Any]) {
@@ -715,6 +776,13 @@ final class WatchSender: NSObject, WCSessionDelegate {
         ChunkCutter.readSettings(context)
         // 家の PC に直接送るか・聞き取りのヒント・iPhone の時間帯（2026-11-07。WatchPC）
         WatchPC.applyContext(context)
+        // 休日のライフログ（2026-11-21。s19）: 今日が休みか・電池の知らせ・外出モード・家を出ているか・車につないだ時刻
+        let defaults = UserDefaults.standard
+        if let day = context[HolidayRules.holidayDayKey] as? String { defaults.set(day, forKey: HolidayRules.holidayDayKey) }
+        for key in [HolidayRules.lowBatteryKey, HolidayRules.awayModeKey, HolidayRules.awayKey] {
+            if let on = context[key] as? Bool { defaults.set(on, forKey: key) }
+        }
+        if let since = context[HolidayRules.carSinceKey] as? Double { defaults.set(since, forKey: HolidayRules.carSinceKey) }
     }
 
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {

@@ -30,6 +30,10 @@ enum HealthExport {
         var activeKcal: Double? = nil
         var exerciseMinutes: Double? = nil
         var standMinutes: Double? = nil
+        /// 心拍変動（HRV・SDNN の平均と幅。ミリ秒。2026-11-21。s19 の 休45。疲れの抜け具合の見立て（仮）は母艦が 14 日の基準と比べる）
+        var hrv: Double? = nil
+        var hrvMin: Double? = nil
+        var hrvMax: Double? = nil
         /// ワークアウト（始まりがその日のもの）
         var workouts: [Workout] = []
 
@@ -57,6 +61,7 @@ enum HealthExport {
         var isEmpty: Bool {
             (steps ?? 0) == 0 && heartMin == nil && heartMax == nil && heartAverage == nil && resting == nil && sleep == nil
                 && (activeKcal ?? 0) == 0 && (exerciseMinutes ?? 0) == 0 && (standMinutes ?? 0) == 0 && workouts.isEmpty
+                && hrv == nil
         }
     }
 
@@ -116,6 +121,13 @@ enum HealthExport {
         }
         if let v = d.standMinutes, v > 0 {
             metrics.append(["name": "apple_stand_time", "units": "min", "data": [["date": date, "qty": rounded(v)]]])
+        }
+        // 心拍変動（Health Auto Export と同じ名前 heart_rate_variability・ms。2026-11-21。s19 の 休45）
+        if let v = d.hrv, v > 0 {
+            var entry: [String: Any] = ["date": date, "qty": rounded(v)]
+            if let low = d.hrvMin { entry["Min"] = rounded(low) }
+            if let high = d.hrvMax { entry["Max"] = rounded(high) }
+            metrics.append(["name": "heart_rate_variability", "units": "ms", "data": [entry]])
         }
         var workouts: [[String: Any]] = []
         for w in d.workouts {

@@ -161,7 +161,23 @@ private struct RecordPage: View {
                         }
                         .tint(recorder.meetingOn ? .orange : nil)
                     }
+                    // 初めての人が多い日（飲み会・イベント。区切りごとに印。2026-11-21。s19 の 休17）
+                    Button {
+                        recorder.toggleCrowd()
+                    } label: {
+                        Label(recorder.crowdOn ? "初めての人が多い: 終える" : "初めての人が多い", systemImage: "person.3.sequence")
+                            .font(.caption2)
+                    }
+                    .tint(recorder.crowdOn ? .orange : nil)
                 }
+                // お酒を 1 杯（2026-11-21。s19 の 休30。翌日の体調と並べるのは母艦）
+                Button {
+                    recorder.drink()
+                } label: {
+                    Label(recorder.drinksToday > 0 ? "お酒 +1（今日 \(recorder.drinksToday) 杯）" : "お酒 +1", systemImage: "wineglass")
+                        .font(.caption2)
+                }
+                .onAppear { recorder.refreshDrinks() }
                 // 声で直す（「違う、〇〇さん」。押すと話して入れられる。2026-11-19。s18）
                 TextField("違う、〇〇さん", text: $fix)
                     .font(.caption2)
@@ -205,6 +221,10 @@ private struct RecordPage: View {
                     }
                     if recorder.lowPower {
                         Text("低電力モード: 15分ほどごとにまとめて送ります")
+                    }
+                    // 外出モード（2026-11-21。s19 の 休8）
+                    if recorder.awayHolding {
+                        Text("外出モード: 家に戻るか充電を始めたら、まとめて送ります")
                     }
                     // 電池が少ないので、区切りを自動で5分にしている（2026-11-07）
                     if recorder.batterySaving {

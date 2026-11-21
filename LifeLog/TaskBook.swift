@@ -1268,6 +1268,26 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
             }
             return
         }
+        // 休日の「一言」（音声・文字で答える）と「さっきの所は〇〇？」（2026-11-21。s19。Holiday.swift。時計に出た通知もここに来る）
+        if content.categoryIdentifier == HolidayNoticeRules.noteCategory,
+           let text = (response as? UNTextInputNotificationResponse)?.userText {
+            let info: [AnyHashable: Any] = content.userInfo
+            Task { @MainActor in
+                HolidayNudges.shared.answeredNote(text: text, userInfo: info)
+                completionHandler()
+            }
+            return
+        }
+        if content.categoryIdentifier == HolidayNoticeRules.placeCategory,
+           response.actionIdentifier != UNNotificationDefaultActionIdentifier {
+            let actionID: String = response.actionIdentifier
+            let info: [AnyHashable: Any] = content.userInfo
+            Task { @MainActor in
+                HolidayNudges.shared.answeredPlace(actionID: actionID, userInfo: info)
+                completionHandler()
+            }
+            return
+        }
         // 自分を知る「はい・いいえ」・職場の「録音を始める」（2026-11-19。s18。KnowMe.swift。時計に出た通知のボタンもここに来る）
         if content.categoryIdentifier == KnowMeRules.category || content.categoryIdentifier == KnowMeRules.geoCategory,
            response.actionIdentifier != UNNotificationDefaultActionIdentifier {
