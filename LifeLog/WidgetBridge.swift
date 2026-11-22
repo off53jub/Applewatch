@@ -91,6 +91,7 @@ extension Pipeline {
         state.pcOK = homePC.isConfigured ? homePC.downSince == nil : nil
         // 確かめ待ちの数と、充電中の 1 枚「今日のまとめ」（2026-11-21。s20 の 体22・追3）
         state.reviewWaiting = S20Book.shared.waitingCount
+        S22Book.fillWidget(&state)  // ウィジェットで答える 1 問（2026-11-22。s22 の 楽14）
         let dayStart = Calendar.current.startOfDay(for: now)
         let dayKey = ReviewRules.dayKey(now)
         state.todayTalks = conversations(on: dayKey).count

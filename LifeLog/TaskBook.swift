@@ -1291,6 +1291,16 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
             }
             return
         }
+        // 確かめ待ちの ○×（2026-11-22。s22 の 楽12・楽15。S22Book.swift。時計に出た通知のボタンもここに来る）
+        if content.categoryIdentifier == S22Notices.reviewCategory {
+            let actionID: String = response.actionIdentifier
+            let info: [AnyHashable: Any] = content.userInfo
+            Task { @MainActor in
+                S22Notices.answered(actionID: actionID, userInfo: info)
+                completionHandler()
+            }
+            return
+        }
         // 自分を知る「はい・いいえ」・職場の「録音を始める」（2026-11-19。s18。KnowMe.swift。時計に出た通知のボタンもここに来る）
         if content.categoryIdentifier == KnowMeRules.category || content.categoryIdentifier == KnowMeRules.geoCategory,
            response.actionIdentifier != UNNotificationDefaultActionIdentifier {

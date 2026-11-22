@@ -79,7 +79,8 @@ final class DeviceSync {
             otherDevices = Set(files.compactMap { Self.parse($0.name)?.device }
                 .filter { $0 != deviceID && !S21Book.excludedPeers.contains($0) }).count
             try await receive(files)
-            try await send(files)
+            // iPad の「読むだけ」では自分の分を書かない（古い版の iPad の分が同期の相手に残り続けないように。2026-11-22。s22 の 楽22）
+            if !S22Device.isReader { try await send(files) }
             lastSynced = .now
             problem = nil
         } catch {

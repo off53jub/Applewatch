@@ -65,6 +65,12 @@ struct WatchInfo: Codable {
     var draft: Draft?
     /// 確かめ待ちの数（2026-11-21。s20 の 体22）
     var reviewWaiting: Int?
+    /// 時計で ○× で答える確かめ待ち 1 つ（はい・いいえで答えられるものだけ。2026-11-22。s22 の 楽13）
+    struct ReviewAsk: Codable {
+        var id: String
+        var question: String
+    }
+    var reviewAsk: ReviewAsk?
 
     /// 会議の相棒（会議モードの最中と、終わって 30 分まで。2026-11-15。iPhone の MeetingLive.swift）
     struct Meeting: Codable {

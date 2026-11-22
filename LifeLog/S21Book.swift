@@ -274,6 +274,7 @@ extension Pipeline {
     func s21WatchState(_ state: PhoneReceiver.WatchState) {
         armWatchQuietGuard(state)
         sendGotListIfDue(kept: state.kept)
+        s22WatchState(state)  // 溜まった分・こもりの数（2026-11-22。s22。S22Book.swift）
     }
 
     /// 守4: 時計の便りが 10 分途切れたら、設定が「録り始める」なら iPhone で録り始める（知らせは前からの見張りの通知が出す）。

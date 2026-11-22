@@ -519,6 +519,8 @@ private struct StatusPage: View {
                     Text("電池が少ないので、5分ごとに区切っています（電池が戻れば短めに戻します）")
                         .font(.caption2).foregroundStyle(LL.dim)
                 }
+                // あと何個・約何分・いま送り直す・電池の先回り・確かめ待ちの ○×（2026-11-22。s22 の 楽6・楽13・楽19）
+                S22WatchStatusExtras()
             }
         }
     }

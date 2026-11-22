@@ -239,7 +239,14 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if cleared > 0 { out[S21Watch.keptClearedKey] = cleared }
         if guarding { out[S21Watch.guardingKey] = true }
         out[S21Watch.sampledNoVoiceKey] = HolidayRules.count(counts, S21Watch.sampledNoVoiceKey, day: today)
+        // s22（2026-11-22。S22WatchSide.swift）: 直近 30 分に終わった受け渡し（楽6）・こもりで震えた回数（確31）。どれも省ける
+        for (key, value) in S22WatchSide.extraState(now: now) { out[key] = value }
         return out
+    }
+
+    /// 時計で確かめ待ちに答えた（楽13。iPhone が離れていても、つながったときに届く。2026-11-22。s22）
+    func s22ReviewAnswer(id: String, value: String) {
+        queueInfo([S22Watch.reviewIDKey: id, S22Watch.reviewValueKey: value])
     }
 
     // MARK: - s21（2026-11-22。S21Watch・docs/s21-app.md）
@@ -520,8 +527,10 @@ final class WatchSender: NSObject, WCSessionDelegate {
         }
         // 送り直した控えは、もう控えの中にある
         guard !isInSentDir(url) else { return }
-        // 「受け取った」が先に届いていれば、控えに移さずに消す（2026-11-16）
-        if lock.withLock({ ackedEarly.remove(url.lastPathComponent) != nil }) {
+        // 「受け取った」が先に届いていれば、控えに移さずに消す（2026-11-16）。アプリが終わって覚えが消えた分も見る
+        // （2026-11-22。s22 の 楽6。返事待ちが 159 → 305 個に増えたわけの仮説の 1 つ。S22WatchSide）
+        let early = lock.withLock({ ackedEarly.remove(url.lastPathComponent) != nil })
+        if S22WatchSide.takeAcked(url.lastPathComponent) || early {
             try? FileManager.default.removeItem(at: url)
             return
         }
@@ -549,6 +558,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
                 if ackedEarly.count > 500 { ackedEarly.removeAll() }
                 ackedEarly.insert(name)
             }
+            S22WatchSide.rememberAcked(name)
         }
         try? FileManager.default.removeItem(at: kept)
         lock.withLock {
@@ -634,9 +644,9 @@ final class WatchSender: NSObject, WCSessionDelegate {
             counts[name] = count + 1
             sentAt[name] = now.timeIntervalSince1970
             budget -= 1
-            WCSession.default.transferFile(url, metadata: WatchDelivery.metadata(
+            WCSession.default.transferFile(url, metadata: S22WatchSide.withExtras(WatchDelivery.metadata(
                 zone: .current, cut: Self.cutTime(url), sent: now, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                viaPC: WatchPC.wasSent(name), resend: count + 1, sampleNoVoice: Self.isNoVoiceSample(name)))
+                viaPC: WatchPC.wasSent(name), resend: count + 1, sampleNoVoice: Self.isNoVoiceSample(name)), name: name))
         }
         guard counts != stored.resent else { return }
         lock.withLock {
@@ -768,9 +778,10 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if (held ?? heldForRelay(unsentFiles().map(\.lastPathComponent), now: .now)).contains(name) { return }
         // 名前の時刻は時計の時間帯。iPhone が自分の時間帯に直せるよう、時間帯も送る（2026-11-06）。
         // 区切った時刻と送り始めた時刻も添える（iPhone が「時計で待った」と「受け渡し」を分けて測る。2026-11-07）
-        WCSession.default.transferFile(url, metadata: WatchDelivery.metadata(
+        // 音の大きさの要約（確4）とその区切りの組（確24）も添える（2026-11-22。s22。無ければ付けない）
+        WCSession.default.transferFile(url, metadata: S22WatchSide.withExtras(WatchDelivery.metadata(
             zone: .current, cut: Self.cutTime(url), sent: .now, lowPower: lowPower,
-            viaPC: direct || WatchPC.wasSent(url.lastPathComponent), sampleNoVoice: Self.isNoVoiceSample(name)))
+            viaPC: direct || WatchPC.wasSent(url.lastPathComponent), sampleNoVoice: Self.isNoVoiceSample(name)), name: name))
     }
 
     /// 受け渡しの列に止まったままの区切りを取り消す（2026-11-20。WatchDelivery.stuckTransfers）。
@@ -884,6 +895,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if let answer = userInfo["answer"] as? String { onAnswer?(answer, userInfo["question"] as? String ?? "") }
         // iPhone が受け取ったと覚えている名前の一覧（返事が届かなかった控えを片付ける。2026-11-22。s21 の 速2）
         if let list = userInfo[S21Watch.gotListKey] as? [String] { tidyKept(phoneHas: watchNames(list), force: true) }
+        // iPhone の「いま送り直す」（2026-11-22。s22 の 楽6。S22WatchSide）
+        if userInfo[S22Watch.resendNowKey] as? Bool == true { S22WatchSide.resendNow(self) }
         onChange?()
     }
 
@@ -919,6 +932,7 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if error == nil {
             lock.withLock { lastFinished = .now }
             UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: Self.lastDeliveredKey)
+            S22WatchSide.noteFinished()  // あと何分かの見込みに使う（2026-11-22。s22 の 楽6）
             keepSent(fileTransfer.file.fileURL)
         }
         onChange?()

@@ -540,6 +540,8 @@ enum ReviewRules {
         case "place": "場所"
         case "voice": "声"
         case "deadline", "request": "依頼と期限"
+        // モデルで数字・日付・金額が割れた行（2026-11-22。s22 の 確19。choices に候補の文）
+        case "number": "数字の確かめ"
         default: kind
         }
     }
@@ -620,6 +622,14 @@ struct DeviceChecksFeed: Codable, Equatable {
         var ok: Bool? = nil
         var note: String? = nil
         var day: String? = nil
+        /// 母艦の state/device_checks.json の形（"ok"・"ng"）と直し方・根拠（2026-11-22。s22 の 楽11。前は ok だけ読んでいて、
+        /// 母艦の result が読めず、どれも「まだ分からない」に見えていた）
+        var result: String? = nil
+        var fix: String? = nil
+        var evidence: String? = nil
+
+        /// ○×（ok が無ければ result から）
+        var passed: Bool? { ok ?? (result == "ok" ? true : result == "ng" ? false : nil) }
     }
 
     var generated_at: String? = nil
