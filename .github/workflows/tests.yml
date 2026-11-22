@@ -32,7 +32,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
         run: |
-          IGNORE='^(pc/|docs/|LifeLogUITests/)|\.md$|^\.github/workflows/(pc|testflight)\.yml$|^\.github/scripts/screens\.py$'
+          IGNORE='^(pc/|docs/|LifeLogUITests/)|\.md$|^\.github/workflows/(pc|testflight)\.yml$|^\.github/scripts/(screens|grid|contrast|words)\.py$'
           files=""
           ok=false
           if [ "$EVENT" = "pull_request" ]; then
@@ -200,7 +200,7 @@ jobs:
           udid=$(xcrun simctl list devices available | grep -m1 -E "^[[:space:]]+iPhone" | grep -oE "[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}")
           echo "シミュレーター: $udid"
           set +e
-          xcodebuild test             -project LifeLog.xcodeproj -scheme LifeLogUITests             -destination "id=$udid"             -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm"             COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_CAS_PATH="$RUNNER_TEMP/cc"             -resultBundlePath "$RUNNER_TEMP/screens.xcresult"             CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/ui.log" | grep -E "error:|Test Case|failed|落ちた|XCTAssert"
+          xcodebuild test             -project LifeLog.xcodeproj -scheme LifeLogUITests             -destination "id=$udid"             -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm"             COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_CAS_PATH="$RUNNER_TEMP/cc"             -skip-testing:LifeLogUITests/ScreenMatrix -resultBundlePath "$RUNNER_TEMP/screens.xcresult"             CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/ui.log" | grep -E "error:|Test Case|failed|落ちた|XCTAssert"
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             grep -E "error:|落ちた|XCTAssert" "$RUNNER_TEMP/ui.log" | sort -u | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
@@ -248,3 +248,121 @@ jobs:
       - name: 落ちた画面があれば失敗にする
         if: steps.tour.outputs.status != '0'
         run: exit 1
+
+
+  # s22 見3・見4: 色の読みやすさと、画面の言葉の見回り。Python だけで数十秒。落とさず、数だけジョブの要約と成果物「色と言葉の報告」に出す。
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 色の読みやすさ（見3）と画面の言葉（見4）を数える
+        run: |
+          mkdir -p "$RUNNER_TEMP/report"
+          { python3 .github/scripts/contrast.py Shared/Design/LLTheme.swift "$RUNNER_TEMP/report" || echo "色の計算に失敗した（報告だけ・落とさない）"; } | tee -a "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/report/contrast.md"
+          { python3 .github/scripts/words.py . "$RUNNER_TEMP/report" || echo "言葉の走査に失敗した（報告だけ・落とさない）"; } | tee -a "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/report/words.md"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: 色と言葉の報告
+          path: ${{ runner.temp }}/report
+          if-no-files-found: warn
+
+  # s22 見1・見2: 主な 20 画面を 明・暗・文字最大 で撮って 1 枚に並べる。文字最大ではみ出した所も数える（報告だけ）。
+  # 必須の検査（build・test）や、ふだんの画面の見回り（screens）とは並べて動かす。ここが落ちても全体は赤にしない（continue-on-error）。
+  screens-grid:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.ui != 'false' }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode を選ぶ
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: Haas-ja の Swift 部品を取ってくる
+        run: |
+          set -e
+          rev=62f542657b454afa7873424e3dfb6d7a1d9c270d
+          base=https://huggingface.co/Sanami/haas-ja-coreml/resolve/$rev
+          mkdir -p Vendor/HaasCore/Sources/HaasCore LifeLog/Haas
+          for f in Audio Frontend HaasASR Tokenizer; do
+            curl -fsSL "$base/swift/Sources/HaasCore/$f.swift" -o "Vendor/HaasCore/Sources/HaasCore/$f.swift"
+          done
+          curl -fsSL "$base/swift/Resources/frontend.bin" -o LifeLog/Haas/frontend.bin
+          curl -fsSL "$base/swift/Resources/vocab.json" -o LifeLog/Haas/vocab.json
+          cat > Vendor/HaasCore/Package.swift <<'SWIFT'
+          // swift-tools-version:5.9
+          import PackageDescription
+
+          let package = Package(
+              name: "HaasCoreML",
+              platforms: [.macOS(.v14), .iOS(.v17)],
+              products: [.library(name: "HaasCore", targets: ["HaasCore"])],
+              targets: [.target(name: "HaasCore", path: "Sources/HaasCore")]
+          )
+          SWIFT
+
+      - name: SwiftPM の部品の作り置きを戻す
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/spm
+          key: spm-grid-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-grid-${{ runner.os }}-
+      - name: コンパイルの作り置きを戻す
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cc
+          key: cc-grid-${{ runner.os }}-${{ github.sha }}
+          restore-keys: cc-grid-${{ runner.os }}-
+
+      - name: テスト用のプロジェクトを生成
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec project-tests.yml
+
+      - name: 20 画面を 3 通りで撮る
+        id: tour
+        run: |
+          udid=$(xcrun simctl list devices available | grep -m1 -E "^[[:space:]]+iPhone" | grep -oE "[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}")
+          echo "シミュレーター: $udid"
+          set +e
+          xcodebuild test \
+            -project LifeLog.xcodeproj -scheme LifeLogUITests \
+            -destination "id=$udid" \
+            -only-testing:LifeLogUITests/ScreenMatrix \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" \
+            COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_CAS_PATH="$RUNNER_TEMP/cc" \
+            -resultBundlePath "$RUNNER_TEMP/grid.xcresult" \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/grid.log" | grep -E "error:|Test Case|failed|落ちた|XCTAssert"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -E "error:|落ちた|XCTAssert" "$RUNNER_TEMP/grid.log" | sort -u | head -20 | while IFS= read -r line; do echo "::warning::${line}"; done
+          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: 写真を 1 枚に並べて、はみ出しの報告を作る
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/raw" "$RUNNER_TEMP/grid"
+          if [ -d "$RUNNER_TEMP/grid.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/grid.xcresult" --output-path "$RUNNER_TEMP/raw"
+            python3 -m venv "$RUNNER_TEMP/venv"
+            "$RUNNER_TEMP/venv/bin/pip" install --quiet pillow || true
+            "$RUNNER_TEMP/venv/bin/python" .github/scripts/grid.py "$RUNNER_TEMP/raw" "$RUNNER_TEMP/grid" || echo "並べる処理が失敗した"
+            cat "$RUNNER_TEMP/grid/summary.md" >> "$GITHUB_STEP_SUMMARY" || true
+          else
+            echo "画面の一覧: 結果が無い（撮れなかった）" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          ls -R "$RUNNER_TEMP/grid" | head -100
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: 画面の一覧
+          path: ${{ runner.temp }}/grid
+          if-no-files-found: warn
