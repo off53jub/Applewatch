@@ -35,9 +35,9 @@ private struct TodayBandView: View {
             HStack(alignment: .bottom, spacing: 1) {
                 ForEach(0..<BandSlots.count, id: \.self) { i in
                     RoundedRectangle(cornerRadius: 1)
-                        .fill(Color.primary.opacity(Self.opacity(slots[i], future: i > now)))
+                        .fill(Color.primary.opacity(Self.alpha(slots[i], future: i > now)))
                         .frame(maxWidth: .infinity)
-                        .frame(height: Self.height(slots[i]))
+                        .frame(height: Self.barHeight(slots[i]))
                         .overlay(alignment: .bottom) {
                             if i == now { Rectangle().fill(Color.primary).frame(width: 1.5, height: 20) }
                         }
@@ -67,7 +67,7 @@ private struct TodayBandView: View {
         return "会話 \(talks)" + hours
     }
 
-    static func height(_ slot: Int) -> CGFloat {
+    static func barHeight(_ slot: Int) -> CGFloat {
         switch slot {
         case 2: 18
         case 1: 8
@@ -75,7 +75,7 @@ private struct TodayBandView: View {
         }
     }
 
-    static func opacity(_ slot: Int, future: Bool) -> Double {
+    static func alpha(_ slot: Int, future: Bool) -> Double {
         if future { return 0.15 }
         switch slot {
         case 2: return 1

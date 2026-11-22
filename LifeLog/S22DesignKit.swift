@@ -97,7 +97,7 @@ struct SignalRow: Identifiable {
 }
 
 enum S22Signals {
-    struct Group {
+    struct Bucket {
         var rows: [SignalRow] = []
         var tone: LLTone { LLSignal.tone(of: rows.map(\.tone)) }
         /// 良くない行の数
@@ -105,12 +105,12 @@ enum S22Signals {
     }
 
     /// 行を 6 つの信号に分ける。fix は行の直し方の印（A1 の CheckupFix の名前）。nil なら控えめな見立て（LLTone.guessFix）
-    static func group(_ items: [DiagnosticItem], fix: (DiagnosticItem) -> String?) -> [LLSignal: Group] {
-        var out: [LLSignal: Group] = [:]
+    static func group(_ items: [DiagnosticItem], fix: (DiagnosticItem) -> String?) -> [LLSignal: Bucket] {
+        var out: [LLSignal: Bucket] = [:]
         for item in items {
             guard let signal = LLSignal.of(section: item.section, label: item.label) else { continue }
             let mark = fix(item) ?? LLTone.guessFix(section: item.section, label: item.label)
-            out[signal, default: Group()].rows.append(SignalRow(item: item, tone: LLTone.of(ok: item.ok, fix: mark)))
+            out[signal, default: Bucket()].rows.append(SignalRow(item: item, tone: LLTone.of(ok: item.ok, fix: mark)))
         }
         return out
     }
