@@ -112,8 +112,9 @@ enum S22Checkup {
                 groups[key] = g
             } else {
                 order.append(key)
-                let fix = isError ? fix(section: row.section, label: row.label, value: row.value + " " + friendly) : fix(row)
-                groups[key] = (title, fix, 1, row.time)
+                let mark: CheckupFix = isError ? Self.fix(section: row.section, label: row.label, value: row.value + " " + friendly)
+                    : Self.fix(row)
+                groups[key] = (title, mark, 1, row.time)
             }
         }
         let all = order.compactMap { key -> Focus? in
