@@ -39,7 +39,13 @@ enum WatchAction: String, CaseIterable, Identifiable {
     /// よく使う順に、表の 3 つと残り
     static func split(recording: Bool) -> (top: [WatchAction], rest: [WatchAction]) {
         let list = allCases.filter { recording || !$0.needsRecording }
-        let top = WatchFaceRules.topActions(list.map(\.rawValue), counts: counts()).compactMap { WatchAction(rawValue: $0) }
+        var top = WatchFaceRules.topActions(list.map(\.rawValue), counts: counts()).compactMap { WatchAction(rawValue: $0) }
+        // 録音中は「印」をいつも表に出す（指のダブルタップ handGestureShortcut は、画面に出ているボタンにしか効かないため。
+        // 2026-11-22。s22 の 楽18）
+        if recording, !top.contains(.mark), !top.isEmpty {
+            top.removeLast()
+            top.insert(.mark, at: 0)
+        }
         return (top, list.filter { !top.contains($0) })
     }
 }

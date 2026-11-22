@@ -176,6 +176,9 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         var keptCleared: Int? = nil
         var guarding: Bool? = nil
         var sampledNoVoice: Int? = nil
+        /// s22（2026-11-22。新しい時計のアプリだけ。S22Watch）: 直近 30 分に終わった受け渡し（楽6）・今日こもりで震えた回数（確31）
+        var finishedRecent: Int? = nil
+        var muffledToday: Int? = nil
 
         /// 時計の中に残っている区切り（まだ送っていない＋返事待ち）。どちらも分からなければ nil
         var leftOnWatch: Int? {
@@ -198,6 +201,14 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         guard !names.isEmpty, WCSession.isSupported(), WCSession.default.activationState == .activated,
               WCSession.default.isPaired else { return false }
         WCSession.default.transferUserInfo([S21Watch.gotListKey: names])
+        return true
+    }
+
+    /// 時計に「いま送り直して」と頼む（止まった受け渡しの取り消し・返事待ちの片付けもする。2026-11-22。s22 の 楽6）。頼めたら true
+    @discardableResult
+    func askWatchToResendNow() -> Bool {
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated, WCSession.default.isPaired else { return false }
+        WCSession.default.transferUserInfo([S22Watch.resendNowKey: true])
         return true
     }
 
@@ -358,6 +369,8 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         state.keptCleared = context[S21Watch.keptClearedKey] as? Int
         state.guarding = context[S21Watch.guardingKey] as? Bool
         state.sampledNoVoice = context[S21Watch.sampledNoVoiceKey] as? Int
+        state.finishedRecent = context[S22Watch.finishedRecentKey] as? Int
+        state.muffledToday = context[S22Watch.muffledTodayKey] as? Int
         let snapshot = state
         Task { @MainActor in
             if let lowPower { self.onWatchLowPower?(lowPower) }
@@ -387,6 +400,10 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         // 時計の「お酒 +1」（2026-11-21。s19 の 休30）
         if let at = userInfo["drink"] as? Double {
             Task { @MainActor in self.onDrink?(Date(timeIntervalSince1970: at)) }
+        }
+        // 時計で確かめ待ちに ○×（2026-11-22。s22 の 楽13。S22Book.swift）
+        if let id = userInfo[S22Watch.reviewIDKey] as? String, let value = userInfo[S22Watch.reviewValueKey] as? String {
+            Task { @MainActor in S22Book.answerReview(id: id, value: value, from: "watch") }
         }
     }
 

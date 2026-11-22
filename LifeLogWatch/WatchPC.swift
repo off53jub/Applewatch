@@ -297,6 +297,8 @@ final class WatchPC: @unchecked Sendable {
                                                         car: HolidayRules.inCar(chunkStart: start, chunkEnd: end,
                                                                                 carSince: defaults.double(forKey: HolidayRules.carSinceKey)),
                                                         sampleNoVoice: WatchSender.isNoVoiceSample(fileName))
+            // 音の大きさの要約（確4）とその区切りの組（確24）（2026-11-22。s22。無ければ付けない）
+            + S22WatchSide.queryExtras(fileName)
         guard let target = components?.url else {
             release(fileName)
             return false

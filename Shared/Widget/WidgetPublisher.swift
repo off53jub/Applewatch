@@ -58,6 +58,7 @@ final class WidgetPublisher {
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetState.tasksKind)
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetState.goodKind)  // 「LifeLog のいいこと帳」も（2026-11-12）
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetState.todayKind)  // 充電中の 1 枚も（2026-11-21。s20 の 追3）
+            WidgetCenter.shared.reloadTimelines(ofKind: WidgetState.reviewKind)  // 「LifeLog の 1 問」も（2026-11-22。s22 の 楽14）
         }
     }
 

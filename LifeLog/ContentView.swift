@@ -228,6 +228,8 @@ private struct TodayView: View {
                 // (d) 困ったことがあるときだけ
                 alerts()
                 PCFeatureNotice()
+                // いま話したことは約○分で文字に・電池の先回り（2026-11-22。s22 の 楽7・楽19。S22Views.swift）
+                S22TodaySection()
                 switch part {
                 case .morning:
                     PrepCardSection()
@@ -260,6 +262,7 @@ private struct TodayView: View {
             }
             .navigationTitle("今日")
             .countsOpen("today")
+            .onAppear { S22Launch.todayShown() }  // 開いてから今日の画面まで（2026-11-22。s22 の 楽21）
             .safeAreaInset(edge: .bottom, spacing: 0) { recordBar() }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -885,6 +888,8 @@ private struct SettingsView: View {
         }
         // 時計の声から自分の声・見直したい声を ○× で（2026-11-22。s21 の 使7・使8）
         S21CheckSection()
+        // 報告の棚・いつも録れない所・時計の LifeLog を新しくする（2026-11-22。s22 の 楽5・楽10・楽20。S22Views.swift）
+        S22CheckSection()
         // 実機でまだ確かめていない新しい動き（2026-11-10。Checklist.swift。前は「今日」に出していた）
         ChecklistSection()
         // 精度の通信簿・あまり開かれていない画面（2026-11-13。施策 12・21。MothershipFeeds.swift）
@@ -921,6 +926,8 @@ private struct SettingsView: View {
     private func everydayPage() -> some View {
         // 場面のセット・見た目・寝ているあいだ・知らせ・説明（2026-11-21。s20 の 体31〜37。S20SettingsViews.swift）
         S20SettingsSection()
+        // 設定を探す・変えた所だけ・初めに戻す（2026-11-22。s22 の 楽8・楽9。S22Views.swift）
+        S22SettingsEntrySection()
         // 電池優先・早さ優先・精度優先（2026-11-22。s21 の 使1。S21Views.swift）
         S21PresetSection()
         Section {
@@ -1071,6 +1078,8 @@ private struct DetailedSettingsView: View {
 
                 // 時計の守りと実験（寝ている時間の 5 分・強い守り・便りが途切れたら・直接送るの実験・振って送る。2026-11-22。s21）
                 S21WatchSettingsSection()
+                // 1 時間ごとの実験・袖でこもった音・電車の 3 問・誰と話した？・iPad は読むだけ（2026-11-22。s22。S22Views.swift）
+                S22WatchSettingsSection()
 
                 // 外付けマイク（2026-11-07。MicViews.swift）
                 MicSettingsSection()

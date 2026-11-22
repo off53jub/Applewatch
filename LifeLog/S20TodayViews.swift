@@ -156,11 +156,12 @@ struct CaptureDotSheet: View {
                     Section {
                         ForEach(checks) { c in
                             HStack {
-                                Image(systemName: c.ok == true ? "checkmark.circle.fill" : c.ok == false ? "xmark.circle.fill" : "circle.dashed")
-                                    .foregroundStyle(c.ok == true ? LL.good : c.ok == false ? LL.danger : LL.dim)
+                                Image(systemName: c.passed == true ? "checkmark.circle.fill" : c.passed == false ? "xmark.circle.fill" : "circle.dashed")
+                                    .foregroundStyle(c.passed == true ? LL.good : c.passed == false ? LL.danger : LL.dim)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(c.name).font(.callout)
-                                    if let note = c.note { Text(note).font(.caption).foregroundStyle(LL.dim) }
+                                    if let note = c.note ?? c.evidence { Text(note).font(.caption).foregroundStyle(LL.dim) }
+                                    if c.passed == false, let fix = c.fix { Text(fix).font(.caption).foregroundStyle(LL.accent) }
                                 }
                                 Spacer()
                                 if let day = c.day { Text(AppFeeds.monthDay(day)).font(.caption).foregroundStyle(LL.dim).monospacedDigit() }

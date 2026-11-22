@@ -407,7 +407,8 @@ final class Pipeline {
             // 時計が家の PC にも直接送っていて、もうでき上がっていれば、その答えをすぐ使う（WatchDirect.swift）
             sendWatchChunkToPC(url, hints: keywords(for: vocabularyContext(at: start)), viaPC: stamp.viaPC,
                                sampleNoVoice: stamp.sampleNoVoice,
-                               car: carAudio.connected(from: start, to: ended))
+                               car: carAudio.connected(from: start, to: ended),
+                               extras: S22Watch.queryItems(levels: stamp.levels, recExp: stamp.recExp))
             // 時計が PC に送るときのヒントも、ときどき新しくする（10分に1回まで）
             refreshWatchPCHints()
         }
@@ -1434,6 +1435,11 @@ final class Pipeline {
     /// そのときは iOS の決まりで、録音を始める前に Live Activity を出す（出さないと録音が止められる）。
     func toggleRecording(fromButton: Bool = false) async {
         defer { updateWidgets() }  // 録音を始めた・止めたら、ウィジェットにも出す（2026-11-07。WidgetBridge.swift）
+        // iPad の「読むだけ」では録音を始めない（2026-11-22。s22 の 楽22。くわしい設定で切れる）
+        if !isRecording && S22Device.isReader {
+            message = "iPad は読むだけの形です（録音は iPhone と時計で。くわしい設定の「iPad は読むだけ」で切れます）"
+            return
+        }
         if isRecording {
             endLive()
             recorder.stop()

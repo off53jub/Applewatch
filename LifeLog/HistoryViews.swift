@@ -301,6 +301,10 @@ struct ConversationsView: View {
                                     Button("言葉を登録", systemImage: "character.book.closed") {
                                         addingWord = WordTarget(line: line)
                                     }
+                                    // 会話の 1 場面をカードの絵で共有（名前を伏せるのが初め。2026-11-22。s22 の 楽23。S22Views.swift）
+                                    Button("この場面をカードで共有", systemImage: "photo.on.rectangle") {
+                                        S22Present.shared.card = S22SceneTarget(conversation: conversation, around: line.time)
+                                    }
                                     // この行から別の会話にする（2026-11-06）
                                     if conversation.closed, l > 0 {
                                         Button("ここで会話を分ける", systemImage: "scissors") {

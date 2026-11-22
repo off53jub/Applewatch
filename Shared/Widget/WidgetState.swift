@@ -48,6 +48,12 @@ struct WidgetState: Codable, Equatable {
     var todayTalks: Int?
     var todayHours: Double?
     var todayThree: [String]?
+    /// ウィジェットで答える確かめ待ちの 1 問（はい・いいえで答えられるもの。iPhone だけ。2026-11-22。s22 の 楽14）
+    var reviewAskID: String?
+    var reviewAskQuestion: String?
+
+    /// 「LifeLog の 1 問」の種類の名前（2026-11-22。s22 の 楽14。同じ中身を読む）
+    static let reviewKind = "com.off53jub.lifelog.review"
 
     static let suiteName = "group.com.off53jub.lifelog"
     static let key = "widgetState"

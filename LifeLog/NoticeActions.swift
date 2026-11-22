@@ -57,7 +57,8 @@ enum NoticeActions {
         ]
         // 自分を知る「はい・いいえ」と、職場に着いたときの「録音を始める」（2026-11-19。s18。KnowMe.swift）
         // 休日の「一言」と「さっきの所は〇〇？」（2026-11-21。s19。Holiday.swift）
-        return base.union(KnowMeRules.notificationCategories()).union(HolidayNoticeRules.categories())
+        // 確かめ待ちの ○×（2026-11-22。s22 の 楽12。S22Book.swift）
+        return base.union(KnowMeRules.notificationCategories()).union(HolidayNoticeRules.categories()).union(S22Notices.categories())
     }
 
     /// 押されたボタンの名前から、動きを決める（知らせそのものを押したときは open。分からないものは nil）
@@ -197,6 +198,8 @@ enum NoticeRoute: Identifiable, Equatable {
         if id.hasPrefix(KnowMeRules.noticePrefix) { return .tab(.fix) }
         // 休日の知らせ（2026-11-21。s19。Holiday.swift）は「今日」から
         if id.hasPrefix(HolidayNoticeRules.prefix) { return .tab(.today) }
+        // s22 の「誰と話した？」（2026-11-22。楽16）は「直す」から
+        if id.hasPrefix(S22Notices.prefix) { return .tab(.fix) }
         // 朝夕の便り（2026-11-21。s20 の 体16）は知らせの履歴を開く
         if id.hasPrefix("digest-") { return .screen(.notices) }
         switch id {

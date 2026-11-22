@@ -154,7 +154,8 @@ struct ReviewDeckView: View {
 
     @ViewBuilder
     private func answerButtons(_ item: ReviewItem) -> some View {
-        switch item.answer {
+        // 知らない answer の形でも choices があれば選ぶ形で出す（kind number など。2026-11-22。s22 の 確19。S22Rules）
+        switch S22Rules.answerStyle(answer: item.answer, choices: item.choices) {
         case "pick":
             FlowLayout(spacing: LL.Space.s) {
                 ForEach(item.choices ?? [], id: \.self) { choice in
@@ -194,7 +195,7 @@ struct ReviewDeckView: View {
         DragGesture(minimumDistance: 12)
             .onChanged { offset = $0.translation }
             .onEnded { value in
-                if item.answer != "yesno" {
+                if !S22Rules.isYesNo(answer: item.answer, choices: item.choices) {
                     offset = .zero
                     return
                 }
