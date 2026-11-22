@@ -313,6 +313,8 @@ private struct TodayView: View {
         } label: {
             Label(on ? "録音を止める" : "録音を始める", systemImage: on ? "stop.circle.fill" : "record.circle")
                 .font(.headline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)  // 大きいボタンでも 1 行に（s22 の 見21。2 行に折れていた）
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
