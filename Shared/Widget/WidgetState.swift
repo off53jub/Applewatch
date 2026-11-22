@@ -48,6 +48,17 @@ struct WidgetState: Codable, Equatable {
     var todayTalks: Int?
     var todayHours: Double?
     var todayThree: [String]?
+    /// ウィジェットで答える確かめ待ちの 1 問（はい・いいえで答えられるもの。iPhone だけ。2026-11-22。s22 の 楽14）
+    var reviewAskID: String?
+    var reviewAskQuestion: String?
+
+    /// 「LifeLog の 1 問」の種類の名前（2026-11-22。s22 の 楽14。同じ中身を読む）
+    static let reviewKind = "com.off53jub.lifelog.review"
+
+    /// 今日の帯（30 分ごとの 48 こま。0 何も無い・1 録れた・2 会話。iPhone だけ。2026-11-22。s22 の 見18。BandSlots）
+    var todayBand: String?
+    /// 時計の電池（0〜1。時計だけ。2026-11-22。s22 の 見17）
+    var watchBattery: Double?
 
     static let suiteName = "group.com.off53jub.lifelog"
     static let key = "widgetState"
@@ -61,6 +72,10 @@ struct WidgetState: Codable, Equatable {
     static let todayKind = "com.off53jub.lifelog.today"
     /// 時計の文字盤の LifeLog の種類の名前。前からある「開くボタン」と同じ（変えると文字盤から消える）
     static let watchKind = "com.off53jub.lifelog.watch.launcher"
+    /// iPhone のロック画面の「LifeLog の今日の帯」（2026-11-22。s22 の 見18。同じ中身を読む）
+    static let bandKind = "com.off53jub.lifelog.band"
+    /// 時計の文字盤の「LifeLog の電池」（丸・角。2026-11-22。s22 の 見17。同じ中身を読む）
+    static let watchBatteryKind = "com.off53jub.lifelog.watch.battery"
     /// ウィジェットが自分で中身を読み直すまでの長さ（アプリからの読み直しが届かなかったとき用）
     static let refreshAfter: TimeInterval = 3600
 
@@ -108,6 +123,11 @@ struct WidgetState: Codable, Equatable {
         // 録った時間は区切りごとに少しずつ増えるので、急がない（2026-11-21。s20 の 追3）
         new.todayHours = nil
         old.todayHours = nil
+        // 帯と電池も少しずつ変わるので、急がない（2026-11-22。s22 の 見17・見18）
+        new.todayBand = nil
+        old.todayBand = nil
+        new.watchBattery = nil
+        old.watchBattery = nil
         return new == old
     }
 

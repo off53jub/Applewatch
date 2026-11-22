@@ -62,6 +62,8 @@ final class WatchRecorder: NSObject {
     @ObservationIgnored private var lowSpaceAlerted = Date.distantPast
 
     private let sender: WatchSender
+    /// s22（2026-11-22。S22WatchSide.swift）から送りの係に触る入口（いま送り直す・溜まった数）
+    var s22Sender: WatchSender { sender }
     /// 頼まれごと・次の予定・聞く・朝の読み上げの画面の中身（2026-11-07）
     let board: WatchBoard
     private let engine = AVAudioEngine()
@@ -355,6 +357,8 @@ final class WatchRecorder: NSObject {
             // 「初めての人が多い」モードのあいだは、区切りごとに「初めての人」の印を付ける（2026-11-21。s19 の 休17）
             if crowdActiveNow() { sender.newPerson(Date.now.addingTimeInterval(-HolidayRules.crowdMarkBack)) }
         }
+        // 袖でこもった音が続いたら震える（初めはオフ。2026-11-22。s22 の 確31。S22WatchSide.swift）
+        S22WatchSide.afterCut(url.lastPathComponent, peakDB: peakDB, now: now)
         // 無音で捨てた区切りでも、録音が続いていることは知らせる
         if isRecording {
             sender.readBattery()
@@ -721,6 +725,8 @@ final class ChunkWriter: @unchecked Sendable {
     private var gate = SilenceGate()
     /// 区切りの中の声らしい音を数える（2026-11-16）
     private var voice = VoiceGate()
+    /// 1 秒ごとの音の大きさ（区切りの metadata の levels。2026-11-22。s22 の 確4。S22Watch）
+    private var levels = S22Watch.LevelMeter(rate: 16_000)
     /// 静かで休んでいるか
     private var resting = false
     private var restingSince: Date?
@@ -773,6 +779,7 @@ final class ChunkWriter: @unchecked Sendable {
             cutter.reset()
             gate.reset()
             voice.reset()
+            levels.reset()
             resting = false
             restingSince = nil
             preRoll.removeAll()
@@ -818,6 +825,7 @@ final class ChunkWriter: @unchecked Sendable {
         }
         for i in 0..<frames { peak = max(peak, abs(samples[i])) }
         voice.feed(samples, count: frames)
+        levels.feed(samples, count: frames, tonal: voice.tonalFrames)
         try? file?.write(from: out)
         if step == .rest {
             rest()
@@ -832,6 +840,8 @@ final class ChunkWriter: @unchecked Sendable {
         let peakDB = 20 * log10(max(peak, 1e-8))
         let voiced = voice.tonalFrames
         voice.reset()
+        S22WatchSide.saveLevels(finished.lastPathComponent, levels.summary())
+        levels.reset()
         file = nil
         url = nil
         resting = true
@@ -866,6 +876,7 @@ final class ChunkWriter: @unchecked Sendable {
         peak = 0
         cutter.reset()
         voice.reset()
+        levels.reset()
         for piece in preRoll {
             if let samples = piece.floatChannelData?[0] {
                 for i in 0..<Int(piece.frameLength) { peak = max(peak, abs(samples[i])) }
@@ -886,6 +897,8 @@ final class ChunkWriter: @unchecked Sendable {
         let peakDB = 20 * log10(max(peak, 1e-8))
         let voiced = voice.tonalFrames
         voice.reset()
+        S22WatchSide.saveLevels(finished.lastPathComponent, levels.summary())
+        levels.reset()
         // AVAudioFile は手放したときに書き終わる
         file = nil
         url = nil
@@ -914,6 +927,8 @@ final class ChunkWriter: @unchecked Sendable {
         let peakDB = 20 * log10(max(peak, 1e-8))
         let voiced = voice.tonalFrames
         voice.reset()
+        if let closing { S22WatchSide.saveLevels(closing.lastPathComponent, levels.summary()) }
+        levels.reset()
         file = nil
         url = nil
         resting = false

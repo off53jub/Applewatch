@@ -567,10 +567,10 @@ enum ProposalRules {
 
     /// 受けたら何をするか（何もしないなら nil）
     static func actionLine(_ p: Proposal) -> String? {
-        // 台帳の候補（2026-11-14）: 受けても、この iPhone では何も変えない。家の PC（母艦）が台帳に足す
-        if p.kind == "profile" { return "受けると、家の PC（母艦）が本人の台帳に足します（この iPhone では何も変えません）" }
+        // 台帳の候補（2026-11-14）: 受けても、この iPhone では何も変えない。家の PCが台帳に足す
+        if p.kind == "profile" { return "受けると、家の PCが本人の台帳に足します（この iPhone では何も変えません）" }
         // 欲しい物（2026-11-15）: 会話から拾ったものは、受けると母艦が欲しい物リストに足す
-        if p.kind == "wish" { return "受けると、家の PC（母艦）が欲しい物リストに足します（リストから出たものは、そのままです）" }
+        if p.kind == "wish" { return "受けると、家の PCが欲しい物リストに足します（リストから出たものは、そのままです）" }
         guard let a = p.action, let text = a.text else { return nil }
         switch a.type {
         case "task": return "受けると、タスク「\(text)」を足します"
@@ -833,8 +833,8 @@ extension Pipeline {
                     note = acceptPlace(text, action: action)
                 }
             }
-            if p.kind == "profile" { note = "受けました。家の PC（母艦）が台帳に足します。" }
-            if p.kind == "wish" { note = "受けました。会話から拾ったものなら、家の PC（母艦）が欲しい物リストに足します。" }
+            if p.kind == "profile" { note = "受けました。家の PCが台帳に足します。" }
+            if p.kind == "wish" { note = "受けました。会話から拾ったものなら、家の PCが欲しい物リストに足します。" }
             Tally.add("proposal.accept")
         case .later:
             note = "\(ProposalRules.laterDays)日たったら、もう一度出します。"
@@ -974,7 +974,7 @@ struct ProposalCardsSection: View {
             } header: {
                 Text(open.isEmpty ? "提案" : "提案（\(open.count)）")
             } footer: {
-                Text("家の PC（母艦）からの提案です。押すまでは何も変えず、何も送りません。")
+                Text("家の PCからの提案です。押すまでは何も変えず、何も送りません。")
             }
         }
     }
@@ -1014,7 +1014,7 @@ struct ProposalsView: View {
             } header: {
                 Text("まだ答えていない（\(open.count)）")
             } footer: {
-                Text("家の PC（母艦）が、記録・LINE・予定などから作った提案です。1日に新しいのは3つまで。押すまでは何も変えず、何も送りません。「受ける」はタスクか言葉の登録に足し、どの答えも家の PC に返します（つながらないときは、ためて次に送ります）。「今はいい」は\(ProposalRules.laterDays)日隠し、「この種類はいらない」は下の「種類」で戻すまで、その種類を出しません。")
+                Text("家の PCが、記録・LINE・予定などから作った提案です。1日に新しいのは3つまで。押すまでは何も変えず、何も送りません。「受ける」はタスクか言葉の登録に足し、どの答えも家の PC に返します（つながらないときは、ためて次に送ります）。「今はいい」は\(ProposalRules.laterDays)日隠し、「この種類はいらない」は下の「種類」で戻すまで、その種類を出しません。")
             }
             if !later.isEmpty {
                 Section("今はいい にしたもの（\(later.count)）") {
@@ -1204,7 +1204,7 @@ struct SpeakerDoubtsView: View {
                     NavigationLink { SpeakerDoubtView(doubt: d) } label: { SpeakerDoubtRow(doubt: d) }
                 }
             } footer: {
-                Text("家の PC（母艦）が PLAUD の区切りや文の中身から見つけた「話し手が違っていそう」な行です。疑いの印だけで、名前は自動では変えません。押して行を確かめ、「自分の声にする」か「違う」を選んでください。")
+                Text("家の PC が PLAUD の録音のまとまりや文の中身から見つけた「話し手が違っていそう」な行です。疑いの印だけで、名前は自動では変えません。押して行を確かめ、「自分の声にする」か「違う」を選んでください。")
             }
         }
         .navigationTitle("話し手の疑い")

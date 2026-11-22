@@ -405,7 +405,7 @@ struct SelfCandidatesView: View {
                         return "\(done.count) 件を「自分の声」にしました。"
                     }
                 } footer: {
-                    Text("母艦が「ほぼ確か」と印を付けたものだけです。迷うものは下で1件ずつ確かめてください。")
+                    Text("家の PC が「ほぼ確か」と印を付けたものだけです。迷うものは下で1件ずつ確かめてください。")
                 }
             }
             Section {

@@ -8,27 +8,37 @@ import SwiftUI
 /// いちばん上: あいさつ・録音の丸 3 つ・確かめ待ちの数
 struct TodayHeroSection: View {
     @Environment(Pipeline.self) private var pipeline
+    /// 文字がとても大きいときは、あいさつと休日の印・録音の丸 3 つを縦に積む（2026-11-22。s22。文字最大で横にはみ出していた）
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var picked: CaptureDot?
+    /// 今日の会話（今日の画面が 1 回読んだものを受け取る。帯に描く。2026-11-22。s22 の 見15）
+    var talks: [ConversationLog.Conversation] = []
 
     var body: some View {
         let now = Date.now
         let part = DayPart.of(now)
-        let waiting = S20Book.shared.waitingCount
         let pause = S20Hold.reason(now: now)
+        let dayStart = Calendar.current.startOfDay(for: now)
         Section {
             VStack(alignment: .leading, spacing: LL.Space.m) {
-                HStack(alignment: .firstTextBaseline) {
+                let big = typeSize.isAccessibilitySize
+                let headLayout = big ? AnyLayout(VStackLayout(alignment: .leading, spacing: LL.Space.xs))
+                    : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
+                headLayout {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(part.greeting).font(.title3.weight(.bold)).foregroundStyle(LL.text)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text(now.formatted(.dateTime.month().day().weekday(.wide).locale(LL.ja)))
                             .font(.caption).foregroundStyle(LL.dim)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    Spacer()
+                    if !big { Spacer() }
                     if DayOffCache.isOff(pipeline, now) {
                         CertaintyBadge(certainty: .good, text: "休日")
                     }
                 }
-                HStack(spacing: LL.Space.s) {
+                let dotLayout = big ? AnyLayout(VStackLayout(spacing: LL.Space.s)) : AnyLayout(HStackLayout(spacing: LL.Space.s))
+                dotLayout {
                     ForEach(CaptureDot.allCases) { dot in
                         let state = dotState(dot, now: now)
                         Button {
@@ -42,22 +52,14 @@ struct TodayHeroSection: View {
                 if let pause {
                     Label(pause, systemImage: "moon.zzz").font(.caption).foregroundStyle(LL.dim)
                 }
-                if waiting > 0 {
-                    NavigationLink {
-                        ReviewDeckView()
-                    } label: {
-                        HStack {
-                            Label("確かめ待ち", systemImage: "hand.raised")
-                                .font(.callout.weight(.semibold))
-                            Spacer()
-                            Text("\(waiting)").font(.title3.weight(.bold)).monospacedDigit()
-                            Text("件・1 枚 3 秒").font(.caption).foregroundStyle(LL.dim)
-                        }
-                        .padding(LL.Space.m)
-                        .background(LL.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: LL.Radius.small))
-                        .overlay(RoundedRectangle(cornerRadius: LL.Radius.small).strokeBorder(LL.accent, lineWidth: LL.Stroke.thin))
-                    }
-                    .accessibilityLabel("確かめ待ち \(waiting) 件。押すと答えるカードを開きます")
+                // 今日の帯（文字が届くと、その所が光る。2026-11-22。s22 の 見15）。確かめ待ちの数は下の帯へ移した（見21）
+                NavigationLink {
+                    DayBandView(day: now)
+                } label: {
+                    LLDayStrip(talks: talks.map { BandSpan(start: $0.start, end: $0.end) },
+                               recorded: pipeline.ledger.map(for: dayStart).spans.filter { $0.kind == .recorded }
+                                   .map { BandSpan(start: $0.start, end: $0.end) },
+                               dayStart: dayStart)
                 }
             }
             .padding(.vertical, LL.Space.xs)
@@ -104,8 +106,11 @@ struct CaptureDotView: View {
                     .frame(width: 44, height: 44)
                 Image(systemName: dot.symbol).font(.system(size: 17, weight: .semibold)).foregroundStyle(color)
             }
+            // 文字が大きいときは折り返す（s22。文字最大で横にはみ出していた）
             Text(dot.label).font(.caption2.weight(.medium)).foregroundStyle(LL.text)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             Text(stateWord).font(.caption2).foregroundStyle(LL.dim)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, LL.Space.s)
@@ -156,11 +161,12 @@ struct CaptureDotSheet: View {
                     Section {
                         ForEach(checks) { c in
                             HStack {
-                                Image(systemName: c.ok == true ? "checkmark.circle.fill" : c.ok == false ? "xmark.circle.fill" : "circle.dashed")
-                                    .foregroundStyle(c.ok == true ? LL.good : c.ok == false ? LL.danger : LL.dim)
+                                Image(systemName: c.passed == true ? "checkmark.circle.fill" : c.passed == false ? "xmark.circle.fill" : "circle.dashed")
+                                    .foregroundStyle(c.passed == true ? LL.good : c.passed == false ? LL.danger : LL.dim)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(c.name).font(.callout)
-                                    if let note = c.note { Text(note).font(.caption).foregroundStyle(LL.dim) }
+                                    if let note = c.note ?? c.evidence { Text(note).font(.caption).foregroundStyle(LL.dim) }
+                                    if c.passed == false, let fix = c.fix { Text(fix).font(.caption).foregroundStyle(LL.accent) }
                                 }
                                 Spacer()
                                 if let day = c.day { Text(AppFeeds.monthDay(day)).font(.caption).foregroundStyle(LL.dim).monospacedDigit() }

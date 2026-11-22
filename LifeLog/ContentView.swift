@@ -197,6 +197,8 @@ struct HelpNote: View {
 /// 今日の会話・最近の発言・いまの様子は、畳んだ「今日の記録」の中に移した（なくした働きは無い）
 private struct TodayView: View {
     @Environment(Pipeline.self) private var pipeline
+    /// 文字がとても大きいときは、下の帯を縦に積む（2026-11-22。s22。文字最大で横にはみ出していた）
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var showLive = false
     @State private var showHelp = false
     /// 「今日の記録」を開いているか（いつもは畳む）
@@ -221,13 +223,15 @@ private struct TodayView: View {
             LLList {
                 // 2026-11-21（s20 の 体7〜10）: 上は大事な 3 つ（録音の丸 3 つ・今日の三つ・確かめ待ちの数）。ほかのカードは畳む。
                 // 朝は予定の前と朝のまとめ・1 年前の今日、夜は夜の10秒と今日の問いを上に出す。休日は休日の顔（S20TodayViews.swift）
-                TodayHeroSection()
+                TodayHeroSection(talks: talks)
                 HolidayFaceSection()
                 // (a) 今日の三つと提案1つ（MothershipFeeds.swift）
                 TodayAnswerCard()
                 // (d) 困ったことがあるときだけ
                 alerts()
                 PCFeatureNotice()
+                // いま話したことは約○分で文字に・電池の先回り（2026-11-22。s22 の 楽7・楽19。S22Views.swift）
+                S22TodaySection()
                 switch part {
                 case .morning:
                     PrepCardSection()
@@ -260,12 +264,9 @@ private struct TodayView: View {
             }
             .navigationTitle("今日")
             .countsOpen("today")
+            .onAppear { S22Launch.todayShown() }  // 開いてから今日の画面まで（2026-11-22。s22 の 楽21）
             .safeAreaInset(edge: .bottom, spacing: 0) { recordBar() }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("使い方", systemImage: "questionmark.circle") { showHelp = true }
-                }
-            }
+            // 「使い方」は下の帯へ（2026-11-22。s22 の 見21。片手で届く所）。歯車はどのタブでも右上のまま
             .settingsGear()
             .sheet(isPresented: $showHelp) { TodayHelpView { showHelp = false } }
             .fullScreenCover(isPresented: $showLive) { LiveView { showLive = false } }
@@ -274,9 +275,13 @@ private struct TodayView: View {
 
     /// 録る・印・会議・ライブ字幕を1行に（録音のボタンを大きく。ほかの3つは小さなボタン）
     private func recordBar() -> some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 10) {
+        VStack(spacing: 6) {
+            // 確かめ待ちと使い方も、親指の届く下に（2026-11-22。s22 の 見21。S22TodayViews.swift）
+            TodayReachRow(showHelp: $showHelp)
+            let rowLayout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 10))
+            rowLayout {
                 recordButton()
+                HStack(spacing: 10) {
                 Button {
                     pipeline.addMark()
                     LLHaptic.confirm.play()
@@ -293,9 +298,11 @@ private struct TodayView: View {
                 }
                 .buttonStyle(.bordered)
                 .accessibilityLabel(pipeline.liveOn ? "ライブ字幕（オン）" : "ライブ字幕")
+                }
             }
+            .controlSize(.large)  // 親指で押しやすい大きさ（s22 の 見21）
             if let line = barNote() {
-                Text(line).font(.caption).foregroundStyle(LL.dim).lineLimit(1)
+                Text(line).font(.caption).foregroundStyle(LL.dim).lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
             }
         }
         .padding(.horizontal)
@@ -314,6 +321,8 @@ private struct TodayView: View {
         } label: {
             Label(on ? "録音を止める" : "録音を始める", systemImage: on ? "stop.circle.fill" : "record.circle")
                 .font(.headline)
+                .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                .minimumScaleFactor(0.7)  // 大きいボタンでも 1 行に（s22 の 見21。2 行に折れていた）
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
@@ -391,7 +400,7 @@ private struct TodayView: View {
             DisclosureGroup(isExpanded: $recordOpen) {
                 talkRows(today: today, talks: talks)
                 recentRows()
-                Text("いまの様子").font(.caption.bold()).foregroundStyle(LL.dim)
+                Text("いまの状態").font(.caption.bold()).foregroundStyle(LL.dim)
                 statusRows()
             } label: {
                 LabeledContent("今日の記録", value: summary)
@@ -445,10 +454,10 @@ private struct TodayView: View {
             NavigationLink {
                 WatchDelayView()
             } label: {
-                LabeledContent("時計の遅れ", value: "直近 " + WatchDelayLog.text(last.arrival))
+                LabeledContent("時計の遅れ", value: LLNumber.humanize("直近 " + WatchDelayLog.text(last.arrival)))
             }
         }
-        LabeledContent("文字起こし待ち", value: "\(pipeline.pendingCount) 件")
+        LabeledContent("文字起こし待ち", value: LLNumber.count(pipeline.pendingCount) + " 件")
         NavigationLink {
             RecordingMapView()
         } label: {
@@ -472,7 +481,7 @@ private struct TodayHelpView: View {
         NavigationStack {
             LLList {
                 Section("下のタブ") {
-                    Text("今日: いちばん上に今日の三つと提案。録る・印・会議・ライブ字幕は画面の下の1行です。今日の会話といまの様子は「今日の記録」を開くと出ます。困ったことがあるときだけ「気をつけること」が出ます。")
+                    Text("今日: いちばん上に今日の三つと提案。録る・印・会議・ライブ字幕は画面の下の1行です。今日の会話といまの状態は「今日の記録」を開くと出ます。困ったことがあるときだけ「気をつけること」が出ます。")
                     Text("タスク: やること。上の「仕事のまとめ」から職場の Claude の答えを取り込めます。")
                     Text("直す: AI からの質問・名前を付ける声・聞き間違いなど、答えると記録が正しくなるもの。タブの数字がたまっている数です。")
                     Text("記録: 言葉や名前で探す・日ごとに読む。上の切り替えで、人・場所・お金も見られます。")
@@ -491,7 +500,7 @@ private struct TodayHelpView: View {
                 // 2026-11-15（強化案 48）: 迷ったときの早見
                 Section("こういうときはこれ") {
                     Text("あとで正確に残したい会話 → 会議モード（仕事でもプライベートでも）")
-                    Text("記録のどこかに書いてあることを聞きたい → 記録に質問する（母艦も探す）")
+                    Text("記録のどこかに書いてあることを聞きたい → 記録に質問する（家の PC の記録も探す）")
                     Text("人・欲しい物・決めたことを聞きたい → 記録に質問する（欲しい物リスト・決めごと・人のノートも読みます）")
                     Text("何日もまたいで考えてほしいこと → Claude Code に聞く")
                     Text("払った記録を残したい → ウォレットのショートカット。PayPay はスクショ")
@@ -885,6 +894,8 @@ private struct SettingsView: View {
         }
         // 時計の声から自分の声・見直したい声を ○× で（2026-11-22。s21 の 使7・使8）
         S21CheckSection()
+        // 報告の棚・いつも録れない所・時計の LifeLog を新しくする（2026-11-22。s22 の 楽5・楽10・楽20。S22Views.swift）
+        S22CheckSection()
         // 実機でまだ確かめていない新しい動き（2026-11-10。Checklist.swift。前は「今日」に出していた）
         ChecklistSection()
         // 精度の通信簿・あまり開かれていない画面（2026-11-13。施策 12・21。MothershipFeeds.swift）
@@ -921,6 +932,8 @@ private struct SettingsView: View {
     private func everydayPage() -> some View {
         // 場面のセット・見た目・寝ているあいだ・知らせ・説明（2026-11-21。s20 の 体31〜37。S20SettingsViews.swift）
         S20SettingsSection()
+        // 設定を探す・変えた所だけ・初めに戻す（2026-11-22。s22 の 楽8・楽9。S22Views.swift）
+        S22SettingsEntrySection()
         // 電池優先・早さ優先・精度優先（2026-11-22。s21 の 使1。S21Views.swift）
         S21PresetSection()
         Section {
@@ -1071,6 +1084,8 @@ private struct DetailedSettingsView: View {
 
                 // 時計の守りと実験（寝ている時間の 5 分・強い守り・便りが途切れたら・直接送るの実験・振って送る。2026-11-22。s21）
                 S21WatchSettingsSection()
+                // 1 時間ごとの実験・袖でこもった音・電車の 3 問・誰と話した？・iPad は読むだけ（2026-11-22。s22。S22Views.swift）
+                S22WatchSettingsSection()
 
                 // 外付けマイク（2026-11-07。MicViews.swift）
                 MicSettingsSection()

@@ -266,7 +266,7 @@ struct CanonicalDayView: View {
         .overlay {
             if value == nil {
                 ContentUnavailableView("この日の正本はまだありません", systemImage: "text.document",
-                                       description: Text("家の PC が母艦の正本を配るのは直近 14 日の分です。母艦が作るまで、少し待ってください。"))
+                                       description: Text("家の PC が記録の正本を配るのは直近 14 日の分です。家の PC が作るまで、少し待ってください。"))
             }
         }
         .task(id: day) { await book.refresh(day: day, pc: pipeline.homePC) }

@@ -105,7 +105,9 @@ enum RecordingExperiment {
     // MARK: いまの値（この端末の設定から）
 
     static func current(now: Date = .now) -> Combo? {
-        combo(on: isOn, start: start, meeting: meetingNow, now: now)
+        // 1 時間ごとの入れ替え（本人がオンにした日から 8 日。初めはオフ。2026-11-22。s22 の 確24。S22Watch）が先
+        if let hourly = S22Watch.hourlyNow(now: now) { return hourly }
+        return combo(on: isOn, start: start, meeting: meetingNow, now: now)
     }
 
     /// 時計の録音の音質（会議モードは 48kbps）

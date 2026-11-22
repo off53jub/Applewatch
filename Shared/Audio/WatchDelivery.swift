@@ -31,6 +31,10 @@ enum WatchDelivery {
         var viaPC: Bool = false
         /// 声が無いので捨てるはずだった区切りの見本（1 割。家の PC が本当に声が無かったかを数える。2026-11-22。s21 の 精7）
         var sampleNoVoice: Bool = false
+        /// 区切りの中の音の大きさの要約（p10・p50・p90・voicedP50。2026-11-22。s22 の 確4。古い時計は付けない）
+        var levels: [String: Double]? = nil
+        /// その区切りの録り方の実験の組（"32k45" など。2026-11-22。s22 の 確24。入れ替えの日だけ）
+        var recExp: String? = nil
     }
 
     /// 時計が付ける控え
@@ -53,7 +57,9 @@ enum WatchDelivery {
         }
         return Stamp(cut: date(cutKey), sent: date(sentKey), lowPower: metadata?[lowPowerKey] as? Bool,
                      viaPC: metadata?[pcKey] as? Bool ?? false,
-                     sampleNoVoice: metadata?[S21Watch.sampleNoVoiceKey] as? Bool ?? false)
+                     sampleNoVoice: metadata?[S21Watch.sampleNoVoiceKey] as? Bool ?? false,
+                     levels: S22Watch.levels(from: metadata),
+                     recExp: (metadata?[S22Watch.recExpKey] as? String).flatMap { S22Watch.isRecExpLabel($0) ? $0 : nil })
     }
 
     // MARK: - 低電力モードで送るか

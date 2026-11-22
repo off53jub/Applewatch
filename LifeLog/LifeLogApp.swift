@@ -53,6 +53,8 @@ struct LifeLogApp: App {
     }()
 
     init() {
+        // 開いてから今日の画面が出るまでを測る（2026-11-22。s22 の 楽21。S22Book.swift）
+        S22Launch.markStart()
         // 日本時間で区切る設定なら、ほかの何よりも先に時間帯を日本にする（2026-11-06）
         Storage.applyTimeZoneSetting()
         // 「控えから戻す」で選んだ控えは、登録を読む前に入れ替える
@@ -114,6 +116,8 @@ struct LifeLogApp: App {
         S20Hold.changed = { pipeline.updateHold() }
         // 時計に伝える設定（寝ている時間の 5 分・強い守り）が変わったら送り直す（2026-11-22。s21。S21Book.swift）
         S21Book.settingsChanged = { pipeline.receiver.sendSettings(skipSilence: pipeline.skipSilence, held: pipeline.recordingHeld) }
+        // s22（2026-11-22。S22Book.swift）: 5 分ごとの見回り（電池の見本・ウィジェットの答え・電車の 3 問・誰と話した？）
+        S22Book.install(pipeline, live: !Self.testing && !Self.demo)
         if !Self.testing && !Self.demo {
             Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
                 Task { @MainActor in pipeline.updateHold() }
@@ -131,6 +135,8 @@ struct LifeLogApp: App {
                     .environment(pipeline)
                     // 夜の青（見た目と差し色。2026-11-21。s20 の 体1・体5。DesignKit.swift）
                     .llRoot()
+                    // 会話の 1 場面のカード（2026-11-22。s22 の 楽23。S22Views.swift）
+                    .s22Root(pipeline)
                     // 開くときに Face ID（設定でオンにしたときだけ。録音と裏の処理は止めない）
                     .modifier(AppLock())
                     // lifelog:// はウィジェットから（2026-11-12。NoticeActions.swift の NoticeRoute.route(url:)）。ほかは Google のログイン
@@ -157,6 +163,7 @@ struct LifeLogApp: App {
             if phase == .active {
                 pipeline.appBecameActive()
                 pipeline.processQueue()
+                S22Book.tick()  // ウィジェットの答え・電池の見本（2026-11-22。s22）
             }
             if phase == .background {
                 pipeline.appMovedToBackground()

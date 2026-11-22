@@ -381,7 +381,7 @@ struct SettleCheckSection: View {
             } header: {
                 Text("入れたものとお金")
             } footer: {
-                Text("家の PC（母艦）が毎朝数えた、入れた施策が本番で動いた日・使われた回数と、Claude に使った額です。畳むかどうかは自分で決めます。")
+                Text("家の PCが毎朝数えた、入れた施策が本番で動いた日・使われた回数と、Claude に使った額です。畳むかどうかは自分で決めます。")
             }
         }
     }
@@ -395,7 +395,7 @@ struct RolloutView: View {
         let items: [RolloutItem] = SettleBook.shared.rollout?.items ?? []
         LLList {
             if items.isEmpty {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
+                Text("まだ家の PC から届いていません。つながると読みます。").foregroundStyle(LL.dim)
             }
             ForEach(SettleFeeds.rolloutStatuses, id: \.self) { status in
                 let rows: [RolloutItem] = items.filter { $0.status == status }
@@ -478,7 +478,7 @@ struct CostsView: View {
                     }
                 }
             } else {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
+                Text("まだ家の PC から届いていません。つながると読みます。").foregroundStyle(LL.dim)
             }
         }
         .navigationTitle("Claude の費用")
@@ -557,7 +557,7 @@ struct CheckClaimSection: View {
             } header: {
                 Text("合ってる？")
             } footer: {
-                Text("家の PC（母艦）が書いたことが合っているかを、1日1つ確かめます。答えは母艦の「精度の通信簿」に入ります。")
+                Text("家の PCが書いたことが合っているかを、1日1つ確かめます。答えは家の PC の「精度の通信簿」に入ります。")
             }
         }
     }

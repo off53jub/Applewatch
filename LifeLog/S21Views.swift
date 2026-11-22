@@ -34,6 +34,8 @@ struct S21PresetSection: View {
                 Text(current.map { "いまは「\($0.label)」の組です" } ?? "いまは自分で選んだ組です")
                     .font(.caption).foregroundStyle(LL.dim)
             }
+            // 押す前に、組ごとの電池と速さの見込み（いまの実測から・仮。2026-11-22。s22 の 楽9。S22Views.swift）
+            S22PresetForecastRows()
         } header: {
             LLHeader(title: "録り方の組", symbol: "dial.medium")
         } footer: {

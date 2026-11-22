@@ -537,6 +537,9 @@ extension Pipeline {
         if !writes.isEmpty { state["writeKB"] = writes }
         let spans = SpanClock.longest()
         if !spans.isEmpty { state["slowSpans"] = spans }
+        // s22（2026-11-22。S22Book.diagState。どれも省ける）: 実験の入れ替えの組（確24）・開いてから今日の画面まで（楽21）・
+        // 手で答えた実機の確かめ（楽11）・iPad は読むだけ（楽22）
+        for (key, value) in S22Book.diagState() { state[key] = value }
         return state
     }
 
@@ -592,6 +595,8 @@ extension Pipeline {
         if let on = state.guarding { detail["watchGuarding"] = on }
         if let n = state.sampledNoVoice { detail["watchSampledNoVoice"] = n }
         if let route = S21Book.routeToday() { detail["watchRouteExp"] = route.rawValue }
+        // 1 時間ごとの実験の入れ替えのいまの組（"32k45" など。入れ替えの外は付けない。2026-11-22。s22 の 確24）
+        if let combo = S22Watch.hourlyNow() { detail["recExpHourly"] = S22Watch.label(combo) }
         UserDefaults.standard.set(detail, forKey: PCDiag.watchDetailKey)
         S21Book.noteWatch(state)
     }

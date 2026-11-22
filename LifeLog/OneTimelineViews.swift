@@ -300,7 +300,7 @@ struct ReflectionCheckSection: View {
                     LabeledContent("反映の見張り", value: late > 0 ? "止まっている所 \(late)" : "止まっていません")
                 }
             } footer: {
-                Text("LINE・場所・お金などが、年表・朝のまとめ・アプリ・ノートまで届いているかの表です（家の PC の母艦が毎日作ります）。")
+                Text("LINE・場所・お金などが、年表・朝のまとめ・アプリ・ノートまで届いているかの表です（家の PC が毎日作ります）。")
             }
         }
     }

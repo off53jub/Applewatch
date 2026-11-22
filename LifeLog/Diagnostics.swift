@@ -380,6 +380,8 @@ extension Pipeline {
             add("処理", "家の PC の待ち合わせ（直近7日）",
                 "付けた \(waits[0].n)・送っている途中が多くて付けなかった \(waits[1].n)・PC が対応していない \(waits[2].n)")
         }
+        // s22（2026-11-22。S22Book.swift）: 時計に溜まった分・版が分からない・電池の先回り・実験の入れ替え・開くまでの秒・iPad
+        items += s22DiagnosticItems()
         // 最近のエラー（進み具合の文は外す。2026-11-22。s21 の 使2）
         for problem in diagnostics.problems.filter({ !S21Rules.isProgress($0.text) }).suffix(15).reversed() {
             add("最近のエラー", Self.diagTime.string(from: problem.time), problem.text, false)
@@ -415,6 +417,13 @@ struct DiagnosticsView: View {
     var body: some View {
         let sections = items.reduce(into: [String]()) { if !$0.contains($1.section) { $0.append($1.section) } }
         LLForm {
+            // 6 つの丸の信号（2026-11-22。s22 の 見6・見7。S22DesignKit.swift）。数えているあいだは骨組み（見14）
+            if items.isEmpty {
+                Section { LLSkeletonRows(count: 6) }
+            } else {
+                // 丸の色は A1 の直し方の印から（赤は自分で直せるものだけ。s22 の 見7・楽2。合流で つないだ）
+                S22SignalBoard(items: items, fix: { S22Checkup.fix(section: $0.section, label: $0.label, value: $0.value).rawValue })
+            }
             Section {
                 Button(writing ? "書いています…" : "ドライブの「診断」に書く") {
                     writing = true
@@ -428,21 +437,25 @@ struct DiagnosticsView: View {
             } footer: {
                 Text("同じ中身を、ドライブの「LifeLog」フォルダの「診断」ドキュメントにも1時間に1回ほど書きます。会話の中身・人の名前は入れません。Claude などに「診断を見て」と頼むと、実際の iPhone での動き具合を読めます。")
             }
+            // いまやること 3 つ・印・Claude に頼む（2026-11-22。s22 の 楽1〜3。S22Views.swift）
+            S22CheckupTopSection(items: items)
             ForEach(sections, id: \.self) { section in
                 Section(section) {
                     ForEach(items.filter { $0.section == section }) { item in
                         HStack(alignment: .firstTextBaseline) {
-                            if let ok = item.ok {
-                                Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                                    .foregroundStyle(ok ? LL.good : LL.warn)
+                            // 赤は自分で動くものだけ・待てば直るものは灰色（2026-11-22。s22 の 見7）
+                            if item.ok != nil {
+                                LLToneMark(tone: LLTone.of(ok: item.ok, fix: S22Checkup.fix(section: item.section, label: item.label, value: item.value).rawValue))
                             }
+                            // 数は人が読む形に（「12792.0 分」→「約 9 日」。s22 の 見5。LLNumber.swift）
                             if section == "最近のエラー" {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(item.label).font(.caption).foregroundStyle(LL.dim)
-                                    Text(item.value).font(.callout)
+                                    // 生の英語は日本語の 1 行に。元は「詳しく」に畳む（2026-11-22。s22 の 楽4）
+                                    S22ErrorText(raw: item.value)
                                 }
                             } else {
-                                LabeledContent(item.label) { Text(item.value).multilineTextAlignment(.trailing) }
+                                LabeledContent(item.label) { Text(LLNumber.display(item.value)).multilineTextAlignment(.trailing) }
                             }
                         }
                     }

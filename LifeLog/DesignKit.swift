@@ -318,7 +318,7 @@ struct StatTile: View {
         VStack(alignment: .leading, spacing: LL.Space.xs) {
             Text(title).font(.caption).foregroundStyle(LL.dim).lineLimit(1).minimumScaleFactor(0.75)
             HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(value).font(.title2.weight(.bold)).monospacedDigit()
+                Text(LLNumber.display(value)).font(.title2.weight(.bold)).monospacedDigit()  // 桁区切り（s22 の 見5）
                     .foregroundStyle(certainty == .fact ? LL.text : certainty.color)
                 if !unit.isEmpty { Text(unit).font(.caption).foregroundStyle(LL.dim) }
             }
@@ -538,5 +538,44 @@ struct LLPillButtonStyle: ButtonStyle {
             .opacity(configuration.isPressed ? 0.7 : 1)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(LL.Motion.fade, value: configuration.isPressed)
+    }
+}
+
+// MARK: - 見7 直し方の印の色（s22。2026-11-22）
+
+/// 赤は「本人が動くもの」だけ・待てば直るものは灰色・Claude に頼むものは琥珀（外の AI に渡るもの）。
+/// 印の名前から色の意味を決めるのは `LLTone.forFix(_:)`（Shared/Design/S22DesignRules.swift）。
+/// A1 の `CheckupFix`（self_・wait・askClaude）とは、合流のときに `LLTone.forFix(fix.rawValue)` でつなぐ（docs/s22-design.md）
+extension LLTone {
+    var color: Color {
+        switch self {
+        case .ok: LL.good
+        case .act: LL.danger
+        case .wait: LL.dim
+        case .claude, .warn: LL.warn
+        case .unknown: LL.dim.opacity(0.7)
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .ok: "checkmark.circle.fill"
+        case .act: "hand.point.up.left.fill"
+        case .wait: "hourglass"
+        case .claude: "sparkles"
+        case .warn: "exclamationmark.triangle.fill"
+        case .unknown: "circle.dashed"
+        }
+    }
+}
+
+/// 1 行の頭に置く小さな印（色と形の両方で分かるように）
+struct LLToneMark: View {
+    let tone: LLTone
+
+    var body: some View {
+        Image(systemName: tone.symbol)
+            .foregroundStyle(tone.color)
+            .accessibilityLabel(tone.label)
     }
 }
