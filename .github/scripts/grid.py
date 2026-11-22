@@ -18,19 +18,22 @@ import shutil
 import sys
 from collections import Counter
 
-src, out = sys.argv[1], sys.argv[2]
+srcs, out = sys.argv[1:-1], sys.argv[-1]
 os.makedirs(os.path.join(out, "shots"), exist_ok=True)
 
 MODES = ["明", "暗", "最大"]
 MODE_LABEL = {"明": "明るい", "暗": "暗い", "最大": "文字最大"}
 
-with open(os.path.join(src, "manifest.json"), encoding="utf-8") as f:
-    manifest = json.load(f)
+manifests = []
+for src in srcs:
+    with open(os.path.join(src, "manifest.json"), encoding="utf-8") as f:
+        manifests.append((src, json.load(f)))
 
 shots = {}  # (mode, index) -> (name, path, reached)
 findings = []
-for test in manifest:
-    for a in test.get("attachments", []):
+entries = [(src, a) for src, manifest in manifests for test in manifest for a in test.get("attachments", [])]
+for src, a in entries:
+    if True:
         name = a.get("suggestedHumanReadableName") or a["exportedFileName"]
         name = re.sub(r"(_\d+)?_[0-9A-Fa-f-]{36}(\.\w+)?$", "", name)
         path = os.path.join(src, a["exportedFileName"])
