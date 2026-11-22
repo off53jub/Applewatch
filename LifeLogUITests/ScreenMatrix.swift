@@ -49,7 +49,7 @@ final class ScreenMatrix: XCTestCase {
         var args = ["-screenshotDemo", "-AppleLanguages", "(ja)", "-AppleLocale", "ja_JP",
                     "-llAppearance", mode == "明" ? "light" : "dark"]
         if mode == "最大" {
-            args += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge"]
+            args += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         }
         app.launchArguments = args
         app.launch()
