@@ -69,6 +69,9 @@ SERVE_STALE_DAYS = 3    # これより古い voices.json は出さない
 SAVE_EVERY = 200        # これだけ足したら途中でも置く（時間切れで止まっても無駄にしない）
 
 _lock = threading.Lock()
+# s22 確5（s22pc.py が入れる）: (labels, 日の並び) → ((人物N の印, 名前のある人の印) → 足す近さ) か None。
+# 予定・場所・直前の LINE に出てくる人の「名前のある人かも」の近さを少しだけ上げる（名前はまとめない）
+PRIOR_BONUS: Callable | None = None
 
 
 def folder(home: Path) -> Path:
@@ -392,15 +395,18 @@ def cluster(ids: list[str], centers: np.ndarray, apart: set[tuple[str, str]], li
 
 
 def suggest_named(centers: dict[str, np.ndarray], refs: dict[str, np.ndarray], apart: set[tuple[str, str]],
-                  low: float = NAMED_MIN, margin: float = NAMED_MARGIN) -> dict[str, tuple[str, float, float]]:
-    """名前の無い人物N ごとに、いちばん近い名前のある人（自分ではない）。{印: (名前のある人の印, 近さ, 2 番目との差)}"""
+                  low: float = NAMED_MIN, margin: float = NAMED_MARGIN,
+                  bonus: Callable[[str, str], float] | None = None) -> dict[str, tuple[str, float, float]]:
+    """名前の無い人物N ごとに、いちばん近い名前のある人（自分ではない）。{印: (名前のある人の印, 近さ, 2 番目との差)}
+    s22 確5: bonus があれば、いそうな人の近さに足してから比べる（自分には足さない）"""
     out = {}
     for label, vector in centers.items():
         scored = []
         for ref, rv in refs.items():
             if (min(label, ref), max(label, ref)) in apart:
                 continue
-            scored.append((float(np.dot(vector, rv)), ref))
+            extra = bonus(label, ref) if bonus is not None and ref != SELF_LABEL else 0.0
+            scored.append((float(np.dot(vector, rv)) + extra, ref))
         if not scored:
             continue
         scored.sort(reverse=True)
@@ -461,7 +467,13 @@ def build(home: Path, store, today: datetime.date | None = None, window: int = W
                 break
     maybe = []
     per_named: dict[str, int] = {}
-    named = suggest_named(unnamed, refs, apart, NAMED_MIN, NAMED_MARGIN)
+    bonus = None
+    if PRIOR_BONUS is not None:
+        try:
+            bonus = PRIOR_BONUS(labels, days)
+        except Exception:  # noqa: BLE001 — いそうな人が分からなくても、今までどおり
+            bonus = None
+    named = suggest_named(unnamed, refs, apart, NAMED_MIN, NAMED_MARGIN, bonus)
     for label, (ref, score, gap) in sorted(named.items(), key=lambda kv: -kv[1][1]):
         entry = labels[label]
         name = _text(labels[ref]["name"], 20)

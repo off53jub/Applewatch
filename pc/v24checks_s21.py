@@ -663,6 +663,10 @@ def run_all() -> int:
 
             traceback.print_exc()
             failed += say(False, f"{check.__name__} が途中で落ちました: {error!r}")
+    # 2026-11-22（s22）: CI の手順（.github は別の担当）を増やさずに、s22 の家の PC の分もここで確かめる
+    import v24checks_s22
+
+    failed += v24checks_s22.run_all()
     return failed
 
 

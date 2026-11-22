@@ -27,6 +27,8 @@ INTERVIEW = Path("reports") / "interview-sheet.html"
 FEATURE_ANSWERS = Path("inbox") / "feature_answers.jsonl"
 FEATURES = ("reviewq", "featcheck", "devchecks", "interview", "holidaytags")
 REVIEW_LIMIT = 100
+# s22 確19・確27（s22pc.py が入れる）: GET /review-queue に家の PC の確かめ待ちを足す口 (答え, 母艦) → 答え
+REVIEW_EXTRA = None
 HTML_LIMIT = 2 * 1024 * 1024
 
 
@@ -135,4 +137,10 @@ def http_get(handler, base: Path, path: str) -> None:
     if path in HTML_GETS:
         http_get_html(handler, base)
     else:
-        handler.send_json(200, READERS[path](base))
+        body = READERS[path](base)
+        if path == "/review-queue" and REVIEW_EXTRA is not None:
+            try:
+                body = REVIEW_EXTRA(body, base)
+            except Exception:  # noqa: BLE001 — 足せなくても母艦の列は返す
+                pass
+        handler.send_json(200, body)

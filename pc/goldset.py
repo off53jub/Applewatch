@@ -70,7 +70,9 @@ def items(folder: Path) -> list[dict]:
         except ValueError:
             continue
         source = row.get("source") if isinstance(row, dict) else None
-        if not isinstance(row, dict) or (isinstance(source, dict) and source.get("origin") == "pc-auto"):
+        # s22 確16: PLAUD と合う行の材料（"pc-plaud"）も、モデルが書いた文なので正解集に入れない
+        if not isinstance(row, dict) or (isinstance(source, dict) and (source.get("origin") in ("pc-auto", "pc-plaud")
+                                                                       or source.get("auto") is True)):
             continue
         audio = Path(folder) / str(row.get("audio") or "")
         if row.get("audio") and audio.is_file() and norm(str(row.get("text") or "")):

@@ -697,3 +697,46 @@ iPhone のタスクの「母艦のやること」に、母艦（D:\Lifelog）の
   読むだけ）を 4 人まで足します。既定はオフ（地名と同じく、測ってから本人が決めます）。
 ・新しい版の確かめは 1 時間ごと、Ollama の優先度の見回りは 5 分ごと、仕事のまとめの索引の見回りは 15 分ごとになりました。
 ・確かめ: python v24checks_s21.py（v24checks_s20.py の最後でも動きます。一時フォルダと作り物の記録・母艦・LINE で）
+
+■ s22 の分（2026-11-22。人と声・文字・録り方の実験・報告の棚。中身は s22pc.py ほか。docs\s22-pc.md）
+言語モデルの呼び出しは足していません（0 円）。どれも「印」「候補」を足すだけで、記録の話し手を勝手に変えたり、人をまとめたり、
+名前を付け替えたりはしません（変えるのは、本人が確かめ待ちで答えたときだけ）。
+・新しい道（iPhone の合言葉が要ります）:
+    GET /reports                    母艦の reports\ の md のうち、母艦の state\reports_for_app.json の "allow" にあるものの一覧
+                                    {"generated_at","reports":[{"name","title","updated_at","bytes"}]}（features "reports"）
+    GET /reports/<名前>             その md の本文（text/markdown）。許していない名前・.. や / の入った名前は 404
+    GET /capture-gap-patterns       母艦の state\capture_gap_patterns.json をそのまま（features "gappatterns"）
+    GET /speaker-tags?day=YYYY-MM-DD  話し手の札（通りすがり・重なり・遠い声（仮）・動画の声かも。features "speakertags"）
+・POST /jobs・/w/jobs の省ける印: recExp=32k45|48k45|32k300|48k300（録り方の実験の組）・levels（区切りの声の大きさの要約 dB。
+  {"p10","p50","p90","voicedP50"} の JSON か「p10,p50,p90,voicedP50」の並び）・scene=train|car|shop|outside|home（features "levels"・"recexp"）。
+・記録（POST /records/<日>）を置く前に、行に省ける "conf"（確かさ 0〜1）・"norm"（数字と表記をそろえた文。元の text は残す）・
+  "mediaNearby": true（PC で動画・音楽を再生していた時刻に重なる行）を足します。母艦が読みます。
+・GET /same-person: 組に "snorm"（その日の人たちの声でならした点・仮）を足し、1.5 より低い組は出しません（隠した数は "s22"）。
+  短い声（4 秒より短い）の組は点を付けません（"short": true）。続いた区切りの人物N の組（"why": "chain"）と、
+  予定に「N人」とある会話の組（"why": "count"）も足します。母艦の答え合わせ用に same-person\snorm.json。
+・GET /review-queue: 母艦の列の後ろに、家の PC の確かめ待ち（数字が割れた行 kind "number"・「この声は ○○ さんですか」kind
+  "speaker_line"）を 8 件まで足します。答え（POST /feedback の kind review）が来たら、数字は行の文を、話し手は同じ声のかたまりの行を
+  「PC から直す」と同じ直しにして、答えに "done": {"changed": 直した行の数} を返します（母艦 inbox\review_expanded.jsonl にも）。
+・再生中の情報（s22media.py）: 1 分ごとに Windows の「いま再生中」（GSMTC）から、再生中のアプリの名前だけを読みます
+  （曲名・動画の題は読みません）。PC を触っていた時刻も。s22\media\<日>.json（30 日）。"media_watch": false で止めます。
+・行の音の大きさ（確9・確4）: 重い仕事の時間（00:00〜05:00・08:30〜18:00）に、新しい区切りが待っていないとき、1 回 90 秒まで
+  s22\levels\<日>.json に。"s22_levels": false で止めます。
+・PLAUD と合う行を学び直しの材料に（確16）: 毎晩 01:00〜05:00 に、昨日〜3 日前の行で PLAUD の文と 9 割以上合うものを、1 日 60 個まで
+  自動の材料（"origin": "pc-plaud"）として足します。正解集と学び直しの試験には使いません。"plaud_samples": false で止めます。
+・Whisper の決まり文句（確12）: Whisper の票が「ご協力ありがとうございました」「以上です」などだけで、ほかのモデルの文と似ていなければ、
+  その票は数えません（行は消しません）。"junk_votes": false で前と同じ。
+・新しく置くファイル（HOME の中）: s22\chain・s22\speaker-tags・s22\levels・s22\media・s22\chunks（区切りごとの実験の組・levels・行の数）・
+  s22\rec-exp.json（録り方の実験の日ごと・組ごとの数。quality-daily.json の "rec_exp" にも）・s22\review\items.json・
+  same-person\snorm.json・s22\models（切り替えたモデル）。母艦には inbox\speaker-tags\<日>.json・inbox\pc-review\candidates.json・
+  inbox\review_expanded.jsonl。quality-daily.json に "work_unknown"・"work_unknown_share"・"work_guess_place"・"work_guess_time"・
+  "self_level_auc"・"self_level_gap_db"・"rec_exp" を足します。
+・切り替えの口（どれも書かなければ今のまま。測った数は docs\s22-pc.md）:
+    "speaker_model": "wespeaker34" | "eres2netv2" | "titanet"   話し手の声の特徴のモデル（今は campplus）
+    "enhance_model": "dpdfnet2"                                  雑音を除くモデル（今は gtcrn）
+    "enhance_scenes": {"train": true, …}                         場面ごとに雑音を除いた票を足す
+    "asr_extra": ["parakeet"] | ["sensevoice"]                   多数決に足すモデル（CPU）
+    "vote_primary": "reazon"                                     そのモデルの票を 1.5 倍に（測ったら良くならなかった）
+    "word_line_times": true                                      行の始まり・終わりを言葉の時刻に寄せる
+    "s22_voice": {"snorm_min": 1.5, "chain_link": 0.5, …}        同じ人かの点・つなぐ近さなど（すべて仮）
+  切り替えたモデルのファイルが無ければ、00:00〜05:00 の枠でだけ Hugging Face から取ってきます（大きさと SHA-256 が合うものだけ）。
+・確かめ: python v24checks_s22.py（v24checks_s21.py の最後でも動きます。一時フォルダと作り物の記録・母艦で）

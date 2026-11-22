@@ -201,6 +201,9 @@ import quality  # 2026-11-13（施策 9・10・11）: 品質の記録・夜の�
 import plaudmatch  # s21 精1・精10: PLAUD との文字の合い方・モデルごとの当たり率と重み（仮）
 import jobfirst  # s21 速3: 新しい区切りを先に（/transcribe の夜の待ち）
 import s21pc  # s21（2026-11-22）: 精1・精7・精10・精11・精15・速4・速8・速9・電1・電2・守1・守5（中身は s21pc.py ほか）
+import s22pc  # s22（2026-11-22）: 楽5・楽20・確1〜確30 の家の PC の分（中身は s22pc.py・s22voice.py・s22text.py ほか）
+import s22models  # s22 確2・確13・確15: モデルの切り替えの口（初めは今のまま）
+import s22text  # s22 確12・確21・確11: 決まり文句の票・行の時刻・区切りの境目
 
 VERSION = 10
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
@@ -1416,7 +1419,8 @@ class Ensemble:
             hypotheses = {name: (got[i][0] if i < len(got) else "") for name, got in results.items()
                           if not (i < len(got) and got[i] is None)}
             known: dict = {}
-            picked = vote(hypotheses, weights, known)
+            # s22 確12: Whisper の仲間の票が決まり文句だけで、ほかのモデルの文と似ていなければ、その票は数えない（票の文は残す）
+            picked = vote(s22text.drop_junk(hypotheses) if s22text.JUNK_ON else hypotheses, weights, known)
             rows.append((hypotheses, known))
             if not picked:
                 continue
@@ -1491,6 +1495,11 @@ def _load_engines(names: list[str], threads: int, provider: str, whisper: str, d
                 engines.append(MineEngine(whisper, device, threads))
         except Exception as error:  # noqa: BLE001
             log(f"{name} を読み込めませんでした（このモデル抜きで続けます）: {error!r}")
+    # s22 確15: config.json の "asr_extra"（["parakeet"] など）で足すモデル。手元にあるときだけ（既定は足さない）
+    try:
+        engines.extend(s22models.make_asr_engines(Engine, HOME, load_config(), max(1, threads // 2), RATE, log))
+    except Exception as error:  # noqa: BLE001
+        log(f"足すモデルを読み込めませんでした（今のモデルだけで続けます）: {type(error).__name__}")
     return Ensemble(engines)
 
 
@@ -1703,6 +1712,25 @@ def fetch(url: str, path: Path) -> None:
     part.replace(path)
 
 
+def apply_s22_models() -> None:
+    """s22 確2: config.json の "speaker_model" で切り替えた話し手のモデルが手元にあれば、それを使う（既定は今の CAM++）。
+    手元に無ければ、00:00〜05:00 に s22pc が取ってくるまで今のまま"""
+    global SPEAKER_MODEL, SPEAKER_URL
+    if os.environ.get("LIFELOG_SPEAKER_MODEL"):
+        return
+    try:
+        ready = s22models.speaker_ready(HOME, load_config())
+    except Exception:  # noqa: BLE001
+        ready = None
+    if ready is None:
+        return
+    SPEAKER_MODEL, SPEAKER_URL = ready
+    import voices
+
+    voices.MODEL = SPEAKER_MODEL
+    log(f"話し手のモデルを {SPEAKER_MODEL} に切り替えました（config.json の speaker_model）")
+
+
 def download_speaker() -> Path:
     path = SPEAKER_DIR / SPEAKER_MODEL
     if path.exists() and path.stat().st_size > 1_000_000:
@@ -1862,11 +1890,21 @@ class Denoiser:
     def __init__(self, threads: int) -> None:
         import sherpa_onnx
 
-        path = download_enhance()
-        # 設定の部品は、C++ 側が使い終わるまで消えないよう持っておく
-        self.gtcrn = sherpa_onnx.OfflineSpeechDenoiserGtcrnModelConfig(model=str(path))
-        self.model_config = sherpa_onnx.OfflineSpeechDenoiserModelConfig(gtcrn=self.gtcrn, num_threads=threads,
-                                                                          provider="cpu")
+        # s22 確13: config.json の "enhance_model": "dpdfnet2" で、手元にあれば DPDFNet を使う（既定は今の GTCRN）
+        chosen = None
+        try:
+            chosen = s22models.enhance_model_config(sherpa_onnx, HOME, load_config(), threads)
+        except Exception as error:  # noqa: BLE001
+            log(f"切り替えた雑音除去のモデルを使えませんでした（GTCRN のまま）: {type(error).__name__}")
+        if chosen is not None:
+            self.gtcrn, self.model_config, stem = chosen
+            path = Path(stem)
+        else:
+            path = download_enhance()
+            # 設定の部品は、C++ 側が使い終わるまで消えないよう持っておく
+            self.gtcrn = sherpa_onnx.OfflineSpeechDenoiserGtcrnModelConfig(model=str(path))
+            self.model_config = sherpa_onnx.OfflineSpeechDenoiserModelConfig(gtcrn=self.gtcrn, num_threads=threads,
+                                                                              provider="cpu")
         self.config = sherpa_onnx.OfflineSpeechDenoiserConfig(model=self.model_config)
         if not self.config.validate():
             raise RuntimeError(f"雑音を除くモデルの設定が正しくありません: {self.config}")
@@ -2250,6 +2288,8 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(ops.features())
     found.extend(quality.features())  # "sameperson"・"nightreview"（2026-11-13。quality.py）
     found.extend(s21pc.FEATURES)  # s21: "shake"（POST /feedback の kind shake）・"novoicesample"（sampleNoVoice=1）
+    # s22: reports・gappatterns・speakertags（GET の道）・levels・recexp（POST /jobs の省ける印）・reviewspread（答えを広げる）
+    found.extend(s22pc.FEATURES)
     # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
     if watchroute.running():
         found.append("watchroute")
@@ -2356,6 +2396,14 @@ def place_hints_for(name: str, params: dict) -> tuple[list[str], int]:
     config = load_config()
     # s21 精12: その日の予定に出てくる人の名前（"people_hints": true のときだけ。既定はオフ）
     hints, people = hintpolicy.add_people(hints, hintpolicy.epoch_of(name), mothership.home(config), config)
+    # s22 確23: 場所ごとの言葉の辞書（"place_words": true のときだけ。既定はオフ。s22place.py）
+    try:
+        import s22place
+
+        hints, worded = s22place.add(hints, hintpolicy.epoch_of(name), mothership.home(config), HOME, config)
+        people += worded
+    except Exception:  # noqa: BLE001
+        pass
     if not hintpolicy.place_hints_on(config):
         return hints, people
     extra = [params["place"]] if isinstance(params.get("place"), str) else None
@@ -2378,17 +2426,33 @@ def run_job(path: Path, params: dict, name: str, draft=None) -> tuple[dict, dict
     if enhance is None:
         # enhance を指定しなかったら、iPhone と同じく、騒がしい区切りだけ雑音を除いた票も加える
         enhance = bool(params.get("noisy"))
+        # s22 確22: 場面（scene）ごとに雑音を除いた票を足す（config.json の "enhance_scenes"。既定は今のまま）
+        if not enhance and s22models.enhance_for_scene(load_config(), params.get("scene")):
+            enhance = True
     # 同じ仕事を文字にしている最中に2回止まった（jobqueue が cpu_only を付ける）。GPU のモデルを使わない
     cpu_only = bool(params.get("cpu_only"))
     # 2026-11-16（99）: 設定でオンのときだけ、その時間・その日の地名をヒントの先頭に足す（既定はオフ）
     hints, _placed = place_hints_for(name, params)
     # s21 精10: iPhone の重みに、PLAUD と比べた週 1 の当たり率の重み（仮）を掛ける（"engine_weights": false で使わない）
     weights = plaudmatch.merge(parse_weights(params.get("weights")), HOME, load_config())
+    # s22 確14: 主にするモデルの票を重くする（config.json の "vote_primary": "reazon" など。既定はしない。測った数は docs）
+    primary = load_config().get("vote_primary")
+    if isinstance(primary, str) and primary in PRIORITY:
+        weights = {**(weights or {}), primary: round((weights or {}).get(primary, 1.0) * 1.5, 3)}
     reply, numbers = transcribe_reply(Handler.engine, audio, segments, hints, None,
                                       weights, bool(enhance), False,
                                       f"後で受け取る文字起こし {name}: " + ("（CPU のモデルだけ）" if cpu_only else ""), "job",
                                       started, on_draft=draft, cpu_only=cpu_only)
     lines = reply.get("lines") or []
+    # s22 確21: 行の始まり・終わりを言葉の時刻に寄せる（config.json の "word_line_times": true のときだけ。既定は今のまま）
+    if load_config().get("word_line_times") is True:
+        s22text.refine_times(lines)
+    # s22 確11: 前の区切りの終わりから言葉が続いていそうなら、最初の行に "joinPrev": true（音声はつながない）
+    try:
+        if lines and App.jobs is not None and s22text.boundary_cut(*previous_chunk(name), lines):
+            lines[0]["joinPrev"] = True
+    except Exception:  # noqa: BLE001
+        pass
     # 2026-11-15（強化案 50）: 会議モードのあいだだけ、区切りの文を会議の相棒にためる（受け取った時刻と録音の時刻つき）
     meta = (App.jobs.jobs.get(name) if App.jobs is not None else None) or {}
     livecoach.feed(lines, meta.get("queued_at"), meta.get("times"))
@@ -2399,6 +2463,25 @@ def run_job(path: Path, params: dict, name: str, draft=None) -> tuple[dict, dict
     # 2026-11-13（精7・仮）: モデルが全部そろって同じことを書いた行を、あなた向けのモデルの材料に足す（既定は使わない）
     auto_samples(audio, lines, name)
     return reply, numbers
+
+
+def previous_chunk(name: str) -> tuple[list[dict] | None, float | None]:
+    """s22 確11: 同じ端末で、この区切りのすぐ前（間が 2 秒まで）の区切りの (行, 長さ)。無ければ (None, None)"""
+    begin = s22pc.judgecheck.chunk_epoch(name)
+    if begin is None or App.jobs is None:
+        return None, None
+    watch = name.endswith("-w.m4a")
+    for other, meta in list(App.jobs.jobs.items()):
+        if other == name or other.endswith("-w.m4a") != watch or meta.get("status") != "done":
+            continue
+        times = meta.get("times") or {}
+        start, length = times.get("chunk_start"), meta.get("audio_seconds")
+        if not isinstance(start, (int, float)) or not isinstance(length, (int, float)):
+            continue
+        if 0 <= begin - (start + length) <= 2.0:
+            got = App.jobs.get(other) or {}
+            return (got.get("result") or {}).get("lines") or None, float(length)
+    return None, None
 
 
 def judge_job(lines: list[dict], hints: list[str], work, name: str) -> dict | None:
@@ -2579,6 +2662,10 @@ def start_v6(threads: int) -> None:
         s21pc.start(sys.modules[__name__])
     except Exception as error:  # noqa: BLE001
         log(f"s21 の見回りを始められませんでした: {type(error).__name__}")
+    try:  # s22（2026-11-22）: 記録の行の印・区切りの印・札・確かめ待ち・再生中の情報（s22pc.py）
+        s22pc.start(sys.modules[__name__])
+    except Exception as error:  # noqa: BLE001
+        log(f"s22 の見回りを始められませんでした: {type(error).__name__}")
     # 2026-11-13（施策 9・10・11）: 夜の流れ（品質の記録・同じ人かも・夜の読み直し。quality.py）
     quality.start(HOME, App.records, App.jobs, lambda: mothership.home(load_config()),
                   lambda p, r: extra_model("speaker", 1).embed(load_audio(p.read_bytes()), r), log)
@@ -2990,6 +3077,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.authorized():
                 quality.http_get(self, url)
             return
+        if s22pc.s22feeds.handles(path):  # s22: GET /reports・/reports/<名前>・/capture-gap-patterns・/speaker-tags
+            if self.authorized():
+                s22pc.http_get(self, path, url.query)
+            return
         if path not in ("/hello", "/train-status", "/jobs", "/index/status", "/watch-route", "/claude/usage") \
                 and path not in mothership.GETS and path not in promises.GETS and path not in livecoach.GETS \
                 and path not in audioclip.GETS and path not in placelinks.GETS and not path.startswith("/jobs/"):
@@ -3372,6 +3463,7 @@ def serve(engine_factory, port: int, threads: int = 4, watch_port: int = watchro
     # 2026-11-07: GPU に文字起こしのモデルが載っているかを <home>/gpu-state.json に書く（MCP サーバーが読み、
     # そのあいだは bge-m3 を CPU だけで動かす。main() が置き場所を決める）。モデルを読み込む前から
     gpu.note_change()
+    apply_s22_models()
     Handler.engine = engine_factory()
     Handler.key = key
     # 2026-11-07 の落ち方への守り: 前の起動が GPU のモデルで文字にしている最中に止まっていたか（続けば GPU を使わない）。
