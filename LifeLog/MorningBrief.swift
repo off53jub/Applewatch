@@ -37,7 +37,7 @@ enum MorningBrief {
         var text: String
         /// 「期限切れ」「今日まで」「急ぎ」や、家の PC が書いたわけ
         var why: String
-        /// 解き方の手順（家の PC が今の様子と照らして選んだときだけ。2026-11-10）
+        /// 解き方の手順（家の PC が今の状態と照らして選んだときだけ。2026-11-10）
         var how: [String] = []
         /// だいたいの時間（分）
         var minutes: Int? = nil
@@ -152,7 +152,7 @@ enum MorningBrief {
 
     /// 今日の三つを選ぶ。期限を過ぎた・今日までのタスク（急ぎを先に）→ 家の PC が選んだもの → 急ぎ → 今週まで
     /// → 家の PC のやることで14日以内に足されたもの（期限の近い順・新しい順。recent）。
-    /// chosen（家の PC が今の様子と照らして選んだ。2026-11-10）なら、家の PC が選んだものを先にする。
+    /// chosen（家の PC が今の状態と照らして選んだ。2026-11-10）なら、家の PC が選んだものを先にする。
     /// 家の PC が「アプリのタスク」としたもの（origin "app"）は、まだのタスクに当たるときだけ入れる。
     /// 休みの日は仕事のものを入れない（仕事の印の付いた家の PC のものも）。同じらしいものは1つ
     static func pickThree(open: [TaskBook.Item], mothership: [MothershipExport.Three], mothershipWork: Set<String>,
@@ -315,7 +315,7 @@ extension Pipeline {
         let items = mothership.export?.items ?? []
         let workIDs = Set(items.filter { $0.work == true }.map(\.id))
         let ids = Set(items.map(\.id))
-        // 家の PC が今の様子と照らして選んだ日（2026-11-10）は、選んだものを全部（アプリのタスク・決めごと・新しいことも）。
+        // 家の PC が今の状態と照らして選んだ日（2026-11-10）は、選んだものを全部（アプリのタスク・決めごと・新しいことも）。
         // そうでなければ前と同じく、家の PC のやることにあるものだけ（決めごとの期限切れなどは、アプリで済みにできないので出さない）
         let chosen = mothership.export?.chosenFromSituation(day: briefDayKey.string(from: day)) ?? false
         let threes = chosen ? mothership.todayThree : mothership.todayThree.filter { ids.contains($0.id) }
@@ -568,7 +568,7 @@ struct PickHowToView: View {
             }
             if !pick.hasHowTo {
                 Section {
-                    Text("解き方はまだありません。家の PC が今の様子と照らして選んだ日に出ます。").foregroundStyle(LL.dim)
+                    Text("解き方はまだありません。家の PC が今の状態と照らして選んだ日に出ます。").foregroundStyle(LL.dim)
                 }
             }
         }

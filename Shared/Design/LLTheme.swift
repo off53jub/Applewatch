@@ -9,8 +9,8 @@ import UIKit
 enum LL {
     // MARK: 色（地・面・線・文字）
 
-    /// 地（画面のいちばん奥）
-    static let bg = Color.ll(light: 0xF3F6FB, dark: 0x0B1220)
+    /// 地（画面のいちばん奥）。朝・昼・夜でわずかに変わる（2026-11-22。s22 の 見20。設定「見た目」で切れる。時計は変えない）
+    static let bg = Color.llDayTinted()
     /// 面（カード・一覧の行）
     static let surface = Color.ll(light: 0xFFFFFF, dark: 0x121A2B)
     /// 面2（カードの中の一段上・押せる札）
@@ -22,16 +22,16 @@ enum LL {
     /// 薄い文字（補足・見立て（仮））
     static let dim = Color.ll(light: 0x55657F, dark: 0x8A9BB8)
     /// 差し色（水色 1 色だけ。押せる所・確かめ待ちの枠）
-    static let accent = Color.ll(light: 0x147FB3, dark: 0x5BC8F5)
+    static let accent = Color.ll(light: 0x11719F, dark: 0x5BC8F5)  // 明るい画面は s22 で 0x147FB3 から少し濃く（面2 の上でも 4.5:1 以上。見3）
 
     // MARK: 意味の色（体1。使う所を絞る）
 
     /// 止まっている・注意（琥珀）
-    static let warn = Color.ll(light: 0xA8660E, dark: 0xF2B24C)
+    static let warn = Color.ll(light: 0x985C0C, dark: 0xF2B24C)  // s22 で 0xA8660E から少し濃く
     /// 危ない（くすんだ赤）
     static let danger = Color.ll(light: 0xB8403F, dark: 0xE26D6D)
     /// よかった（くすんだ緑。使う所を絞る）
-    static let good = Color.ll(light: 0x22875C, dark: 0x5FC79A)
+    static let good = Color.ll(light: 0x1E7952, dark: 0x5FC79A)  // s22 で 0x22875C から少し濃く
 
     // MARK: 余白・角・線の太さ
 
@@ -107,6 +107,18 @@ extension Color {
         #else
         return Color(uiColor: UIColor { traits in
             UIColor(llHex: traits.userInterfaceStyle == .dark ? dark : light)
+        })
+        #endif
+    }
+
+    /// 地の色: 色を使うたびに、いまの時刻と設定から決める（LLDayTint。切っていれば #0B1220・#F3F6FB のまま）
+    static func llDayTinted() -> Color {
+        #if os(watchOS)
+        return Color(llHex: 0x0B1220)
+        #else
+        return Color(uiColor: UIColor { traits in
+            let hour = Calendar.current.component(.hour, from: Date())
+            return UIColor(llHex: LLDayTint.bgHex(hour: hour, dark: traits.userInterfaceStyle == .dark, enabled: LLDayTint.isOn))
         })
         #endif
     }

@@ -94,7 +94,12 @@ extension Pipeline {
         S22Book.fillWidget(&state)  // ウィジェットで答える 1 問（2026-11-22。s22 の 楽14）
         let dayStart = Calendar.current.startOfDay(for: now)
         let dayKey = ReviewRules.dayKey(now)
-        state.todayTalks = conversations(on: dayKey).count
+        let talks = conversations(on: dayKey)
+        state.todayTalks = talks.count
+        // ロック画面の今日の帯（30 分ごとの 48 こま。2026-11-22。s22 の 見18。BandSlots）
+        let recorded = ledger.map(for: dayStart, now: now).spans.filter { $0.kind == .recorded }
+        state.todayBand = BandSlots.encode(talks: talks.map { BandSpan(start: $0.start, end: $0.end) },
+                                           recorded: recorded.map { BandSpan(start: $0.start, end: $0.end) }, dayStart: dayStart)
         var seconds = 0.0
         for c in ledger.chunks where c.start >= dayStart && c.source != "import" {
             seconds += (c.end ?? c.start.addingTimeInterval(ChunkCutter.longest)).timeIntervalSince(c.start)

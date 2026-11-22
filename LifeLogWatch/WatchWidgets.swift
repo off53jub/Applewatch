@@ -17,6 +17,8 @@ extension WatchRecorder {
         state.watchHoursLeft = WatchFaceRules.hoursLeft(battery: device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil,
                                                         drainPerHour: HolidayRules.drainPerHour(samples, holding: false))
         state.reviewWaiting = board.info?.reviewWaiting
+        // 文字盤の電池の部品（丸・角。2026-11-22。s22 の 見17）
+        state.watchBattery = WatchGaugeRules.level(device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil)
         WidgetPublisher.shared.publish(state, kind: WidgetState.watchKind)
     }
 }

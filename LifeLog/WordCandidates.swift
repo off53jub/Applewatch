@@ -36,7 +36,7 @@ final class WordCandidateBook {
         var dismissed: [String] = []
     }
 
-    /// 母艦の辞書からの候補（家の PC から読んだまま）
+    /// 家の PC の辞書からの候補（家の PC から読んだまま）
     private(set) var items: [WordCandidate] = []
     private(set) var generatedAt: String?
     private(set) var fetchedAt: Date?
@@ -256,9 +256,9 @@ struct WordCandidateSections: View {
             Section {
                 rows(mothership, fromDigest: false)
             } header: {
-                Text("母艦の辞書からの候補")
+                Text("家の PC の辞書からの候補")
             } footer: {
-                Text("家の PC の母艦が過去の会話から集めた名前・社名・専門用語のうち、まだ登録していない言葉です。押したときだけ、上で選んだ組に足します。自動では登録しません。左にスワイプすると候補から外せます。")
+                Text("家の PC が過去の会話から集めた名前・社名・専門用語のうち、まだ登録していない言葉です。押したときだけ、上で選んだ組に足します。自動では登録しません。左にスワイプすると候補から外せます。")
             }
         }
     }
@@ -365,7 +365,7 @@ struct WordCandidateListView: View {
                 }
             }
         }
-        .navigationTitle(fromDigest ? "仕事のまとめに出た言葉" : "母艦の辞書からの候補")
+        .navigationTitle(fromDigest ? "仕事のまとめに出た言葉" : "家の PC の辞書からの候補")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable {
             if !fromDigest { await book.refresh(pipeline.homePC, force: true) }

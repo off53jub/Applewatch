@@ -110,6 +110,8 @@ private struct SceneDetailView: View {
 
 struct AppearanceView: View {
     @AppStorage(LLAppearance.key) private var appearance = LLAppearance.dark.rawValue
+    /// 朝・昼・夜で地の色をわずかに変える（2026-11-22。s22 の 見20。初めはオン）
+    @AppStorage(LLDayTint.key) private var dayTint = true
     @State private var icon: String?
     @State private var problem: String?
 
@@ -125,6 +127,13 @@ struct AppearanceView: View {
                 LLHeader(title: "画面", symbol: "circle.lefthalf.filled")
             } footer: {
                 Text("暗い画面が先（夜の青）。明るい画面も同じ色の意味で作っています。")
+            }
+            Section {
+                Toggle("朝・昼・夜で地の色を少し変える", isOn: $dayTint)
+            } header: {
+                LLHeader(title: "地の色", symbol: "sun.horizon")
+            } footer: {
+                Text("朝（5〜10 時）は少し明るい紺、夕方は少し紫がかった紺、夜（20 時から）は深い紺にします。文字の読みやすさは変えません。変えたあとは、画面を開き直すと全部に効きます。")
             }
             Section {
                 iconRow(nil, title: "夜の青（新しい）", file: "AppIcon")

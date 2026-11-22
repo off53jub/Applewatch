@@ -59,6 +59,11 @@ final class WidgetPublisher {
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetState.goodKind)  // 「LifeLog のいいこと帳」も（2026-11-12）
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetState.todayKind)  // 充電中の 1 枚も（2026-11-21。s20 の 追3）
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetState.reviewKind)  // 「LifeLog の 1 問」も（2026-11-22。s22 の 楽14）
+            WidgetCenter.shared.reloadTimelines(ofKind: WidgetState.bandKind)  // ロック画面の今日の帯も（2026-11-22。s22 の 見18）
+        }
+        // 時計の文字盤の電池の部品も同じ中身を読む（2026-11-22。s22 の 見17）
+        if kind == WidgetState.watchKind {
+            WidgetCenter.shared.reloadTimelines(ofKind: WidgetState.watchBatteryKind)
         }
     }
 

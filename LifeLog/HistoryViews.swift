@@ -224,6 +224,11 @@ struct ConversationsView: View {
     /// 会話ごとの、その時間に撮った写真（始まりの時刻ごと。iPhone の中で探すだけで保存しない。2026-11-07。DayPhotos.swift）
     @State private var photos: [Date: [DayPhoto]] = [:]
     @Environment(\.displayScale) private var displayScale
+    /// 相づちを畳む・話題の線（2026-11-22。s22 の 見10・見11。初めはどちらもオン。元の文は消さない）
+    @AppStorage(ReadingPrefs.easyKey) private var readEasy = true
+    @AppStorage(ReadingPrefs.topicKey) private var topicLines = true
+    /// 畳んだ相づちのうち、押して出したもの
+    @State private var openedFillers: Set<String> = []
 
     struct WordTarget: Identifiable {
         let id = UUID()
@@ -288,44 +293,8 @@ struct ConversationsView: View {
                             }
                             .font(.caption)
                         }
-                        ForEach(Array(conversation.lines.enumerated()), id: \.offset) { l, line in
-                            let next = conversation.lines[(l + 1)...].first { $0.audio == line.audio }
-                            row(line, key: "\(g)-\(c)-\(l)")
-                                .contextMenu {
-                                    Button("話者を直す", systemImage: "person.crop.circle.badge.questionmark") {
-                                        fixing = Fix(line: line, next: next)
-                                    }
-                                    Button("文字を直す", systemImage: "pencil") {
-                                        editing = WordTarget(line: line)
-                                    }
-                                    Button("言葉を登録", systemImage: "character.book.closed") {
-                                        addingWord = WordTarget(line: line)
-                                    }
-                                    // 会話の 1 場面をカードの絵で共有（名前を伏せるのが初め。2026-11-22。s22 の 楽23。S22Views.swift）
-                                    Button("この場面をカードで共有", systemImage: "photo.on.rectangle") {
-                                        S22Present.shared.card = S22SceneTarget(conversation: conversation, around: line.time)
-                                    }
-                                    // この行から別の会話にする（2026-11-06）
-                                    if conversation.closed, l > 0 {
-                                        Button("ここで会話を分ける", systemImage: "scissors") {
-                                            Task {
-                                                await pipeline.splitConversation(start: conversation.start, at: line.time, day: day)
-                                                conversations = load()
-                                            }
-                                        }
-                                    }
-                                }
-                                .swipeActions(edge: .leading) {
-                                    Button("話者", systemImage: "person.crop.circle.badge.questionmark") {
-                                        fixing = Fix(line: line, next: next)
-                                    }
-                                    .tint(LL.accent)
-                                    Button("文字", systemImage: "pencil") {
-                                        editing = WordTarget(line: line)
-                                    }
-                                    .tint(LL.warn)
-                                }
-                        }
+                        // 吹き出し・相づちを畳む・話題の線（2026-11-22。s22 の 見9〜見11。S22DesignKit.swift）
+                        lineRows(conversation, g: g, c: c)
                     }
                 } header: {
                     Text(heading(for: group))
@@ -353,6 +322,8 @@ struct ConversationsView: View {
             photos = await DayPhotos.load(conversations.map { (start: $0.start, end: $0.end) }, scale: displayScale)
         }
         .onDisappear { player.stop() }
+        // 読みやすく（相づちを畳む）・話題の線の切り替え（2026-11-22。s22 の 見10・見11）
+        .toolbar { ToolbarItem(placement: .primaryAction) { ReadingMenu() } }
         .alert("場所の名前を変える", isPresented: Binding(get: { renamingPlace != nil }, set: { if !$0 { renamingPlace = nil } })) {
             TextField("新しい名前", text: $placeText)
             Button("変える") {
@@ -381,6 +352,71 @@ struct ConversationsView: View {
         }
     }
 
+    /// 1 つの会話の行。相づち・言い淀みだけの行は畳み（読みやすく）、話題が変わったかもしれない所に線（仮）（2026-11-22。s22 の 見10・見11）
+    @ViewBuilder
+    private func lineRows(_ conversation: ConversationLog.Conversation, g: Int, c: Int) -> some View {
+        let texts: [String] = conversation.lines.map(\.text)
+        let plan: [(start: Int, count: Int, folded: Bool)] = readEasy ? FillerRules.groups(texts)
+            : texts.indices.map { (start: $0, count: 1, folded: false) }
+        let breaks: Set<Int> = topicLines ? Set(TopicRules.breaks(texts)) : []
+        ForEach(Array(plan.enumerated()), id: \.offset) { _, part in
+            let foldKey: String = "\(g)-\(c)-\(part.start)"
+            if part.folded && !openedFillers.contains(foldKey) {
+                FoldedFillerRow(count: part.count,
+                                preview: texts[part.start..<(part.start + part.count)].joined(separator: "・")) {
+                    openedFillers.insert(foldKey)
+                }
+            } else {
+                ForEach(part.start..<(part.start + part.count), id: \.self) { l in
+                    if breaks.contains(l) { TopicBreakLine() }
+                    lineRow(conversation, l: l, key: "\(g)-\(c)-\(l)")
+                }
+            }
+        }
+    }
+
+    /// 1 行（押すとその場面から再生・長押しで直す・左に払うと話者と文字）
+    private func lineRow(_ conversation: ConversationLog.Conversation, l: Int, key: String) -> some View {
+        let line = conversation.lines[l]
+        let next = conversation.lines[(l + 1)...].first { $0.audio == line.audio }
+        return row(line, key: key)
+            .listRowSeparator(.hidden)  // 吹き出しなので、行の線は引かない（s22 の 見9）
+            .contextMenu {
+                Button("話者を直す", systemImage: "person.crop.circle.badge.questionmark") {
+                    fixing = Fix(line: line, next: next)
+                }
+                Button("文字を直す", systemImage: "pencil") {
+                    editing = WordTarget(line: line)
+                }
+                Button("言葉を登録", systemImage: "character.book.closed") {
+                    addingWord = WordTarget(line: line)
+                }
+                // 会話の 1 場面をカードの絵で共有（名前を伏せるのが初め。2026-11-22。s22 の 楽23。S22Views.swift）
+                Button("この場面をカードで共有", systemImage: "photo.on.rectangle") {
+                    S22Present.shared.card = S22SceneTarget(conversation: conversation, around: line.time)
+                }
+                // この行から別の会話にする（2026-11-06）
+                if conversation.closed, l > 0 {
+                    Button("ここで会話を分ける", systemImage: "scissors") {
+                        Task {
+                            await pipeline.splitConversation(start: conversation.start, at: line.time, day: day)
+                            conversations = load()
+                        }
+                    }
+                }
+            }
+            .swipeActions(edge: .leading) {
+                Button("話者", systemImage: "person.crop.circle.badge.questionmark") {
+                    fixing = Fix(line: line, next: next)
+                }
+                .tint(LL.accent)
+                Button("文字", systemImage: "pencil") {
+                    editing = WordTarget(line: line)
+                }
+                .tint(LL.warn)
+            }
+    }
+
     private func load() -> [ConversationLog.Conversation] {
         let all = pipeline.conversations(on: day)
         guard let range else { return all }
@@ -390,54 +426,16 @@ struct ConversationsView: View {
     @ViewBuilder
     private func row(_ line: ConversationLog.Line, key: String) -> some View {
         let audio = line.audio.flatMap { pipeline.archive.canPlay($0) ? $0 : nil }
-        let label = HStack(alignment: .firstTextBaseline) {
-            VStack(spacing: 2) {
-                Text(Self.lineTimeFormatter.string(from: line.time))
-                    .font(.caption.monospacedDigit())
-                // 時計で録った音から書いた行
-                if line.audio?.hasSuffix("-w.m4a") == true {
-                    Image(systemName: "applewatch").font(.caption2)
-                }
-                // 騒がしいところで聞き取った行
-                if line.noisy == true {
-                    Image(systemName: "speaker.wave.3").font(.caption2)
-                }
-            }
-            .foregroundStyle(LL.dim)
-            VStack(alignment: .leading, spacing: 2) {
-                if line.speaker != nil || line.marked == true {
-                    HStack(spacing: 4) {
-                        if line.marked == true {
-                            Image(systemName: "star.fill").foregroundStyle(LL.warn)
-                        }
-                        if let speaker = line.speaker {
-                            Text(speaker)
-                            // 2つの声のモデルで話し手が食い違った行（2026-11-06）
-                            if let doubt = line.speakerDoubt, doubt != line.speakerID {
-                                Text("？").foregroundStyle(LL.warn)
-                            }
-                        }
-                    }
-                    .font(.caption.bold())
-                }
-                // 確からしさの低い行は薄く出す（聞き直して確かめたほうがよい行）
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    if line.isUncertain {
-                        Image(systemName: "questionmark.circle").font(.caption).foregroundStyle(LL.warn)
-                    }
-                    // 自信の低い行は、名前・数字・日時・金額に下線（要確認。2026-11-06）
-                    Text(line.isUncertain ? UncertainMarks.underlined(line.text) : AttributedString(line.text))
-                        .opacity(line.isUncertain ? 0.55 : 1)
-                }
-                if let original = line.original {
-                    Text("直す前: " + original)
-                        .font(.caption)
-                        .foregroundStyle(LL.dim)
-                }
-            }
-            Spacer(minLength: 0)
+        let isSelf: Bool = line.speakerID == SpeakerLabeler.selfID || line.speaker == SpeakerLabeler.selfName
+        // 吹き出し（自分は右・確かでない語は薄い下線・話し手の色は人の丸と同じ。2026-11-22。s22 の 見9・見12・見13）
+        let label = LineBubble(text: line.text, speaker: line.speaker, isSelf: isSelf,
+                               time: Self.lineTimeFormatter.string(from: line.time),
+                               uncertain: line.isUncertain, marked: line.marked == true,
+                               doubt: line.speakerDoubt.map { $0 != line.speakerID } ?? false,
+                               original: line.original, fromWatch: line.audio?.hasSuffix("-w.m4a") == true,
+                               noisy: line.noisy == true) {
             if player.loading == key {
-                ProgressView()
+                ProgressView().controlSize(.mini)
             } else if audio != nil {
                 Image(systemName: player.playing == key ? "stop.circle.fill" : "play.circle")
                     .foregroundStyle(LL.accent)

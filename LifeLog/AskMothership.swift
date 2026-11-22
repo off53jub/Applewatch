@@ -146,7 +146,8 @@ struct MothershipAnswerSections: View {
 
     var body: some View {
         Section {
-            Text(answer.answer).textSelection(.enabled)
+            // md の見出し・箇条書き・表（表は 1 行 1 カード）を読む形で（2026-11-22。s22 の 見19。S22DesignKit.swift）
+            LLMarkdownView(text: answer.answer)
         } header: {
             Text(question)
         } footer: {
@@ -154,7 +155,7 @@ struct MothershipAnswerSections: View {
                  : "母艦で探しましたが、答えられるものは見つかりませんでした（\(answer.snippets) 件を読みました）。")
         }
         if !answer.sources.isEmpty {
-            Section("もとにした記録（母艦）") {
+            Section("もとにした記録（家の PC）") {
                 ForEach(answer.sources) { source in
                     VStack(alignment: .leading, spacing: 2) {
                         Text("[\(source.n)] " + source.caption).font(.caption).foregroundStyle(LL.dim)

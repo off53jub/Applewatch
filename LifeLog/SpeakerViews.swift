@@ -307,24 +307,28 @@ struct PeopleView: View {
             NavigationLink {
                 PersonView(id: person.id)
             } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    LabeledContent(person.displayName) {
-                        Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))")
-                    }
-                    // どこで話した声か（場所の分かる会話から、多い順に3つまで）
-                    if let list = places.byPerson[person.id], !list.isEmpty {
-                        Text(list.prefix(3).map(\.place).joined(separator: "・"))
-                            .font(.caption)
-                            .foregroundStyle(LL.dim)
-                            .lineLimit(1)
-                    }
-                    // ▶︎で鳴る声が、いつ何を話したところか（声だけでは分かりにくいので）
-                    if let sample = person.samples.last, let info = sampleInfo[sample] {
-                        Text("▶︎「\(info.text)」\(info.caption)").font(.caption).foregroundStyle(LL.dim).lineLimit(2)
-                    }
-                    // 名前の無い声は、呼ばれた名前を添える
-                    if let top = clues[person.id]?.candidates.first {
-                        Text("もしかして: \(top.name)").font(.caption).foregroundStyle(LL.accent)
+                // 人の丸（頭文字と色は名前から。2026-11-22。s22 の 見13）
+                HStack(alignment: .top, spacing: LL.Space.s) {
+                    PersonAvatar(name: person.displayName, isSelf: person.isSelf)
+                    VStack(alignment: .leading, spacing: 2) {
+                        LabeledContent(person.displayName) {
+                            Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))")
+                        }
+                        // どこで話した声か（場所の分かる会話から、多い順に3つまで）
+                        if let list = places.byPerson[person.id], !list.isEmpty {
+                            Text(list.prefix(3).map(\.place).joined(separator: "・"))
+                                .font(.caption)
+                                .foregroundStyle(LL.dim)
+                                .lineLimit(1)
+                        }
+                        // ▶︎で鳴る声が、いつ何を話したところか（声だけでは分かりにくいので）
+                        if let sample = person.samples.last, let info = sampleInfo[sample] {
+                            Text("▶︎「\(info.text)」\(info.caption)").font(.caption).foregroundStyle(LL.dim).lineLimit(2)
+                        }
+                        // 名前の無い声は、呼ばれた名前を添える
+                        if let top = clues[person.id]?.candidates.first {
+                            Text("もしかして: \(top.name)").font(.caption).foregroundStyle(LL.accent)
+                        }
                     }
                 }
             }
@@ -865,13 +869,19 @@ struct PersonPicker: View {
         let order: [SpeakerLabeler.Context?] = context == .other ? [.other, nil, .work] : [.work, nil, .other]
         LLList {
             if includeSelf {
-                Button(SpeakerLabeler.selfName) { onPick(SpeakerLabeler.selfID) }
+                Button { onPick(SpeakerLabeler.selfID) } label: {
+                    Label { Text(SpeakerLabeler.selfName) } icon: { PersonAvatar(name: SpeakerLabeler.selfName, isSelf: true, size: 26) }
+                }
             }
             ForEach(order, id: \.self) { c in
                 let list = named.filter { $0.context == c }
                 if !list.isEmpty {
                     Section(c?.label ?? "どちらでも") {
-                        ForEach(list) { p in Button(p.displayName) { onPick(p.id) } }
+                        ForEach(list) { p in
+                            Button { onPick(p.id) } label: {
+                                Label { Text(p.displayName) } icon: { PersonAvatar(name: p.displayName, size: 26) }
+                            }
+                        }
                     }
                 }
             }
@@ -880,6 +890,8 @@ struct PersonPicker: View {
                 Section("名前の無い声") {
                     ForEach(unnamed) { p in
                         Button { onPick(p.id) } label: {
+                            HStack(alignment: .top, spacing: LL.Space.s) {
+                            PersonAvatar(name: p.displayName, size: 26)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(p.displayName)
                                 // どこで聞いた声か（名前の無い声を見分ける手がかり）
@@ -887,6 +899,7 @@ struct PersonPicker: View {
                                     Text(list.prefix(3).map(\.place).joined(separator: "・"))
                                         .font(.caption).foregroundStyle(LL.dim)
                                 }
+                            }
                             }
                         }
                     }
@@ -961,7 +974,7 @@ struct SpeakerFixView: View {
                 Text(line.text).lineLimit(3)
                 Picker("直す範囲", selection: $scope) {
                     Text("この行だけ").tag(Pipeline.SpeakerFix.line)
-                    Text("同じ区切りの同じ声").tag(Pipeline.SpeakerFix.sameVoice)
+                    Text("同じ録音の同じ声").tag(Pipeline.SpeakerFix.sameVoice)
                     if line.speakerID != nil {
                         Text("この声すべて").tag(Pipeline.SpeakerFix.everywhere)
                     }

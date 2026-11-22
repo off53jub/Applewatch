@@ -53,6 +53,9 @@ struct DayBandView: View {
                                     .frame(width: max(2, x1 - x0), height: 22)
                                     .offset(x: x0, y: 12)
                             }
+                            // 文字が届いた所が少しのあいだ光る（2026-11-22。s22 の 見15。「視差効果を減らす」なら光らない）
+                            BandGlowLayer(talks: talks.map { BandSpan(start: $0.start, end: $0.end) }, dayStart: start,
+                                          width: width, height: 22, y: 12)
                             if let selection {
                                 let x0 = BandRules.x(of: selection.lowerBound, width: width, dayStart: start, dayEnd: end)
                                 let x1 = BandRules.x(of: selection.upperBound, width: width, dayStart: start, dayEnd: end)

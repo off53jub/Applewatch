@@ -19,11 +19,21 @@ struct LifeLogWidgets: WidgetBundle {
         GoodWidget()
         // 充電中（StandBy）の今日のまとめ（2026-11-21。s20 の 追3。TodayStandByWidget.swift）
         TodayStandByWidget()
-        // 確かめ待ちの 1 問に ○×（2026-11-22。s22 の 楽14。S22ReviewWidget.swift）
-        S22ReviewWidget()
+        // s22 の 2 つ（楽14 の 1 問・見18 の今日の帯）は、束が 10 個を超えないよう別の束にまとめる（2026-11-22）
+        S22Widgets().body
         RecordingLiveActivity()
         // 会議モードのあいだの「決まったこと・宿題・聞き忘れ」（2026-11-15。強化案 50。MeetingActivityWidget.swift）
         MeetingLiveActivity()
+    }
+}
+
+/// s22 で足したウィジェット（WidgetBundle の中身は 10 個までなので、別の束にして上の束から読む。2026-11-22）
+struct S22Widgets: WidgetBundle {
+    var body: some Widget {
+        // 確かめ待ちの 1 問に ○×（s22 の 楽14。S22ReviewWidget.swift）
+        S22ReviewWidget()
+        // ロック画面の今日の帯（s22 の 見18。TodayBandWidget.swift）
+        TodayBandWidget()
     }
 }
 

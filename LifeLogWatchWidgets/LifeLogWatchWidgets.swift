@@ -8,6 +8,14 @@ import WidgetKit
 /// iPhone から届いた分）。読めないとき（App Group が使えない入れ方など）は「—」を出す。押すと LifeLog を開く。
 /// 種類の名前（kind）は前の「開くボタン」と同じにしてある（文字盤に置いたものが消えないように）。
 @main
+struct LifeLogWatchWidgetBundle: WidgetBundle {
+    var body: some Widget {
+        LifeLogWatchWidgets()
+        // 録音中か・電池の残り時間を、丸と角の形で（2026-11-22。s22 の 見17）
+        WatchBatteryWidget()
+    }
+}
+
 struct LifeLogWatchWidgets: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: WidgetState.watchKind, provider: Provider()) { entry in
@@ -101,5 +109,63 @@ private struct Provider: TimelineProvider {
         let state = WidgetState.load()
         let entries = (state?.timelineDates(from: now) ?? [now]).map { Entry(date: $0, state: state) }
         completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(WidgetState.refreshAfter))))
+    }
+}
+
+/// 文字盤の「LifeLog の電池」（s22 の 見17。2026-11-22）。丸: 電池の輪の中に録音中の印と「あと○時間」。
+/// 角: 録音中の印と、曲がった電池の目盛り。中身は時計のアプリが書く WidgetState（watchRecording・watchBattery・watchHoursLeft）
+struct WatchBatteryWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: WidgetState.watchBatteryKind, provider: Provider()) { entry in
+            WatchBatteryView(state: entry.state)
+                .containerBackground(for: .widget) { LLWidgetBackground() }
+        }
+        .configurationDisplayName("LifeLog の電池")
+        .description("録音しているかと、あと何時間録れるかを、丸か角に出します。")
+        .supportedFamilies([.accessoryCircular, .accessoryCorner])
+    }
+}
+
+private struct WatchBatteryView: View {
+    @Environment(\.widgetFamily) private var family
+    let state: WidgetState?
+
+    private var recording: Bool { state?.watchRecording == true }
+    private var symbol: String { recording ? "record.circle.fill" : "waveform" }
+    private var level: Double { WatchGaugeRules.level(state?.watchBattery) ?? 0 }
+    private var short: String { WatchGaugeRules.short(hoursLeft: state?.watchHoursLeft) }
+
+    var body: some View {
+        switch family {
+        case .accessoryCorner:
+            Image(systemName: symbol)
+                .font(.title3)
+                .widgetAccentable()
+                .widgetLabel {
+                    Gauge(value: level) {
+                        Text("電池")
+                    } currentValueLabel: {
+                        Text(short)
+                    } minimumValueLabel: {
+                        Text("")
+                    } maximumValueLabel: {
+                        Text(short)
+                    }
+                    .tint(recording ? LL.danger : LL.accent)
+                }
+                .accessibilityLabel((recording ? "録音中" : "止まっている") + "、あと " + short)
+        default:
+            Gauge(value: level) {
+                Image(systemName: symbol)
+            } currentValueLabel: {
+                VStack(spacing: 0) {
+                    Image(systemName: symbol).font(.caption2).widgetAccentable()
+                    Text(short).font(.caption2.weight(.semibold)).monospacedDigit()
+                }
+            }
+            .gaugeStyle(.accessoryCircular)
+            .tint(recording ? LL.danger : LL.accent)
+            .accessibilityLabel((recording ? "録音中" : "止まっている") + "、あと " + short)
+        }
     }
 }
