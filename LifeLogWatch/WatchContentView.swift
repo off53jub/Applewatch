@@ -132,23 +132,10 @@ private struct RecordPage: View {
         let split = WatchAction.split(recording: recorder.isRecording)
         ScrollView {
             VStack(spacing: 8) {
-                Button {
+                // 輪＋大きな数字 1 つ（輪＝今日録れた時間・数字は切り替え。2026-11-22。s22 の 見16。WatchRing.swift）
+                WatchRing(recording: recorder.isRecording, recorded: recorder.recordedToday, unsent: recorder.unsent,
+                          waiting: recorder.board.info?.reviewWaiting) {
                     Task { await recorder.toggle() }
-                } label: {
-                    ZStack {
-                        Circle().fill((recorder.isRecording ? LL.danger : LL.accent).opacity(0.18))
-                            .frame(width: 74, height: 74)
-                            .scaleEffect(recorder.isRecording && breathe ? 1.1 : 1)
-                        Image(systemName: recorder.isRecording ? "stop.fill" : "record.circle")
-                            .font(.system(size: recorder.isRecording ? 28 : 44, weight: .semibold))
-                            .foregroundStyle(recorder.isRecording ? LL.danger : LL.accent)
-                    }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(recorder.isRecording ? "録音を止める" : "録音を始める")
-                .onAppear {
-                    guard !reduceMotion else { return }
-                    withAnimation(LL.Motion.breathe) { breathe = true }
                 }
                 Text(recorder.isRecording ? "録音中" : "停止中")
                     .font(.headline)

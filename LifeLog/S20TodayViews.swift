@@ -9,12 +9,14 @@ import SwiftUI
 struct TodayHeroSection: View {
     @Environment(Pipeline.self) private var pipeline
     @State private var picked: CaptureDot?
+    /// 今日の会話（今日の画面が 1 回読んだものを受け取る。帯に描く。2026-11-22。s22 の 見15）
+    var talks: [ConversationLog.Conversation] = []
 
     var body: some View {
         let now = Date.now
         let part = DayPart.of(now)
-        let waiting = S20Book.shared.waitingCount
         let pause = S20Hold.reason(now: now)
+        let dayStart = Calendar.current.startOfDay(for: now)
         Section {
             VStack(alignment: .leading, spacing: LL.Space.m) {
                 HStack(alignment: .firstTextBaseline) {
@@ -42,22 +44,14 @@ struct TodayHeroSection: View {
                 if let pause {
                     Label(pause, systemImage: "moon.zzz").font(.caption).foregroundStyle(LL.dim)
                 }
-                if waiting > 0 {
-                    NavigationLink {
-                        ReviewDeckView()
-                    } label: {
-                        HStack {
-                            Label("確かめ待ち", systemImage: "hand.raised")
-                                .font(.callout.weight(.semibold))
-                            Spacer()
-                            Text("\(waiting)").font(.title3.weight(.bold)).monospacedDigit()
-                            Text("件・1 枚 3 秒").font(.caption).foregroundStyle(LL.dim)
-                        }
-                        .padding(LL.Space.m)
-                        .background(LL.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: LL.Radius.small))
-                        .overlay(RoundedRectangle(cornerRadius: LL.Radius.small).strokeBorder(LL.accent, lineWidth: LL.Stroke.thin))
-                    }
-                    .accessibilityLabel("確かめ待ち \(waiting) 件。押すと答えるカードを開きます")
+                // 今日の帯（文字が届くと、その所が光る。2026-11-22。s22 の 見15）。確かめ待ちの数は下の帯へ移した（見21）
+                NavigationLink {
+                    DayBandView(day: now)
+                } label: {
+                    LLDayStrip(talks: talks.map { BandSpan(start: $0.start, end: $0.end) },
+                               recorded: pipeline.ledger.map(for: dayStart).spans.filter { $0.kind == .recorded }
+                                   .map { BandSpan(start: $0.start, end: $0.end) },
+                               dayStart: dayStart)
                 }
             }
             .padding(.vertical, LL.Space.xs)

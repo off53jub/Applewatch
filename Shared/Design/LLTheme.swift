@@ -9,8 +9,8 @@ import UIKit
 enum LL {
     // MARK: 色（地・面・線・文字）
 
-    /// 地（画面のいちばん奥）
-    static let bg = Color.ll(light: 0xF3F6FB, dark: 0x0B1220)
+    /// 地（画面のいちばん奥）。朝・昼・夜でわずかに変わる（2026-11-22。s22 の 見20。設定「見た目」で切れる。時計は変えない）
+    static let bg = Color.llDayTinted()
     /// 面（カード・一覧の行）
     static let surface = Color.ll(light: 0xFFFFFF, dark: 0x121A2B)
     /// 面2（カードの中の一段上・押せる札）
@@ -107,6 +107,18 @@ extension Color {
         #else
         return Color(uiColor: UIColor { traits in
             UIColor(llHex: traits.userInterfaceStyle == .dark ? dark : light)
+        })
+        #endif
+    }
+
+    /// 地の色: 色を使うたびに、いまの時刻と設定から決める（LLDayTint。切っていれば #0B1220・#F3F6FB のまま）
+    static func llDayTinted() -> Color {
+        #if os(watchOS)
+        return Color(llHex: 0x0B1220)
+        #else
+        return Color(uiColor: UIColor { traits in
+            let hour = Calendar.current.component(.hour, from: Date())
+            return UIColor(llHex: LLDayTint.bgHex(hour: hour, dark: traits.userInterfaceStyle == .dark, enabled: LLDayTint.isOn))
         })
         #endif
     }

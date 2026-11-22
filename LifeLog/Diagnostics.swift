@@ -415,6 +415,12 @@ struct DiagnosticsView: View {
     var body: some View {
         let sections = items.reduce(into: [String]()) { if !$0.contains($1.section) { $0.append($1.section) } }
         LLForm {
+            // 6 つの丸の信号（2026-11-22。s22 の 見6・見7。S22DesignKit.swift）。数えているあいだは骨組み（見14）
+            if items.isEmpty {
+                Section { LLSkeletonRows(count: 6) }
+            } else {
+                S22SignalBoard(items: items)
+            }
             Section {
                 Button(writing ? "書いています…" : "ドライブの「診断」に書く") {
                     writing = true
@@ -432,17 +438,18 @@ struct DiagnosticsView: View {
                 Section(section) {
                     ForEach(items.filter { $0.section == section }) { item in
                         HStack(alignment: .firstTextBaseline) {
-                            if let ok = item.ok {
-                                Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                                    .foregroundStyle(ok ? LL.good : LL.warn)
+                            // 赤は自分で動くものだけ・待てば直るものは灰色（2026-11-22。s22 の 見7）
+                            if item.ok != nil {
+                                LLToneMark(tone: LLTone.of(ok: item.ok, fix: LLTone.guessFix(section: item.section, label: item.label)))
                             }
+                            // 数は人が読む形に（「12792.0 分」→「約 9 日」。s22 の 見5。LLNumber.swift）
                             if section == "最近のエラー" {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(item.label).font(.caption).foregroundStyle(LL.dim)
                                     Text(item.value).font(.callout)
                                 }
                             } else {
-                                LabeledContent(item.label) { Text(item.value).multilineTextAlignment(.trailing) }
+                                LabeledContent(item.label) { Text(LLNumber.display(item.value)).multilineTextAlignment(.trailing) }
                             }
                         }
                     }

@@ -187,14 +187,15 @@ struct StoryView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 220)
                 if loading {
-                    ProgressView().tint(LL.accent)
+                    // 骨組み（2026-11-22。s22 の 見14）
+                    LLSkeletonRows(count: 3).padding(.horizontal, LL.Space.l)
                 } else if pages.isEmpty {
                     LLEmpty(title: "まだ物語になるほど記録がありません", symbol: "text.book.closed")
                 }
                 ForEach(Array(pages.enumerated()), id: \.offset) { i, page in
                     VStack(spacing: LL.Space.s) {
                         Text(page.title).font(.headline).foregroundStyle(LL.dim)
-                        Text(page.value).font(.system(size: 64, weight: .heavy, design: .rounded)).monospacedDigit()
+                        Text(LLNumber.display(page.value)).font(.system(size: 64, weight: .heavy, design: .rounded)).monospacedDigit()
                             .foregroundStyle(i == 0 ? LL.accent : LL.text)
                         Text(page.note).font(.callout).foregroundStyle(LL.dim)
                     }

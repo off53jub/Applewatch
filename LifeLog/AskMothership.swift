@@ -146,7 +146,8 @@ struct MothershipAnswerSections: View {
 
     var body: some View {
         Section {
-            Text(answer.answer).textSelection(.enabled)
+            // md の見出し・箇条書き・表（表は 1 行 1 カード）を読む形で（2026-11-22。s22 の 見19。S22DesignKit.swift）
+            LLMarkdownView(text: answer.answer)
         } header: {
             Text(question)
         } footer: {

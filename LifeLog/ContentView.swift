@@ -221,7 +221,7 @@ private struct TodayView: View {
             LLList {
                 // 2026-11-21（s20 の 体7〜10）: 上は大事な 3 つ（録音の丸 3 つ・今日の三つ・確かめ待ちの数）。ほかのカードは畳む。
                 // 朝は予定の前と朝のまとめ・1 年前の今日、夜は夜の10秒と今日の問いを上に出す。休日は休日の顔（S20TodayViews.swift）
-                TodayHeroSection()
+                TodayHeroSection(talks: talks)
                 HolidayFaceSection()
                 // (a) 今日の三つと提案1つ（MothershipFeeds.swift）
                 TodayAnswerCard()
@@ -261,11 +261,7 @@ private struct TodayView: View {
             .navigationTitle("今日")
             .countsOpen("today")
             .safeAreaInset(edge: .bottom, spacing: 0) { recordBar() }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("使い方", systemImage: "questionmark.circle") { showHelp = true }
-                }
-            }
+            // 「使い方」は下の帯へ（2026-11-22。s22 の 見21。片手で届く所）。歯車はどのタブでも右上のまま
             .settingsGear()
             .sheet(isPresented: $showHelp) { TodayHelpView { showHelp = false } }
             .fullScreenCover(isPresented: $showLive) { LiveView { showLive = false } }
@@ -274,7 +270,9 @@ private struct TodayView: View {
 
     /// 録る・印・会議・ライブ字幕を1行に（録音のボタンを大きく。ほかの3つは小さなボタン）
     private func recordBar() -> some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 6) {
+            // 確かめ待ちと使い方も、親指の届く下に（2026-11-22。s22 の 見21。S22TodayViews.swift）
+            TodayReachRow(showHelp: $showHelp)
             HStack(spacing: 10) {
                 recordButton()
                 Button {
@@ -294,6 +292,7 @@ private struct TodayView: View {
                 .buttonStyle(.bordered)
                 .accessibilityLabel(pipeline.liveOn ? "ライブ字幕（オン）" : "ライブ字幕")
             }
+            .controlSize(.large)  // 親指で押しやすい大きさ（s22 の 見21）
             if let line = barNote() {
                 Text(line).font(.caption).foregroundStyle(LL.dim).lineLimit(1)
             }
@@ -445,10 +444,10 @@ private struct TodayView: View {
             NavigationLink {
                 WatchDelayView()
             } label: {
-                LabeledContent("時計の遅れ", value: "直近 " + WatchDelayLog.text(last.arrival))
+                LabeledContent("時計の遅れ", value: LLNumber.humanize("直近 " + WatchDelayLog.text(last.arrival)))
             }
         }
-        LabeledContent("文字起こし待ち", value: "\(pipeline.pendingCount) 件")
+        LabeledContent("文字起こし待ち", value: LLNumber.count(pipeline.pendingCount) + " 件")
         NavigationLink {
             RecordingMapView()
         } label: {

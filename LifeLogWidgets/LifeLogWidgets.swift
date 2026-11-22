@@ -19,6 +19,8 @@ struct LifeLogWidgets: WidgetBundle {
         GoodWidget()
         // 充電中（StandBy）の今日のまとめ（2026-11-21。s20 の 追3。TodayStandByWidget.swift）
         TodayStandByWidget()
+        // ロック画面の今日の帯（2026-11-22。s22 の 見18。TodayBandWidget.swift）
+        TodayBandWidget()
         RecordingLiveActivity()
         // 会議モードのあいだの「決まったこと・宿題・聞き忘れ」（2026-11-15。強化案 50。MeetingActivityWidget.swift）
         MeetingLiveActivity()

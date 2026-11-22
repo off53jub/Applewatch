@@ -139,17 +139,17 @@ struct WatchDelayView: View {
             Section {
                 LabeledContent("届いた区切り", value: "\(recent.count) 個")
                 if !arrivals.isEmpty {
-                    LabeledContent("届くまで（ふつう）", value: WatchDelayLog.text(median(arrivals)))
-                    LabeledContent("届くまで（いちばん遅い）", value: WatchDelayLog.text(arrivals.max() ?? 0))
+                    LabeledContent("届くまで（ふつう）", value: LLNumber.humanize(WatchDelayLog.text(median(arrivals))))
+                    LabeledContent("届くまで（いちばん遅い）", value: LLNumber.humanize(WatchDelayLog.text(arrivals.max() ?? 0)))
                 }
                 if let split = WatchDelayLog.splitText(recent) {
-                    LabeledContent("届くまでの内訳", value: split)
+                    LabeledContent("届くまでの内訳", value: LLNumber.humanize(split))
                 }
                 if !waits.isEmpty {
-                    LabeledContent("文字になるまで（ふつう）", value: WatchDelayLog.text(median(waits)))
-                    LabeledContent("文字になるまで（いちばん遅い）", value: WatchDelayLog.text(waits.max() ?? 0))
+                    LabeledContent("文字になるまで（ふつう）", value: LLNumber.humanize(WatchDelayLog.text(median(waits))))
+                    LabeledContent("文字になるまで（いちばん遅い）", value: LLNumber.humanize(WatchDelayLog.text(waits.max() ?? 0)))
                 }
-                LabeledContent("遅れて使えなかった時間", value: WatchDelayLog.text(TimeInterval(dropped * 30)))
+                LabeledContent("遅れて使えなかった時間", value: LLNumber.humanize(WatchDelayLog.text(TimeInterval(dropped * 30))))
             } header: {
                 Text("直近24時間")
             } footer: {

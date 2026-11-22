@@ -688,6 +688,11 @@ final class PagesBook {
         URL.applicationSupportDirectory.appendingPathComponent(name)
     }
 
+    /// 写しを書いた時刻（ファイルの時刻。無ければ nil。2026-11-22。s22 の 見14「前の写し ○分前」）
+    static func copiedAt(_ name: String) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url(name).path))?[.modificationDate] as? Date
+    }
+
     private static func read<T: Decodable>(_ type: T.Type, _ name: String) -> T? {
         guard let data = try? Data(contentsOf: url(name)) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
@@ -861,11 +866,25 @@ struct PeoplePagesView: View {
                     ForEach(rest) { page in PersonPageRow(page: page) }
                 }
             }
+            // 前の写し ○分前（2026-11-22。s22 の 見14）。引っ張って読み直しているあいだは骨組み
+            if refreshing {
+                Section { LLSkeletonRows(count: 3) }
+            }
+            Section { LLCopyAgeLabel(at: copiedAt) }
         }
         .navigationTitle("人のページ")
         .countsOpen("peoplePages")
-        .refreshable { await PagesBook.shared.refresh(pipeline.homePC, force: true) }
+        .task { copiedAt = PagesBook.copiedAt(PagesBook.peopleFile) }
+        .refreshable {
+            refreshing = true
+            await PagesBook.shared.refresh(pipeline.homePC, force: true)
+            refreshing = false
+            copiedAt = PagesBook.copiedAt(PagesBook.peopleFile)
+        }
     }
+
+    @State private var copiedAt: Date?
+    @State private var refreshing = false
 }
 
 struct PersonPageRow: View {
@@ -875,11 +894,15 @@ struct PersonPageRow: View {
         NavigationLink {
             PersonPageView(page: page)
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(page.name)
-                if let last = page.last_talk {
-                    Text(AppFeeds.monthDay(last.day) + " " + last.summary)
-                        .font(.caption).foregroundStyle(LL.dim).lineLimit(2)
+            // 人の丸（2026-11-22。s22 の 見13）
+            HStack(alignment: .top, spacing: LL.Space.s) {
+                PersonAvatar(name: page.name)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(page.name)
+                    if let last = page.last_talk {
+                        Text(AppFeeds.monthDay(last.day) + " " + last.summary)
+                            .font(.caption).foregroundStyle(LL.dim).lineLimit(2)
+                    }
                 }
             }
         }
