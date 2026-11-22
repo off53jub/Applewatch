@@ -692,7 +692,32 @@ def summary_lines(diag_store=None, now: float | None = None) -> tuple[list[str],
                 f"{s22models.enhance_choice(config)}・足すモデル {','.join(s22models.asr_extra(config)) or 'なし'}"
                 + (f"（まだ無いファイル {len(missing)} 個。00:00〜05:00 に取ります）" if missing else ""))
 
-    for name, make in (("chain", chain_line), ("tags", tags_line), ("snorm", snorm_line), ("review", review_line),
+    def device_line():
+        """アプリ（A1・PR #97）の省ける様子: launchToToday {last,median,n}・ipadReader・deviceChecksManual・
+        時計の finishedRecent・muffledToday。来ていなければ書かない"""
+        if diag_store is None:
+            return None
+        parts = []
+        for record in diag_store.devices():
+            state = record.get("state") if isinstance(record.get("state"), dict) else {}
+            bits = []
+            launch = state.get("launchToToday")
+            if isinstance(launch, dict) and isinstance(launch.get("median"), (int, float)):
+                bits.append(f"開いてから今日の画面まで 真ん中 {launch['median']:.1f} 秒（最後 {launch.get('last')}・{launch.get('n')} 回）")
+            if isinstance(state.get("ipadReader"), bool):
+                bits.append("iPad の読むだけの形" + ("（オン）" if state["ipadReader"] else "（オフ）"))
+            for key, label in (("deviceChecksManual", "実機の確かめ（手で）"), ("finishedRecent", "時計の最近の録り終わり"),
+                               ("muffledToday", "時計のこもった音（今日）")):
+                value = state.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    bits.append(f"{label} {value}")
+                elif isinstance(value, (list, dict)):
+                    bits.append(f"{label} {len(value)} 件")
+            if bits:
+                parts.append(f"{str(record.get('device') or record.get('deviceID') or '端末')[:20]}: " + "・".join(bits))
+        return "アプリの省ける様子（s22 A1）: " + " / ".join(parts) if parts else None
+
+    for name, make in (("device", device_line), ("chain", chain_line), ("tags", tags_line), ("snorm", snorm_line), ("review", review_line),
                        ("recexp", recexp_line), ("media", media_line), ("daily", daily_line), ("samples", samples_line),
                        ("models", models_line)):
         try:

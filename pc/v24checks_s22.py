@@ -220,6 +220,12 @@ def check_params() -> int:
                                                                           "voicedP50": -33.0} and got.get("scene") == "train"
                   and csv.get("levels", {}).get("voicedP50") == -33.0 and "rec_exp" not in csv and "scene" not in csv,
                   "確24・確4・確22: POST /jobs の recExp・levels（JSON か並び）・scene を読む（決まった値だけ）")
+    import urllib.parse
+
+    raw = "name=20261122-120000-w.m4a&recExp=32k45&levels=" + urllib.parse.quote('{"p10":-62.5,"p50":-48,"p90":-31,"voicedP50":-35}')
+    watch = jobqueue.parse_params(urllib.parse.parse_qs(raw))
+    failed += say(watch.get("rec_exp") == "32k45" and watch.get("levels", {}).get("p10") == -62.5,
+                  "確24・確4: /jobs と /w/jobs（時計の外の道）の query の levels（JSON の文字）・recExp をどちらも読む（同じ parse_params）")
     failed += say(s22pc.parse_levels("x") is None and s22pc.parse_levels('{"p10": "a"}') is None
                   and s22pc.parse_levels({"p50": 999}) is None, "確4: おかしい levels は捨てる")
     return failed
@@ -553,6 +559,11 @@ def check_work_and_summary() -> int:
     s22pc.S.main = SimpleNamespace(load_config=lambda: {}, log=LOGS.append, mothership=SimpleNamespace(home=lambda c: None),
                                    read_samples=lambda p: [{"source": {"origin": "pc-plaud"}}, {}], PERSONAL_DATA=home)
     worries, lines = s22pc.summary_lines(None, datetime.datetime(2026, 11, 22, 12).timestamp())
+    store = SimpleNamespace(devices=lambda: [{"device": "iPhone", "state": {"launchToToday": {"last": 1.2, "median": 0.9, "n": 5},
+                                                                             "ipadReader": False, "muffledToday": 2}}])
+    _, with_device = s22pc.summary_lines(store, datetime.datetime(2026, 11, 22, 12).timestamp())
+    failed += say(any("今日の画面まで 真ん中 0.9 秒" in x and "こもった音（今日） 2" in x for x in with_device),
+                  "A1 の省ける様子（launchToToday・muffledToday など）を summary に出す（来ていなければ書かない）")
     failed += say(any("録り方の実験" in x for x in lines) and any("PLAUD と合う行から 1 個" in x for x in lines)
                   and not any("数えられませんでした" in x for x in lines),
                   "summary.md の「s22 の数」の節が書ける（まだ無い数は書かない・つまずかない）")
