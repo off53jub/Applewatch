@@ -2480,7 +2480,7 @@ def previous_chunk(name: str) -> tuple[list[dict] | None, float | None]:
             continue
         if 0 <= begin - (start + length) <= 2.0:
             got = App.jobs.get(other) or {}
-            return got.get("lines") or None, float(length)
+            return (got.get("result") or {}).get("lines") or None, float(length)
     return None, None
 
 

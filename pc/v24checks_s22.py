@@ -624,7 +624,53 @@ def check_place_words() -> int:
     return failed
 
 
-CHECKS = (check_place_words, check_feeds, check_text, check_records_annotate, check_params, check_snorm, check_chain_and_count, check_tags,
+def check_main_hooks() -> int:
+    """lifelog_pc の中のつなぎ（決まり文句の票・前の区切り・場面の雑音除去）"""
+    import lifelog_pc
+
+    lifelog_pc.isolate_home()
+    failed = 0
+
+    class Engine:
+        provider = "cpu"
+
+        def __init__(self, name, text):
+            self.name, self.label, self.text = name, name, text
+
+        def run_timed(self, audio, segments, hints, prompt):
+            return [(self.text, None) for _ in segments]
+
+    audio = np.zeros(16000 * 5, dtype=np.float32)
+    saved = lifelog_pc.CLEAN_AUDIO, lifelog_pc.load_config
+    lifelog_pc.CLEAN_AUDIO = False
+    lifelog_pc.load_config = lambda: {}
+    try:
+        lines = lifelog_pc.Ensemble([Engine("haas", "えーと次はこれ"), Engine("whisper", "ご協力ありがとうございました。")])             .transcribe(audio, [(0.0, 3.0)], votes=True)
+        failed += say(len(lines) == 1 and lines[0]["text"] == "えーと次はこれ"
+                      and lines[0]["votes"]["whisper"] == "ご協力ありがとうございました。",
+                      "確12: 多数決で Whisper の決まり文句の票は数えない（票の文は残る）")
+        import judgecheck
+
+        now = judgecheck.chunk_epoch("20261121-100046-w.m4a")
+        jobs = SimpleNamespace(jobs={"20261121-100000-w.m4a": {"status": "done", "audio_seconds": 45.0,
+                                                               "times": {"chunk_start": now - 46.0}}},
+                               get=lambda n: {"result": {"lines": [{"start": 30.0, "end": 44.9, "text": "x"}]}})
+        saved_jobs = lifelog_pc.App.jobs
+        lifelog_pc.App.jobs = jobs
+        try:
+            prev = lifelog_pc.previous_chunk("20261121-100046-w.m4a")
+            other = lifelog_pc.previous_chunk("20261121-100046.m4a")
+        finally:
+            lifelog_pc.App.jobs = saved_jobs
+        failed += say(prev[1] == 45.0 and prev[0][0]["end"] == 44.9 and other == (None, None),
+                      "確11: 同じ端末のすぐ前の区切りの行と長さを見つける（iPhone の区切りとは混ぜない）")
+        failed += say(set(s22pc.FEATURES) <= set(lifelog_pc.features([])), "s22 の features を /hello に出す")
+    finally:
+        lifelog_pc.CLEAN_AUDIO, lifelog_pc.load_config = saved
+    return failed
+
+
+CHECKS = (check_main_hooks, check_place_words, check_feeds, check_text, check_records_annotate, check_params, check_snorm, check_chain_and_count, check_tags,
           check_media, check_review, check_prior, check_recexp, check_models, check_work_and_summary, check_plaud_samples)
 
 
