@@ -862,6 +862,21 @@ def parse_params(query: dict) -> dict:
     # s21 精7: 時計が「声が無い」と捨てるはずの区切りに印を付けて送ったもの（1 割だけ。本当に声が無かったかを数える）
     if flag("sampleNoVoice"):
         params["sample_no_voice"] = True
+    # s22 確24・確4・確22: 省ける recExp（録り方の実験の組）・levels（区切りの声の大きさの要約 dB）・scene（場面）
+    try:
+        import s22pc
+
+        exp = s22pc.parse_rec_exp((query.get("recExp") or [None])[0])
+        if exp:
+            params["rec_exp"] = exp
+        levels = s22pc.parse_levels((query.get("levels") or [None])[0])
+        if levels:
+            params["levels"] = levels
+    except Exception:  # noqa: BLE001 — 読めなくても預かる
+        pass
+    scene = (query.get("scene") or [""])[0]
+    if scene in ("train", "car", "shop", "outside", "home"):
+        params["scene"] = scene
     return params
 
 

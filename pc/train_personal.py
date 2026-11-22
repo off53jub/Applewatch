@@ -91,7 +91,9 @@ def split(rows: list[dict], seed: int) -> tuple[list[dict], list[dict]]:
     rows = sorted(rows, key=lambda r: r.get("hash") or r["audio"])
     random.Random(seed).shuffle(rows)
     def is_auto(r: dict) -> bool:
-        return isinstance(r.get("source"), dict) and r["source"].get("origin") == "pc-auto"
+        # s22 確16: PLAUD と合う行の材料（"pc-plaud"）も試験には使わない
+        return isinstance(r.get("source"), dict) and (r["source"].get("origin") in ("pc-auto", "pc-plaud")
+                                                      or r["source"].get("auto") is True)
 
     auto = [r for r in rows if is_auto(r)]
     human = [r for r in rows if not is_auto(r)]

@@ -360,6 +360,12 @@ def http_get(handler, url) -> None:
                 body.update(extra)
             if started or State.refreshing:
                 body["refreshing"] = True
+            try:  # s22 確1・確3・確6: s-norm の点・低い組を隠す・区切りをまたぐ組と人数の組（s22voice.py）
+                import s22voice
+
+                body = s22voice.adjust_same_person(State.home, body, s22voice.current_config())
+            except Exception:  # noqa: BLE001 — 足せなくても今までの答えは返す
+                pass
             handler.send_json(200, body)
         elif url.path == "/speaker-check":
             handler.send_json(200, voices.read_check(State.home))

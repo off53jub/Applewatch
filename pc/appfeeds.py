@@ -755,7 +755,35 @@ def _http_inbox(handler, base: Path, data: bytes, log, parse, rel: Path, label: 
     handler.send_json(200, {"ok": True})
 
 
+# s22 確27（s22pc.py が入れる）: 確かめ待ちの答え（kind review）の行 → {"changed": 行の数} か None（家の PC の問いでない）
+REVIEW_HOOK = None
+
+
 def http_post_feedback(handler, base: Path, data: bytes, log) -> None:
+    extra = None
+    if REVIEW_HOOK is not None:
+        try:
+            row = parse_feedback(data)
+        except ValueError:
+            row = None
+        if row is not None and row.get("kind") == "review":
+            class _Quiet:
+                """受け口の答えを 1 回だけ足して返すための包み（{"ok": true} に "done" を足す）"""
+
+                def __init__(self, inner) -> None:
+                    self.inner = inner
+                    self.client_address = inner.client_address
+
+                def send_json(self, status: int, body: dict) -> None:
+                    if status == 200 and extra is not None:
+                        body = {**body, "done": extra}
+                    self.inner.send_json(status, body)
+
+            try:
+                extra = REVIEW_HOOK(row)
+            except Exception:  # noqa: BLE001 — 広げられなくても答えは置く
+                extra = None
+            handler = _Quiet(handler)
     _http_inbox(handler, base, data, log, parse_feedback, FEEDBACK_FILE, "使われ方の記録", True,
                 lambda r: r["kind"] if r["kind"] in ("shake", "review") else f"{r['kind']} {r.get('value', '答え')}")
 

@@ -585,6 +585,9 @@ class RecordStore:
         # 2026-11-19（s18 の 72・73。knowme.py が入れる）: 「聞いて直す」に足す理由と、聞かない行。
         # (日, その日の記録) → ({行の時刻: [理由]}, {聞かない行の時刻})。無ければ今までどおり
         self.extra_doubts: Callable[[str, dict], tuple[dict[int, list[str]], set[int]]] | None = None
+        # s22（2026-11-22。s22pc.py が入れる）: 置く前に行へ省ける "conf"・"norm"・"mediaNearby" を足す口。
+        # (日, 中身の dict) → 足した中身。無い・失敗したときは届いたまま置く
+        self.annotate: Callable[[str, dict], dict] | None = None
 
     # MARK: 置く
 
@@ -633,6 +636,11 @@ class RecordStore:
         except (UnicodeDecodeError, ValueError) as error:
             raise ValueError("中身が JSON ではありません") from error
         parsed = parse_record(body)
+        if self.annotate is not None:
+            try:
+                data = json.dumps(self.annotate(day, body), ensure_ascii=False).encode("utf-8")
+            except Exception as error:  # noqa: BLE001 — 足せなくても、届いたまま置く
+                self.log(f"記録 {day} の行に印を足せませんでした（届いたまま置きます）: {type(error).__name__}")
         with self.lock:
             path = self.path(day)
             try:
