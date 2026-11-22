@@ -326,7 +326,7 @@ struct MeetingLiveRows: View {
                     }
                     Text(MeetingLiveRows.footer(feed)).font(.caption2).foregroundStyle(LL.dim)
                 } else {
-                    Text("会議の相棒: 家の PC が区切りの文から作り直すのを待っています。").font(.caption).foregroundStyle(LL.dim)
+                    Text("会議の相棒: 家の PC が録音の文から作り直すのを待っています。").font(.caption).foregroundStyle(LL.dim)
                 }
                 if let note = book.note {
                     Text(note).font(.caption2).foregroundStyle(LL.dim)

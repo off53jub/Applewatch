@@ -197,6 +197,8 @@ struct HelpNote: View {
 /// 今日の会話・最近の発言・いまの様子は、畳んだ「今日の記録」の中に移した（なくした働きは無い）
 private struct TodayView: View {
     @Environment(Pipeline.self) private var pipeline
+    /// 文字がとても大きいときは、下の帯を縦に積む（2026-11-22。s22。文字最大で横にはみ出していた）
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var showLive = false
     @State private var showHelp = false
     /// 「今日の記録」を開いているか（いつもは畳む）
@@ -273,8 +275,10 @@ private struct TodayView: View {
         VStack(spacing: 6) {
             // 確かめ待ちと使い方も、親指の届く下に（2026-11-22。s22 の 見21。S22TodayViews.swift）
             TodayReachRow(showHelp: $showHelp)
-            HStack(spacing: 10) {
+            let rowLayout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 10))
+            rowLayout {
                 recordButton()
+                HStack(spacing: 10) {
                 Button {
                     pipeline.addMark()
                     LLHaptic.confirm.play()
@@ -291,10 +295,11 @@ private struct TodayView: View {
                 }
                 .buttonStyle(.bordered)
                 .accessibilityLabel(pipeline.liveOn ? "ライブ字幕（オン）" : "ライブ字幕")
+                }
             }
             .controlSize(.large)  // 親指で押しやすい大きさ（s22 の 見21）
             if let line = barNote() {
-                Text(line).font(.caption).foregroundStyle(LL.dim).lineLimit(1)
+                Text(line).font(.caption).foregroundStyle(LL.dim).lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
             }
         }
         .padding(.horizontal)
@@ -313,7 +318,7 @@ private struct TodayView: View {
         } label: {
             Label(on ? "録音を止める" : "録音を始める", systemImage: on ? "stop.circle.fill" : "record.circle")
                 .font(.headline)
-                .lineLimit(1)
+                .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                 .minimumScaleFactor(0.7)  // 大きいボタンでも 1 行に（s22 の 見21。2 行に折れていた）
                 .frame(maxWidth: .infinity)
         }
@@ -392,7 +397,7 @@ private struct TodayView: View {
             DisclosureGroup(isExpanded: $recordOpen) {
                 talkRows(today: today, talks: talks)
                 recentRows()
-                Text("いまの様子").font(.caption.bold()).foregroundStyle(LL.dim)
+                Text("いまの状態").font(.caption.bold()).foregroundStyle(LL.dim)
                 statusRows()
             } label: {
                 LabeledContent("今日の記録", value: summary)
@@ -473,7 +478,7 @@ private struct TodayHelpView: View {
         NavigationStack {
             LLList {
                 Section("下のタブ") {
-                    Text("今日: いちばん上に今日の三つと提案。録る・印・会議・ライブ字幕は画面の下の1行です。今日の会話といまの様子は「今日の記録」を開くと出ます。困ったことがあるときだけ「気をつけること」が出ます。")
+                    Text("今日: いちばん上に今日の三つと提案。録る・印・会議・ライブ字幕は画面の下の1行です。今日の会話といまの状態は「今日の記録」を開くと出ます。困ったことがあるときだけ「気をつけること」が出ます。")
                     Text("タスク: やること。上の「仕事のまとめ」から職場の Claude の答えを取り込めます。")
                     Text("直す: AI からの質問・名前を付ける声・聞き間違いなど、答えると記録が正しくなるもの。タブの数字がたまっている数です。")
                     Text("記録: 言葉や名前で探す・日ごとに読む。上の切り替えで、人・場所・お金も見られます。")
@@ -492,7 +497,7 @@ private struct TodayHelpView: View {
                 // 2026-11-15（強化案 48）: 迷ったときの早見
                 Section("こういうときはこれ") {
                     Text("あとで正確に残したい会話 → 会議モード（仕事でもプライベートでも）")
-                    Text("記録のどこかに書いてあることを聞きたい → 記録に質問する（母艦も探す）")
+                    Text("記録のどこかに書いてあることを聞きたい → 記録に質問する（家の PC の記録も探す）")
                     Text("人・欲しい物・決めたことを聞きたい → 記録に質問する（欲しい物リスト・決めごと・人のノートも読みます）")
                     Text("何日もまたいで考えてほしいこと → Claude Code に聞く")
                     Text("払った記録を残したい → ウォレットのショートカット。PayPay はスクショ")

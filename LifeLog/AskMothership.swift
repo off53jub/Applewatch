@@ -155,7 +155,7 @@ struct MothershipAnswerSections: View {
                  : "母艦で探しましたが、答えられるものは見つかりませんでした（\(answer.snippets) 件を読みました）。")
         }
         if !answer.sources.isEmpty {
-            Section("もとにした記録（母艦）") {
+            Section("もとにした記録（家の PC）") {
                 ForEach(answer.sources) { source in
                     VStack(alignment: .leading, spacing: 2) {
                         Text("[\(source.n)] " + source.caption).font(.caption).foregroundStyle(LL.dim)

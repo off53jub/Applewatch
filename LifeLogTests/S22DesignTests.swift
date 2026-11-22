@@ -306,6 +306,13 @@ final class S22DesignTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(ratio(0x8A9BB8, LLDayTint.bgHex(hour: hour, dark: true, enabled: true)), 4.5, "暗い \(hour) 時")
             XCTAssertGreaterThanOrEqual(ratio(0x55657F, LLDayTint.bgHex(hour: hour, dark: false, enabled: true)), 4.5, "明るい \(hour) 時")
         }
+        // 見3（担当 C の報告）: 明るい画面の差し色・よかった・注意の文字を、地（どの時間でも）・面・面2 に置いても 4.5:1 以上
+        let lightGrounds: [UInt32] = [0xFFFFFF, 0xE9EEF6] + [3, 7, 12, 18, 23].map { LLDayTint.bgHex(hour: $0, dark: false, enabled: true) }
+        for (name, text) in [("差し色", UInt32(0x11719F)), ("よかった", 0x1E7952), ("注意", 0x985C0C), ("危ない", 0xB8403F)] {
+            for ground in lightGrounds {
+                XCTAssertGreaterThanOrEqual(ratio(text, ground), 4.5, "明るい \(name) / #" + String(ground, radix: 16))
+            }
+        }
     }
 
     // MARK: - 見16・見17 時計

@@ -151,7 +151,7 @@ struct ListenQualityView: View {
             }
             if noise.devices.isEmpty {
                 Section {
-                    Text("まだ測った区切りがありません。これから文字にする区切りから測ります。").foregroundStyle(LL.dim)
+                    Text("まだ測った録音がありません。これから文字にする録音から測ります。").foregroundStyle(LL.dim)
                 } header: {
                     Text("周りの音")
                 }

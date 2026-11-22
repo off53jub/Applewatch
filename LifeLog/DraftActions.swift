@@ -740,7 +740,7 @@ struct TimeLedgerView: View {
                     }
                 }
             } else {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
+                Text("まだ家の PC から届いていません。つながると読みます。").foregroundStyle(LL.dim)
             }
         }
         .navigationTitle("時間の家計簿")

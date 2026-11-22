@@ -22,16 +22,16 @@ enum LL {
     /// 薄い文字（補足・見立て（仮））
     static let dim = Color.ll(light: 0x55657F, dark: 0x8A9BB8)
     /// 差し色（水色 1 色だけ。押せる所・確かめ待ちの枠）
-    static let accent = Color.ll(light: 0x147FB3, dark: 0x5BC8F5)
+    static let accent = Color.ll(light: 0x11719F, dark: 0x5BC8F5)  // 明るい画面は s22 で 0x147FB3 から少し濃く（面2 の上でも 4.5:1 以上。見3）
 
     // MARK: 意味の色（体1。使う所を絞る）
 
     /// 止まっている・注意（琥珀）
-    static let warn = Color.ll(light: 0xA8660E, dark: 0xF2B24C)
+    static let warn = Color.ll(light: 0x985C0C, dark: 0xF2B24C)  // s22 で 0xA8660E から少し濃く
     /// 危ない（くすんだ赤）
     static let danger = Color.ll(light: 0xB8403F, dark: 0xE26D6D)
     /// よかった（くすんだ緑。使う所を絞る）
-    static let good = Color.ll(light: 0x22875C, dark: 0x5FC79A)
+    static let good = Color.ll(light: 0x1E7952, dark: 0x5FC79A)  // s22 で 0x22875C から少し濃く
 
     // MARK: 余白・角・線の太さ
 

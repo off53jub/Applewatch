@@ -6,6 +6,8 @@ import SwiftUI
 /// 下の帯の上の段: 確かめ待ち（あるときだけ）と使い方
 struct TodayReachRow: View {
     @Binding var showHelp: Bool
+    /// 文字がとても大きいときは「1 枚 3 秒」を外し、文字を折り返す（文字最大で横にはみ出していた）
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let waiting = S20Book.shared.waitingCount
@@ -16,17 +18,23 @@ struct TodayReachRow: View {
                 } label: {
                     HStack(spacing: LL.Space.s) {
                         Image(systemName: "hand.raised")
-                        Text("確かめ待ち").font(.callout.weight(.semibold))
-                        Text(LLNumber.count(waiting)).font(.callout.weight(.bold)).monospacedDigit()
-                        Text("件・1 枚 3 秒").font(.caption).foregroundStyle(LL.dim)
+                        if typeSize.isAccessibilitySize {
+                            Text("確かめ待ち \(LLNumber.count(waiting)) 件").font(.callout.weight(.semibold))
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            Text("確かめ待ち").font(.callout.weight(.semibold))
+                            Text(LLNumber.count(waiting)).font(.callout.weight(.bold)).monospacedDigit()
+                            Text("件・1 枚 3 秒").font(.caption).foregroundStyle(LL.dim)
+                        }
                         Spacer(minLength: 0)
                         Image(systemName: "chevron.right").font(.caption.weight(.semibold))
                     }
                     .foregroundStyle(LL.accent)
                     .padding(.horizontal, LL.Space.m)
+                    .padding(.vertical, typeSize.isAccessibilitySize ? LL.Space.s : 0)
                     .frame(minHeight: 44)
-                    .background(LL.accent.opacity(0.10), in: Capsule())
-                    .overlay(Capsule().strokeBorder(LL.accent, lineWidth: LL.Stroke.thin))
+                    .background(LL.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 22))
+                    .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(LL.accent, lineWidth: LL.Stroke.thin))
                 }
                 .accessibilityLabel("確かめ待ち \(waiting) 件。押すと答えるカードを開きます")
             } else {

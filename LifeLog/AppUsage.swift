@@ -26,7 +26,7 @@ enum AppUsageEvent: String, AppEnum {
 /// 「アプリを開いた記録」。ショートカットのオートメーションから呼ぶ（LifeLog は開かない）
 struct RecordAppUsageIntent: AppIntent {
     static let title: LocalizedStringResource = "アプリを開いた記録"
-    static let description: IntentDescription? = IntentDescription("いまの時刻と、アプリの名前・開いたか閉じたかを LifeLog に残します。家の PC につながったときに母艦へ送ります。")
+    static let description: IntentDescription? = IntentDescription("いまの時刻と、アプリの名前・開いたか閉じたかを LifeLog に残します。家の PC につながったときに送ります。")
     static let openAppWhenRun = false
 
     @Parameter(title: "アプリの名前")
@@ -68,7 +68,7 @@ struct AppUsageHowToView: View {
                 LabeledContent("送る前のもの", value: "\(pipeline.mothershipFeeds.waiting) 件")
                 LabeledContent("家の PC", value: pipeline.homePC.features.contains("appusage") ? "受け取れる" : "まだ受け取れない")
             } footer: {
-                Text("残すのは時刻・アプリの名前・出来事だけです。端末にためて、家の PC につながったときに母艦へ送ります（家の PC がまだ受け取れないときは、ためたままにします）。")
+                Text("残すのは時刻・アプリの名前・出来事だけです。端末にためて、家の PC につながったときに送ります（家の PC がまだ受け取れないときは、ためたままにします）。")
             }
         }
         .navigationTitle("アプリを開いた記録")

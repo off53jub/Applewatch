@@ -672,7 +672,7 @@ final class PagesBook {
     private(set) var threads: [ThreadPage] = []
     private(set) var places: [PlacePage] = []
     private(set) var decisions: [DecisionItem] = []
-    /// アプリで選んだ決めごと（id → 選んだもの）。母艦が帳面に入れて写しから消えたら、ここからも消す
+    /// アプリで選んだ決めごと（id → 選んだもの）。家の PC が帳面に入れて写しから消えたら、ここからも消す
     private(set) var answered: [String: String] = [:]
     @ObservationIgnored private var fetchedAt: Date?
     @ObservationIgnored private var fetching = false
@@ -835,7 +835,7 @@ struct PeoplePagesSection: View {
                     }
                 }
             } footer: {
-                Text("この60日に話した・LINE した人ごとに、最後に話したこと・続いている話題・互いの約束・好み・次に会うときの一言を、家の PC（母艦）がまとめた1枚です。")
+                Text("この60日に話した・LINE した人ごとに、最後に話したこと・続いている話題・互いの約束・好み・次に会うときの一言を、家の PCがまとめた1枚です。")
             }
         }
     }
@@ -850,7 +850,7 @@ struct PeoplePagesView: View {
         let people: [PersonPage] = PagesBook.shared.people
         LLList {
             if people.isEmpty {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
+                Text("まだ家の PC から届いていません。つながると読みます。").foregroundStyle(LL.dim)
             }
             ForEach(Self.groups, id: \.self) { group in
                 let rows: [PersonPage] = people.filter { $0.group == group }
@@ -976,7 +976,7 @@ struct PersonPageView: View {
             Section {
                 EmptyView()
             } footer: {
-                Text("家の PC（母艦）が人物ノート・会話・LINE・約束の記録からまとめました。会話の見出しは要約なので、事実と違うことがあります。")
+                Text("家の PCが人物ノート・会話・LINE・約束の記録からまとめました。会話の見出しは要約なので、事実と違うことがあります。")
             }
         }
         .navigationTitle(page.name)
@@ -1078,7 +1078,7 @@ struct ThreadsView: View {
         let settled: [ThreadPage] = threads.filter { $0.status != "open" }
         LLList {
             if threads.isEmpty {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
+                Text("まだ家の PC から届いていません。つながると読みます。").foregroundStyle(LL.dim)
             }
             if !open.isEmpty {
                 Section("続いている") {
@@ -1147,8 +1147,8 @@ struct ThreadDetailView: View {
                 Text("出てきた日（\(thread.days.count) 日）")
             } footer: {
                 Text(thread.source == "claude"
-                     ? "家の PC（母艦）が仕事のまとめ・朝のまとめから整えました（記録の文を引用できたものだけ）。"
-                     : "家の PC（母艦）が、案件のノートの名前が出てきた仕事のまとめの行から並べました。")
+                     ? "家の PCが仕事のまとめ・朝のまとめから整えました（記録の文を引用できたものだけ）。"
+                     : "家の PCが、案件のノートの名前が出てきた仕事のまとめの行から並べました。")
             }
         }
         .navigationTitle(thread.title)
@@ -1170,7 +1170,7 @@ struct PlacePagesSection: View {
                     LabeledContent("行った場所のページ", value: "\(places.count) か所")
                 }
             } footer: {
-                Text("お店・場所ごとに、行った回数・誰と・いくら・そこでの会話を、家の PC（母艦）の場所のノートからまとめています。")
+                Text("お店・場所ごとに、行った回数・誰と・いくら・そこでの会話を、家の PCの場所のノートからまとめています。")
             }
         }
     }
@@ -1183,7 +1183,7 @@ struct PlacePagesView: View {
         let places: [PlacePage] = PagesBook.shared.places
         LLList {
             if places.isEmpty {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
+                Text("まだ家の PC から届いていません。つながると読みます。").foregroundStyle(LL.dim)
             }
             ForEach(places) { place in
                 NavigationLink {
@@ -1247,7 +1247,7 @@ struct PlacePageView: View {
             Button("変える") { _ = PlaceNameBook.shared.fixPage(id: place.id, name: nameText) }
             Button("キャンセル", role: .cancel) {}
         } message: {
-            Text("直した名前は、母艦にも伝えます。")
+            Text("直した名前は、家の PC の記録にも伝えます。")
         }
     }
 }
@@ -1325,7 +1325,7 @@ struct DecisionsView: View {
                 Section { Text(note).font(.footnote).foregroundStyle(LL.dim) }
             }
             if book.decisions.isEmpty {
-                Text("まだ写しがありません。家の PC につながると読みます。").foregroundStyle(LL.dim)
+                Text("まだ家の PC から届いていません。つながると読みます。").foregroundStyle(LL.dim)
             }
             ForEach(book.decisions) { item in
                 Section {
@@ -1339,7 +1339,7 @@ struct DecisionsView: View {
             Section {
                 EmptyView()
             } footer: {
-                Text("家の PC（母艦）の「決めごとの帳面」の、まだ決めていないものです。選ぶと確かめてから家の PC に送り、母艦が帳面のその項目の下に「決定（日付・アプリで）」の1行を足します。30日たったら「その決定どうだった」を提案で聞きます。")
+                Text("家の PCの「決めごとの帳面」の、まだ決めていないものです。選ぶと確かめてから家の PC に送り、家の PC が帳面のその項目の下に「決定（日付・アプリで）」の1行を足します。30日たったら「その決定どうだった」を提案で聞きます。")
             }
         }
         .navigationTitle("決めごと")
@@ -1349,7 +1349,7 @@ struct DecisionsView: View {
             Button("決める") { decide() }
             Button("やめる", role: .cancel) {}
         } message: {
-            Text("家の PC に送ると、母艦の帳面に1行足します。あとで変えるときは、PC の帳面を直してください。")
+            Text("家の PC に送ると、家の PC の帳面に1行足します。あとで変えるときは、PC の帳面を直してください。")
         }
     }
 

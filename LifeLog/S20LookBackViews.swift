@@ -26,7 +26,7 @@ struct S20LookBackSection: View {
         } header: {
             LLHeader(title: "数で見る", symbol: "chart.bar")
         } footer: {
-            Text("ラーメンは立ち寄ったお店の名前からの見立て（仮）です。正しい杯数は母艦が数えます。")
+            Text("ラーメンは立ち寄ったお店の名前からの AI の推測（仮）です。正しい杯数は家の PC が数えます。")
         }
         .task { await load() }
         Section {
@@ -299,21 +299,50 @@ struct InterviewSheetView: View {
 
 struct HTMLFileView: UIViewRepresentable {
     let url: URL
+    @Environment(\.colorScheme) private var scheme
+
+    /// 暗い画面では、紙を夜の青の面（#121A2B）・文字を明るい色（#E6EDF7）にして読む（2026-11-22。s22。
+    /// 前は暗い画面でも白い紙で、まわりから浮いて真っ白に見えた）。印刷と共有は元の白い紙のまま
+    static let darkStyle = "<style>html,body{background:#121A2B !important;color:#E6EDF7 !important}"
+        + "*{color:inherit !important;background-color:transparent !important;border-color:#22304A !important}"
+        + "a{color:#5BC8F5 !important}</style>"
+
+    static func html(_ text: String, dark: Bool) -> String {
+        guard dark else { return text }
+        if let head = text.range(of: "</head>", options: .caseInsensitive) {
+            return text.replacingCharacters(in: head.lowerBound..<head.lowerBound, with: darkStyle)
+        }
+        return darkStyle + text
+    }
+
+    final class Coordinator {
+        var dark: Bool?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> WKWebView {
-        // 紙の 1 枚として白い地に出す（中の html は印刷用の黒い文字）
         let view = WKWebView()
         view.isOpaque = true
-        view.backgroundColor = .white
-        view.scrollView.backgroundColor = .white
-        // 文として読み込む（ファイルの道で読むと、シミュレーターで白いままのことがあった。2026-11-21）
-        if let html = try? String(contentsOf: url, encoding: .utf8) {
-            view.loadHTMLString(html, baseURL: nil)
-        }
+        load(view, context: context)
         return view
     }
 
-    func updateUIView(_ view: WKWebView, context: Context) {}
+    func updateUIView(_ view: WKWebView, context: Context) {
+        if context.coordinator.dark != (scheme == .dark) { load(view, context: context) }
+    }
+
+    /// 文として読み込む（ファイルの道で読むと、シミュレーターで白いままのことがあった。2026-11-21）
+    private func load(_ view: WKWebView, context: Context) {
+        let dark = scheme == .dark
+        context.coordinator.dark = dark
+        let paper: UIColor = dark ? UIColor(llHex: 0x121A2B) : .white
+        view.backgroundColor = paper
+        view.scrollView.backgroundColor = paper
+        if let text = try? String(contentsOf: url, encoding: .utf8) {
+            view.loadHTMLString(Self.html(text, dark: dark), baseURL: nil)
+        }
+    }
 }
 
 // MARK: - 次1・体26 検品表を通信簿に

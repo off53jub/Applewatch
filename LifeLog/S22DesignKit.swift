@@ -255,7 +255,7 @@ struct LatencyBarSection: View {
             if !loaded {
                 LLSkeletonRows(count: 1)
             } else if segments.isEmpty {
-                Text("まだ測っていません（区切りが記録に入ると測ります）").font(.callout).foregroundStyle(LL.dim)
+                Text("まだ測っていません（録音が記録に入ると測ります）").font(.callout).foregroundStyle(LL.dim)
             } else {
                 LatencyBar(segments: segments)
             }
@@ -404,7 +404,7 @@ struct LLDayStrip: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("今日の帯。会話 \(talks.count) 個。押すと 1 日の帯を開きます")
+        .accessibilityLabel("今日の時間の線。会話 \(talks.count) 個。押すと 1 日の時間の線を開きます")
     }
 }
 
@@ -638,7 +638,7 @@ struct TopicBreakLine: View {
             Rectangle().fill(LL.line).frame(height: LL.Stroke.thin)
         }
         .readingWidth()
-        .accessibilityLabel("ここで話題が変わったかもしれません（見立て）")
+        .accessibilityLabel("ここで話題が変わったかもしれません（AI の推測）")
     }
 }
 

@@ -8,6 +8,8 @@ import SwiftUI
 /// いちばん上: あいさつ・録音の丸 3 つ・確かめ待ちの数
 struct TodayHeroSection: View {
     @Environment(Pipeline.self) private var pipeline
+    /// 文字がとても大きいときは、あいさつと休日の印・録音の丸 3 つを縦に積む（2026-11-22。s22。文字最大で横にはみ出していた）
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var picked: CaptureDot?
     /// 今日の会話（今日の画面が 1 回読んだものを受け取る。帯に描く。2026-11-22。s22 の 見15）
     var talks: [ConversationLog.Conversation] = []
@@ -19,18 +21,24 @@ struct TodayHeroSection: View {
         let dayStart = Calendar.current.startOfDay(for: now)
         Section {
             VStack(alignment: .leading, spacing: LL.Space.m) {
-                HStack(alignment: .firstTextBaseline) {
+                let big = typeSize.isAccessibilitySize
+                let headLayout = big ? AnyLayout(VStackLayout(alignment: .leading, spacing: LL.Space.xs))
+                    : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
+                headLayout {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(part.greeting).font(.title3.weight(.bold)).foregroundStyle(LL.text)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text(now.formatted(.dateTime.month().day().weekday(.wide).locale(LL.ja)))
                             .font(.caption).foregroundStyle(LL.dim)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    Spacer()
+                    if !big { Spacer() }
                     if DayOffCache.isOff(pipeline, now) {
                         CertaintyBadge(certainty: .good, text: "休日")
                     }
                 }
-                HStack(spacing: LL.Space.s) {
+                let dotLayout = big ? AnyLayout(VStackLayout(spacing: LL.Space.s)) : AnyLayout(HStackLayout(spacing: LL.Space.s))
+                dotLayout {
                     ForEach(CaptureDot.allCases) { dot in
                         let state = dotState(dot, now: now)
                         Button {
@@ -98,8 +106,11 @@ struct CaptureDotView: View {
                     .frame(width: 44, height: 44)
                 Image(systemName: dot.symbol).font(.system(size: 17, weight: .semibold)).foregroundStyle(color)
             }
+            // 文字が大きいときは折り返す（s22。文字最大で横にはみ出していた）
             Text(dot.label).font(.caption2.weight(.medium)).foregroundStyle(LL.text)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             Text(stateWord).font(.caption2).foregroundStyle(LL.dim)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, LL.Space.s)

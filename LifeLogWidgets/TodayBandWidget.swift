@@ -57,7 +57,7 @@ private struct TodayBandView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("今日の帯。" + Self.headline(state))
+        .accessibilityLabel("今日の時間の線。" + Self.headline(state))
     }
 
     /// 「会話 5・3.2 時間」（分からなければ「今日」）

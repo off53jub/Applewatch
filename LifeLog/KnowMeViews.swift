@@ -60,7 +60,7 @@ struct KnowMeView: View {
             } header: {
                 Text("今週の見立て")
             } footer: {
-                Text("AI が記録から立てた見立て（仮）です。事実ではありません。当たっているかを押すと、母艦の見立ての答え合わせに入ります。")
+                Text("AI が記録から立てた見立て（仮）です。事実ではありません。当たっているかを押すと、家の PC の答え合わせに入ります。")
             }
             if !book.spots.isEmpty {
                 Section {
@@ -443,7 +443,7 @@ struct PersonGoalSection: View {
         } header: {
             Text("この人とどうなりたいか")
         } footer: {
-            Text("1 行で十分です。家の PC（母艦）に送ります。")
+            Text("1 行で十分です。家の PCに送ります。")
         }
     }
 }

@@ -291,11 +291,11 @@ struct AskView: View {
                     .lineLimit(1...4)
                 Button(working ? "探しています…" : "質問する") { run() }
                     .disabled(working || question.trimmingCharacters(in: .whitespaces).isEmpty)
-                Toggle("母艦も探す（LINE・PLAUD・写真・予定・お金も）", isOn: motherOn)
+                Toggle("家の PC の記録も探す（LINE・PLAUD・写真・予定・お金も）", isOn: motherOn)
                     .disabled(!motherUsable)
             } footer: {
                 if motherOn.wrappedValue {
-                    Text("家の PC が、母艦の LINE・PLAUD・予定・写真・体調・場所・1日と週のまとめ・仕事のまとめ・お金の記録を、言葉と意味の両方で探します。人・欲しい物・決めたことの質問なら、欲しい物リスト・決めごと・人のノートの合うところも読みます。Claude が見つかったものだけをもとに答えます（1分ほどかかります）。")
+                    Text("家の PC が、LINE・PLAUD・予定・写真・体調・場所・1日と週のまとめ・仕事のまとめ・お金の記録を、言葉と意味の両方で探します。人・欲しい物・決めたことの質問なら、欲しい物リスト・決めごと・人のノートの合うところも読みます。Claude が見つかったものだけをもとに答えます（1分ほどかかります）。")
                 } else {
                     Text(plainFooter)
                 }
@@ -330,7 +330,7 @@ struct AskView: View {
                 if answer.sources.isEmpty && answer.digestUsed.isEmpty && motherUsable && !working {
                     // iPhone の記録で見つからなかったときは、母艦からも探せる（2026-11-13。AskMothership.swift）
                     Section {
-                        Button("母艦（LINE・写真・予定・お金も）からも探す") { runMothership(asked) }
+                        Button("家の PC の記録（LINE・写真・予定・お金も）からも探す") { runMothership(asked) }
                     }
                 }
                 if !answer.digestUsed.isEmpty {

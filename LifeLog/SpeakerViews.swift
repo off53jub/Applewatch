@@ -974,7 +974,7 @@ struct SpeakerFixView: View {
                 Text(line.text).lineLimit(3)
                 Picker("直す範囲", selection: $scope) {
                     Text("この行だけ").tag(Pipeline.SpeakerFix.line)
-                    Text("同じ区切りの同じ声").tag(Pipeline.SpeakerFix.sameVoice)
+                    Text("同じ録音の同じ声").tag(Pipeline.SpeakerFix.sameVoice)
                     if line.speakerID != nil {
                         Text("この声すべて").tag(Pipeline.SpeakerFix.everywhere)
                     }

@@ -1328,7 +1328,7 @@ struct TodayAnswerCard: View {
             Text("今日の三つ")
         } footer: {
             if !open.isEmpty {
-                Text("提案は家の PC（母艦）からです。押すまでは何も変えず、何も送りません。")
+                Text("提案は家の PCからです。押すまでは何も変えず、何も送りません。")
             }
         }
     }
@@ -1500,7 +1500,7 @@ struct NightMoodSection: View {
                 Text("夜の10秒")
             } footer: {
                 if !done {
-                    Text("1 から 5 で押します。疲れは 1 がいちばん疲れている、5 が元気です。家の PC（母艦）に送ります。")
+                    Text("1 から 5 で押します。疲れは 1 がいちばん疲れている、5 が元気です。家の PCに送ります。")
                 }
             }
         }
@@ -1612,7 +1612,7 @@ struct WeeklyLookBackSection: View {
             } header: {
                 Text("今週のふり返り" + headerWeek(weekly))
             } footer: {
-                Text("家の PC（母艦）が1週間の記録から選んだ3つです。")
+                Text("家の PCが1週間の記録から選んだ3つです。")
             }
             .onAppear { Tally.add("weekly.shown") }
         }
@@ -1662,7 +1662,7 @@ struct HypothesesView: View {
                     HypothesisRow(hypothesis: h)
                 }
             } footer: {
-                Text("口にした見立てを、家の PC（母艦）がその後の記録と照らしたものです（月に1回）。見立ては見立てで、決まったことではありません。")
+                Text("口にした見立てを、家の PCがその後の記録と照らしたものです（月に1回）。見立ては見立てで、決まったことではありません。")
             }
         }
         .navigationTitle("見立ての台帳")
@@ -1745,7 +1745,7 @@ struct BriefCompareView: View {
                         }
                     }
                 } footer: {
-                    Text("同じ日の朝のまとめを、2つの作り手（Codex と Claude）で作りました。読みやすい方の「こっちがいい」を押してください。家の PC（母艦）に返します。")
+                    Text("同じ日の朝のまとめを、2つの作り手（Codex と Claude）で作りました。読みやすい方の「こっちがいい」を押してください。家の PCに返します。")
                 }
                 if sizeClass == .regular {
                     Section {
@@ -1816,9 +1816,9 @@ struct MothershipCheckSection: View {
                     }
                 }
             } header: {
-                Text("母艦から")
+                Text("家の PC から")
             } footer: {
-                Text("家の PC（母艦）が週ごと・月ごとに数えたものです。施策の前と後を比べる物差しにします。")
+                Text("家の PCが週ごと・月ごとに数えたものです。施策の前と後を比べる物差しにします。")
             }
         }
     }
