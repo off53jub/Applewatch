@@ -94,7 +94,7 @@ final class WorkFollowupsTests: XCTestCase {
         XCTAssertEqual(NoticeActions.action(for: "tomorrow"), .tomorrow)
         XCTAssertNil(NoticeActions.action(for: "知らないボタン"))
         let categories = NoticeActions.categories()
-        XCTAssertEqual(categories.count, 10)  // 2026-11-22 確かめ待ちの ○×（S22Notices.reviewCategory）も。2026-11-21 休日の「一言」と「さっきの所は〇〇？」（HolidayNoticeRules）も。2026-11-19 自分を知るの「はい・いいえ」と職場の「録音を始める」（KnowMeRules）も。2026-11-13 会話のあとの約束（PromiseRules.category）・2026-11-16 30分いたら「ここは？」（PlaceAssistRules.askCategory）を足した
+        XCTAssertEqual(categories.count, 11)  // 2026-11-23 何人でしたか？（s23 の 続5。S23Notices.countCategory）も。2026-11-22 確かめ待ちの ○×（S22Notices.reviewCategory）も。2026-11-21 休日の「一言」と「さっきの所は〇〇？」（HolidayNoticeRules）も。2026-11-19 自分を知るの「はい・いいえ」と職場の「録音を始める」（KnowMeRules）も。2026-11-13 会話のあとの約束（PromiseRules.category）・2026-11-16 30分いたら「ここは？」（PlaceAssistRules.askCategory）を足した
         XCTAssertTrue(categories.contains { $0.identifier == PromiseRules.category })
         XCTAssertTrue(categories.contains { $0.identifier == S22Notices.reviewCategory })
         let found = categories.first { $0.identifier == NoticeActions.foundCategory }
