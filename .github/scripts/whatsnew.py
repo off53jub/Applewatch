@@ -28,7 +28,7 @@ def titles(commits: list) -> list[str]:
         if first.startswith("Merge pull request"):
             rest = [l for l in lines[1:] if l]
             first = rest[0] if rest else ""
-        elif first.startswith("Merge branch"):
+        elif first.startswith("Merge "):  # Merge branch ... と、PR の実行で GitHub が作る「Merge <sha> into <sha>」
             first = ""
         if not first or first in seen:
             continue

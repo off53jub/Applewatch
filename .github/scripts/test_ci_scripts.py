@@ -23,7 +23,7 @@ class WhatsNewTests(unittest.TestCase):
         self.assertEqual(t, ["中断のあと録音を戻す", "見本を直す"])
 
     def test_duplicates_and_branch_merges_dropped(self):
-        t = whatsnew.titles([commit("A"), commit("A"), commit("Merge branch 'main' into x")])
+        t = whatsnew.titles([commit("A"), commit("A"), commit("Merge branch 'main' into x"), commit("Merge abc123 into def456")])
         self.assertEqual(t, ["A"])
 
     def test_empty_has_fallback_line(self):
