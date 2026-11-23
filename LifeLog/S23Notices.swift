@@ -355,9 +355,9 @@ final class S23Book {
         guard let url = URL(string: "https://api.github.com/repos/off53jub/Applewatch/releases/latest") else { return }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+        guard let got = try? await URLSession.shared.data(for: request),
+              (got.1 as? HTTPURLResponse)?.statusCode == 200,
+              let object = (try? JSONSerialization.jsonObject(with: got.0)) as? [String: Any],
               let tag = object["tag_name"] as? String, let build = S23VersionRules.build(fromTag: tag) else { return }
         releaseBuild = build
         d.set(build, forKey: Self.releaseKey)
