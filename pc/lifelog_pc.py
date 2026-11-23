@@ -204,6 +204,7 @@ import s21pc  # s21（2026-11-22）: 精1・精7・精10・精11・精15・速4�
 import s22pc  # s22（2026-11-22）: 楽5・楽20・確1〜確30 の家の PC の分（中身は s22pc.py・s22voice.py・s22text.py ほか）
 import s22models  # s22 確2・確13・確15: モデルの切り替えの口（初めは今のまま）
 import s22text  # s22 確12・確21・確11: 決まり文句の票・行の時刻・区切りの境目
+import s23pc  # s23（2026-11-23）: 続1〜続4・続8・続10・試4・届7・止1/続5 の受け口（中身は s23pc.py・s23voice.py・s23gaps.py ほか）
 
 VERSION = 10
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
@@ -2290,6 +2291,8 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(s21pc.FEATURES)  # s21: "shake"（POST /feedback の kind shake）・"novoicesample"（sampleNoVoice=1）
     # s22: reports・gappatterns・speakertags（GET の道）・levels・recexp（POST /jobs の省ける印）・reviewspread（答えを広げる）
     found.extend(s22pc.FEATURES)
+    # s23: headcount（POST /headcount）・s23checks（GET /s23/checks）・voicepairs・noisygold（確かめ待ちの問い）
+    found.extend(s23pc.FEATURES)
     # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
     if watchroute.running():
         found.append("watchroute")
@@ -2666,6 +2669,10 @@ def start_v6(threads: int) -> None:
         s22pc.start(sys.modules[__name__])
     except Exception as error:  # noqa: BLE001
         log(f"s22 の見回りを始められませんでした: {type(error).__name__}")
+    try:  # s23（2026-11-23）: 確かめ待ちの問い・人数の答え・抜けの段・版ごとの録れた時間・s22 の 7 つの確かめ（s23pc.py）
+        s23pc.start(sys.modules[__name__])
+    except Exception as error:  # noqa: BLE001
+        log(f"s23 の見回りを始められませんでした: {type(error).__name__}")
     # 2026-11-13（施策 9・10・11）: 夜の流れ（品質の記録・同じ人かも・夜の読み直し。quality.py）
     quality.start(HOME, App.records, App.jobs, lambda: mothership.home(load_config()),
                   lambda p, r: extra_model("speaker", 1).embed(load_audio(p.read_bytes()), r), log)
@@ -3081,6 +3088,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.authorized():
                 s22pc.http_get(self, path, url.query)
             return
+        if path in s23pc.GETS:  # s23 試4: GET /s23/checks（s22 の 7 つを新しい版で 1 回ずつ呼んだ結果）
+            if self.authorized():
+                s23pc.http_get(self, path, url.query)
+            return
         if path not in ("/hello", "/train-status", "/jobs", "/index/status", "/watch-route", "/claude/usage") \
                 and path not in mothership.GETS and path not in promises.GETS and path not in livecoach.GETS \
                 and path not in audioclip.GETS and path not in placelinks.GETS and not path.startswith("/jobs/"):
@@ -3191,6 +3202,10 @@ class Handler(BaseHTTPRequestHandler):
                     promises.http_post(self, log)
                 else:
                     askmother.http_post(self, load_config(), log, App.records)
+            return
+        if url.path in s23pc.POSTS:  # s23 続5: POST /headcount（会話のあとに本人が答えた人数。HOME/s23/headcount.jsonl）
+            if self.authorized():
+                s23pc.http_post(self, url.path)
             return
         if url.path not in ("/transcribe", "/speakers", "/scene", "/train-sample", "/llm", "/jobs", "/claude") \
                 and url.path not in semantic.POSTS and url.path not in ops.POSTS \

@@ -178,6 +178,17 @@ def recent_crashes(record: dict, now: float, within: float = CRASH_RECENT) -> li
     return sorted(found, key=lambda pair: pair[0])
 
 
+def _plain(value, limit: int, errors: bool = True) -> str:
+    """summary.md に書く 1 行（s23 続8。2026-11-23）: 改行をつぶし、生の英語のエラーを日本語に、読みにくい数（12792 分など）を
+    人の読む数に（s23text.tidy）。元の文は latest.json・日ごとの .jsonl にそのまま残る"""
+    try:
+        import s23text
+
+        return s23text.tidy(value, limit, errors)
+    except Exception:  # noqa: BLE001 — 直せなくても、今までどおり切るだけで書く
+        return _text(str(value), limit)
+
+
 def concerns(record: dict, now: float) -> list[str]:
     """気になる所（やさしい日本語の文の並び）。無ければ空。"""
     out: list[str] = []
@@ -196,11 +207,11 @@ def concerns(record: dict, now: float) -> list[str]:
         last_at, last = crashes[-1]
         detail = str(last.get("detail") or "").strip()
         out.append("24時間以内に " + "・".join(f"{k} {n} 回" for k, n in counts.items())
-                   + f"（最後は {clock(last_at)}" + (f"・{_text(detail, 120)}" if detail else "") + "）")
+                   + f"（最後は {clock(last_at)}" + (f"・{_plain(detail, 120, False)}" if detail else "") + "）")
     bad = [row for row in record.get("rows") or [] if isinstance(row, dict) and row.get("ok") is False]
     for row in bad[:10]:
         out.append(f"自己点検で ok でない行: {row.get('group') or '—'} / {row.get('name') or '—'}: "
-                   f"{_text(str(row.get('value') if row.get('value') is not None else '—'), 120)}")
+                   f"{_plain(row.get('value') if row.get('value') is not None else '—', 120)}")
     if len(bad) > 10:
         out.append(f"…ほかにも ok でない行が {len(bad) - 10} 行あります")
     state = record.get("state") if isinstance(record.get("state"), dict) else {}
@@ -245,8 +256,15 @@ LATENCY_PARTS = (("toPhone", "録音の終わり→iPhone"), ("toPC", "iPhone→
 
 
 def _secs(value: float) -> str:
+    """s23 続8（2026-11-23）: 0.0 秒は「0 秒」、2 時間より長ければ「約 X 時間」「約 X 日」（12792 分のような数を出さない）"""
     value = float(value)
-    return f"{value:.1f} 秒" if value < 120 else f"{value / 60:.1f} 分"
+    if value < 0.05:
+        return "0 秒"
+    if value < 120:
+        return f"{value:.1f} 秒"
+    if value < 7200:
+        return f"{value / 60:.1f} 分"
+    return f"約 {value / 3600:.1f} 時間" if value < 2 * 86400 else f"約 {value / 86400:.1f} 日"
 
 
 def phone_latency(state: dict) -> str | None:
@@ -472,12 +490,12 @@ class DiagStore:
             bad = [r for r in rows if isinstance(r, dict) and r.get("ok") is False]
             lines.append(f"- 自己点検: {len(rows)} 行（ok でない {len(bad)} 行）")
             for row in bad[:20]:
-                lines.append(f"  - {row.get('group') or '—'} / {row.get('name') or '—'}: {_text(str(row.get('value')), 200)}")
+                lines.append(f"  - {row.get('group') or '—'} / {row.get('name') or '—'}: {_plain(row.get('value'), 200)}")
             week = recent_crashes(record, now, 7 * 86400)
             if week:
                 lines.append(f"- 落ちた・固まった（直近 7 日）: {len(week)} 回")
                 for at, crash in week[-5:]:
-                    detail = _text(str(crash.get("detail") or ""), 200)
+                    detail = _plain(crash.get("detail") or "", 200, False) if crash.get("detail") else ""
                     lines.append(f"  - {clock(at)} {crash_kind(crash)}" + (f"・{detail}" if detail else ""))
             tally = record.get("tally") if isinstance(record.get("tally"), dict) else {}
             for day in sorted(tally, reverse=True)[:2]:
