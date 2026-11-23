@@ -118,6 +118,8 @@ struct LifeLogApp: App {
         S21Book.settingsChanged = { pipeline.receiver.sendSettings(skipSilence: pipeline.skipSilence, held: pipeline.recordingHeld) }
         // s22（2026-11-22。S22Book.swift）: 5 分ごとの見回り（電池の見本・ウィジェットの答え・電車の 3 問・誰と話した？）
         S22Book.install(pipeline, live: !Self.testing && !Self.demo)
+        // s23（2026-11-23。S23Notices.swift）: 5 分ごとの見回り（何人でしたか・夜の名前の無い場所・確かめの自動の ○・版）
+        S23Book.install(pipeline, live: !Self.testing && !Self.demo)
         if !Self.testing && !Self.demo {
             Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
                 Task { @MainActor in pipeline.updateHold() }
@@ -137,6 +139,8 @@ struct LifeLogApp: App {
                     .llRoot()
                     // 会話の 1 場面のカード（2026-11-22。s22 の 楽23。S22Views.swift）
                     .s22Root(pipeline)
+                    // 知らせを押したあとの画面（2026-11-23。s23 の 知2〜知7。S23Screens.swift）
+                    .s23Root(pipeline)
                     // 開くときに Face ID（設定でオンにしたときだけ。録音と裏の処理は止めない）
                     .modifier(AppLock())
                     // lifelog:// はウィジェットから（2026-11-12。NoticeActions.swift の NoticeRoute.route(url:)）。ほかは Google のログイン
@@ -164,6 +168,7 @@ struct LifeLogApp: App {
                 pipeline.appBecameActive()
                 pipeline.processQueue()
                 S22Book.tick()  // ウィジェットの答え・電池の見本（2026-11-22。s22）
+                S23Book.shared.tick()  // 何人でしたか・版など（2026-11-23。s23）
             }
             if phase == .background {
                 pipeline.appMovedToBackground()

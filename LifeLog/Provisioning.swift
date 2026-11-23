@@ -73,6 +73,7 @@ enum Provisioning {
             let content = UNMutableNotificationContent()
             content.title = "LifeLog の署名がもうすぐ切れます"
             content.body = "\(text(expiry)) に切れると、アプリが起動しなくなり録音が止まります。Sideloadly で入れ直してください（記録は消えません）。"
+            S23Notices.decorate(content, id: "signExpiry-")  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
             content.sound = .default
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: at.timeIntervalSinceNow, repeats: false)
             try? await center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))

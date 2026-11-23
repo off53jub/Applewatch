@@ -99,6 +99,7 @@ extension Pipeline {
             let content = UNMutableNotificationContent()
             content.title = "まもなく " + (event.title.isEmpty ? "予定" : event.title)
             content.body = parts.joined(separator: "\n")
+            S23Notices.decorate(content, id: "brief-")  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
             content.sound = .default
             let wait = max(10, event.start.addingTimeInterval(-Self.briefLead).timeIntervalSince(now))
             let id = Self.briefPrefix + "\(Int(event.start.timeIntervalSince1970))-" + event.title

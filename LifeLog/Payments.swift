@@ -436,6 +436,7 @@ final class PaymentBook {
         let content = UNMutableNotificationContent()
         content.title = "PayPay の明細を読み込む日です"
         content.body = "PayPay の取引履歴から先月の分を書き出して、LifeLog の「行ったお店」で読み込むと、お店の答え合わせができます。"
+        S23Notices.decorate(content, id: "payments-monthly")  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
         let trigger = UNCalendarNotificationTrigger(dateMatching: DateComponents(day: 1, hour: 20), repeats: true)
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: reminderID, content: content, trigger: trigger))
     }

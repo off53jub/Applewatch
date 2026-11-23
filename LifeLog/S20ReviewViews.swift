@@ -164,7 +164,7 @@ struct ReviewDeckView: View {
             }
         case "text":
             HStack {
-                TextField("ひとこと", text: $text).textFieldStyle(.roundedBorder)
+                TextField(S23ReviewRules.placeholder(kind: item.kind), text: $text).textFieldStyle(.roundedBorder)
                 Button("送る") {
                     let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !value.isEmpty else { return }
@@ -172,6 +172,11 @@ struct ReviewDeckView: View {
                     text = ""
                 }
                 .buttonStyle(LLPillButtonStyle(filled: true))
+            }
+            // 聞き取りの答え合わせ（gold_noisy）は、合っていれば「そのまま」（2026-11-23。s23。家の PC #104 に合わせる）
+            if S23ReviewRules.keepAsIs(kind: item.kind) {
+                Button("そのまま（合っている）") { answer(item, S23ReviewRules.keepValue) }
+                    .buttonStyle(LLPillButtonStyle(tint: LL.good))
             }
         default:
             HStack(spacing: LL.Space.m) {
@@ -247,12 +252,15 @@ private struct BatchRow: View {
 }
 
 /// 体12: 声は「聞いて選ぶ」（5 秒の音 2 つ。家の PC から取ってくる）
-private struct ClipChooser: View {
+struct ClipChooser: View {
     @Environment(Pipeline.self) private var pipeline
     let clips: [ReviewItem.Clip]
     @State private var player: AVAudioPlayer?
     @State private var playing: String?
     @State private var problem: String?
+
+    /// ほかのファイル（S23Screens の確かめ待ちの 1 問）からも使う（2026-11-23。s23）
+    init(clips: [ReviewItem.Clip]) { self.clips = clips }
 
     var body: some View {
         VStack(alignment: .leading, spacing: LL.Space.xs) {

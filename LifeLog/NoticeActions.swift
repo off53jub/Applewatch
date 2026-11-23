@@ -59,8 +59,9 @@ enum NoticeActions {
         // 休日の「一言」と「さっきの所は〇〇？」（2026-11-21。s19。Holiday.swift）
         // 確かめ待ちの ○×（2026-11-22。s22 の 楽12。S22Book.swift）
         // 「録音が止まっています」の「録音を戻す」（2026-11-23。s23 の 止8。S23Resume.swift）
-        return base.union(KnowMeRules.notificationCategories()).union(HolidayNoticeRules.categories()).union(S22Notices.categories())
-            .union(S23Resume.categories())
+        // 質問の知らせに「あとで」・「何人でしたか？」のボタン（2026-11-23。s23 の 知12・続5。S23Notices.swift）
+        return S23Notices.categories(base.union(KnowMeRules.notificationCategories()).union(HolidayNoticeRules.categories())
+            .union(S22Notices.categories()).union(S23Resume.categories()))
     }
 
     /// 押されたボタンの名前から、動きを決める（知らせそのものを押したときは open。分からないものは nil）

@@ -36,8 +36,8 @@ enum PlaceAssistRules {
     static let remindedKey = "placeRemindedKeys"
 
     /// 着いてから 30 分たつ時刻。もう過ぎていれば、1 分後
-    static func fireDate(arrival: Date, now: Date) -> Date {
-        let target: Date = arrival.addingTimeInterval(askAfter)
+    static func fireDate(arrival: Date, now: Date, after: TimeInterval = askAfter) -> Date {
+        let target: Date = arrival.addingTimeInterval(after)
         let soon: Date = now.addingTimeInterval(60)
         return target > soon ? target : soon
     }
@@ -196,6 +196,12 @@ final class PlaceAssist {
             let known: Bool = isKnown(here, accuracy: accuracy)
             UnnamedStayBook.shared.record(arrival: raw.arrival, departure: raw.departure, latitude: raw.latitude,
                                           longitude: raw.longitude, accuracy: accuracy, known: known)
+            // 場3 いる最中ではなく、出たときに聞く（切り替えがオンのときだけ。初めはオフ。2026-11-23。s23 の 場3）
+            if S23Places.askOnLeave, raw.arrival != .distantPast,
+               raw.departure.timeIntervalSince(raw.arrival) >= S23Places.askAfter() {
+                let arrival: Date = raw.arrival
+                Task { await askLater(arrival: arrival, here: here, accuracy: accuracy, now: true) }
+            }
             // 休日は、滞在の直後に「さっきの所は〇〇？」・会場で休んでいたら戻す（2026-11-21。s19 の 休21・休34。Holiday.swift）
             let arrival: Date = raw.arrival, departure: Date = raw.departure
             Task { await HolidayNudges.shared.stayEnded(arrival: arrival, departure: departure, here: here, known: known) }
@@ -275,11 +281,26 @@ final class PlaceAssist {
         return scored.prefix(3).map { $0.0 }
     }
 
-    private func askLater(arrival: Date, here: CLLocation, accuracy: Double) async {
+    /// now が true なら、すぐ聞く（出たときに聞く。s23 の 場3）
+    private func askLater(arrival: Date, here: CLLocation, accuracy: Double, now: Bool = false) async {
         guard pipeline != nil else { return }
+        // 場3 出たときに聞く切り替えがオンなら、いる最中には聞かない（2026-11-23。s23）
+        if S23Places.askOnLeave && !now { return }
         let known: Bool = isKnown(here, accuracy: accuracy)
         guard PlaceAssistRules.shouldAsk(on: PlaceAssistRules.askOn, known: known, meeting: MeetingMode.active != nil,
                                          askedToday: savedCount("ask")) else { return }
+        // 場1 「ここは覚えなくていい」にした所の近くでは聞かない（2026-11-23。s23）
+        if S23Places.isIgnored(latitude: here.coordinate.latitude, longitude: here.coordinate.longitude) {
+            Tally.add("placeask.ignoredPlace")
+            return
+        }
+        // 場2 近くで同じ名前を 2 回選んでいれば、聞かずにその名前を入れる（初めはオフ。あとで地図の画面から直せる。2026-11-23。s23）
+        if let name = S23Places.autoName(latitude: here.coordinate.latitude, longitude: here.coordinate.longitude) {
+            _ = PlaceNameBook.shared.fix(name: name, latitude: here.coordinate.latitude, longitude: here.coordinate.longitude,
+                                         source: "auto")
+            S23Places.noteAuto(name: name, latitude: here.coordinate.latitude, longitude: here.coordinate.longitude)
+            return
+        }
         let list: [String] = await candidates(for: here, arrival: arrival)
         guard !list.isEmpty else { return }
 
@@ -292,11 +313,14 @@ final class PlaceAssist {
         content.body = PlaceAssistRules.askBody
         content.categoryIdentifier = PlaceAssistRules.askCategory
         content.interruptionLevel = .passive
-        content.userInfo = ["lat": here.coordinate.latitude, "lon": here.coordinate.longitude, "cands": list]
-        let fire: Date = PlaceAssistRules.fireDate(arrival: arrival, now: .now)
+        content.userInfo = ["lat": here.coordinate.latitude, "lon": here.coordinate.longitude, "cands": list,
+                            "arr": arrival.timeIntervalSince1970]
+        // 場6 答えが少なければ 60 分いた所だけ・場3 出たときはすぐ（2026-11-23。s23）
+        let wait: TimeInterval = now ? 2
+            : max(60, PlaceAssistRules.fireDate(arrival: arrival, now: .now, after: S23Places.askAfter()).timeIntervalSinceNow)
         let id: String = PlaceAssistRules.askPrefix + String(Int(arrival.timeIntervalSince1970))
         let request = UNNotificationRequest(identifier: id, content: content,
-                                            trigger: UNTimeIntervalNotificationTrigger(timeInterval: max(60, fire.timeIntervalSinceNow), repeats: false))
+                                            trigger: UNTimeIntervalNotificationTrigger(timeInterval: wait, repeats: false))
         do {
             try await center.add(request)
         } catch {
@@ -305,6 +329,29 @@ final class PlaceAssist {
         UserDefaults.standard.set(["lat": here.coordinate.latitude, "lon": here.coordinate.longitude], forKey: PlaceAssistRules.pendingKey)
         bump("ask")
         Tally.add("placeask.scheduled")
+        // 場5 答える画面で、そのときの会話と写真を出すため・知13 答えそびれた質問に残す（2026-11-23。s23）
+        S23Places.noteAsk(latitude: here.coordinate.latitude, longitude: here.coordinate.longitude, arrival: arrival)
+        S23Book.shared.noteQuestion(request)
+    }
+
+    /// 知12 答える画面の「あとで」: 同じ候補で、少したってからもう一度聞く（2026-11-23。s23）
+    func askAgain(_ target: PlaceAskTarget, after seconds: TimeInterval) {
+        guard let lat = target.latitude, let lon = target.longitude else { return }
+        let content = UNMutableNotificationContent()
+        content.title = PlaceAssistRules.askTitle
+        content.body = PlaceAssistRules.askBody
+        content.categoryIdentifier = PlaceAssistRules.askCategory
+        content.interruptionLevel = .passive
+        content.userInfo = ["lat": lat, "lon": lon, "cands": target.candidates]
+        let id: String = target.noticeID.hasPrefix(PlaceAssistRules.askPrefix) ? target.noticeID
+            : PlaceAssistRules.askPrefix + "later-" + String(Int(Date.now.timeIntervalSince1970))
+        let request = UNNotificationRequest(identifier: id, content: content,
+                                            trigger: UNTimeIntervalNotificationTrigger(timeInterval: max(60, seconds), repeats: false))
+        let center = UNUserNotificationCenter.current()
+        UserDefaults.standard.set(target.candidates, forKey: PlaceAssistRules.titlesKey)
+        center.setNotificationCategories(NoticeActions.categories())
+        center.add(request)
+        Tally.add("s23.snooze.placeAsk")
     }
 
     /// 出す前の「ここは？」と、出したあとの「ここは？」を消す（ボタンの名前を入れ替えるので、1 つだけにする）
@@ -338,12 +385,16 @@ final class PlaceAssist {
     /// 通知のボタンが押された（候補の名前を、位置で覚える）
     func answered(actionID: String, candidates: [String], latitude: Double?, longitude: Double?) {
         guard let index = PlaceAssistRules.index(of: actionID), candidates.indices.contains(index) else { return }
-        answered(name: candidates[index], latitude: latitude, longitude: longitude)
+        answered(name: candidates[index], latitude: latitude, longitude: longitude, via: "button")
     }
 
-    /// 名前で答えた（ボタン・書いた名前・答える画面。2026-11-23）
-    func answered(name raw: String, latitude: Double?, longitude: Double?, source: String = "watch") {
+    /// 名前で答えた（ボタン・書いた名前・答える画面。2026-11-23）。via は答え方（button・typed・sheet。場6 で数える。s23）
+    func answered(name raw: String, latitude: Double?, longitude: Double?, source: String = "watch", via: String = "typed") {
         guard let name = PlaceAssistRules.typedName(raw), let latitude, let longitude else { return }
+        // 場6 答え方ごとの数・場2 選んだ名前の控え・知13 答えそびれから外す（2026-11-23。s23）
+        if via != "sheet" { Tally.add("placeask.answer." + via) }
+        S23Places.noteAnswer(name: name, latitude: latitude, longitude: longitude)
+        S23Book.shared.answeredQuestions(prefix: PlaceAssistRules.askPrefix)
         _ = PlaceNameBook.shared.fix(name: name, latitude: latitude, longitude: longitude, source: source)
         // 「行ったお店」にこの立ち寄りがあれば、その名前も本人が決めたものにする
         if let pipeline, pipeline.shopVisits.isOn {

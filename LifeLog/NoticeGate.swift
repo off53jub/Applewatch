@@ -103,7 +103,9 @@ enum NoticeGate {
     private static let lock = NSLock()
 
     /// すぐ出す知らせを、束ねの決まりを通して出す（時刻を決めた知らせは、そのまま頼む）
-    static func add(_ request: UNNotificationRequest, now: Date = .now) {
+    static func add(_ original: UNNotificationRequest, now: Date = .now) {
+        // 押すとどうなるか・長押しの 1 行を文に足し、質問なら答えそびれの控えに残す（2026-11-23。s23 の 知8・知9・知13）
+        let request: UNNotificationRequest = S23Notices.prepared(original)
         // 止めた種類・朝夕の便りに回すもの（2026-11-21。s20 の 体16・体19。S20Notices.swift）
         guard S20Notices.pass(request, now: now) else { return }
         let center = UNUserNotificationCenter.current()

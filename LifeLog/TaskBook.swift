@@ -1027,6 +1027,7 @@ extension Pipeline {
                 let content = UNMutableNotificationContent()
                 content.title = "もうすぐ期限です"
                 content.body = Self.dueHourBody(item)
+                S23Notices.decorate(content, id: NoticeActions.duePrefix)  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
                 content.sound = .default
                 content.categoryIdentifier = NoticeActions.dueCategory
                 content.userInfo = ["ids": [item.id]]
@@ -1064,6 +1065,7 @@ extension Pipeline {
                 let content = UNMutableNotificationContent()
                 content.title = notice.title
                 content.body = notice.body
+                S23Notices.decorate(content, id: Self.taskNotifyPrefix)  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
                 content.sound = .default
                 let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: at)
                 try? await center.add(UNNotificationRequest(
@@ -1282,6 +1284,8 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
             }
             return
         }
+        // 押したあと迷わない: その質問の画面・あとで・何人でしたか（2026-11-23。s23 の 知2〜知7・知12・続5。S23Notices.swift）
+        if S23Notices.receive(response, completion: completionHandler) { return }
         // 休日の「一言」（音声・文字で答える）と「さっきの所は〇〇？」（2026-11-21。s19。Holiday.swift。時計に出た通知もここに来る）
         if content.categoryIdentifier == HolidayNoticeRules.noteCategory,
            let text = (response as? UNTextInputNotificationResponse)?.userText {
