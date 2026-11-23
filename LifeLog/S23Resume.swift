@@ -233,7 +233,9 @@ enum S23PhoneBook {
     static func watchDrillText() -> String? {
         let state = UserDefaults.standard.dictionary(forKey: watchStateKey)
         guard let drill = S23Rec.parseDrill(state?["drill"] as? String) else { return nil }
-        return S23Rec.drillText(ok: drill.ok, seconds: drill.seconds) + "（" + drill.at.formatted(date: .omitted, time: .shortened) + "）"
+        let result: String = S23Rec.drillText(ok: drill.ok, seconds: drill.seconds)
+        let at: String = drill.at.formatted(date: .omitted, time: .shortened)
+        return "\(result)（\(at)）"
     }
 
     // MARK: 止1 家の PC への様子
@@ -371,16 +373,21 @@ struct S23StopTicksLayer: View {
 struct S23StopsSection: View {
     let dayStart: Date
 
+    /// 「6:30〜6:32（2分）」（型の推し量りが長くならないよう、式を分けて作る）
+    static func span(_ tick: S23Rec.Tick) -> String {
+        let from: String = tick.start.formatted(date: .omitted, time: .shortened)
+        let to: String = tick.end.formatted(date: .omitted, time: .shortened)
+        let length: String = S21Watch.durationText(tick.end.timeIntervalSince(tick.start))
+        return from + "〜" + to + "（" + length + "）"
+    }
+
     var body: some View {
         let ticks = S23PhoneBook.ticks(dayStart: dayStart, dayEnd: dayStart.addingTimeInterval(86400))
         if !ticks.isEmpty {
             Section {
                 ForEach(Array(ticks.suffix(20).enumerated()), id: \.offset) { _, tick in
                     LabeledContent(tick.label) {
-                        Text(tick.start.formatted(date: .omitted, time: .shortened) + "〜"
-                             + tick.end.formatted(date: .omitted, time: .shortened)
-                             + "（" + S21Watch.durationText(tick.end.timeIntervalSince(tick.start)) + "）")
-                            .monospacedDigit()
+                        Text(Self.span(tick)).monospacedDigit()
                     }
                 }
             } header: {
