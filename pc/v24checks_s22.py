@@ -1,6 +1,7 @@
 """2026-11-22（s22。担当 P）: 家の PC の分を確かめる。決まりは docs/s22-pc.md。
 
-    python pc/v24checks_s22.py          （v24checks_s21.py の最後にも呼ばれる。CI の手順を増やさずに動かすため）
+    python pc/v24checks_s22.py          （v24checks_s21.py の最後にも呼ばれる。CI の手順を増やさずに動かすため。
+                                         最後に v24checks_s23 も動かす）
 
 本物の HOME・母艦・iPhone は使わない（一時フォルダに作り物を作る。人の名前は「甲」「乙」などの記号だけ）。確かめること（check_*）:
 - 楽5・楽20 s22feeds: 報告の棚（許した名前だけ・.. や / を断る・一覧が無ければ空・本文は text/markdown）・録れない表をそのまま
@@ -699,6 +700,10 @@ def run_all() -> int:
     s22pc.S.home, s22pc.S.main = saved
     appfeeds.REVIEW_HOOK = None
     s20feeds.REVIEW_EXTRA = None
+    # s23（2026-11-23）: 続1〜続4・続8・続10・試4・届7・止1/続5 の受け口（CI の手順を増やさずに動かす）
+    import v24checks_s23
+
+    failed += v24checks_s23.run_all()
     return failed
 
 
