@@ -12,7 +12,14 @@ final class Recorder: NSObject {
 
     var onChunk: ((URL) -> Void)?
     var onStop: ((String) -> Void)?
+    /// 中断のあと戻せていない・戻せた（文は画面に出す。2026-11-23）
+    var onStall: ((String) -> Void)?
+    var onResumed: (() -> Void)?
     private(set) var isRecording = false
+    /// アラーム・電話などで止められていて、まだ流し直せていない（2026-11-23）
+    private(set) var waitingResume = false
+    /// 流し直しを試す係（中断の始まりから 1 分後と、失敗したあとの試し直し）
+    private var resumeTask: Task<Void, Never>?
 
     private var engine: AVAudioEngine?
     private let writer = ChunkWriter { Storage.pendingDir.appendingPathComponent(Storage.chunkName(for: $0)) }
@@ -69,6 +76,9 @@ final class Recorder: NSObject {
 
     func stop() {
         isRecording = false
+        waitingResume = false
+        resumeTask?.cancel()
+        resumeTask = nil
         stopEngine()
         finishChunk()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
@@ -173,24 +183,79 @@ final class Recorder: NSObject {
         onStop?(reason)
     }
 
+    /// 試し直すまでの間（秒。最後の値をくり返す。仮。2026-11-23）
+    static let resumeWaits: [TimeInterval] = [15, 30, 60, 120, 300]
+
+    static func resumeWait(_ attempt: Int) -> TimeInterval {
+        resumeWaits[min(max(attempt, 0), resumeWaits.count - 1)]
+    }
+
+    /// アラーム・電話・通知の音などで止められた・終わった。
+    /// 2026-11-23: 前は「終わった」の知らせを待つだけで、知らせが来ないと録音中の表示のまま何も録らず、
+    /// 来ても裏で戻せなければ録音を止めて、開き直して押し直すまで戻らなかった。
+    /// 今は、1 分たっても知らせが無ければ自分で流し直し、だめなら止めずに間を空けて試し続ける（止めるボタンを押すまで）
     private func interrupted(_ type: AVAudioSession.InterruptionType?) {
         switch type {
         case .began:
+            guard isRecording else { return }
+            waitingResume = true
             stopEngine()
             finishChunk()
+            scheduleResume(after: 60, attempt: 0)
         case .ended:
             guard isRecording else { return }
-            // バックグラウンドでは再開できないことがある。失敗したら通知して止める。
-            do {
-                try AVAudioSession.sharedInstance().setActive(true)
-                try writer.open(Self.newChunkURL())
-                try startEngine()
-            } catch {
-                stopWithReason("電話などで録音が止まりました。アプリを開いて再開してください。")
-            }
+            resumeTask?.cancel()
+            resumeTask = nil
+            _ = resumeNow(attempt: 0)
         default:
             break
         }
+    }
+
+    private func scheduleResume(after seconds: TimeInterval, attempt: Int) {
+        resumeTask?.cancel()
+        resumeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard let self, !Task.isCancelled, self.isRecording, self.waitingResume else { return }
+            _ = self.resumeNow(attempt: attempt)
+        }
+    }
+
+    /// 今すぐ流し直す。戻せたら true。だめなら試し直しを予約する
+    @discardableResult
+    private func resumeNow(attempt: Int) -> Bool {
+        guard isRecording else { return false }
+        stopEngine()
+        finishChunk()
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            MicChoice.apply(AVAudioSession.sharedInstance())
+            try writer.open(Self.newChunkURL())
+            try startEngine()
+        } catch {
+            stopEngine()
+            finishChunk()
+            waitingResume = true
+            if attempt == 0 { onStall?("アラームや電話のあとで録音を戻せていません（自動で試し直しています）") }
+            scheduleResume(after: Self.resumeWait(attempt), attempt: attempt + 1)
+            return false
+        }
+        let was: Bool = waitingResume
+        waitingResume = false
+        resumeTask?.cancel()
+        resumeTask = nil
+        MicRoute.shared.update(recording: true)
+        if was { onResumed?() }
+        return true
+    }
+
+    /// 画面を開いたとき: 中断のあと戻せていなければ、待たずに今すぐ流し直す（開いたときは戻りやすい。2026-11-23）
+    func resumeIfInterrupted() {
+        guard isRecording, waitingResume || engine == nil else { return }
+        resumeTask?.cancel()
+        resumeTask = nil
+        waitingResume = true
+        resumeNow(attempt: 0)
     }
 }
 

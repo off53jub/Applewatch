@@ -1265,8 +1265,17 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
             let candidates: [String] = content.userInfo["cands"] as? [String] ?? []
             let lat: Double? = content.userInfo["lat"] as? Double
             let lon: Double? = content.userInfo["lon"] as? Double
+            let typed: String? = (response as? UNTextInputNotificationResponse)?.userText
             Task { @MainActor in
-                PlaceAssist.shared.answered(actionID: actionID, candidates: candidates, latitude: lat, longitude: lon)
+                if let typed {
+                    // 通知の上で名前を書いた（2026-11-23）
+                    PlaceAssist.shared.answered(name: typed, latitude: lat, longitude: lon)
+                } else if actionID == UNNotificationDefaultActionIdentifier {
+                    // 通知そのものを押した: 答える画面を開く（前はアプリが開くだけだった。2026-11-23。PlaceAskSheet.swift）
+                    S22Present.shared.placeAsk = PlaceAskTarget(candidates: candidates, latitude: lat, longitude: lon)
+                } else {
+                    PlaceAssist.shared.answered(actionID: actionID, candidates: candidates, latitude: lat, longitude: lon)
+                }
                 completionHandler()
             }
             return

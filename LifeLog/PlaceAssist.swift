@@ -69,6 +69,19 @@ enum PlaceAssistRules {
     }
 
     static func actionID(_ index: Int) -> String { "ask\(index)" }
+    /// 通知の上で名前を書いて答えるボタン（時計では音声・手書き。2026-11-23）
+    static let typeAction = "askType"
+    static let askTitle = "ここは、どこですか？"
+    /// 通知の文。押すと答える画面が開く・長押しで候補と「名前を入れる」が出ることを書く（2026-11-23。
+    /// 前は押してもアプリが開くだけで、どこに何を入れればいいか分からなかった）
+    static let askBody = "30 分ほどいます。押すと名前を選べます（長押しでもその場で選べます）。"
+
+    /// 書いた名前を整える（空・長すぎるものは nil。ボタンと同じ 24 文字まで）
+    static func typedName(_ raw: String) -> String? {
+        guard var name = PlaceNameRules.clean(raw) else { return nil }
+        if name.count > 24 { name = String(name.prefix(24)) }
+        return name
+    }
 
     /// 押されたボタンの名前から、何番目の候補か（違う名前なら nil）
     static func index(of actionID: String) -> Int? {
@@ -86,6 +99,8 @@ enum PlaceAssistRules {
         for (i, title) in savedTitles().prefix(candidateLimit).enumerated() {
             actions.append(UNNotificationAction(identifier: actionID(i), title: title, options: []))
         }
+        actions.append(UNTextInputNotificationAction(identifier: typeAction, title: "名前を入れる", options: [],
+                                                     textInputButtonTitle: "覚える", textInputPlaceholder: "例: 駅前のカフェ"))
         return UNNotificationCategory(identifier: askCategory, actions: actions, intentIdentifiers: [], options: [])
     }
 
@@ -273,8 +288,8 @@ final class PlaceAssist {
         UserDefaults.standard.set(list, forKey: PlaceAssistRules.titlesKey)
         center.setNotificationCategories(NoticeActions.categories())
         let content = UNMutableNotificationContent()
-        content.title = "ここは、どこですか？"
-        content.body = "30 分ほどいます。名前を教えてもらうと、次から使います。"
+        content.title = PlaceAssistRules.askTitle
+        content.body = PlaceAssistRules.askBody
         content.categoryIdentifier = PlaceAssistRules.askCategory
         content.interruptionLevel = .passive
         content.userInfo = ["lat": here.coordinate.latitude, "lon": here.coordinate.longitude, "cands": list]
@@ -322,10 +337,14 @@ final class PlaceAssist {
 
     /// 通知のボタンが押された（候補の名前を、位置で覚える）
     func answered(actionID: String, candidates: [String], latitude: Double?, longitude: Double?) {
-        guard let index = PlaceAssistRules.index(of: actionID), candidates.indices.contains(index),
-              let latitude, let longitude else { return }
-        let name: String = candidates[index]
-        PlaceNameBook.shared.fix(name: name, latitude: latitude, longitude: longitude, source: "watch")
+        guard let index = PlaceAssistRules.index(of: actionID), candidates.indices.contains(index) else { return }
+        answered(name: candidates[index], latitude: latitude, longitude: longitude)
+    }
+
+    /// 名前で答えた（ボタン・書いた名前・答える画面。2026-11-23）
+    func answered(name raw: String, latitude: Double?, longitude: Double?, source: String = "watch") {
+        guard let name = PlaceAssistRules.typedName(raw), let latitude, let longitude else { return }
+        _ = PlaceNameBook.shared.fix(name: name, latitude: latitude, longitude: longitude, source: source)
         // 「行ったお店」にこの立ち寄りがあれば、その名前も本人が決めたものにする
         if let pipeline, pipeline.shopVisits.isOn {
             let here = CLLocation(latitude: latitude, longitude: longitude)

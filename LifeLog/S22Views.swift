@@ -586,6 +586,8 @@ struct S22SceneTarget: Identifiable {
 final class S22Present {
     static let shared = S22Present()
     var card: S22SceneTarget?
+    /// 「ここは、どこですか？」の通知を押したときの答える画面（2026-11-23。PlaceAskSheet.swift）
+    var placeAsk: PlaceAskTarget?
 }
 
 extension View {
@@ -603,6 +605,12 @@ private struct S22RootModifier: ViewModifier {
                 S22SceneCardSheet(target: target) { present.card = nil }
             }
             .environment(pipeline)
+            .llRoot()
+        }
+        .sheet(item: $present.placeAsk) { target in
+            NavigationStack {
+                PlaceAskSheet(target: target) { present.placeAsk = nil }
+            }
             .llRoot()
         }
     }
