@@ -349,14 +349,33 @@ final class Pipeline {
         recorder.onStall = { [weak self] reason in
             self?.message = reason
             if self?.stopAlertsOn == true, UIApplication.shared.applicationState != .active {
-                Self.notify(id: "phone-stopped", title: "iPhone の録音が止まっています",
-                            body: "アラームや電話のあとで戻せていません。自動で試し直しています。LifeLog を開くとすぐ戻します。")
+                // 「録音を戻す」のボタンつき（2026-11-23。s23 の 止8。S23Resume.swift）
+                S23Resume.notifyPhoneStalled()
             }
         }
         recorder.onResumed = { [weak self] in
-            if self?.message.hasPrefix("アラームや電話のあとで") == true { self?.message = "" }
+            if self?.message.hasPrefix("アラームや電話のあとで") == true || self?.message.hasPrefix("電話中です") == true {
+                self?.message = ""
+            }
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["phone-stopped"])
         }
+        // 録音が止まらない（2026-11-23。s23。S23Resume.swift）: 知らせの「録音を戻す」（止8）・毎日の見回り（止11）・
+        // 中断の練習（止15）・電話が終わったらすぐ戻す（止4。設定がオンのときだけ）
+        S23Resume.resume = { [weak self] way in self?.recorder.kick(way) }
+        S23Resume.drill = { [weak self] in await self?.recorder.drill() ?? (false, 0) }
+        S23PhoneBook.dailyKick = { [weak self] in self?.recorder.kick("daily") }
+        S23Calls.shared.onChange = { [weak self] inCall in
+            guard let self, self.isRecording else { return }
+            if inCall, self.recorder.waitingResume, S23Rec.isOn(S23Rec.callKey) {
+                self.message = "電話中です。終わったらすぐ録音を戻します"
+            } else if !inCall {
+                if self.message.hasPrefix("電話中です") { self.message = "" }
+                if S23Rec.isOn(S23Rec.callKey) { self.recorder.callEnded() }
+            }
+        }
+        S23Calls.shared.start()
+        S23PhoneBook.ensureSince()
+        S23PhoneBook.scheduleDailyCheck()
         recorder.onStop = { [weak self] reason in
             self?.endLive()
             self?.isRecording = false
@@ -428,6 +447,8 @@ final class Pipeline {
             self?.noteWatchState(state)
             // 時計の便りが途切れたとき・返事待ちが多いとき（2026-11-22。s21 の 守4・速2。S21Book.swift）
             self?.s21WatchState(state)
+            // 時計が戻れないあいだ iPhone で録る（初めはオフ。2026-11-23。s23 の 止9。S23Resume.swift）
+            self?.s23WatchState(state)
             // 時計の区切りが届かないときの立て直し（2026-11-07。WatchRescue.swift）
             self?.checkWatchDelivery(state)
         }

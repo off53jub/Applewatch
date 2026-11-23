@@ -45,7 +45,9 @@ final class Recorder: NSObject {
         observers = [
             center.addObserver(forName: AVAudioSession.interruptionNotification, object: session, queue: .main) { [weak self] note in
                 let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-                MainActor.assumeIsolated { self?.interrupted(raw.flatMap { AVAudioSession.InterruptionType(rawValue: $0) }) }
+                // 中断の理由（OS が教える分だけ。2026-11-23。s23 の 止5）
+                let why = note.userInfo?[AVAudioSessionInterruptionReasonKey] as? UInt
+                MainActor.assumeIsolated { self?.interrupted(raw.flatMap { AVAudioSession.InterruptionType(rawValue: $0) }, why: why) }
             },
             center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.restartEngine() }
@@ -79,6 +81,11 @@ final class Recorder: NSObject {
         waitingResume = false
         resumeTask?.cancel()
         resumeTask = nil
+        probeTask?.cancel()
+        probeTask = nil
+        // 中断のあいだに止めた（止めるボタン・前の動きで止めた）なら、その中断は「止めた」で閉じる（s23 の 止1）
+        if flow.waiting { S23PhoneBook.abandoned() }
+        flow = S23Rec.ResumeFlow()
         stopEngine()
         finishChunk()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
@@ -183,48 +190,113 @@ final class Recorder: NSObject {
         onStop?(reason)
     }
 
-    /// 試し直すまでの間（秒。最後の値をくり返す。仮。2026-11-23）
-    static let resumeWaits: [TimeInterval] = [15, 30, 60, 120, 300]
+    /// 試し直すまでの間（秒。最後の値をくり返す。仮。2026-11-23。決まりは S23Rec.ResumeFlow に移した）
+    static var resumeWaits: [TimeInterval] { S23Rec.ResumeFlow.waits }
 
-    static func resumeWait(_ attempt: Int) -> TimeInterval {
-        resumeWaits[min(max(attempt, 0), resumeWaits.count - 1)]
-    }
+    static func resumeWait(_ attempt: Int) -> TimeInterval { S23Rec.ResumeFlow.wait(attempt) }
+
+    /// 戻すかの判断（2026-11-23。s23 の 届5。決まった入力から決まった出力だけなので、テストで中断を偽って流せる）
+    private var flow = S23Rec.ResumeFlow()
+    /// 中断のあいだ 5 秒ごとに「ほかの音がまだ鳴っているか」を見る係（s23 の 止6）
+    private var probeTask: Task<Void, Never>?
 
     /// アラーム・電話・通知の音などで止められた・終わった。
     /// 2026-11-23: 前は「終わった」の知らせを待つだけで、知らせが来ないと録音中の表示のまま何も録らず、
     /// 来ても裏で戻せなければ録音を止めて、開き直して押し直すまで戻らなかった。
-    /// 今は、1 分たっても知らせが無ければ自分で流し直し、だめなら止めずに間を空けて試し続ける（止めるボタンを押すまで）
-    private func interrupted(_ type: AVAudioSession.InterruptionType?) {
+    /// 今は、1 分たっても知らせが無ければ自分で流し直し、だめなら止めずに間を空けて試し続ける（止めるボタンを押すまで）。
+    /// s23（同日）: 判断は S23Rec.ResumeFlow に任せ、中断ごとに理由・戻るまでの秒・戻った道を残す（止1・止5。S23Resume.swift）。
+    /// 設定「前の動きに戻す」（止16）がオンなら、版 386 より前と同じ（終わったときに 1 回だけ試し、だめなら止める）
+    private func interrupted(_ type: AVAudioSession.InterruptionType?, why: UInt? = nil, drill: Bool = false) {
+        guard isRecording else { return }
         switch type {
         case .began:
-            guard isRecording else { return }
+            let fresh: Bool = !flow.waiting
+            if fresh {
+                flow.legacy = S23Rec.isOn(S23Rec.legacyKey)
+                flow.probeOn = S23Rec.isOn(S23Rec.probeKey)
+            }
+            let out = flow.step(.began, now: .now)
             waitingResume = true
+            if fresh {
+                let reason: String = drill ? "drill" : S23Rec.reasonCode(raw: why, inCall: S23Calls.shared.inCall, began: .now)
+                S23PhoneBook.began(reason: reason)
+            }
             stopEngine()
             finishChunk()
-            scheduleResume(after: 60, attempt: 0)
+            apply(out)
         case .ended:
-            guard isRecording else { return }
-            resumeTask?.cancel()
-            resumeTask = nil
-            _ = resumeNow(attempt: 0)
+            apply(flow.step(.ended, now: .now))
         default:
             break
         }
     }
 
-    private func scheduleResume(after seconds: TimeInterval, attempt: Int) {
+    /// 判断の結果どおりに動く
+    private func apply(_ out: S23Rec.ResumeFlow.Output) {
+        switch out {
+        case .nothing:
+            break
+        case .pause(let timer, let probe):
+            resumeTask?.cancel()
+            resumeTask = nil
+            if let timer { scheduleResume(after: timer) }
+            startProbe(every: probe)
+        case .tryNow(_, let quiet):
+            // 見回り・電話の終わりで試すとき（quiet）は、1 分の予約・試し直しの予約をそのまま残す
+            if !quiet {
+                resumeTask?.cancel()
+                resumeTask = nil
+            }
+            attemptResume()
+        case .retry(let after, let notify):
+            S23PhoneBook.failed()
+            if notify {
+                onStall?("アラームや電話のあとで録音を戻せていません（自動で試し直しています）")
+                S23PhoneBook.firstFailure()
+            }
+            scheduleResume(after: after)
+        case .giveUp:
+            stopWithReason("電話などで録音が止まりました。アプリを開いて再開してください。")
+        case .done(let way, let seconds):
+            probeTask?.cancel()
+            probeTask = nil
+            resumeTask?.cancel()
+            resumeTask = nil
+            waitingResume = false
+            MicRoute.shared.update(recording: true)
+            S23PhoneBook.resumed(way: way, seconds: seconds)
+            onResumed?()
+        }
+    }
+
+    private func scheduleResume(after seconds: TimeInterval) {
         resumeTask?.cancel()
         resumeTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
             guard let self, !Task.isCancelled, self.isRecording, self.waitingResume else { return }
-            _ = self.resumeNow(attempt: attempt)
+            self.apply(self.flow.step(.timer, now: .now))
         }
     }
 
-    /// 今すぐ流し直す。戻せたら true。だめなら試し直しを予約する
-    @discardableResult
-    private func resumeNow(attempt: Int) -> Bool {
-        guard isRecording else { return false }
+    /// 初めの 1 分のあいだ、5 秒ごとにほかの音が止んだかを見る（止んだら試す。だめでも 1 分の戻しは残る。止6）
+    private func startProbe(every: TimeInterval?) {
+        probeTask?.cancel()
+        probeTask = nil
+        guard let every, every > 0 else { return }
+        let ticks = Int(S23Rec.ResumeFlow.firstWait / every)
+        probeTask = Task { @MainActor [weak self] in
+            for _ in 0..<ticks {
+                try? await Task.sleep(for: .seconds(every))
+                guard let self, !Task.isCancelled, self.isRecording, self.waitingResume else { return }
+                let other: Bool = AVAudioSession.sharedInstance().isOtherAudioPlaying
+                self.apply(self.flow.step(.probe(otherAudio: other), now: .now))
+            }
+        }
+    }
+
+    /// 今すぐ流し直す。戻せたら判断に「戻った」、だめなら「だめだった」を渡す
+    private func attemptResume() {
+        guard isRecording else { return }
         stopEngine()
         finishChunk()
         do {
@@ -236,26 +308,47 @@ final class Recorder: NSObject {
             stopEngine()
             finishChunk()
             waitingResume = true
-            if attempt == 0 { onStall?("アラームや電話のあとで録音を戻せていません（自動で試し直しています）") }
-            scheduleResume(after: Self.resumeWait(attempt), attempt: attempt + 1)
-            return false
+            apply(flow.step(.failed, now: .now))
+            return
         }
-        let was: Bool = waitingResume
-        waitingResume = false
-        resumeTask?.cancel()
-        resumeTask = nil
-        MicRoute.shared.update(recording: true)
-        if was { onResumed?() }
-        return true
+        apply(flow.step(.resumed, now: .now))
     }
 
     /// 画面を開いたとき: 中断のあと戻せていなければ、待たずに今すぐ流し直す（開いたときは戻りやすい。2026-11-23）
     func resumeIfInterrupted() {
-        guard isRecording, waitingResume || engine == nil else { return }
-        resumeTask?.cancel()
-        resumeTask = nil
-        waitingResume = true
-        resumeNow(attempt: 0)
+        kick("open")
+    }
+
+    /// 開いた・「録音を戻す」（止8）・毎日の見回り（止11）で、待たずに今すぐ流し直す（前の動きの設定のときは何もしない）
+    func kick(_ way: String) {
+        guard isRecording, waitingResume || engine == nil, !S23Rec.isOn(S23Rec.legacyKey) else { return }
+        if !flow.waiting {
+            // 中断の知らせ無しに止まっていた（音の仕組みが作り直されたあと流せなかった など）
+            flow.legacy = false
+            flow.probeOn = false
+            _ = flow.step(.began, now: .now)
+            waitingResume = true
+        }
+        apply(flow.step(.now(way), now: .now))
+    }
+
+    /// 電話が終わった（止4。設定がオンのときだけ S23Calls が呼ぶ）
+    func callEnded() {
+        guard isRecording, waitingResume else { return }
+        apply(flow.step(.callEnded, now: .now))
+    }
+
+    /// 中断の練習（止15）: 録音をわざと 1 回切り、2 秒後に「終わった」を偽って流して、自分で戻るかを見る（戻る道だけを試す）
+    func drill() async -> (ok: Bool, seconds: TimeInterval) {
+        guard isRecording, !waitingResume else { return (false, 0) }
+        let began = Date.now
+        interrupted(.began, drill: true)
+        try? await Task.sleep(for: .seconds(2))
+        interrupted(.ended)
+        while waitingResume, Date.now.timeIntervalSince(began) < S23Rec.drillLimit {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        return (!waitingResume && isRecording, Date.now.timeIntervalSince(began))
     }
 }
 

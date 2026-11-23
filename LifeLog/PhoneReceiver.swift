@@ -371,6 +371,8 @@ final class PhoneReceiver: NSObject, WCSessionDelegate {
         state.sampledNoVoice = context[S21Watch.sampledNoVoiceKey] as? Int
         state.finishedRecent = context[S22Watch.finishedRecentKey] as? Int
         state.muffledToday = context[S22Watch.muffledTodayKey] as? Int
+        // 時計の中断から戻るまでの数・止まっていたあいだ・練習の結果（2026-11-23。s23 の 止1・止12・止15。S23Resume.swift）
+        S23PhoneBook.noteWatchContext(context)
         let snapshot = state
         Task { @MainActor in
             if let lowPower { self.onWatchLowPower?(lowPower) }

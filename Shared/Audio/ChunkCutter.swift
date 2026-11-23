@@ -110,6 +110,8 @@ struct ChunkCutter {
         S21Watch.addSettings(to: &context)
         // 1 時間ごとの実験の入れ替え・袖でこもった音（2026-11-22。s22 の 確24・確31。初めはオフ）
         S22Watch.addSettings(to: &context)
+        // 録音が止まらない: 音が止んだら戻す・毎日の見回り・戻ったら知らせる・前の動きに戻す（2026-11-23。s23。S23Rec）
+        S23Rec.addSettings(to: &context)
     }
 
     /// 時計が iPhone から届いた設定を読む（区切りの長さと「電池が少ないときは5分に」。次の区切りから効く）
@@ -122,6 +124,7 @@ struct ChunkCutter {
         VoiceGate.readSettings(context)
         S21Watch.readSettings(context)
         S22Watch.readSettings(context)
+        S23Rec.readSettings(context)
     }
 
     /// 静かな瞬間をこれだけ待つ
