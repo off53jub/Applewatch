@@ -53,6 +53,8 @@ struct DayBandView: View {
                                     .frame(width: max(2, x1 - x0), height: 22)
                                     .offset(x: x0, y: 12)
                             }
+                            // 止まっていた所（中断。iPhone は赤・時計は橙。2026-11-23。s23 の 止12。S23Resume.swift）
+                            S23StopTicksLayer(dayStart: start, width: width, height: 6, y: 60)
                             // 文字が届いた所が少しのあいだ光る（2026-11-22。s22 の 見15。「視差効果を減らす」なら光らない）
                             BandGlowLayer(talks: talks.map { BandSpan(start: $0.start, end: $0.end) }, dayStart: start,
                                           width: width, height: 22, y: 12)
@@ -103,6 +105,8 @@ struct DayBandView: View {
             } footer: {
                 Text("帯を指でなぞると、その時間を選べます（\(BandRules.snapMinutes) 分きざみ）。")
             }
+            // 止まっていた時間と理由（2026-11-23。s23 の 止12。S23Resume.swift）
+            S23StopsSection(dayStart: start)
             if let selection {
                 let lines = talks.flatMap(\.lines).filter { selection.contains($0.time) }
                 let convs = talks.filter { $0.start <= selection.upperBound && $0.end >= selection.lowerBound }.count

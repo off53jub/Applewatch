@@ -980,6 +980,7 @@ enum NightMood {
         let content = UNMutableNotificationContent()
         content.title = "夜の10秒"
         content.body = "今日の気分・疲れ・手ごたえを3つ押すだけです。"
+        S23Notices.decorate(content, id: "night-mood")  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
         content.sound = .default
         var comps = DateComponents()
         comps.hour = reminderMinutes / 60

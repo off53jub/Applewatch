@@ -388,8 +388,10 @@ extension Pipeline {
     func handlePromiseNotice(_ p: NoticeActions.Pending) {
         switch p.action {
         case .keep:
+            Tally.add("s23.promise.notice.add")  // 出し方ごとの数（2026-11-23。s23 の 続6）
             PromiseInbox.shared.answer(ids: p.ids, add: true, pipeline: self)
         case .reject:
+            Tally.add("s23.promise.notice.ignore")
             PromiseInbox.shared.answer(ids: p.ids, add: false, pipeline: self)
         default:
             PromiseInbox.shared.poke()
@@ -413,6 +415,7 @@ struct PromisesSection: View {
                 Section {
                     ForEach(Array(open.prefix(5))) { item in
                         PromiseRow(item: item) { add in
+                            Tally.add(add ? "s23.promise.today.add" : "s23.promise.today.ignore")  // 2026-11-23。s23 の 続6
                             withAnimation { note = inbox.answer(item, add: add, pipeline: pipeline) }
                         }
                     }
@@ -493,6 +496,8 @@ struct PromiseSettingsView: View {
             } footer: {
                 Text("会話が終わって10分ほどで、家の PC がその会話から約束・頼まれごとだけを Claude（軽いモデル）で探し、通知で知らせます。通知の「タスクに入れる」でタスクに入り、「いらない」で消えます。見逃しても「今日」に出ます。通知は1日6回・10分に1回までです。\n「通知に中身を出さない」をオンにすると、通知には件数だけを出します（ロック画面に相手の名前やすることを出したくないとき）。iPhone の「設定」→「通知」→「プレビューを表示」を「ロックされていないときのみ」にしても、ロック画面では隠れます。")
             }
+            // 出し方ごとの数と、やめるかを決める材料（2026-11-23。s23 の 続6。S23Screens.swift）
+            S23PromiseCountsSection()
         }
         .navigationTitle("会話のあとの約束")
         .onChange(of: on) { _, _ in sync() }

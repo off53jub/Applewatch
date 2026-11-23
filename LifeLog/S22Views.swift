@@ -42,7 +42,8 @@ struct S22CheckupTopSection: View {
                     Label("時計の LifeLog を新しくする", systemImage: "applewatch.radiowaves.left.and.right")
                 }
             }
-            ShareLink(item: S22Checkup.askClaudeText(list, phoneBuild: AppBuild.current, watchBuild: watchBuild, names: names)) {
+            ShareLink(item: S22Checkup.askClaudeText(list, phoneBuild: AppBuild.current, watchBuild: watchBuild, names: names,
+                                                     failedChecks: S23Checks.failed().map(\.title))) {
                 Label("Claude に頼む（いまの様子を共有）", systemImage: CheckupFix.askClaude.symbol)
             }
             .simultaneousGesture(TapGesture().onEnded { Tally.add("s22.askClaude") })
@@ -254,9 +255,8 @@ struct S22ReportView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
                 if let text {
-                    ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
-                        lineView(line)
-                    }
+                    // 表は 1 行 1 カードに（見19 の部品。2026-11-23。s23 の 続7）
+                    LLMarkdownView(text: text)
                 } else if let note {
                     Text(note).foregroundStyle(LL.dim)
                 } else {
@@ -271,25 +271,6 @@ struct S22ReportView: View {
         .navigationTitle(report.title.isEmpty ? report.name : report.title)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
-    }
-
-    @ViewBuilder
-    private func lineView(_ line: String) -> some View {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("#") {
-            Text(trimmed.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces))
-                .font(trimmed.hasPrefix("##") ? .headline : .title3.weight(.bold))
-                .padding(.top, 6)
-        } else if trimmed.hasPrefix("|") {
-            // 表の行（横に長い表は A2 の「1 行 1 カード」の部品ができたら、そちらに替える）
-            Text(trimmed).font(.caption.monospaced()).foregroundStyle(LL.dim)
-        } else if trimmed.isEmpty {
-            Spacer().frame(height: 4)
-        } else {
-            Text((try? AttributedString(markdown: trimmed, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-                 ?? AttributedString(trimmed))
-                .font(.callout)
-        }
     }
 
     private func load() async {
@@ -611,6 +592,7 @@ private struct S22RootModifier: ViewModifier {
             NavigationStack {
                 PlaceAskSheet(target: target) { present.placeAsk = nil }
             }
+            .environment(pipeline)
             .llRoot()
         }
     }

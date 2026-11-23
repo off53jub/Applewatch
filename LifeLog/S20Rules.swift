@@ -542,6 +542,9 @@ enum ReviewRules {
         case "deadline", "request": "依頼と期限"
         // モデルで数字・日付・金額が割れた行（2026-11-22。s22 の 確19。choices に候補の文）
         case "number": "数字の確かめ"
+        // 2 つの声が同じ人か・聞き取りの答え合わせ（2026-11-23。s23。家の PC #104 の新しい kind）
+        case "voice_pair": "同じ人の声？"
+        case "gold_noisy": "聞き取りの答え合わせ"
         default: kind
         }
     }

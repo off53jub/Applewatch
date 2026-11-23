@@ -241,6 +241,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         out[S21Watch.sampledNoVoiceKey] = HolidayRules.count(counts, S21Watch.sampledNoVoiceKey, day: today)
         // s22（2026-11-22。S22WatchSide.swift）: 直近 30 分に終わった受け渡し（楽6）・こもりで震えた回数（確31）。どれも省ける
         for (key, value) in S22WatchSide.extraState(now: now) { out[key] = value }
+        // s23（2026-11-23。S23WatchRec.swift）: 中断から戻るまでの数・止まっていたあいだ・練習の結果（止1・止12・止15）。どれも省ける
+        for (key, value) in S23WatchRec.extraState(now: now) { out[key] = value }
         return out
     }
 
@@ -897,6 +899,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         if let list = userInfo[S21Watch.gotListKey] as? [String] { tidyKept(phoneHas: watchNames(list), force: true) }
         // iPhone の「いま送り直す」（2026-11-22。s22 の 楽6。S22WatchSide）
         if userInfo[S22Watch.resendNowKey] as? Bool == true { S22WatchSide.resendNow(self) }
+        // iPhone の「録って」・電話が終わった・中断の練習（2026-11-23。s23 の 止10・止4・止15。S23WatchRec）
+        S23WatchRec.received(userInfo)
         onChange?()
     }
 

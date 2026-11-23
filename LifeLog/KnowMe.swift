@@ -792,6 +792,7 @@ final class KnowMeBook {
         let content = UNMutableNotificationContent()
         content.title = "5 分しゃべる振り返り"
         content.body = "今週あったこと・思ったことを 5 分しゃべってみませんか。「直す」→「自分を知る」の「録り始める」で印が付きます。"
+        S23Notices.decorate(content, id: KnowMeRules.weeklyTalkID)  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
         var c = DateComponents()
         c.weekday = KnowMeRules.weeklyTalkWeekday
         c.hour = KnowMeRules.weeklyTalkHour

@@ -426,13 +426,17 @@ def chain_day(home: Path, parsed: dict, day: str, cfg: dict) -> dict:
             "after": len(people) - sum(len(g["people"]) - 1 for g in groups)}
 
 
+# s23 続5（s23pc.py が入れる）: 日 → 家の PC が受けた人数の行 [{"day","start","count"}]（無ければ None）
+EXTRA_HEADCOUNTS = None
+
+
 def headcounts(base: Path | None, day: str) -> list[tuple[int, int, int]]:
     """確6: その日の人数の分かる時間 [(始まりのミリ秒, 終わりのミリ秒, 人数)]（予定の「N人」・本人の答え）"""
     out = []
-    if base is None:
-        return out
     y, m, d = day.split("-")
     try:
+        if base is None:
+            raise OSError("母艦が無い")
         text = (Path(base) / "archive" / "calendar" / y / m / f"{d}.md").read_text(encoding="utf-8")
     except OSError:
         text = ""
@@ -448,9 +452,16 @@ def headcounts(base: Path | None, day: str) -> list[tuple[int, int, int]]:
                if match.group(3) else begin + datetime.timedelta(hours=2))
         out.append((int(begin.timestamp() * 1000), int(end.timestamp() * 1000), int(count.group(1))))
     try:
+        if base is None:
+            raise OSError("母艦が無い")
         rows = (Path(base) / "inbox" / "headcount.jsonl").read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, TypeError):
         rows = []
+    if EXTRA_HEADCOUNTS is not None:  # s23 続5（2026-11-23）: 家の PC が POST /headcount で受けた人数も足す（s23pc.py が入れる）
+        try:
+            rows = rows + [json.dumps(r, ensure_ascii=False) for r in EXTRA_HEADCOUNTS(day)]
+        except Exception:  # noqa: BLE001 — 読めなくても母艦の分で続ける
+            pass
     for raw in rows:
         try:
             row = json.loads(raw)

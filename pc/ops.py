@@ -434,6 +434,14 @@ def write_summary(now: float | None = None) -> Path | None:
     except Exception as error:  # noqa: BLE001 — 数えられなくても、ほかは書く
         s22_worries, s22_lines = [], [f"- （s22 の数を書けませんでした: {type(error).__name__}）"]
     worries = worries + s22_worries
+    # s23（2026-11-23）: 試4 の確かめ・届7 の版ごとの録れた時間・続4 の抜けの段・続10・続1 の影・止1（s23pc.py）
+    try:
+        import s23pc
+
+        s23_worries, s23_lines = s23pc.summary_lines(O.diag, now)
+    except Exception as error:  # noqa: BLE001 — 数えられなくても、ほかは書く
+        s23_worries, s23_lines = [], [f"- （s23 の数を書けませんでした: {type(error).__name__}）"]
+    worries = worries + s23_worries
     lines = ["# LifeLog の実機の様子（家の PC の LifeLog PC が書き直します）", "",
              f"書いた時刻: {time.strftime('%Y-%m-%d %H:%M', time.localtime(now))}（この PC の時刻）。"
              "iPhone が POST /diag で送った様子・TestFlight の報告・通知・学び直しの様子をまとめたものです。",
@@ -454,6 +462,9 @@ def write_summary(now: float | None = None) -> Path | None:
     if s22_lines:
         lines += ["", "## s22 の数（人と声・文字・録り方の実験。docs/s22-pc.md）", ""]
         lines.extend(s22_lines)
+    if s23_lines:
+        lines += ["", "## s23 の数（確かめの続き・版ごとの録れた時間・抜けの段。pc/s23pc.py）", ""]
+        lines.extend(s23_lines)
     lines += ["", "## 端末ごと", ""]
     lines.extend(devices or ["（まだ様子が届いていません）", ""])
     lines += ["## TestFlight の報告（新しい 10 件）", ""]
