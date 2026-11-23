@@ -41,7 +41,10 @@ SPEAKER_FILES = {"campplus（今）": ("speaker", "3dspeaker_speech_campplus_sv_
 
 
 def say(text: str) -> None:
-    print(time.strftime("%H:%M:%S"), text, flush=True)
+    # 画面の文字の形（cp932）で出せない記号（⚠ など）があっても止まらない（2026-11-24。夜の測りが最後の 1 行で落ちた）
+    line = f"{time.strftime('%H:%M:%S')} {text}"
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    print(line.encode(enc, "replace").decode(enc, "replace"), flush=True)
 
 
 def window_ok(moment: datetime.datetime | None = None) -> bool:
