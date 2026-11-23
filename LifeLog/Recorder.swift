@@ -256,6 +256,7 @@ final class Recorder: NSObject {
             }
             scheduleResume(after: after)
         case .giveUp:
+            S23PhoneBook.abandoned()
             stopWithReason("電話などで録音が止まりました。アプリを開いて再開してください。")
         case .done(let way, let seconds):
             probeTask?.cancel()

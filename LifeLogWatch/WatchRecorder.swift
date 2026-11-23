@@ -755,6 +755,7 @@ final class WatchRecorder: NSObject {
                 if self.interruptionOpen { self.s23Way = "timer" }
                 self.restartEngine()
             case .ended:
+                if self.interruptionOpen { self.s23Way = "ended" }
                 self.restartEngine()
             @unknown default:
                 break
