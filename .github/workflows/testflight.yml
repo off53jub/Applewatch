@@ -145,6 +145,7 @@ jobs:
             # 読めなければ TestFlight には送らず、今までどおり署名なしの IPA だけ作る（リリースは止めない）
             echo "::warning::ASC_KEY_P8 が鍵として読めません（${#body} 文字）。.p8 ファイルの中身を、BEGIN と END の行も含めてそのまま貼ってください。今回は TestFlight に送らず、署名なしの IPA だけ作ります"
             echo "ASC_UNUSABLE=true" >> "$GITHUB_ENV"
+            echo "ASC_UNUSABLE_REASON=key-unreadable" >> "$GITHUB_ENV"
           fi
 
       # CI はビルドのたびに開発用の証明書を1枚作る。たまると上限（10枚）で署名できなくなる（2026-11-07 のビルド 154）。
@@ -191,9 +192,11 @@ jobs:
                   CODE_SIGN_STYLE=Automatic)
             archive "${sign[@]}"
             status=$?
-            # 署名のプロファイルを作った直後は、ビルドに間に合わないことがある（初回など）。1回だけやり直す
-            if [ "$status" -ne 0 ] && grep -q "Provisioning Profiles" "$RUNNER_TEMP/build.log"; then
-              echo "::notice::署名のプロファイルが間に合わなかったので、もう一度アーカイブします"
+            # 署名のプロファイルを作った直後は、ビルドに間に合わないことがある（初回など）。1回だけやり直す。
+            # （2026-11-23。s23 の 届1）前は大文字の "Provisioning Profiles" で探していたが、実際の文は小文字の "provisioning profiles"
+            #  だったので、やり直しが動いていなかった。大文字小文字を区別せず、Apple との通信切れのときも 1 回やり直す
+            if [ "$status" -ne 0 ] && grep -qiE "provisioning profiles|network connection was lost|connection (was )?lost|internet connection appears to be offline|timed out" "$RUNNER_TEMP/build.log"; then
+              echo "::notice::署名のプロファイルが間に合わなかった・Apple との通信が切れたので、もう一度アーカイブします"
               archive "${sign[@]}"
               status=$?
             fi
@@ -202,6 +205,7 @@ jobs:
               grep -E "error:" "$RUNNER_TEMP/build.log" | sort -u | head -20 | while IFS= read -r line; do echo "::warning::${line}"; done
               echo "::warning::署名つきで作れなかったので、署名なしで作ります（今回は TestFlight に送りません）"
               echo "ASC_UNUSABLE=true" >> "$GITHUB_ENV"
+              echo "ASC_UNUSABLE_REASON=signing-failed" >> "$GITHUB_ENV"
               : > "$RUNNER_TEMP/build.log"
               archive CODE_SIGNING_ALLOWED=NO
               status=$?
@@ -317,12 +321,36 @@ jobs:
       # 送れても、Apple の受け付けの検査で弾かれることがある（2026-11-06 は ITMS-90626 で3回とも弾かれていた）。
       # 結果が出るまで待ち、弾かれたら理由を出してこのジョブを失敗にする。
       # main のときだけ、内部テストのグループにビルドを渡す（PR のビルドは本人に届かない。2026-11-07）
+      # （2026-11-23。s23 の 届6）TestFlight の「テストする内容」に入れる文を作る: 前の版（直前の GitHub のリリース）からのコミットの題の一覧。
+      #  作れなくても配達は止めない（continue-on-error）。前のリリースが見つからないときは、直近 10 コミット
+      - name: この版で変わったことの文を作る
+        if: env.HAS_ASC == 'true' && env.ASC_UNUSABLE != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          prev=$(gh api "repos/$REPO/releases?per_page=20" --jq "[.[] | select(.prerelease == false and .draft == false and .target_commitish != \"$SHA\")][0].target_commitish // empty" || true)
+          mode=recent
+          : > "$RUNNER_TEMP/commits.json"
+          if [ -n "$prev" ] && gh api "repos/$REPO/compare/$prev...$SHA" > "$RUNNER_TEMP/commits.json"; then
+            mode=compare
+            echo "前の版のコミット: ${prev:0:7}"
+          else
+            gh api "repos/$REPO/commits?sha=$SHA&per_page=10" > "$RUNNER_TEMP/commits.json" || true
+          fi
+          python3 .github/scripts/whatsnew.py "$RUNNER_TEMP/commits.json" "$RUNNER_TEMP/whatsnew.txt" "$mode"
+          echo "ASC_WHATS_NEW_FILE=$RUNNER_TEMP/whatsnew.txt" >> "$GITHUB_ENV"
+
       - name: Apple の受け付け結果を待つ
+        id: wait
         if: env.HAS_ASC == 'true' && env.ASC_UNUSABLE != 'true'
         timeout-minutes: 40
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_RESULT_FILE: ${{ runner.temp }}/asc-result.txt
         run: ASC_KEY_PATH="$RUNNER_TEMP/asc/key.p8" "$RUNNER_TEMP/ascpy/bin/python" .github/scripts/asc.py wait-upload "${{ github.run_number }}"
 
       # この CI で作った開発用の証明書を片づける（失敗しても、ほかの手順の結果は変えない）
@@ -336,3 +364,50 @@ jobs:
           [ -x "$RUNNER_TEMP/ascpy/bin/python" ] || exit 0
           [ -f "$RUNNER_TEMP/asc/key.p8" ] || exit 0
           ASC_KEY_PATH="$RUNNER_TEMP/asc/key.p8" "$RUNNER_TEMP/ascpy/bin/python" .github/scripts/asc.py revoke-own-cert
+
+      # （2026-11-23。s23 の 届2・届3）TestFlight に届いたか・届いていないかを、実行の「成功」の陰に隠さず、必ず 1 行で出す。
+      #  同じ形の 1 行を、ログ・注記（annotations）・実行のまとめ（$GITHUB_STEP_SUMMARY）に出す。母艦は `gh run view <id> --log` か
+      #  `gh api repos/R/check-runs/<job id>/annotations` から「TESTFLIGHT_RESULT:」で探せる:
+      #    TESTFLIGHT_RESULT: delivered build=N group=yes|no|failed   … Apple が受け付けた（group=yes は内部テストのグループにも渡した。main のときだけ）
+      #    TESTFLIGHT_RESULT: not-delivered build=N reason=...         … reason は no-secrets・key-unreadable・signing-failed・rejected・unconfirmed・build-failed
+      #  main への push（と main の手動実行）で、Secrets があるのに届かなかったときは、この手順で失敗にする（PR・Secrets の無いフォークでは失敗にしない）
+      - name: TestFlight に届いたかをまとめる
+        if: always() && !cancelled()
+        env:
+          BUILD: ${{ github.run_number }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          WAIT_OUTCOME: ${{ steps.wait.outcome }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          res=$(cat "$RUNNER_TEMP/asc-result.txt" 2>/dev/null || true)
+          reason=""
+          if [ "$HAS_ASC" != "true" ]; then reason="no-secrets"
+          elif [ "$ASC_UNUSABLE" = "true" ]; then reason="${ASC_UNUSABLE_REASON:-signing-failed}"
+          elif [ "$WAIT_OUTCOME" = "failure" ] || [ "$res" = "rejected" ]; then reason="rejected"
+          elif [ "${res%% *}" = "delivered" ]; then reason=""
+          elif [ "$JOB_STATUS" = "failure" ]; then reason="build-failed"
+          else reason="unconfirmed"; fi
+          if [ -z "$reason" ]; then
+            line="TESTFLIGHT_RESULT: delivered build=$BUILD ${res#delivered }"
+            echo "::notice::$line"
+            msg="TestFlight に届きました。ビルド $BUILD を渡しました"
+            case "$res" in
+              *group=yes*) msg="$msg（内部テストのグループにも渡しました）";;
+              *group=no*) msg="$msg（main ではないので、テスターには渡していません）";;
+              *group=failed*) msg="$msg（グループに渡せませんでした。TestFlight で手で渡してください）";;
+            esac
+          else
+            line="TESTFLIGHT_RESULT: not-delivered build=$BUILD reason=$reason"
+            echo "::warning::$line（TestFlight には届いていません）"
+            msg="TestFlight に届いていません（理由: $reason）"
+          fi
+          echo "$line"
+          { echo "### TestFlight"; echo; echo "$msg"; echo; echo "\`$line\`"; } >> "$GITHUB_STEP_SUMMARY"
+          # 届かなかったのに実行が「成功」で終わるのを防ぐ（2026-11-23。版 382 で起きた）。ビルドそのものの失敗は前の手順がもう赤にしている。unconfirmed（35 分待っても結果が出ない。届いているかもしれない）は警告だけ
+          on_main=false
+          if [ "$REF" = "refs/heads/main" ] && { [ "$EVENT" = "push" ] || [ "$EVENT" = "workflow_dispatch" ]; }; then on_main=true; fi
+          if [ -n "$reason" ] && [ "$on_main" = "true" ] && [ "$HAS_ASC" = "true" ] && [ "$reason" != "build-failed" ] && [ "$reason" != "unconfirmed" ]; then
+            echo "::error::main への実行なのに、TestFlight に届きませんでした（理由: $reason）"
+            exit 1
+          fi

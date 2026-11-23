@@ -71,6 +71,15 @@ unreached = sorted((m, i, shots[(m, i)][0]) for (m, i) in shots if not shots[(m,
 lines.append(f"- 撮れなかった: {len(missing)} 枚 / 開けなかった（行が見つからない）: {len(unreached)} 枚")
 lines.append(f"- 文字最大などで見つけた報告: {len(findings)} 件（" + "・".join(f"{k} {v}" for k, v in kinds.items()) + "）" if findings
              else "- 見つけた報告: 0 件")
+# s23 続9: 文字最大のはみ出しを、前の測り（見2。10 件・全部「今日」の画面）と並べる。母艦は「OVERFLOW_LARGE:」の行を読める
+large_over = [x for x in findings if x["mode"] == "最大" and x["kind"] == "はみ出し"]
+by_screen = Counter(x["screen"] for x in large_over)
+BASELINE = 10
+lines.append("")
+lines.append(f"- 文字最大のはみ出し（続9）: **{len(large_over)} 件**（見2 の測りは {BASELINE} 件・全部「今日」の画面。画面ごと: "
+             + ("・".join(f"{k} {v}" for k, v in by_screen.most_common()) if by_screen else "なし") + "）")
+lines.append(f"- `OVERFLOW_LARGE: count={len(large_over)} baseline={BASELINE} shots={len(shots)}`")
+print(f"OVERFLOW_LARGE: count={len(large_over)} baseline={BASELINE} shots={len(shots)}")
 lines.append("")
 lines.append("| 通り | はみ出し | 省略の印 | つぶれ |")
 lines.append("|---|---:|---:|---:|")

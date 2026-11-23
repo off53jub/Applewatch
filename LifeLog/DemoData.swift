@@ -12,6 +12,11 @@ enum DemoData {
         let nextID: Int
     }
 
+    /// 長い名前・長い文の見本（2026-11-23。s23 の 試3。全部作り物）。文字最大ではみ出す・つぶれるかを、画面の自動撮影で確かめる
+    static let longPersonName = "見本 とても長い名前の人物 見本 見本 見本 見本 見本 見本 見本 見本"
+    static let longPlaceName = "見本の とても長い名前の場所 見本の駅前の見本の商業ビルの見本の階の見本の店"
+    static let longTaskText = "見本の長い文: 来月の見本の打ち合わせの前に、見本の資料の三つの章を見直して、見本の担当の人に確かめてから、見本の宛先へ送る"
+
     static func install() {
         let base = URL.applicationSupportDirectory
         let days = base.appendingPathComponent("days", isDirectory: true)
@@ -70,7 +75,10 @@ enum DemoData {
                                   samples: [], updated: nil, hidden: nil),
             SpeakerLabeler.Person(id: "15", name: nil, context: nil, voices: [], seconds: 20, lastHeard: b,
                                   samples: [], updated: nil, hidden: nil),
-        ], nextID: 16)
+            // 長い名前の見本（2026-11-23。s23 の 試3。はみ出し・「…」の確かめ。名前は作り物）
+            SpeakerLabeler.Person(id: "21", name: DemoData.longPersonName, context: .work, voices: [], seconds: 90, lastHeard: b,
+                                  samples: [], updated: now, hidden: nil),
+        ], nextID: 22)
         if let data = try? encoder.encode(people) {
             try? data.write(to: base.appendingPathComponent("people.json"), options: .atomic)
         }
@@ -82,7 +90,10 @@ enum DemoData {
         t2.agreed = false
         var t3 = TaskBook.Item(what: "見積もりを確かめる（見本）", said: a, source: .manual, state: .open, work: true)
         t3.due = midnight.addingTimeInterval(86400 + 17 * 3600)
-        if let data = try? encoder.encode([t1, t2, t3]) {
+        // 長い文の見本（s23 の 試3）
+        var t4 = TaskBook.Item(what: DemoData.longTaskText, said: a, source: .manual, state: .open, work: true)
+        t4.due = midnight.addingTimeInterval(86400 + 9 * 3600)
+        if let data = try? encoder.encode([t1, t2, t3, t4]) {
             try? data.write(to: base.appendingPathComponent("tasks.json"), options: .atomic)
         }
         installHomeFeeds(base: base, now: now, day: f.string(from: now),
@@ -444,7 +455,14 @@ enum DemoData {
         taro.last_talk = PageTalk(day: yesterday, summary: "LINE「週末どうする？」", source: "line")
         taro.line_7d = 2
         taro.line_30d = 9
-        let people = PeoplePagesFeed(generated_at: stamp, items: [hanako, taro])
+        // 長い名前・長い文の見本（s23 の 試3。作り物）
+        var longp = PersonPage(id: "pp-demo000000003", name: DemoData.longPersonName)
+        longp.group = "とても長い名前のグループの見本（作り物）"
+        longp.last_talk = PageTalk(day: day, summary: DemoData.longTaskText, source: "app")
+        longp.line_7d = 1
+        longp.line_30d = 3
+        longp.topics = [PageDated(text: DemoData.longTaskText, day: day)]
+        let people = PeoplePagesFeed(generated_at: stamp, items: [hanako, taro, longp])
         if let data = try? encoder.encode(people) {
             try? data.write(to: base.appendingPathComponent(PagesBook.peopleFile), options: .atomic)
         }
@@ -468,7 +486,9 @@ enum DemoData {
         cafe.with = ["見本 花子"]
         cafe.recent = [PlaceVisit(day: day, time: "12:10–12:50", amount: 780, with: ["見本 花子"], talk: "見本の資料の話"),
                        PlaceVisit(day: yesterday, time: "09:00–09:20", amount: nil, with: [], talk: "")]
-        let places = PlacePagesFeed(generated_at: stamp, items: [cafe])
+        var longPlace = PlacePage(id: "pl-demo000000002", name: DemoData.longPlaceName, sure: true, visit_days: 1, visits: 1, last_day: yesterday)
+        longPlace.recent = [PlaceVisit(day: yesterday, time: "10:00–10:30", amount: nil, with: [], talk: DemoData.longTaskText)]
+        let places = PlacePagesFeed(generated_at: stamp, items: [cafe, longPlace])
         if let data = try? encoder.encode(places) {
             try? data.write(to: base.appendingPathComponent(PagesBook.placesFile), options: .atomic)
         }

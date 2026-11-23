@@ -7,6 +7,9 @@
                                             （「すべてのビルドを自動で受け取る」は API で切れないので、自動で受け取らない
                                             グループを2026-11-07 に作り直した。PR のビルドは本人に届かない）
 
+wait-upload は、環境変数 ASC_WHATS_NEW_FILE があれば「テストする内容」を入れ（s23 届6）、
+ASC_RESULT_FILE があれば結果（delivered group=yes|no|failed / unconfirmed / rejected）を書く（s23 届2・届3）。
+
 環境変数: ASC_KEY_ID・ASC_ISSUER_ID と、ASC_KEY_PATH（.p8 のファイル）。
 リポジトリは公開なので、人の名前・メールアドレス・証明書の名前は記録に出さない。
 片づける証明書は「API で作られた（Created via API）開発用」だけ。Sideloadly などほかの作り方の証明書には触らない。
@@ -26,6 +29,7 @@ import requests
 BASE = "https://api.appstoreconnect.apple.com"
 BUNDLE_ID = "com.off53jub.lifelog"
 API_MADE = "Created via API"
+WHATS_NEW_MAX = 3800  # 「テストする内容」の上限 4000 文字より少し短く
 
 
 def token() -> str:
@@ -121,18 +125,44 @@ def app_id() -> str | None:
     return apps[0]["id"] if apps else None
 
 
-def give_to_testers(app: str, number: str) -> None:
-    """内部テストのグループ「自分（main）」（自動では受け取らない）に、このビルドを渡す"""
-    build = None
+def find_build(app: str, number: str) -> str | None:
+    """アップロードしたビルドの id を探す（Apple の処理が終わるまで、30 秒おきに 10 回まで）"""
     for _ in range(10):
         rows = call("GET", "/v1/builds", **{"filter[app]": app, "filter[version]": number, "limit": 5}).get("data", [])
         if rows:
-            build = rows[0]["id"]
-            break
+            return rows[0]["id"]
         time.sleep(30)
-    if build is None:
-        print("::warning::ビルドが見つからないので、テスターに渡せませんでした")
+    return None
+
+
+def set_whats_new(build: str) -> None:
+    """TestFlight の「テストする内容」に、この版で変わったことを入れる（s23 届6）。
+    文は ASC_WHATS_NEW_FILE（CI がコミットの題から作った UTF-8 の文）から読む。無ければ何もしない。失敗しても CI は止めない。"""
+    path = os.environ.get("ASC_WHATS_NEW_FILE", "")
+    if not path or not os.path.exists(path):
         return
+    text = open(path, encoding="utf-8").read().strip()
+    if not text:
+        return
+    text = text[:WHATS_NEW_MAX]  # Apple の上限は 4000 文字
+    try:
+        rows = call("GET", f"/v1/builds/{build}/betaBuildLocalizations", limit=50).get("data", [])
+        mine = next((r for r in rows if r["attributes"].get("locale") == "ja"), None)
+        if mine:
+            call("PATCH", f"/v1/betaBuildLocalizations/{mine['id']}",
+                 json={"data": {"type": "betaBuildLocalizations", "id": mine["id"], "attributes": {"whatsNew": text}}})
+        else:
+            call("POST", "/v1/betaBuildLocalizations",
+                 json={"data": {"type": "betaBuildLocalizations", "attributes": {"locale": "ja", "whatsNew": text},
+                                "relationships": {"build": {"data": {"type": "builds", "id": build}}}}})
+        print(f"「テストする内容」に、この版で変わったこと（{len(text)} 文字）を入れました")
+    except (RuntimeError, requests.RequestException) as error:
+        print(f"::warning::「テストする内容」を入れられませんでした（TestFlight への配達には影響しません）: {error}")
+
+
+def give_to_testers(app: str, build: str, number: str) -> bool:
+    """内部テストのグループ「自分（main）」（自動では受け取らない）に、このビルドを渡す。渡せたら True"""
+    gave = False
     for g in call("GET", f"/v1/apps/{app}/betaGroups", limit=50).get("data", []):
         # 自動で全部受け取るグループには渡せない（API が断る）ので、自動で受け取らない内部テストのグループだけ
         if not g["attributes"].get("isInternalGroup") or g["attributes"].get("hasAccessToAllBuilds"):
@@ -140,14 +170,25 @@ def give_to_testers(app: str, number: str) -> None:
         try:
             call("POST", f"/v1/betaGroups/{g['id']}/relationships/builds", json={"data": [{"type": "builds", "id": build}]})
             print(f"内部テストのグループ「{g['attributes'].get('name')}」にビルド {number} を渡しました")
+            gave = True
         except RuntimeError as error:
             print(f"::warning::ビルドをグループに渡せませんでした: {error}")
+    return gave
+
+
+def write_result(line: str) -> None:
+    """届いた結果を CI の最後の手順に伝える（ASC_RESULT_FILE があるときだけ。s23 届2・届3）"""
+    path = os.environ.get("ASC_RESULT_FILE", "")
+    if path:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(line + chr(10))
 
 
 def wait_upload(number: str) -> None:
     app = app_id()
     if app is None:
         print("::warning::App Store Connect にアプリが見つからないので、受け付け結果を確かめられません")
+        write_result("unconfirmed")
         return
     deadline = time.time() + 35 * 60
     while time.time() < deadline:
@@ -160,20 +201,31 @@ def wait_upload(number: str) -> None:
             if name == "FAILED":
                 for e in state.get("errors", []):
                     print(f"::error::Apple に弾かれました（ITMS-{e.get('code')}）: {e.get('description')}")
+                write_result("rejected")
                 sys.exit(1)
             if name == "COMPLETE":
                 for w in state.get("warnings", []):
                     print(f"::warning::Apple からの注意（ITMS-{w.get('code')}）: {w.get('description')}")
                 print("Apple が受け付けました")
+                write_result("delivered group=no")
                 on_main = os.environ.get("GITHUB_REF") == "refs/heads/main" \
                     and os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch")
+                build = find_build(app, number)
+                if build is None:
+                    print("::warning::ビルドが見つからないので、テスターに渡せませんでした")
+                    return
+                set_whats_new(build)
                 if on_main:
-                    give_to_testers(app, number)
+                    if give_to_testers(app, build, number):
+                        write_result("delivered group=yes")
+                    else:
+                        write_result("delivered group=failed")
                 else:
                     print("main ではないので、テスターには渡しません（TestFlight の一覧には出ます）")
                 return
         time.sleep(60)
     print("::warning::35 分待っても受け付けの結果が出ませんでした。App Store Connect の TestFlight を見てください")
+    write_result("unconfirmed")
 
 
 if __name__ == "__main__":

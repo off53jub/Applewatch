@@ -32,7 +32,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
         run: |
-          IGNORE='^(pc/|docs/|LifeLogUITests/)|\.md$|^\.github/workflows/(pc|testflight)\.yml$|^\.github/scripts/(screens|grid|contrast|words)\.py$'
+          IGNORE='^(pc/|docs/|LifeLogUITests/)|\.md$|^\.github/workflows/(pc|testflight)\.yml$|^\.github/scripts/(screens|grid|contrast|words|notice_hints|whatsnew|asc|test_ci_scripts)\.py$'
           files=""
           ok=false
           if [ "$EVENT" = "pull_request" ]; then
@@ -261,6 +261,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/report"
           { python3 .github/scripts/contrast.py Shared/Design/LLTheme.swift "$RUNNER_TEMP/report" || echo "色の計算に失敗した（報告だけ・落とさない）"; } | tee -a "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/report/contrast.md"
           { python3 .github/scripts/words.py . "$RUNNER_TEMP/report" || echo "言葉の走査に失敗した（報告だけ・落とさない）"; } | tee -a "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/report/words.md"
+          # s23 知8: 知らせの本文に「押すとどうなるか」の言葉があるかを数える（報告だけ・落とさない）
+          { python3 .github/scripts/notice_hints.py . "$RUNNER_TEMP/report" || echo "知らせの本文の走査に失敗した（報告だけ・落とさない）"; } | tee -a "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/report/notice_hints.md"
+      # s23 届6・知8: CI の手伝いの script の確かめ（TestFlight の「テストする内容」の文と、知らせの本文の数え方）
+      - name: CI の手伝いの script の確かめ
+        run: python3 -m unittest discover -s .github/scripts -p "test_*.py" -v
       - uses: actions/upload-artifact@v4
         if: always()
         with:
