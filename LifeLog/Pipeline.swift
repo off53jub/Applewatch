@@ -532,6 +532,7 @@ final class Pipeline {
         let content = UNMutableNotificationContent()
         content.title = "時計の録音が届いていません"
         content.body = "10分以上、時計の LifeLog から知らせがありません。時計の電池や LifeLog を確かめてください（iPhone から離れているだけなら、そのままで大丈夫です）。"
+        S23Notices.decorate(content, id: watchAlertID)  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
         content.sound = .default
         content.interruptionLevel = UrgentNotice.level(for: watchAlertID)  // 即時（集中モードでも出る。2026-11-07）
         UNUserNotificationCenter.current().add(UNNotificationRequest(

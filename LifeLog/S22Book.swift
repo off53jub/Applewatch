@@ -180,7 +180,9 @@ enum S22Book {
         let done = Checklist.done
         return Checklist.items.filter { $0.id.hasPrefix("s21-") || $0.id.hasPrefix("s22-") }.compactMap { item in
             guard let result = done[item.id] else { return nil }
-            return ["id": item.id, "name": item.title, "result": result, "source": "app"]
+            // 数から自動で ○ にしたものは source を auto に（2026-11-23。s23 の 試1）
+            return ["id": item.id, "name": item.title, "result": result,
+                    "source": S23Book.shared.autoChecks.contains(item.id) ? "auto" : "app"]
         }
     }
 

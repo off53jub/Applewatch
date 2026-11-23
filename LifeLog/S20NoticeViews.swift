@@ -17,6 +17,8 @@ struct NoticeHistoryView: View {
         let waiting = S20Notices.waiting()
         let opened = list.filter { $0.opened == true }.count
         LLList {
+            // 答えそびれた質問・知らせの棚卸し（2026-11-23。s23 の 知1・知13。S23Screens.swift）
+            S23NoticeLinks()
             Section {
                 Toggle(isOn: $digestOn) {
                     VStack(alignment: .leading, spacing: 2) {

@@ -140,6 +140,7 @@ enum GoodNightly {
         let content = UNMutableNotificationContent()
         content.title = "今日のいいこと帳"
         content.body = rows.joined(separator: "\n")
+        S23Notices.decorate(content, id: "good-tonight")  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
         content.sound = .default
         let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: at)
         center.add(UNNotificationRequest(identifier: noticeID, content: content,

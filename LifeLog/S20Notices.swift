@@ -56,6 +56,7 @@ enum S20Notices {
         let content = UNMutableNotificationContent()
         content.title = text.title
         content.body = text.body
+        S23Notices.decorate(content, id: NoticeDigestRules.morningID)  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
         content.sound = .default
         let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: slot)
         let trigger = UNCalendarNotificationTrigger(dateMatching: parts, repeats: false)

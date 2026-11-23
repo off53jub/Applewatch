@@ -409,6 +409,7 @@ extension Pipeline {
         let content = UNMutableNotificationContent()
         content.title = "AI から \(count) つ質問があります"
         content.body = "\(label)の記録で、合っているか分からないところです。答えると、見出しやまとめが正しくなり、次からも覚えておきます。"
+        S23Notices.decorate(content, id: "askQuestions")  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
         content.sound = .default
         var trigger: UNNotificationTrigger?
         if Self.minuteOfDay(.now) < Self.askTime {

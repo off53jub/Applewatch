@@ -386,6 +386,7 @@ extension Pipeline {
         let content = UNMutableNotificationContent()
         content.title = "昨日と今日"
         content.body = record.text
+        S23Notices.decorate(content, id: "morning-brief")  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
         content.sound = .default
         let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: at)
         try? await center.add(UNNotificationRequest(

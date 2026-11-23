@@ -441,9 +441,11 @@ final class HolidayNudges {
     /// 滞在を出た直後に「さっきの所は〇〇？」
     func stayEnded(arrival: Date, departure: Date, here: CLLocation, known: Bool) async {
         venueLeft(here, departed: true)
+        // 「ここは覚えなくていい」にした所では聞かない・聞く長さは場6 で絞った長さに揃える（2026-11-23。s23 の 場1・場6）
         guard arrival != .distantPast, departure > arrival, MeetingMode.active == nil,
+              !S23Places.isIgnored(latitude: here.coordinate.latitude, longitude: here.coordinate.longitude),
               HolidayNoticeRules.shouldAskAfterStay(known: known, stay: departure.timeIntervalSince(arrival),
-                                                    placeAskOn: PlaceAssistRules.askOn) else { return }
+                                                    placeAskOn: PlaceAssistRules.askOn, askAfter: S23Places.askAfter()) else { return }
         let names: [String] = await PlaceAssist.shared.candidates(for: here, arrival: arrival)
         guard let name = names.first, take("place", setting: HolidaySettings.placeAfterKey) else { return }
         let content = UNMutableNotificationContent()
@@ -522,6 +524,8 @@ final class HolidayNudges {
             HolidayBook.shared.addPlaceAnswer(day: day, name: name, answer: "no")
         }
         Tally.add("holiday.place." + (actionID == HolidayNoticeRules.yesAction ? "yes" : "no"))
+        // 答えそびれた質問から外す（2026-11-23。s23 の 知13）
+        S23Book.shared.answeredQuestions(prefix: HolidayNoticeRules.prefix + "place-")
     }
 }
 

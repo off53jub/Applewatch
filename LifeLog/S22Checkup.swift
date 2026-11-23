@@ -190,7 +190,9 @@ enum S22Checkup {
     // MARK: 楽3 「Claude に頼む」の文（共有シートに渡すだけ。言語モデルは呼ばない）
 
     /// いまの様子を 1 つの文に。秘密・人名・会話の中身・場所の名前は入れない（scrub で消す）
-    static func askClaudeText(_ list: FocusList, phoneBuild: Int, watchBuild: String?, names: [String]) -> String {
+    /// failedChecks は実機の確かめで「動かなかった」にしたものの題（2026-11-23。s23 の 試7）
+    static func askClaudeText(_ list: FocusList, phoneBuild: Int, watchBuild: String?, names: [String],
+                              failedChecks: [String] = []) -> String {
         var lines: [String] = []
         lines.append("LifeLog（iPhone の版 \(phoneBuild)" + (watchBuild.map { "・時計の版 \($0)" } ?? "") + "）の自己点検で、気になる所があります。")
         if list.top.isEmpty { lines.append("・（いまは気になる所はありません）") }
@@ -200,6 +202,7 @@ enum S22Checkup {
         }
         if list.others > 0 { lines.append("ほかに \(list.others) 種類あります。") }
         if list.folded > 0 { lines.append("7 日より前のエラー \(list.folded) 個は畳みました。") }
+        lines.append(contentsOf: S23CheckRules.failedLines(failedChecks.map { scrub($0, names: names) }))
         lines.append("直し方を、やさしい言葉で教えてください。自分で直せないものは、どのファイルを見ればよいかも教えてください。")
         lines.append("（会話の中身・人の名前・場所の名前・鍵は入れていません）")
         return lines.joined(separator: "\n")

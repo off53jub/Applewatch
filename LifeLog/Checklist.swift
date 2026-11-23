@@ -13,7 +13,8 @@ enum Checklist {
         let how: String
     }
 
-    static let items: [Item] = [
+    // s23 の分は先頭に（2026-11-23。S23Notices.swift の S23Checks）
+    static let items: [Item] = S23Checks.items + [
         Item(id: "one-task-list", since: "2026-11-10", title: "タスクの「やる」が1つの一覧になる",
              how: "タスクの「やる」を開く。家の PC が拾ったやることが、期限ごとの並びにアプリのタスクと混ざって出ていて、「母艦のやること」の見出しが無ければ OK。同じものが2つ出ていないかも見る。"),
         Item(id: "today-howto", since: "2026-11-10", title: "今日の三つの「解き方」",
@@ -162,15 +163,38 @@ struct ChecklistView: View {
 
     var body: some View {
         LLList {
-            let left: [Checklist.Item] = Checklist.items.filter { finished[$0.id] == nil }
+            let all: [Checklist.Item] = Checklist.items.filter { finished[$0.id] == nil }
+            // 時計の版が古いあいだは、時計がらみを「時計を新しくしてから」に畳む（2026-11-23。s23 の 試6）
+            let watchOld: Bool = S23Book.watchOld
+            let left: [Checklist.Item] = watchOld ? all.filter { !S23CheckRules.watchItems.contains($0.id) } : all
+            let waiting: [Checklist.Item] = watchOld ? all.filter { S23CheckRules.watchItems.contains($0.id) } : []
             let ended: [Checklist.Item] = Checklist.items.filter { finished[$0.id] != nil }
+            let failed: [Checklist.Item] = ended.filter { finished[$0.id] == "ng" }
             Section {
                 if left.isEmpty { Text("全部確かめました").foregroundStyle(LL.dim) }
                 ForEach(left) { item in row(item) }
             } header: {
                 Text("まだ（\(left.count)）")
             } footer: {
-                Text("押すと確かめ方が出ます。動かなかったものは「動かなかった」にして、Claude に伝えてください。")
+                Text("押すと確かめ方が出ます。動いた数が残っているものは、自動で「確かめた」になります。動かなかったものは「動かなかった」にして、Claude に頼んでください。")
+            }
+            if !waiting.isEmpty {
+                Section {
+                    DisclosureGroup("時計を新しくしてから（\(waiting.count)）") {
+                        ForEach(waiting) { item in row(item) }
+                    }
+                } footer: {
+                    Text("時計の LifeLog が古い版のあいだは、時計がらみの確かめは後回しにします。")
+                }
+            }
+            // 動かなかったものを、そのまま「Claude に頼む」文に（2026-11-23。s23 の 試7）
+            if !failed.isEmpty {
+                Section {
+                    ShareLink(item: S23Checks.askClaudeText(failed)) {
+                        Label("動かなかった \(failed.count) 個を Claude に頼む", systemImage: "paperplane")
+                    }
+                    .simultaneousGesture(TapGesture().onEnded { Tally.add("s23.check.askClaude") })
+                }
             }
             if !ended.isEmpty {
                 Section("済み") {
@@ -178,7 +202,13 @@ struct ChecklistView: View {
                         HStack {
                             Image(systemName: finished[item.id] == "ok" ? "checkmark.circle.fill" : "xmark.circle.fill")
                                 .foregroundStyle(finished[item.id] == "ok" ? LL.good : LL.danger)
-                            Text(item.title)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title)
+                                // 数から自動で ○ にしたもの（2026-11-23。s23 の 試1）
+                                if S23Book.shared.autoChecks.contains(item.id) {
+                                    Text("動いた数から自動で").font(.caption2).foregroundStyle(LL.dim)
+                                }
+                            }
                             Spacer()
                             Button("戻す") { set(item.id, nil) }.font(.caption).buttonStyle(.borderless)
                         }
@@ -187,6 +217,11 @@ struct ChecklistView: View {
             }
         }
         .navigationTitle("確かめてほしいこと")
+        .onAppear {
+            // 動いた数から自動で ○ にする（2026-11-23。s23 の 試1）
+            S23Book.shared.autoMarkChecks()
+            finished = Checklist.done
+        }
     }
 
     private func row(_ item: Checklist.Item) -> some View {

@@ -232,6 +232,8 @@ private struct TodayView: View {
                 PCFeatureNotice()
                 // いま話したことは約○分で文字に・電池の先回り（2026-11-22。s22 の 楽7・楽19。S22Views.swift）
                 S22TodaySection()
+                // 新しい版・今日の 1 つの確かめ・答えそびれた質問（2026-11-23。s23 の 届4・試5・知13。S23Screens.swift）
+                S23TodaySection()
                 switch part {
                 case .morning:
                     PrepCardSection()
