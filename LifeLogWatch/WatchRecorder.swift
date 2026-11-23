@@ -66,7 +66,9 @@ final class WatchRecorder: NSObject {
     var s22Sender: WatchSender { sender }
     /// 頼まれごと・次の予定・聞く・朝の読み上げの画面の中身（2026-11-07）
     let board: WatchBoard
-    private let engine = AVAudioEngine()
+    /// マイクを流す部品。中断のあとは作り直す（使い回すと、アラームのあとに流し直せず、アプリを一から起動し直すまで
+    /// 録れないことがあった。2026-11-23）
+    @ObservationIgnored private var engine = AVAudioEngine()
     private let writer: ChunkWriter
 
     /// 録音中に時計がアプリを終わらせても気づけるよう、「録音中だった」ことを残しておく。
@@ -190,7 +192,7 @@ final class WatchRecorder: NSObject {
     private func forceRestartEngine() {
         guard isRecording, !stalled else { return }
         do {
-            stopEngine()
+            rebuildEngine()
             try startEngine()
         } catch {
             stall("restart", "マイクを流し直せませんでした")
@@ -229,7 +231,7 @@ final class WatchRecorder: NSObject {
                 name: AVAudioSession.interruptionNotification, object: session)
             NotificationCenter.default.addObserver(
                 self, selector: #selector(configurationChanged(_:)),
-                name: .AVAudioEngineConfigurationChange, object: engine)
+                name: .AVAudioEngineConfigurationChange, object: nil)
             try startEngine()
             isRecording = true
             sender.isRecording = true
@@ -294,6 +296,12 @@ final class WatchRecorder: NSObject {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         finishChunk()
+    }
+
+    /// 止めて、マイクを流す部品を新しく作る（中断のあとに流し直すとき。2026-11-23）
+    private func rebuildEngine() {
+        stopEngine()
+        engine = AVAudioEngine()
     }
 
     private func openChunk() throws {
@@ -555,7 +563,7 @@ final class WatchRecorder: NSObject {
         Task { @MainActor in
             guard self.isRecording, !self.stalled else { return }
             do {
-                self.stopEngine()
+                self.rebuildEngine()
                 try await AVAudioSession.sharedInstance().activate()
                 try self.startEngine()
                 self.noteResumed()
@@ -586,6 +594,16 @@ final class WatchRecorder: NSObject {
         // 止まりかけて試し直しているところなら、待たずにすぐ試す（画面を開いたときは戻りやすい。2026-11-22）
         if isRecording, stalled {
             _ = await recoverStall()
+            return
+        }
+        // アラームなどで止まったまま「終わった」の知らせを待っているところなら、待たずに今すぐ流し直す（2026-11-23。
+        // 前は 1 分待つか知らせが来るまで何もせず、開いても録れなかった）
+        if isRecording, !stalled {
+            if engine.isRunning {
+                reopenIfNeeded()
+            } else {
+                restartEngine()
+            }
             return
         }
         guard !isRecording, UserDefaults.standard.bool(forKey: Self.wasRecordingKey) else { return }
@@ -635,7 +653,7 @@ final class WatchRecorder: NSObject {
     private func recoverStall() async -> Bool {
         guard isRecording, stalled else { return !stalled }
         do {
-            stopEngine()
+            rebuildEngine()
             try await AVAudioSession.sharedInstance().activate()
             try startEngine()
         } catch {
@@ -693,7 +711,12 @@ final class WatchRecorder: NSObject {
 
     /// 音の経路が変わるとエンジンが止まるので、流し直す。
     @objc nonisolated private func configurationChanged(_ note: Notification) {
-        Task { @MainActor in self.restartEngine() }
+        // いま使っている部品の知らせだけを見る（作り直す前の部品の知らせは無視する。2026-11-23）
+        let source: ObjectIdentifier? = (note.object as AnyObject?).map { ObjectIdentifier($0) }
+        Task { @MainActor in
+            guard source == nil || source == ObjectIdentifier(self.engine) else { return }
+            self.restartEngine()
+        }
     }
 }
 

@@ -345,6 +345,18 @@ final class Pipeline {
             }
             processQueue()
         }
+        // 中断のあと戻せていない・戻せた（止めずに試し続ける。2026-11-23。Recorder.swift）
+        recorder.onStall = { [weak self] reason in
+            self?.message = reason
+            if self?.stopAlertsOn == true, UIApplication.shared.applicationState != .active {
+                Self.notify(id: "phone-stopped", title: "iPhone の録音が止まっています",
+                            body: "アラームや電話のあとで戻せていません。自動で試し直しています。LifeLog を開くとすぐ戻します。")
+            }
+        }
+        recorder.onResumed = { [weak self] in
+            if self?.message.hasPrefix("アラームや電話のあとで") == true { self?.message = "" }
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["phone-stopped"])
+        }
         recorder.onStop = { [weak self] reason in
             self?.endLive()
             self?.isRecording = false
@@ -1544,6 +1556,8 @@ final class Pipeline {
 
     func appBecameActive() {
         RunClock.becameActive()
+        // アラーム・電話のあとで戻せていない録音を、開いたときに今すぐ流し直す（2026-11-23。Recorder.swift）
+        recorder.resumeIfInterrupted()
         updateHold()
         if email != nil { Task { await sync.run() } }
         if UIDevice.current.userInterfaceIdiom != .pad { Task { await scheduleMeetingBriefs() } }
