@@ -248,6 +248,11 @@ final class S23Book {
         if let data = try? JSONEncoder().encode(headcounts) { UserDefaults.standard.set(data, forKey: Self.headcountsKey) }
         Tally.add("s23.headcount.answered")
         answeredQuestion(id: "s23-count-" + String(Int(start)))
+        // 家の PC へ POST /headcount（features に "headcount" があるときだけ送る。無いあいだはためておく。#104）
+        if let body = S23HeadcountRules.postBody(day: day, start: Date(timeIntervalSince1970: start), count: count) {
+            MothershipOutbox.enqueue(path: "headcount", body: body)
+            if let pc = Self.pipeline?.homePC { Task { await MothershipOutbox.send(pc) } }
+        }
     }
 
     func headcount(start: Date) -> Int? {

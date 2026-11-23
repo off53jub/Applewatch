@@ -256,6 +256,10 @@ struct S23ReviewView: View {
         LLList {
             Section {
                 Text(item?.question ?? fallbackQuestion).font(.title3.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                // 声を聞いて答える（voice_pair は 2 つとも聞ける）
+                if let clips = item?.clips, !clips.isEmpty {
+                    ClipChooser(clips: clips)
+                }
                 if let evidence = item?.evidence, !evidence.isEmpty {
                     ForEach(Array(evidence.prefix(3).enumerated()), id: \.offset) { _, e in
                         Text(e.text).font(.callout).foregroundStyle(LL.dim)
@@ -292,12 +296,16 @@ struct S23ReviewView: View {
             }
         } else if style == "text", let item {
             HStack {
-                TextField("ひとこと", text: $text).textFieldStyle(.roundedBorder)
+                TextField(S23ReviewRules.placeholder(kind: item.kind), text: $text).textFieldStyle(.roundedBorder)
                 Button("送る") {
                     let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !value.isEmpty { answerOther(item, value) }
                 }
                 .buttonStyle(LLPillButtonStyle(filled: true))
+            }
+            if S23ReviewRules.keepAsIs(kind: item.kind) {
+                Button("そのまま（合っている）") { answerOther(item, S23ReviewRules.keepValue) }
+                    .buttonStyle(LLPillButtonStyle(tint: LL.good))
             }
         } else {
             HStack(spacing: LL.Space.m) {

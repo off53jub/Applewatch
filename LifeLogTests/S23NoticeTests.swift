@@ -223,6 +223,31 @@ final class S23NoticeTests: XCTestCase {
         XCTAssertEqual(list.map(\.count), [4])
     }
 
+    func testHeadcountPostBodyAndOutboxFeature() throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let data = try XCTUnwrap(S23HeadcountRules.postBody(day: "2026-11-23", start: start, count: 5))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["count"] as? Int, 5)
+        XCTAssertEqual(json["orMore"] as? Bool, true)
+        XCTAssertEqual(json["day"] as? String, "2026-11-23")
+        XCTAssertNotNil(json["start"] as? String)
+        let three = try XCTUnwrap(S23HeadcountRules.postBody(day: "2026-11-23", start: start, count: 3))
+        XCTAssertNil((try JSONSerialization.jsonObject(with: three) as? [String: Any])?["orMore"])
+        XCTAssertNil(S23HeadcountRules.postBody(day: "あした", start: start, count: 3))
+        XCTAssertEqual(MothershipOutbox.feature(for: "headcount"), "headcount")
+    }
+
+    func testNewReviewKinds() {
+        XCTAssertEqual(ReviewRules.kindLabel("voice_pair"), "同じ人の声？")
+        XCTAssertEqual(ReviewRules.kindLabel("見本の知らない種類"), "見本の知らない種類")
+        XCTAssertTrue(S23ReviewRules.keepAsIs(kind: "gold_noisy"))
+        XCTAssertFalse(S23ReviewRules.keepAsIs(kind: "voice_pair"))
+        XCTAssertEqual(S22Rules.answerStyle(answer: "text", choices: nil), "text")
+        XCTAssertEqual(S22Rules.answerStyle(answer: "yesno", choices: nil), "yesno")
+        // 知らない kind・知らない answer の形でも、はい・いいえで答えられる
+        XCTAssertEqual(S22Rules.answerStyle(answer: "mystery", choices: nil), "yesno")
+    }
+
     func testPromiseAdvice() {
         XCTAssertTrue(S23PromiseRules.advice(.init(shown: 3)).contains("少ない"))
         XCTAssertTrue(S23PromiseRules.advice(.init(shown: 35, noticeIgnore: 20)).contains("1 回もありません"))

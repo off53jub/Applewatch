@@ -507,6 +507,19 @@ enum S23PlaceRules {
     }
 }
 
+// MARK: - 確かめ待ちの新しい kind（家の PC #104）
+
+enum S23ReviewRules {
+    /// 合っていれば「そのまま」で答えられる kind
+    static let keepKinds: Set<String> = ["gold_noisy"]
+    /// 「そのまま」の答え（家の PC へはこの文のまま送る）
+    static let keepValue = "そのまま"
+
+    static func keepAsIs(kind: String) -> Bool { keepKinds.contains(kind) }
+
+    static func placeholder(kind: String) -> String { kind == "gold_noisy" ? "正しい文を打つ" : "ひとこと" }
+}
+
 // MARK: - 続5 何人でしたか
 
 struct S23Headcount: Codable, Equatable {
@@ -537,6 +550,14 @@ enum S23HeadcountRules {
     static func row(day: String, start: Date, count: Int) -> S23Headcount? {
         guard HomeFeeds.isDay(day), (2...30).contains(count) else { return nil }
         return S23Headcount(day: day, start: ISO8601DateFormatter().string(from: start), count: count)
+    }
+
+    /// 家の PC の POST /headcount の中身 {"start", "count", "orMore"?, "day"}（5 人以上は count 5・orMore true。2026-11-23。#104）
+    static func postBody(day: String, start: Date, count: Int) -> Data? {
+        guard HomeFeeds.isDay(day), (1...30).contains(count) else { return nil }
+        var body: [String: Any] = ["start": ISO8601DateFormatter().string(from: start), "count": count, "day": day]
+        if count >= 5 { body["orMore"] = true }
+        return try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
 
     /// 同じ会話は最後の答えだけ・古いものは捨てる
