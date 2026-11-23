@@ -540,7 +540,7 @@ extension Pipeline {
         // s22（2026-11-22。S22Book.diagState。どれも省ける）: 実験の入れ替えの組（確24）・開いてから今日の画面まで（楽21）・
         // 手で答えた実機の確かめ（楽11）・iPad は読むだけ（楽22）
         for (key, value) in S22Book.diagState() { state[key] = value }
-        // s23（2026-11-23。止1）: iPhone と時計の今日の中断から戻るまでの数（phoneRec・watchRec。どれも省ける。S23Resume.swift）
+        // s23（2026-11-23。止1）: iPhone と時計の今日の中断から戻るまでの数（phoneResume・watchResume。どれも省ける。S23Resume.swift）
         for (key, value) in S23PhoneBook.diagState() { state[key] = value }
         return state
     }

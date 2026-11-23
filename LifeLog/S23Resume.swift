@@ -7,7 +7,7 @@ import WatchConnectivity
 
 // s23（2026-11-23）「録音が止まらない」の iPhone の分。決まりは Shared/Audio/S23Rec.swift（テストは LifeLogTests/S23RecTests.swift）。
 // 番号は母艦の追記 12 の 止1〜止16。
-// - 止1: 中断ごとに、始まり・戻った時刻・だめだった回数・戻った道・理由を残し、数を数えて家の PC への様子に載せる（phoneRec・watchRec）
+// - 止1: 中断ごとに、始まり・戻った時刻・だめだった回数・戻った道・理由を残し、数を数えて家の PC への様子に載せる（phoneResume・watchResume）
 // - 止4: 電話を見て、終わったらすぐ戻す（S23Calls）
 // - 止8: 「iPhone の録音が止まっています」に「録音を戻す」
 // - 止9・止10: 片方が戻れないあいだ、もう片方が肩代わり（どちらも初めはオフ）
@@ -211,7 +211,7 @@ enum S23PhoneBook {
 
     // MARK: 時計の分（deliveryState の s23rec）
 
-    /// 時計から様子が届いたら（PhoneReceiver の糸から呼ぶ）。数は watchRec として家の PC へ、止まっていたあいだは帯へ
+    /// 時計から様子が届いたら（PhoneReceiver の糸から呼ぶ）。数は watchResume として家の PC へ、止まっていたあいだは帯へ
     static func noteWatchContext(_ context: [String: Any]) {
         guard let rec = context[S23Rec.stateKey] as? [String: Any] else { return }
         let stops = (rec["stops"] as? [[String: Any]] ?? []).compactMap(S23Rec.Stop.init(dict:))
@@ -240,14 +240,14 @@ enum S23PhoneBook {
 
     // MARK: 止1 家の PC への様子
 
-    /// phoneRec（iPhone の今日の中断の数）・watchRec（時計から届いた今日の数）。どれも省ける
+    /// phoneResume（iPhone の今日の中断の数）・watchResume（時計から届いた今日の数）。どれも省ける
     static func diagState(now: Date = .now) -> [String: Any] {
         var out: [String: Any] = [:]
         var phone: [String: Any] = S23Rec.summary(load(stopsKey), day: HolidayRules.dayKey(now))
         if let drill = UserDefaults.standard.string(forKey: drillKey) { phone["drill"] = drill }
         if S23Rec.isOn(S23Rec.legacyKey) { phone["legacy"] = true }
-        out["phoneRec"] = phone
-        if let watch = UserDefaults.standard.dictionary(forKey: watchStateKey), !watch.isEmpty { out["watchRec"] = watch }
+        out["phoneResume"] = phone
+        if let watch = UserDefaults.standard.dictionary(forKey: watchStateKey), !watch.isEmpty { out["watchResume"] = watch }
         return out
     }
 
