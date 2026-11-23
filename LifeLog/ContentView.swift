@@ -1086,6 +1086,8 @@ private struct DetailedSettingsView: View {
                 S21WatchSettingsSection()
                 // 1 時間ごとの実験・袖でこもった音・電車の 3 問・誰と話した？・iPad は読むだけ（2026-11-22。s22。S22Views.swift）
                 S22WatchSettingsSection()
+                // 録音が止まらない（音が止んだら戻す・電話・見回り・肩代わり・前の動きに戻す・中断の練習。2026-11-23。s23。S23Resume.swift）
+                S23RecSettingsSection()
 
                 // 外付けマイク（2026-11-07。MicViews.swift）
                 MicSettingsSection()

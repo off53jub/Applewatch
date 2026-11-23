@@ -110,6 +110,8 @@ final class WatchRecorder: NSObject {
         }
         sender.activate()
         refreshStatus()
+        // 録音が止まらない（「録音を戻す」の分類・毎日の見回り・iPhone からの頼み。2026-11-23。s23。S23WatchRec.swift）
+        S23WatchRec.setUp(self)
         guardian.onChange = { [weak self] on in self?.sender.guarding = on }
         // 前回、止めるボタンを押さずに終わっていたら、開き直したときに録音を再開する
         if UserDefaults.standard.bool(forKey: Self.wasRecordingKey) {
@@ -136,6 +138,8 @@ final class WatchRecorder: NSObject {
         content.title = "時計の LifeLog が録音していません"
         content.body = body
         content.sound = .default
+        // 「録音を戻す」（押すと開いてすぐ戻す。2026-11-23。s23 の 止7）
+        content.categoryIdentifier = S23Rec.watchResumeCategory
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: "not-recording", content: content, trigger: nil))
     }
@@ -232,6 +236,13 @@ final class WatchRecorder: NSObject {
             NotificationCenter.default.addObserver(
                 self, selector: #selector(configurationChanged(_:)),
                 name: .AVAudioEngineConfigurationChange, object: nil)
+            // 音の仕組みが作り直された・イヤホンなどをつないだ／外した（iPhone にはあり、時計に無かった。2026-11-23。s23 の 止2・止3）
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(mediaServicesReset(_:)),
+                name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(routeChanged(_:)),
+                name: AVAudioSession.routeChangeNotification, object: session)
             try startEngine()
             isRecording = true
             sender.isRecording = true
@@ -262,6 +273,12 @@ final class WatchRecorder: NSObject {
         micCheck?.cancel()
         micCheck = nil
         interruptedSince = nil
+        // 中断のあいだに止めたら、その中断は「止めた」で閉じる（2026-11-23。s23 の 止1）
+        if interruptionOpen {
+            interruptionOpen = false
+            S23WatchRec.abandoned()
+        }
+        coveringForPhone = false
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.watchdogID])
         stopEngine()
         // 低電力モードで溜めていた区切りも、止めたら送る
@@ -301,6 +318,8 @@ final class WatchRecorder: NSObject {
     /// 止めて、マイクを流す部品を新しく作る（中断のあとに流し直すとき。2026-11-23）
     private func rebuildEngine() {
         stopEngine()
+        // 設定「前の動きに戻す」のときは作り直さない（版 386 より前の動き。2026-11-23。s23 の 止16）
+        guard !S23Rec.isOn(S23Rec.legacyKey) else { return }
         engine = AVAudioEngine()
     }
 
@@ -315,8 +334,10 @@ final class WatchRecorder: NSObject {
     private func armWatchdog() {
         let content = UNMutableNotificationContent()
         content.title = "LifeLog の録音が止まっているかもしれません"
-        content.body = "LifeLog を開くと録音を再開します。"
+        content.body = "LifeLog を開くか「録音を戻す」で、録音を再開します。"
         content.sound = .default
+        // 「録音を戻す」（押すと開いてすぐ戻す。2026-11-23。s23 の 止7）
+        content.categoryIdentifier = S23Rec.watchResumeCategory
         let trigger = UNTimeIntervalNotificationTrigger(
             timeInterval: max(ChunkCutter.longest, ChunkWriter.restTick) + 120, repeats: false)
         UNUserNotificationCenter.current().add(
@@ -568,6 +589,8 @@ final class WatchRecorder: NSObject {
                 try self.startEngine()
                 self.noteResumed()
             } catch {
+                // だめだった回数（2026-11-23。s23 の 止1）
+                if self.interruptionOpen { S23WatchRec.failed() }
                 guard attempt < Self.restartRetries else {
                     // 前はここで録音を止めていた（2026-11-22）。止めずに、間を空けて試し続ける
                     self.stall("alarm", "アラームや電話のあとで録音を再開できていません")
@@ -586,6 +609,9 @@ final class WatchRecorder: NSObject {
         guard interruptionOpen else { return }
         interruptionOpen = false
         sender.countToday(HolidayRules.resumedKey)
+        // 戻るまでの秒と戻った道を残す（2026-11-23。s23 の 止1。1 分より長ければ 1 回知らせる＝止13）
+        S23WatchRec.resumed(way: s23Way)
+        s23Way = "ended"
     }
 
     /// 止めるボタンを押さずに録音が止まっていたら、始め直す（画面を開いたとき。2026-11-20）。
@@ -593,12 +619,15 @@ final class WatchRecorder: NSObject {
     func resumeIfWanted() async {
         // 止まりかけて試し直しているところなら、待たずにすぐ試す（画面を開いたときは戻りやすい。2026-11-22）
         if isRecording, stalled {
+            if s23Way == "ended" { s23Way = "open" }
             _ = await recoverStall()
             return
         }
         // アラームなどで止まったまま「終わった」の知らせを待っているところなら、待たずに今すぐ流し直す（2026-11-23。
         // 前は 1 分待つか知らせが来るまで何もせず、開いても録れなかった）
-        if isRecording, !stalled {
+        // 設定「前の動きに戻す」のときは、前と同じく何もしない（2026-11-23。s23 の 止16）
+        if isRecording, !stalled, !S23Rec.isOn(S23Rec.legacyKey) {
+            if s23Way == "ended", interruptionOpen { s23Way = "open" }
             if engine.isRunning {
                 reopenIfNeeded()
             } else {
@@ -663,6 +692,7 @@ final class WatchRecorder: NSObject {
         stallTask = nil
         sender.isRecording = true
         sender.countToday(HolidayRules.autoResumedKey)
+        if s23Way == "ended" { s23Way = "stall" }
         noteResumed()
         message = "止まりかけた録音を自動で戻しました"
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [Self.watchdogID, "stopped"])
@@ -680,6 +710,8 @@ final class WatchRecorder: NSObject {
         content.title = "LifeLog の録音が止まりました"
         content.body = reason
         content.sound = .default
+        // 「録音を戻す」（押すと開いてすぐ戻す。2026-11-23。s23 の 止7）
+        content.categoryIdentifier = S23Rec.watchResumeCategory
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: "stopped", content: content, trigger: nil))
     }
@@ -687,6 +719,8 @@ final class WatchRecorder: NSObject {
     @objc nonisolated private func interrupted(_ note: Notification) {
         guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        // 中断の理由（OS が教える分だけ。2026-11-23。s23 の 止5）
+        let why = note.userInfo?[AVAudioSessionInterruptionReasonKey] as? UInt
         Task { @MainActor in
             guard self.isRecording else { return }
             switch type {
@@ -696,12 +730,32 @@ final class WatchRecorder: NSObject {
                 if !self.interruptionOpen {
                     self.interruptionOpen = true
                     self.sender.countToday(HolidayRules.interruptionsKey)
+                    // 始まりと理由を残す（2026-11-23。s23 の 止1・止5）
+                    self.s23Way = "ended"
+                    S23WatchRec.began(S23Rec.reasonCode(raw: why, inCall: false, began: .now))
                 }
                 self.finishChunk()
-                // 「終わった」の知らせが来ないこともあるので、1分たっても止まったままなら自分で再開する
-                try? await Task.sleep(for: .seconds(60))
+                // 「終わった」の知らせが来ないこともあるので、1分たっても止まったままなら自分で再開する。
+                // そのあいだ 5 秒ごとに「ほかの音がまだ鳴っているか」を見て、止んだらすぐ流し直す
+                // （2026-11-23。s23 の 止6。初めはオン・効くかは仮説。だめでも 1 分の戻しはそのまま）
+                let began = Date.now
+                var kicked = false
+                while Date.now.timeIntervalSince(began) < S23Rec.ResumeFlow.firstWait {
+                    try? await Task.sleep(for: .seconds(S23Rec.ResumeFlow.probeEvery))
+                    guard self.isRecording else { return }
+                    let other: Bool = AVAudioSession.sharedInstance().isOtherAudioPlaying
+                    if !kicked, self.interruptionOpen,
+                       S23Rec.watchKick(elapsed: Date.now.timeIntervalSince(began), otherAudio: other,
+                                        probeOn: S23Rec.isOn(S23Rec.probeKey), legacy: S23Rec.isOn(S23Rec.legacyKey)) {
+                        kicked = true
+                        self.s23Way = "probe"
+                        self.restartEngine()
+                    }
+                }
+                if self.interruptionOpen { self.s23Way = "timer" }
                 self.restartEngine()
             case .ended:
+                if self.interruptionOpen { self.s23Way = "ended" }
                 self.restartEngine()
             @unknown default:
                 break
@@ -717,6 +771,98 @@ final class WatchRecorder: NSObject {
             guard source == nil || source == ObjectIdentifier(self.engine) else { return }
             self.restartEngine()
         }
+    }
+
+    // MARK: - s23 録音が止まらない（2026-11-23。S23WatchRec.swift）
+
+    /// 次に戻ったときの道の名前（ended・timer・probe・open・stall・call・daily。止1）
+    @ObservationIgnored private var s23Way = "ended"
+    /// iPhone が戻れないので、時計で録り始めた（止10。iPhone が戻ったら止める）
+    @ObservationIgnored private var coveringForPhone = false
+
+    /// 音の仕組みが作り直された（止2）: 前の部品は使えないので、止めてから作り直して流す
+    @objc nonisolated private func mediaServicesReset(_ note: Notification) {
+        Task { @MainActor in
+            guard self.isRecording, !S23Rec.isOn(S23Rec.legacyKey) else { return }
+            S23WatchRec.count("mediaReset")
+            self.stopEngine()
+            self.restartEngine()
+        }
+    }
+
+    /// イヤホンなどをつないだ・外した（止3）: 1 秒待って、マイクが止まっていたら流し直す（動いていれば書く先だけ確かめる）。
+    /// 中断のあいだは中断の係に任せる
+    @objc nonisolated private func routeChanged(_ note: Notification) {
+        let reason = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+        guard S23Rec.routeShouldAct(reason) else { return }
+        Task { @MainActor in
+            guard self.isRecording, !S23Rec.isOn(S23Rec.legacyKey) else { return }
+            S23WatchRec.count("route")
+            try? await Task.sleep(for: .seconds(1))
+            guard self.isRecording, !self.stalled, self.interruptedSince == nil else { return }
+            if self.engine.isRunning {
+                self.reopenIfNeeded()
+            } else {
+                self.restartEngine()
+            }
+        }
+    }
+
+    /// iPhone の電話が終わった（止4）: 時計も中断していれば、待たずに流し直す
+    func s23CallEnded() {
+        guard isRecording, interruptionOpen, !stalled, !S23Rec.isOn(S23Rec.legacyKey) else { return }
+        s23Way = "call"
+        restartEngine()
+    }
+
+    /// iPhone が戻れない・戻った（止10。iPhone の設定がオンのときだけ届く）。
+    /// 本人が録るつもりでなかったときだけ始め、iPhone が戻ったら、ここで始めた分だけ止める。
+    /// 時計が裏で録り始められるかは仮説（だめなら何もしない）
+    func s23Cover(_ on: Bool) async {
+        if on {
+            guard !isRecording, !UserDefaults.standard.bool(forKey: Self.wasRecordingKey) else { return }
+            await start()
+            if isRecording {
+                coveringForPhone = true
+                message = "iPhone が戻れないあいだ、時計で録っています"
+                S23WatchRec.count("cover")
+            }
+        } else {
+            guard coveringForPhone else { return }
+            coveringForPhone = false
+            if isRecording {
+                stopByUser()
+                message = "iPhone が戻ったので、時計の録音を止めました"
+            }
+        }
+    }
+
+    /// 毎日同じ時刻に切れるなら、その 1 分後に見回る（止11）。止まっていれば戻す
+    func s23DailyCheck() async {
+        guard isRecording || UserDefaults.standard.bool(forKey: Self.wasRecordingKey) else { return }
+        if interruptionOpen || stalled { s23Way = "daily" }
+        await resumeIfWanted()
+    }
+
+    /// 中断の練習（止15。iPhone から頼まれる）: マイクをわざと 1 回止め、2 秒後に流し直して、戻るかを見る（戻る道だけを試す）
+    func s23Drill() async {
+        guard isRecording, !stalled, interruptedSince == nil, !interruptionOpen, engine.isRunning else {
+            S23WatchRec.noteDrill(ok: false, seconds: 0)
+            return
+        }
+        let began = Date.now
+        S23WatchRec.began("drill", now: began)
+        stopEngine()
+        try? await Task.sleep(for: .seconds(2))
+        restartEngine()
+        while !engine.isRunning, isRecording, Date.now.timeIntervalSince(began) < S23Rec.drillLimit {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        let ok: Bool = isRecording && engine.isRunning
+        let seconds = Date.now.timeIntervalSince(began)
+        if ok { S23WatchRec.resumed(way: "drill") } else { S23WatchRec.abandoned() }
+        S23WatchRec.noteDrill(ok: ok, seconds: seconds)
+        sender.heartbeat()
     }
 }
 

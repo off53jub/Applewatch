@@ -388,6 +388,8 @@ struct LLDayStrip: View {
                             .offset(x: x0, y: height * 0.05)
                     }
                     BandGlowLayer(talks: talks, dayStart: dayStart, width: w, height: height * 0.7)
+                    // 止まっていた所（中断。2026-11-23。s23 の 止12。S23Resume.swift）
+                    S23StopTicksLayer(dayStart: dayStart, width: w, height: height * 0.2, y: height * 0.8)
                     TimelineView(.periodic(from: .now, by: 60)) { context in
                         Rectangle().fill(LL.text.opacity(0.55))
                             .frame(width: 1.5, height: height)

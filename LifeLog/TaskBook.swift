@@ -1254,6 +1254,8 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
     /// 知らせのボタン・知らせそのものを押されたとき（2026-11-10。中身は NoticeActions.swift）
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
+        // 「録音が止まっています」の「録音を戻す」（2026-11-23。s23 の 止8。中身は S23Resume.swift）
+        if S23Resume.handle(response, completion: completionHandler) { return }
         let request = response.notification.request
         let content = request.content
         // 押された知らせを履歴に印（体験の数字。2026-11-21。s20 の 体38。S20Book.swift）
