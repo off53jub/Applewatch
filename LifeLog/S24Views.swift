@@ -25,7 +25,7 @@ struct S24TodayQuestionsSection: View {
                 Label("今日の \(S24AskRules.clampCap(cap)) 問: 上から \(left) つだけで十分です", systemImage: "list.number")
             }
         } footer: {
-            Text("知らせで聞くのも、ここで答えるのも、全部で 1 日 \(S24AskRules.clampCap(cap)) 問（仮）までにしています。残りは機械の見立てのまま、期限が来れば静かに閉じます。数は「知らせの便りと履歴」で変えられます。")
+            Text("知らせで聞くのと、ここで答えるのを合わせて 1 日 \(S24AskRules.clampCap(cap)) 問（仮）までにしています。超えた分は知らせでは聞きません（答えたければ、ここからはいつでも答えられます）。残りは機械の見立てのまま、期限が来れば静かに閉じます。数は「知らせの便りと履歴」で変えられます。")
         }
     }
 }

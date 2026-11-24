@@ -274,6 +274,20 @@ enum S24AskRules {
 
     /// 今日あと何問か
     static func left(cap: Int, asked: Int) -> Int { max(0, cap - asked) }
+
+    /// その日の印の集まり（saved は "yyyy-MM-dd|a,b,…"。日が変われば空から。同じ印は 1 つ）
+    static func daySet(adding keys: [String], saved: String?, day: String, keep: Int = 200) -> (ids: [String], save: String) {
+        var list: [String] = []
+        if let saved, saved.hasPrefix(day + "|") {
+            list = saved.dropFirst(day.count + 1).split(separator: ",").map(String.init).filter { !$0.isEmpty }
+        }
+        for raw in keys where !raw.isEmpty {
+            let key = raw.replacingOccurrences(of: ",", with: "_")
+            if !list.contains(key) { list.append(key) }
+        }
+        list = Array(list.suffix(keep))
+        return (list, day + "|" + list.joined(separator: ","))
+    }
 }
 
 // MARK: - 減10 今週は聞かないで

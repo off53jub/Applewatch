@@ -540,7 +540,10 @@ enum ReviewRules {
         case "kanojo": "「彼女」の確かめ"
         case "name": "名前の候補"
         case "place": "場所"
-        case "voice": "声"
+        // 名前の無い話し手の上位 5 人（2026-11-24。s24。母艦の当12）
+        case "voice": "この声は誰？"
+        // 固有名詞の聞き間違いの ○×（週 5 語まで。2026-11-24。s24。母艦の当11）
+        case "vocab": "言葉の聞き間違い"
         case "deadline", "request": "依頼と期限"
         // モデルで数字・日付・金額が割れた行（2026-11-22。s22 の 確19。choices に候補の文）
         case "number": "数字の確かめ"

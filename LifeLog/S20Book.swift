@@ -96,6 +96,8 @@ final class S20Book {
         UserDefaults.standard.set(answered, forKey: Self.answeredKey)
         UserDefaults.standard.set(later, forKey: Self.laterKey)
         Tally.add("s20.review.answered")
+        // 1 日 3 問（仮）の上限に入れる（知らせで聞いた同じ問いは 2 回数えない。2026-11-24。s24 の 減1）
+        S24Gate.noteAnswered(key: "q:" + item.id, now: now)
         if let shown = cardShownAt { noteAnswerSeconds(now.timeIntervalSince(shown)) }
         cardShownAt = now
     }

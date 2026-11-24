@@ -248,6 +248,29 @@ final class S24Tests: XCTestCase {
         XCTAssertEqual(S24Settings.questionCapDefault, 3)
     }
 
+    func testAskedSetCountsEachQuestionOnce() {
+        let first = S24AskRules.daySet(adding: ["q:a", "s23-count-1"], saved: nil, day: "2026-11-24")
+        XCTAssertEqual(first.ids, ["q:a", "s23-count-1"])
+        // 知らせで聞いた問いにアプリで答えても、もう 1 問とは数えない
+        let again = S24AskRules.daySet(adding: ["q:a"], saved: first.save, day: "2026-11-24")
+        XCTAssertEqual(again.ids.count, 2)
+        XCTAssertEqual(S24AskRules.daySet(adding: [], saved: again.save, day: "2026-11-25").ids, [])
+        XCTAssertEqual(S24AskRules.daySet(adding: ["a,b"], saved: nil, day: "2026-11-24").ids, ["a_b"])
+        // 確かめ待ちの知らせは問いの id で、ほかは知らせの名前で数える
+        XCTAssertEqual(S24Gate.questionKey(identifier: "s22-review-1", userInfo: ["id": "a", "n": 1]), "q:a")
+        XCTAssertEqual(S24Gate.questionKey(identifier: "s23-count-1", userInfo: ["start": 1.0]), "s23-count-1")
+    }
+
+    func testNewReviewKindsHaveJapaneseNames() {
+        XCTAssertEqual(ReviewRules.kindLabel("vocab"), "言葉の聞き間違い")
+        XCTAssertEqual(ReviewRules.kindLabel("voice"), "この声は誰？")
+        // 新しい種類も問いの上限・期限・並びの対象（kind では外さない）
+        let vocab = ReviewItem(id: "v", kind: "vocab", question: "「見本」は「見本二」の聞き間違い？", answer: "yesno", expires: "2026-11-30")
+        let voice = ReviewItem(id: "w", kind: "voice", question: "この声は誰？", answer: "pick", expires: "2026-11-20")
+        XCTAssertEqual(S24AskRules.reviewItems([vocab, voice], samePersonAsk: false, today: "2026-11-24").map(\.id), ["v"])
+        XCTAssertEqual(S24NoticeRules.lane(identifier: "s22-review-1", category: "s22review", userInfo: ["id": "v"]), .question)
+    }
+
     // MARK: 減5・減8・急3・初めの値
 
     func testDefaults() {

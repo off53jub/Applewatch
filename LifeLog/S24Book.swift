@@ -11,20 +11,38 @@ import UserNotifications
 enum S24Gate {
     private static let lock = NSLock()
     private static let countKey = "s24.dayCounts"
+    private static let askedKey = "s24.askedToday"
 
-    /// 今日すでに出した問いの数と、別枠でない知らせの数（"yyyy-MM-dd|問い|知らせ"）
+    /// 今日すでに聞いた問いの数（知らせで聞いたもの・アプリの中で答えたもの。同じ問いは 1 つ）と、別枠でない知らせの数
     static func counts(now: Date = .now) -> (asked: Int, shown: Int) {
-        lock.withLock { read(day: ReviewRules.dayKey(now)) }
+        let day = ReviewRules.dayKey(now)
+        return lock.withLock { (asked(day: day).count, shown(day: day)) }
     }
 
-    private static func read(day: String) -> (asked: Int, shown: Int) {
+    /// 別枠でない知らせの数（"yyyy-MM-dd|知らせ"）
+    private static func shown(day: String) -> Int {
         let parts = (UserDefaults.standard.string(forKey: countKey) ?? "").split(separator: "|").map(String.init)
-        guard parts.count == 3, parts[0] == day else { return (0, 0) }
-        return (Int(parts[1]) ?? 0, Int(parts[2]) ?? 0)
+        guard parts.count >= 2, parts[0] == day else { return 0 }
+        return Int(parts[parts.count - 1]) ?? 0
     }
 
-    private static func write(day: String, asked: Int, shown: Int) {
-        UserDefaults.standard.set(day + "|" + String(asked) + "|" + String(shown), forKey: countKey)
+    private static func asked(day: String) -> [String] {
+        S24AskRules.daySet(adding: [], saved: UserDefaults.standard.string(forKey: askedKey), day: day).ids
+    }
+
+    /// 問いの印（確かめ待ちは問いの id、ほかは知らせの名前）
+    static func questionKey(identifier: String, userInfo: [AnyHashable: Any]) -> String {
+        if let id = userInfo["id"] as? String, !id.isEmpty { return "q:" + id }
+        return identifier
+    }
+
+    /// アプリの中で問いに答えた（知らせで聞いた同じ問いなら数えない。減1 の 1 日 3 問に入れる）
+    static func noteAnswered(key: String, now: Date = .now) {
+        let day = ReviewRules.dayKey(now)
+        lock.withLock {
+            let merged = S24AskRules.daySet(adding: [key], saved: UserDefaults.standard.string(forKey: askedKey), day: day)
+            UserDefaults.standard.set(merged.save, forKey: askedKey)
+        }
     }
 
     /// 入口で決めて、出してよければ数える
@@ -34,15 +52,23 @@ enum S24Gate {
         let immediate = NoticeBundle.isImmediate(trigger)
         let quiet = S24Book.quietNow(now)
         let day = ReviewRules.dayKey(now)
+        let key = questionKey(identifier: identifier, userInfo: userInfo)
         let decision: S24NoticeRules.Decision = lock.withLock {
-            let c = read(day: day)
-            let d = S24NoticeRules.decide(lane: lane, immediate: immediate, asked: c.asked, shown: c.shown,
+            let askedList = asked(day: day)
+            let shownCount = shown(day: day)
+            // 今日もう聞いた同じ問い（「あとで」の出し直しなど）は、もう 1 問とは数えない
+            let again = lane == .question && askedList.contains(key)
+            let d = S24NoticeRules.decide(lane: lane, immediate: immediate, asked: again ? 0 : askedList.count, shown: shownCount,
                                           questionCap: S24Settings.questionCap,
                                           dailyCapOn: S24Settings.isOn(S24Settings.dailyCapOnKey), quiet: quiet)
             if d == .pass {
-                let asked = c.asked + (lane == .question ? 1 : 0)
-                let shown = c.shown + (immediate && !S24NoticeRules.isPriority(lane) ? 1 : 0)
-                write(day: day, asked: asked, shown: shown)
+                if lane == .question {
+                    let merged = S24AskRules.daySet(adding: [key], saved: UserDefaults.standard.string(forKey: askedKey), day: day)
+                    UserDefaults.standard.set(merged.save, forKey: askedKey)
+                }
+                if immediate && !S24NoticeRules.isPriority(lane) {
+                    UserDefaults.standard.set(day + "|" + String(shownCount + 1), forKey: countKey)
+                }
             }
             return d
         }
