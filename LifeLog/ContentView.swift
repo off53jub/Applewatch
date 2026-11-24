@@ -53,6 +53,8 @@ struct ContentView: View {
                         NoticeScreenView(screen: screen)
                     case .note(let title, let body):
                         NoticeNoteView(title: title, text: body)
+                    case .link(let link):
+                        S26ALinkView(link: link)  // lifelog://person/… など（2026-11-25。s26 の 結9。S26AViews.swift）
                     }
                 }
                 .toolbar {
@@ -1173,6 +1175,9 @@ private struct DetailedSettingsView: View {
 
                 // 会話の横に、その時間に撮った写真を出す（2026-11-07。DayPhotos.swift）
                 DayPhotoSettingsSection()
+
+                // 取るデータと入口（体重・端末の合図・曲・予定で録り方・実績・検索。2026-11-25。s26 の A1。S26AViews.swift）
+                S26ASettingsLinkSection()
 
                 Section {
                     NavigationLink {

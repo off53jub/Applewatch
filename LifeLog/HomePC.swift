@@ -673,7 +673,8 @@ final class HomePC {
         req.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
         // PC は返事を書き終えるまで、15秒ごとに空白を1文字書く。それが届くかぎり切れないよう、待つのは 120 秒まで
         req.timeoutInterval = PCJobUploader.idleTimeout
-        PCJobUploader.shared.upload(url, request: req, cellular: useCellular)
+        // 小さい区切りは、アプリが動いているあいだはすぐ送る（だめなら今までどおり裏の転送。2026-11-25。s26 の 結5。S26ABook.swift）
+        S26AFastSend.upload(url, request: req, cellular: useCellular)
     }
 
     /// POST /jobs に付ける区切りの時刻（分かるものだけ。ISO 8601・UTC・ミリ秒つき）
@@ -1205,7 +1206,8 @@ final class PCJobUploader: NSObject, URLSessionDataDelegate, @unchecked Sendable
     /// その区切りを送っている途中なら、写しを作った時刻（待ち合わせなら、答えを受け取るまで写しが残る）
     static func stagedSince(_ name: String) -> Date? {
         let url = stage.appendingPathComponent(name)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        // すぐ送っている途中の区切りも「送っている途中」（2026-11-25。s26 の 結5。S26ABook.swift）
+        guard FileManager.default.fileExists(atPath: url.path) else { return S26AFastSend.inFlightSince(name) }
         return (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .now
     }
 
@@ -1219,6 +1221,17 @@ final class PCJobUploader: NSObject, URLSessionDataDelegate, @unchecked Sendable
         task.taskDescription = url.lastPathComponent
         task.resume()
         Tally.add("jobs.sent")
+    }
+
+    /// 裏の転送を通さずにすぐ送った返事を、裏の転送の返事と同じに受け取る（でき上がりのときだけ true。
+    /// 2026-11-25。s26 の 結5。S26ABook.swift の S26AFastSend）
+    func deliver(_ body: Data, name: String) -> Bool {
+        guard PCResults.isDone(body) else { return false }
+        PCResults.save(body, name: name)
+        Tally.add("jobs.waited")
+        let callback = lock.withLock { onResult }
+        callback?(name)
+        return true
     }
 
     /// iOS が、裏での転送の知らせを渡すためにアプリを起こしたとき

@@ -178,6 +178,8 @@ enum NoticeRoute: Identifiable, Equatable {
     case screen(NoticeScreen)
     /// 知らせの文をそのまま読み直す（会う前の1枚。消えても読み返せるように）
     case note(title: String, body: String)
+    /// どこからでも同じリンク（lifelog://person/… など。2026-11-25。s26 の 結9・取り決め K3。S26ARules.swift）
+    case link(S26ALink)
 
     var id: String {
         switch self {
@@ -185,6 +187,7 @@ enum NoticeRoute: Identifiable, Equatable {
         case .digestImport: "digestImport"
         case .screen(let s): "screen-" + s.rawValue
         case .note(let title, _): "note-" + title
+        case .link(let l): "link-" + l.id
         }
     }
 
@@ -227,6 +230,8 @@ enum NoticeRoute: Identifiable, Equatable {
     /// ウィジェットの lifelog:// の住所から（lifelog://tasks など）
     static func route(url: URL) -> NoticeRoute? {
         guard url.scheme == "lifelog" else { return nil }
+        // 人・日・会話・タスク・下書き・操作待ち（2026-11-25。s26 の 結9・K3）
+        if let route = S26ALink.parse(url)?.route { return route }
         switch url.host() ?? "" {
         case "tasks": return .tab(.tasks)
         case "fix", "review": return .tab(.fix)

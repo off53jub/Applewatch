@@ -2014,6 +2014,11 @@ final class Pipeline {
         UserDefaults.standard.set(done.sorted(), forKey: HolidayExport.doneKey)
     }
 
+    /// ヘルスケアと同じフォルダ（LifeLog/ヘルスケア）に書く。同じ名前があれば書かない（2026-11-25。s26 の 端末の合図・K2。S26ABook.swift）
+    func uploadToHealthFolder(_ data: Data, name: String) async throws {
+        try await docs.uploadIfMissing(data, name: name, folder: HealthExport.folderName)
+    }
+
     /// 書き出しをドライブの「控え」に置く（同じ名前の頭のものは新しい2つだけ残す）
     func uploadExport(_ data: Data, name: String, prefix: String) async throws {
         try await docs.uploadBackup(data, name: name, prefix: prefix, keep: 2)
@@ -3191,7 +3196,11 @@ final class Pipeline {
         // 声がほとんど無い区切り：重い文字起こしはしない（端末内で聞き取れた文は、確かめたほうがよい行として残す）
         let silent = (voiceSeconds ?? 1) < 0.5
         // 端末内では何も聞き取れなくても、はっきり声がしていれば Haas-ja で聞き取る（小さな声の取りこぼしを減らす）
-        guard !local.isEmpty || (voiceSeconds ?? 0) >= 3 else { return [] }
+        guard !local.isEmpty || (voiceSeconds ?? 0) >= 3 else {
+            // 声の無い夜の区切りも、いびき・せきだけ数える（充電中だけ。2026-11-25。s26 の 集3。S26ABook.swift）
+            await S26ABodySounds.shared.quietChunk(url, start: start, night: sleep.inWindow(start))
+            return []
+        }
         var entries: [(offset: TimeInterval?, text: String, score: Double?)] = local.map { ($0.offset, $0.text, nil) }
         lastEngine = "端末内"
         // 同じ機器の直前の区切りから続いているなら、その終わりの文を文脈として渡す
@@ -3529,7 +3538,12 @@ final class Pipeline {
         let levels = await Task.detached(priority: .utility) { OfficeFilter.levels(url, spans: spans) }.value
         // 背景の音（音楽・電車・拍手や笑い）。放送やテレビの行を見分ける手がかりにする
         var scene: [SoundScene.Window] = []
-        if !Power.isSaving { scene = await Task.detached(priority: .utility) { SoundScene.windows(in: url) }.value }
+        if !Power.isSaving {
+            let soundScan = await Task.detached(priority: .utility) { SoundScene.scan(in: url) }.value
+            scene = soundScan.windows
+            // せき・いびきを数える・流れていた曲を引く（2026-11-25。s26 の 集3・集4。S26ABook.swift）
+            S26ABodySounds.shared.chunkScanned(soundScan, url: url, start: start)
+        }
         let namedIDs = Set(people.filter(\.isNamed).map(\.id))
         // 「記録に出さない」にした人
         let hiddenIDs = Set(people.filter { $0.hidden == true }.map(\.id))
