@@ -1202,6 +1202,7 @@ final class Pipeline {
         let removed = await speakers.split(id, keep: keep.map(\.embedding), moved: clips.map(\.embedding), to: nil)
         let times = Set(clips.map(\.line.time))
         let count = await markMedia(kind) { $0.speakerID == id && times.contains($0.time) }
+        if count > 0 { Tally.add(S25UFeatures.tallyName("app-tv")) }  // 使った回数（2026-11-24。s25 の 大2・K5）
         people = await speakers.people()
         return "\(count) 行を「\(kind)」の行にしました。覚えていた声のうち \(removed) つを外しました。"
     }

@@ -545,6 +545,9 @@ extension Pipeline {
         // s23（2026-11-23。S23Book.diagState。どれも省ける）: 何人でしたかの答え（続5。家の PC の inbox/headcount.jsonl と同じ
         // {day, start, count}）・数から自動で ○ にした確かめ（試1）・知らせを押したあとの数（知11）
         for (key, value) in S23Book.shared.diagState() { state[key] = value }
+        // s25（2026-11-24。S25UBook.diagState。どれも省ける）: 文字になるまでの段ごと・iPhone→PC の中身（早1・早3）・
+        // 初めはオフのまま 30 日の設定（片3）・静かな試しが届いた時刻（堅4・K6）・時計の版が古いまま（堅3）・引き算の版（大1）
+        for (key, value) in S25UBook.diagState(self) { state[key] = value }
         return state
     }
 

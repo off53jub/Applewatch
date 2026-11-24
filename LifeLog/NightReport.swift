@@ -28,6 +28,10 @@ enum Tally {
         var all = loadLocked()
         let day = dayKey(date)
         all[day, default: [:]][name, default: 0] += count
+        // 31 の機能のどれかを使った数なら、その機能の数（feat.<slug>）にも足す（2026-11-24。s25 の 大2・K5。S25UFeatures）
+        if let slug = S25UFeatures.slug(for: name) {
+            all[day, default: [:]][S25UFeatures.tallyName(slug), default: 0] += count
+        }
         // 35日より前は捨てる
         let oldest = dayKey(date.addingTimeInterval(-35 * 86400))
         all = all.filter { $0.key >= oldest }
