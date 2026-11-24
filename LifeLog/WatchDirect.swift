@@ -332,6 +332,12 @@ extension Pipeline {
         // 時計がいま直接送らない理由・最後に届かなかった理由（時刻つき。新しい時計のアプリだけ。2026-11-10）
         if let skip = watch["pcSkip"] as? String, !skip.isEmpty { text += "・いま送らない理由: \(skip)〜" }
         if let fail = watch["pcFail"] as? String, !fail.isEmpty { text += "・最後に届かなかった: \(fail)" }
+        // 溜まり続けたので時計が自分で送り直した回数（今日。2026-11-24。s24 の 急6。新しい時計のアプリだけ）
+        if let n = watch[S24Watch.rescueCountKey] as? Int, n > 0 { text += "・溜まったので時計が自分で送り直した \(n) 回（今日）" }
+        // 家の PC が最後に外の道で預かった時刻（GET /watch-route の watchDirectLast。s24 の 急7）
+        if let last = S23WatchQuiet.pcLast {
+            text += "・PC が最後に預かった " + last.formatted(date: .omitted, time: .shortened)
+        }
         return (text, ok, route.checkedAt)
     }
 

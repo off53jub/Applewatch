@@ -205,6 +205,8 @@ private struct TodayView: View {
     @AppStorage("todayRecordOpen") private var recordOpen = false
     /// ほかのカードを開いているか（いつもは畳む。2026-11-21。s20 の 体7）
     @AppStorage("todayMoreOpen") private var moreOpen = false
+    /// 上の 3 枚（録れているか・今日の三つ・今日の 1 問）だけにして、ほかは畳む（2026-11-24。s24 の 形1。初めはオン・設定で戻せる）
+    @AppStorage(S24Today.foldKey) private var todayFold = true
 
     private static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -222,45 +224,18 @@ private struct TodayView: View {
         NavigationStack {
             LLList {
                 // 2026-11-21（s20 の 体7〜10）: 上は大事な 3 つ（録音の丸 3 つ・今日の三つ・確かめ待ちの数）。ほかのカードは畳む。
-                // 朝は予定の前と朝のまとめ・1 年前の今日、夜は夜の10秒と今日の問いを上に出す。休日は休日の顔（S20TodayViews.swift）
-                TodayHeroSection(talks: talks)
-                HolidayFaceSection()
-                // (a) 今日の三つと提案1つ（MothershipFeeds.swift）
-                TodayAnswerCard()
-                // (d) 困ったことがあるときだけ
-                alerts()
-                PCFeatureNotice()
-                // いま話したことは約○分で文字に・電池の先回り（2026-11-22。s22 の 楽7・楽19。S22Views.swift）
-                S22TodaySection()
-                // 新しい版・今日の 1 つの確かめ・答えそびれた質問（2026-11-23。s23 の 届4・試5・知13。S23Screens.swift）
-                S23TodaySection()
-                switch part {
-                case .morning:
-                    PrepCardSection()
-                    MorningBriefSection()
-                    OneYearAgoSection()
-                case .night:
-                    NightMoodSection()
-                    KnowMeTodaySection()
-                case .day:
-                    PrepCardSection()
-                }
-                TodayMoreRow(open: $moreOpen)
+                // 朝は予定の前と朝のまとめ・1 年前の今日、夜は夜の10秒と今日の問いを上に出す。休日は休日の顔（S20TodayViews.swift）。
+                // 2026-11-24（s24 の 形1）: 上は 3 枚（録れているか・今日の三つ・今日の 1 問）と、あるときだけの「気をつけること」。
+                // ほかは「ほかのカード」に畳む（設定の「今日は上の 3 枚だけ」を切ると前の並び。並びは S24Today.layout）
+                let layout = S24Today.layout(fold: todayFold, part: part)
+                ForEach(layout.top) { card($0, talks: talks) }
+                // よく触る設定 3 つ（2026-11-24。s24 の 形2。S24Views.swift）
+                if todayFold { S24QuickSettingsSection() }
+                TodayMoreRow(open: $moreOpen, detail: todayFold
+                             ? "休日の顔・予定の前・朝のまとめ・夜の10秒・約束・答え合わせ・返事・下書き・電池 など"
+                             : "予定の前・約束・答え合わせ・返事・下書き")
                 if moreOpen {
-                    if part != .morning && part != .day { PrepCardSection() }
-                    PromisesSection()  // 会話のあとの約束（2026-11-13。Promises.swift。無いときは何も出さない）
-                    CheckupsSection()  // 1日1分の答え合わせ（2026-11-16。強化案 136。Checkups.swift。問があるときだけ）
-                    RepliesSection()  // 返事・メールの下書き（2026-11-15。強化案 58。DraftActions.swift。無いときは何も出さない）
-                    if part != .night {
-                        // (c) 夜の10秒（20時から翌朝まで、まだ答えていない日だけ）
-                        NightMoodSection()
-                        // 朝の気分の 1 タップ・今日の問い（2026-11-19。s18。KnowMeViews.swift。あるときだけ）
-                        KnowMeTodaySection()
-                    }
-                    // 朝の「昨日と今日」（畳んである。2026-11-09。MorningBrief.swift）
-                    if part != .morning { MorningBriefSection() }
-                    // 家の PC が書いている途中の下書き（仮。記録には入れない。2026-11-07。Drafts.swift）
-                    DraftSection()
+                    ForEach(layout.more) { card($0, talks: talks) }
                 }
                 recordGroup(today: today, talks: talks)
             }
@@ -272,6 +247,40 @@ private struct TodayView: View {
             .settingsGear()
             .sheet(isPresented: $showHelp) { TodayHelpView { showHelp = false } }
             .fullScreenCover(isPresented: $showLive) { LiveView { showLive = false } }
+        }
+    }
+
+    /// 「今日」のカード 1 枚（中身が無いカードは何も出さない。並びは S24Today.layout。2026-11-24。s24 の 形1）
+    @ViewBuilder
+    private func card(_ kind: S24Today.Card, talks: [ConversationLog.Conversation]) -> some View {
+        switch kind {
+        case .hero: TodayHeroSection(talks: talks)
+        case .holiday: HolidayFaceSection()
+        // (a) 今日の三つと提案1つ（MothershipFeeds.swift）
+        case .answer: TodayAnswerCard()
+        // 今日の 1 問（聞く物が無ければ「今日は聞くことはありません」。s24 の 形3。S24Views.swift）
+        case .ask: S24TodayAskSection()
+        // (d) 困ったことがあるときだけ
+        case .alerts: alerts()
+        case .pcFeature: PCFeatureNotice()
+        // いま話したことは約○分で文字に・電池の先回り（2026-11-22。s22 の 楽7・楽19。S22Views.swift）
+        case .s22: S22TodaySection()
+        // 新しい版・今日の 1 つの確かめ・答えそびれた質問（2026-11-23。s23 の 届4・試5・知13。S23Screens.swift）
+        case .s23: S23TodaySection()
+        case .prep: PrepCardSection()
+        // 朝の「昨日と今日」（2026-11-09。MorningBrief.swift）
+        case .morningBrief: MorningBriefSection()
+        case .oneYearAgo: OneYearAgoSection()
+        // (c) 夜の10秒（20時から翌朝まで、まだ答えていない日だけ）
+        case .nightMood: NightMoodSection()
+        // 朝の気分の 1 タップ・今日の問い（2026-11-19。s18。KnowMeViews.swift。あるときだけ）
+        case .knowMe: KnowMeTodaySection()
+        case .promises: PromisesSection()  // 会話のあとの約束（2026-11-13。Promises.swift。無いときは何も出さない）
+        case .checkups: CheckupsSection()  // 1日1分の答え合わせ（2026-11-16。強化案 136。Checkups.swift。問があるときだけ）
+        case .replies: RepliesSection()  // 返事・メールの下書き（2026-11-15。強化案 58。DraftActions.swift。無いときは何も出さない）
+        // 家の PC が書いている途中の下書き（仮。記録には入れない。2026-11-07。Drafts.swift）
+        case .draft: DraftSection()
+        case .record: EmptyView()  // 今日の記録はいつも最後（recordGroup）
         }
     }
 
@@ -369,27 +378,25 @@ private struct TodayView: View {
         // 期限が3日以内の決めごと（2026-11-15。強化案 61。PagesFeeds.swift）
         let decisionsDue: [DecisionItem] = PagesBook.shared.dueSoon()
         if sign != nil || held || !stale.isEmpty || noLogin || pcQuiet != nil || !decisionsDue.isEmpty {
+            // 色の役割は 3 つ: 赤＝いま本人が動く・青＝機械が進めている・灰＝待てば直る（2026-11-24。s24 の 形8。S24Alerts.role）
             Section("気をつけること") {
                 DecisionDueRows(items: decisionsDue)
                 if let pcQuiet {
-                    Label(pcQuiet, systemImage: "exclamationmark.triangle").foregroundStyle(LL.warn)
+                    S24RoleLabel(text: pcQuiet, role: S24Alerts.role(.pcQuiet))
                 }
                 if let sign {
                     // 無料の署名は7日で切れ、切れるとアプリが起動しなくなって録音が止まる
-                    Label("署名の期限 \(sign)。切れる前に Sideloadly で入れ直してください（記録は消えません）",
-                          systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(LL.warn)
+                    S24RoleLabel(text: "署名の期限 \(sign)。切れる前に Sideloadly で入れ直してください（記録は消えません）",
+                                 role: S24Alerts.role(.signExpiry))
                 }
                 if held {
-                    Label("録音を休む場所にいるので、書くのを休んでいます", systemImage: "pause.circle")
-                        .foregroundStyle(LL.warn)
+                    S24RoleLabel(text: "録音を休む場所にいるので、書くのを休んでいます（出れば戻ります）", role: S24Alerts.role(.held))
                 }
                 ForEach(stale) { item in
-                    Label(AppFeeds.freshLine(item), systemImage: "exclamationmark.triangle").foregroundStyle(LL.warn)
+                    S24RoleLabel(text: AppFeeds.freshLine(item), role: S24Alerts.role(.stale))
                 }
                 if noLogin {
-                    Text("右上の歯車（設定）で Google にログインすると、ドキュメントに書き始めます。")
-                        .foregroundStyle(LL.dim)
+                    S24RoleLabel(text: "右上の歯車（設定）で Google にログインすると、ドキュメントに書き始めます。", role: S24Alerts.role(.noLogin))
                 }
             }
         }
@@ -686,24 +693,35 @@ private struct DaysPage: View {
                     ForEach(hits) { HitRow(hit: $0) }
                 }
             } else {
-                Section {
-                    NavigationLink {
-                        AskView()
-                    } label: {
-                        Label("記録に質問する", systemImage: "questionmark.bubble")
-                    }
-                    // 探す窓を 1 つに・1 日の帯で選ぶ（2026-11-21。s20 の 体28〜30・次11・次12。S20RecordViews.swift）
-                    NavigationLink {
-                        UnifiedSearchView()
-                    } label: {
-                        Label("探す（人・場所・日・言葉・質問）", systemImage: "magnifyingglass")
-                    }
-                    NavigationLink {
-                        DayBandView(day: Date.now)
-                    } label: {
-                        Label("1 日の帯で選ぶ（消す・書き出す・印）", systemImage: "slider.horizontal.below.rectangle")
+                // 本人が畳んだ入口は「ほか」へ（2026-11-24。s24 の 減12。S24Views.swift。戻せる）
+                let entries = S24Entry.split(list: "records", available: ["ask", "unifiedSearch", "dayBand"])
+                if !entries.shown.isEmpty {
+                    Section {
+                        if entries.shown.contains("ask") {
+                            NavigationLink {
+                                AskView()
+                            } label: {
+                                Label("記録に質問する", systemImage: "questionmark.bubble")
+                            }
+                        }
+                        // 探す窓を 1 つに・1 日の帯で選ぶ（2026-11-21。s20 の 体28〜30・次11・次12。S20RecordViews.swift）
+                        if entries.shown.contains("unifiedSearch") {
+                            NavigationLink {
+                                UnifiedSearchView()
+                            } label: {
+                                Label("探す（人・場所・日・言葉・質問）", systemImage: "magnifyingglass")
+                            }
+                        }
+                        if entries.shown.contains("dayBand") {
+                            NavigationLink {
+                                DayBandView(day: Date.now)
+                            } label: {
+                                Label("1 日の帯で選ぶ（消す・書き出す・印）", systemImage: "slider.horizontal.below.rectangle")
+                            }
+                        }
                     }
                 }
+                S24OtherSection(other: entries.other)
                 Section("日ごと") {
                     if days.isEmpty {
                         Text("文字起こしが終わると、ここに日ごとに出てきます。").foregroundStyle(LL.dim)
@@ -986,6 +1004,7 @@ private struct DetailedSettingsView: View {
         }
         .navigationTitle("くわしい設定")
         .countsOpen("detailedSettings")
+        .s24CountsTouches()  // 触った設定を数える（2026-11-24。s24 の 形2。S24Views.swift）
     }
 
     @ViewBuilder

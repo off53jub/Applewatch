@@ -340,6 +340,8 @@ struct OneYearAgoSection: View {
 /// 「ほかのカード」を開く・閉じる行
 struct TodayMoreRow: View {
     @Binding var open: Bool
+    /// 畳んであるカードの名前（2026-11-24。s24 の 形1 で畳むものが増えた）
+    var detail = "予定の前・約束・答え合わせ・返事・下書き"
 
     var body: some View {
         Section {
@@ -347,7 +349,7 @@ struct TodayMoreRow: View {
                 withAnimation(LL.Motion.state) { open.toggle() }
             } label: {
                 HStack {
-                    Label(open ? "ほかのカードを畳む" : "ほかのカード（予定の前・約束・答え合わせ・返事・下書き）",
+                    Label(open ? "ほかのカードを畳む" : "ほかのカード（" + detail + "）",
                           systemImage: open ? "chevron.up" : "square.stack")
                         .font(.callout)
                     Spacer()
