@@ -38,8 +38,9 @@ enum S20Notices {
         Task { @MainActor in S20Book.shared.noteNotice(id: id, kind: kind, title: title, held: held, at: at) }
     }
 
-    /// 便りにためて、次の便りの 1 通を頼み直す（同じ名前で置き換える）
-    private static func hold(title: String, now: Date) {
+    /// 便りにためて、次の便りの 1 通を頼み直す（同じ名前で置き換える）。
+    /// 知らせ全体の 1 日の上限を超えた分もここに回す（2026-11-24。s24 の 減7。S24Book.swift）
+    static func hold(title: String, now: Date) {
         let previous = NoticeDigestRules.previousSlot(before: now)
         let titles: [String] = lock.withLock { () -> [String] in
             var rows = UserDefaults.standard.array(forKey: heldKey) as? [[String: Any]] ?? []
@@ -56,7 +57,7 @@ enum S20Notices {
         let content = UNMutableNotificationContent()
         content.title = text.title
         content.body = text.body
-        S23Notices.decorate(content, id: NoticeDigestRules.morningID)  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
+        S23Notices.decorate(content, id: NoticeDigestRules.morningID)  // 題の頭の「【便り】」もここで（s24 の 形7）  // 押すとどうなるかを文に（2026-11-23。s23 の 知8）
         content.sound = .default
         let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: slot)
         let trigger = UNCalendarNotificationTrigger(dateMatching: parts, repeats: false)

@@ -17,7 +17,8 @@ extension Pipeline {
             ("職場の自分の声", selfCandidateCount),
             ("話し手の疑い", speakerDoubtCount),
             // 2026-11-15（強化案 56）: 日をまたぐ組と「◯◯さんかも」も同じ段で数える
-            ("同じ人かも", samePersonGroups.count + samePersonMaybes.count),
+            // 「同じ人か」は設定でだけ出す（取り決め C4。初めはオフ。2026-11-24。s24 の 当1）
+            ("同じ人かも", S24Settings.isOn(S24Settings.samePersonAskKey) ? samePersonGroups.count + samePersonMaybes.count : 0),
             // 正しさの抜き取り（2026-11-15。強化案 41。SettleFeeds.swift。まだ答えていない日の1つ）
             ("合ってる？", pendingCheckCount),
             // 自分を知る（2026-11-19。s18。KnowMe.swift。今日の問い・今週の見立て・抜き打ちのまだの数）
@@ -47,7 +48,9 @@ extension Pipeline {
             default: counts.append(part.count)
             }
         }
-        return NightReviewRules.badge(counts, cap: FixView.dailyCap)
+        // 問いの全体の上限（1 日 3 問・仮）を超えない。今日すでに知らせで聞いた分は引く（2026-11-24。s24 の 減1・減4）
+        return S24AskRules.badge(NightReviewRules.badge(counts, cap: FixView.dailyCap), cap: S24Settings.questionCap,
+                                 asked: S24Gate.counts().asked)
     }
 
     /// 職場の自分の声の確認（家の PC が対応しているときだけ。AppFeeds.swift）。
@@ -98,26 +101,23 @@ struct FixView: View {
         let unnamedToday = pipeline.people.filter { !$0.isNamed && !$0.isSelf && todayIDs.contains($0.id) }.count
         LLList {
             // 確かめ待ちを 1 つの列で ○×（2026-11-21。s20 の 次3・体11〜15。S20ReviewViews.swift）
+            // 今日の 3 問（仮）と「今週は聞かないで」（2026-11-24。s24 の 減1・減4・減10。S24Views.swift）
+            S24TodayQuestionsSection(hasAny: total > 0)
             ReviewDeckEntrySection()
             if total == 0 {
                 Section {
                     ContentUnavailableView("今は直すものはありません", systemImage: "checkmark.circle",
                                            description: Text("AI からの質問・名前を付ける声・聞き間違いなどがたまると、ここに大事な順に並びます。下の「いつでも」からは、いつでも開けます。"))
                 }
-            } else {
-                Section {
-                    Text("1日に上から\(Self.dailyCap)つまでで十分です（5分ほど）。残りは明日に回して大丈夫です。タブの数字も、今日の\(Self.dailyCap)つまでを数えています（全部で \(total)）。")
-                        .font(.footnote).foregroundStyle(LL.dim)
-                }
             }
             // タスクの候補は「タスク」タブで片づける（ここからは移るだけ）
-            if !pipeline.tasks.candidates.isEmpty {
+            if !pipeline.tasks.todayCandidates().isEmpty {
                 Section {
                     Button {
                         pipeline.tab = .tasks
                     } label: {
                         LabeledContent {
-                            Text("\(pipeline.tasks.candidates.count) 件")
+                            Text("今日の候補")
                         } label: {
                             Label("タスクの候補は「タスク」で", systemImage: "checklist")
                         }
@@ -125,7 +125,7 @@ struct FixView: View {
                 }
             }
             if count("AI からの質問") > 0 {
-                Section("AI からの質問（\(count("AI からの質問"))）") {
+                Section("AI からの質問") {
                     NavigationLink("答える") { QuestionsView() }
                 }
             }
@@ -133,11 +133,11 @@ struct FixView: View {
             if count("職場の自分の声") > 0 {
                 // 1日に10件だけ（「精10」。2026-11-13）。その日はじめて見たときに点の高い順に選び、その日は入れ替えない
                 Section {
-                    NavigationLink("職場の自分の声を10件確かめる（残り \(count("職場の自分の声"))）") {
+                    NavigationLink("職場の自分の声を10件確かめる") {
                         SelfCandidatesView(only: pipeline.appFeeds.todayTen())
                             .countsOpen("selfTen")
                     }
-                    NavigationLink("全部を見る（\(pipeline.appFeeds.visibleCandidates.count) 件）") {
+                    NavigationLink("全部を見る") {
                         SelfCandidatesView()
                     }
                 } header: {
@@ -147,27 +147,27 @@ struct FixView: View {
             // 話し手の疑い（家の PC から。2026-11-13。HomeFeeds.swift）。名前は自動では変えない
             SpeakerDoubtsSection()
             // 同じ人かも（家の PC から。2026-11-13。SamePerson.swift）。押すまでは何も変えない
-            SamePersonSection()
+            if S24Settings.isOn(S24Settings.samePersonAskKey) { SamePersonSection() }
             // 合ってる？（家の PC から1日1つ。2026-11-15。強化案 41。SettleFeeds.swift）
             CheckClaimSection()
             // 自分を知る（2026-11-19。s18。KnowMeViews.swift）
             KnowMeFixSection()
             if reviewCount > 0 || unnamedToday > 0 {
-                Section("見直したい声（\(reviewCount)）") {
+                Section("見直したい声") {
                     if reviewCount > 0 { NavigationLink("声を聞いて直す") { VoiceReviewView() } }
                     // 1 画面で ○×（2026-11-22。s21 の 使8）
                     if reviewCount > 0 { NavigationLink("○× でまとめて") { S21VoiceQuickReviewView() } }
-                    if unnamedToday > 0 { NavigationLink("今日の人物Nを整理（\(unnamedToday) 人）") { UnnamedVoicesView(day: day) } }
+                    if unnamedToday > 0 { NavigationLink("今日の人物Nを整理") { UnnamedVoicesView(day: day) } }
                 }
             }
             if count("名前を付けてほしい声") > 0 {
-                Section("名前を付けてほしい声（\(count("名前を付けてほしい声")) 人）") {
+                Section("名前を付けてほしい声") {
                     NavigationLink("話した相手を開く") { PeopleView() }
                 }
             }
             SplitWordsSection()
             if count("聞き間違いかも") > 0 {
-                Section("聞き間違いかも（\(count("聞き間違いかも"))）") {
+                Section("聞き間違いかも") {
                     NavigationLink("直す・そのまま") { MisheardView() }
                 }
             }
@@ -202,11 +202,7 @@ struct FixView: View {
                     NavigationLink {
                         SelfCandidatesView()
                     } label: {
-                        LabeledContent {
-                            Text("\(pipeline.appFeeds.visibleCandidates.count) 件")
-                        } label: {
-                            Label("職場の自分の声の確認（全部）", systemImage: "person.wave.2")
-                        }
+                        Label("職場の自分の声の確認（全部）", systemImage: "person.wave.2")
                     }
                 }
                 NavigationLink {

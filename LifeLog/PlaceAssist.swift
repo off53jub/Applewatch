@@ -319,6 +319,10 @@ final class PlaceAssist {
         let wait: TimeInterval = now ? 2
             : max(60, PlaceAssistRules.fireDate(arrival: arrival, now: .now, after: S23Places.askAfter()).timeIntervalSinceNow)
         let id: String = PlaceAssistRules.askPrefix + String(Int(arrival.timeIntervalSince1970))
+        // 問いの全体の上限・「今週は聞かないで」・題の印（2026-11-24。s24 の 減1・減10・形7。S24Book.swift）
+        guard S24Gate.admit(identifier: id, category: content.categoryIdentifier, userInfo: content.userInfo, trigger: nil) == .pass
+        else { return }
+        S24Gate.style(content, id: id)
         let request = UNNotificationRequest(identifier: id, content: content,
                                             trigger: UNTimeIntervalNotificationTrigger(timeInterval: wait, repeats: false))
         do {

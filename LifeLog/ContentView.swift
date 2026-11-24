@@ -29,7 +29,8 @@ struct ContentView: View {
         TabView(selection: $pipeline.tab) {
             Tab("今日", systemImage: "waveform", value: AppTab.today) { TodayView() }
             Tab("タスク", systemImage: "checklist", value: AppTab.tasks) { TasksTab() }
-                .badge((badgeLateOnly ? 0 : pipeline.tasks.candidates.count) + lateTasks)
+                // 確かめ待ちは「今日の候補」（3 件まで・仮）だけを数える（2026-11-24。s24 の 減4）
+                .badge((badgeLateOnly ? 0 : pipeline.tasks.todayCandidates().count) + lateTasks)
             Tab("直す", systemImage: "tray.full", value: AppTab.fix) { FixTab() }
                 .badge(fixCount)
             Tab("記録", systemImage: "books.vertical", value: AppTab.records) { RecordsView() }

@@ -442,6 +442,8 @@ enum S23Notices {
 
     /// 直に頼む知らせ（NoticeGate を通らないもの）の文に足す
     nonisolated static func decorate(_ content: UNMutableNotificationContent, id: String) {
+        // 題の頭の印・時計を震わせない（2026-11-24。s24 の 形6・形7。S24Book.swift）
+        S24Gate.style(content, id: id)
         guard let entry = S23NoticeCatalog.entry(identifier: id, category: content.categoryIdentifier) else { return }
         content.body = S23NoticeCatalog.decorate(body: content.body, entry: entry)
     }

@@ -471,6 +471,8 @@ struct ReviewItem: Codable, Equatable, Identifiable {
     var expires: String? = nil
     var group: String? = nil
     var clips: [Clip]? = nil
+    /// この 1 つの答えで直る行の数の見込み（母艦が付けるときだけ。多い順に聞く。2026-11-24。s24 の 減2）
+    var impact: Int? = nil
 }
 
 struct ReviewDone: Codable, Equatable {

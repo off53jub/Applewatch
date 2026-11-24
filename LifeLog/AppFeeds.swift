@@ -28,6 +28,8 @@ struct SelfCandidate: Codable, Identifiable, Equatable {
     /// 母艦が「本人が見ればほぼ必ず OK する」と印を付けたもの（施策 14。省ける。true のときだけ入る）
     var sure: Bool? = nil
     var sure_why: String? = nil
+    /// この日を過ぎたら出さない（"yyyy-MM-dd"。取り決め C3。母艦が付けるときだけ。2026-11-24。s24 の 減3）
+    var expires: String? = nil
 }
 
 struct SelfCandidateFeed: Codable, Equatable {
@@ -254,7 +256,10 @@ final class AppFeedsBook {
     /// 見せる候補（点の高い順）
     /// 自信の段が auto（黙って入れる）のものは聞かない（2026-11-19。s18 の 61。KnowMe.swift）
     var visibleCandidates: [SelfCandidate] {
-        AppFeeds.visible(candidates, hidden: hidden).filter { KnowMeBook.shared.shouldAsk("self_candidates", $0.id) }
+        // 期限（取り決め C3）が過ぎたものは出さない（2026-11-24。s24 の 減3）
+        AppFeeds.visible(candidates, hidden: hidden).filter {
+            S24AskRules.alive(expires: $0.expires, today: ReviewRules.dayKey(.now)) && KnowMeBook.shared.shouldAsk("self_candidates", $0.id)
+        }
     }
     var staleItems: [FreshItem] { freshness.filter(\.stale) }
 

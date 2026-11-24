@@ -99,6 +99,10 @@ struct SpeakerDoubt: Codable, Identifiable, Equatable {
     /// 母艦が「本人が見ればほぼ必ず OK する」と印を付けたもの（施策 14。省ける。true のときだけ入る）
     var sure: Bool? = nil
     var sure_why: String? = nil
+    /// この日を過ぎたら出さない（"yyyy-MM-dd"。取り決め C3。母艦が付けるときだけ。2026-11-24。s24 の 減3）
+    var expires: String? = nil
+    /// この 1 つの答えで直る行の数の見込み（母艦が付けるときだけ。多い順に聞く。2026-11-24。s24 の 減2）
+    var impact: Int? = nil
     var id: String { line_time + "|" + suggest }
 }
 
@@ -161,6 +165,9 @@ enum HomeFeeds {
         // 施策 14 の印（型が違っても行は落とさない）
         var sure: LossyRow<Bool>?
         var sure_why: LossyRow<String>?
+        // s24 の 減2・減3（型が違っても行は落とさない）
+        var expires: LossyRow<String>?
+        var impact: LossyRow<Int>?
     }
 
     /// 前後の空白を除いた文。空なら nil
@@ -300,8 +307,11 @@ enum HomeFeeds {
               let score = raw.score, score.isFinite, score >= 0, score <= 1 else { return nil }
         let sure: Bool = raw.sure?.value == true
         let sureWhy: String? = sure ? String((trimmed(raw.sure_why?.value) ?? "").prefix(60)) : nil
+        let expires: String? = trimmed(raw.expires?.value).flatMap { isDay($0) ? $0 : nil }
+        let impact: Int? = raw.impact?.value.flatMap { $0 > 0 && $0 < 100_000 ? $0 : nil }
         return SpeakerDoubt(day: day, conversation_start: start, line_time: time, text_head: head, current: current,
-                            suggest: suggest, why: why, score: score, sure: sure ? true : nil, sure_why: sureWhy)
+                            suggest: suggest, why: why, score: score, sure: sure ? true : nil, sure_why: sureWhy,
+                            expires: expires, impact: impact)
     }
 
     /// GET /speaker-doubts の答え。200件まで（同じ行・同じ向きは初めのものだけ）
@@ -733,10 +743,14 @@ final class HomeFeedsBook {
     }
 
     /// 自信の段が auto（黙って入れる）のものは聞かない（2026-11-19。s18 の 61。KnowMe.swift）
+    /// 期限（取り決め C3）が過ぎたものは出さない・答えで直る行の多い順（2026-11-24。s24 の 減2・減3）
     var visibleDoubts: [SpeakerDoubt] {
-        HomeFeeds.visibleDoubts(doubts, hidden: hiddenDoubts).filter {
-            KnowMeBook.shared.shouldAsk("speaker_doubts", $0.day + "|" + $0.conversation_start + "|" + $0.line_time)
+        let today: String = ReviewRules.dayKey(.now)
+        let list = HomeFeeds.visibleDoubts(doubts, hidden: hiddenDoubts).filter {
+            S24AskRules.alive(expires: $0.expires, today: today)
+                && KnowMeBook.shared.shouldAsk("speaker_doubts", $0.day + "|" + $0.conversation_start + "|" + $0.line_time)
         }
+        return S24AskRules.byImpact(list) { $0.impact }
     }
 
     /// 「違う」・直し済み。もう出さない
@@ -1352,9 +1366,10 @@ struct SpeakerDoubtsSection: View {
                 ForEach(Array(list.prefix(5))) { d in
                     NavigationLink { SpeakerDoubtView(doubt: d) } label: { SpeakerDoubtRow(doubt: d) }
                 }
-                NavigationLink("話し手の疑いをすべて見る（\(list.count)）") { SpeakerDoubtsView() }
+                // 溜まった数は出さない（2026-11-24。s24 の 減4）
+                NavigationLink("話し手の疑いをすべて見る") { SpeakerDoubtsView() }
             } header: {
-                Text("話し手の疑い（\(list.count)）")
+                Text("話し手の疑い")
             } footer: {
                 Text("疑いの印だけです。名前は自動では変えません。")
             }
