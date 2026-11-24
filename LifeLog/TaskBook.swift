@@ -69,7 +69,8 @@ final class TaskBook {
     }
 
     enum Source: String, Codable {
-        case conversation, mark, minutes, manual, photo, summary
+        // line: LINE の頼まれごと・約束（母艦の state/line_tasks_for_app.json。2026-11-24。s25 の 連2。S25TRules.swift）
+        case conversation, mark, minutes, manual, photo, summary, line
 
         var label: String {
             switch self {
@@ -79,6 +80,7 @@ final class TaskBook {
             case .manual: "手で書いた"
             case .photo: "写真から"
             case .summary: "1日のまとめから"
+            case .line: "LINE から"
             }
         }
     }
@@ -839,6 +841,12 @@ extension Pipeline {
                         items[i].weakReason = reason
                         Tally.add("task.weak." + reason)
                     }
+                }
+                // 職場の候補は「だれから・いつまで」の両方があるものだけ（2026-11-24。s25 の 仕5。足りないものは「たぶん違う」に畳む）
+                for i in items.indices where items[i].source == .conversation && items[i].state == .candidate && items[i].weakReason == nil
+                    && !S25TLineTasks.workOK(work: work, who: items[i].from, due: items[i].due, dueText: items[i].dueText) {
+                    items[i].weakReason = "workNoWhoDue"
+                    Tally.add("task.weak.workNoWhoDue")
                 }
                 found += items
             }
@@ -1753,6 +1761,8 @@ struct TaskBookView: View {
                 if three.contains(where: \.hasHowTo) { Text("押すと、解き方が出ます。") }
             }
         }
+        // 機械が 8 割まで書いた下書き（精算・返事など。押すまで外へは出ない。2026-11-24。s25 の 大8。S25TViews.swift）
+        S25TDraftShelfSection()
         // 確かめ待ちは「今日の候補」（1 日 3 件・仮）だけを上に。残りと「たぶん違う」は畳む。数は出さない（2026-11-24。s24。本人の困りごと）
         let picks = Set(pipeline.tasks.todayCandidates().map(\.id))
         let parts = S24TaskRules.split(book.candidates, today: book.candidates.filter { picks.contains($0.id) }.map(\.id))

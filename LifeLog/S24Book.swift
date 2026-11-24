@@ -211,7 +211,8 @@ extension TaskBook {
     func todayCandidates(now: Date = .now) -> [Item] {
         let all = candidates
         guard S24AskSettings.isOn(S24AskSettings.candidateTodayKey) else { return all }
-        let strong = all.filter { !S24TaskRules.isWeak($0) }
+        // LINE から来た候補（文字なので聞き間違いが無い）を、会話から拾ったものより先に（2026-11-24。s25 の 連2）
+        let strong = S25TLineTasks.lineFirst(all.filter { !S24TaskRules.isWeak($0) })
         let key = "s24.todayCandidates"
         let picks = S24TaskRules.todayPicks(strong: strong, saved: UserDefaults.standard.string(forKey: key),
                                             day: ReviewRules.dayKey(now))

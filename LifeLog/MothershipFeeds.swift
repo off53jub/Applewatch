@@ -89,6 +89,8 @@ struct PrepItem: Codable, Equatable, Identifiable {
     var last_talk: LastTalk? = nil
     var promises: [String] = []
     var recent: [String] = []
+    /// その相手との直近の LINE の要点（省ける。2026-11-24。s25 の 連4）
+    var line: [String]? = nil
 }
 
 struct PrepFeed: Codable, Equatable {
@@ -228,6 +230,8 @@ enum MothershipFeeds {
         var last_talk: LossyRow<RawLastTalk>?
         var promises: [LossyRow<String>]?
         var recent: [LossyRow<String>]?
+        /// その相手との直近の LINE の要点（母艦が足す見込みの省ける項目。形は決めずに読む。2026-11-24。s25 の 連4）
+        var line: S25TPrepLineField?
     }
 
     private struct RawLastTalk: Decodable {
@@ -446,10 +450,13 @@ enum MothershipFeeds {
         if let l = raw.last_talk?.value, let d = day(l.day), let summary = cut(l.summary, 200) {
             last = PrepItem.LastTalk(day: d, summary: summary)
         }
-        return PrepItem(id: id, start: start, end: end, title: title,
-                        people: strings(raw.people, limit: prepListLimit, chars: 20), last_talk: last,
-                        promises: strings(raw.promises, limit: prepListLimit, chars: 80),
-                        recent: strings(raw.recent, limit: prepListLimit, chars: 80))
+        var item = PrepItem(id: id, start: start, end: end, title: title,
+                            people: strings(raw.people, limit: prepListLimit, chars: 20), last_talk: last,
+                            promises: strings(raw.promises, limit: prepListLimit, chars: 80),
+                            recent: strings(raw.recent, limit: prepListLimit, chars: 80))
+        // LINE の要点（無ければ出さない。2026-11-24。s25 の 連4）
+        if let line = raw.line?.lines, !line.isEmpty { item.line = line }
+        return item
     }
 
     /// GET /prep の答え。始まりの早い順に10件まで
@@ -619,6 +626,8 @@ enum MothershipOutbox {
         "check": ["right", "wrong", "unsure"],
         // 見立ての ○×（1）・抜き打ち検査（81）（2026-11-19。s18。KnowMe.swift）
         "hypothesis": ["right", "wrong", "unsure"], "spot": ["right", "wrong", "unsure"],
+        // 下書きの棚の答え（2026-11-24。s25 の 大8・取り決め K2。S25TBook.swift）
+        "draft": ["sent", "edited", "dropped"],
     ]
     static let appEvents: [String] = ["open", "close", "focus_on", "focus_off"]
 
@@ -1386,6 +1395,7 @@ struct PrepCardSection: View {
                 PrepCard(item: item)
                 PrepPeopleLinks(names: item.people)  // 相手の人のページ（2026-11-15。強化案 53。PagesFeeds.swift）
                 PrepWhereRows(item: item)  // 行き先と、前にそこへ行った日（2026-11-16。強化案 138。PrepWhere.swift）
+                S25TMeetVoiceRows(names: item.people)  // 会ったその場で 1 タップで声を登録（2026-11-24。s25 の 大9）
             } header: {
                 Text("次の予定の前に")
             }
@@ -1411,6 +1421,7 @@ struct PrepCard: View {
             }
             PrepLines(title: "約束", lines: item.promises)
             PrepLines(title: "近ごろ", lines: item.recent)
+            PrepLines(title: "LINE", lines: item.line ?? [])  // 直近の LINE の要点（届いたときだけ。2026-11-24。s25 の 連4）
             FeedbackButtons(kind: "prep", id: item.id)
         }
         .padding(.vertical, 2)

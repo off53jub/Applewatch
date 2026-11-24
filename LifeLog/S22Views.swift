@@ -422,6 +422,8 @@ struct S22SettingEntry: Identifiable {
         // 今日は上の 3 枚だけ・入口は 5 つまで（2026-11-24。s24 の 形1・形5。初めはオン。切ると前の並び）
         defaults(S24Today.foldKey, "今日は上の 3 枚だけ（ほかは畳む）", "見た目", true),
         defaults(S24Entries.limitKey, "入口は 5 つまで（ほかは「ほか」に）", "見た目", true),
+        // 録音中に、話している相手の名前・前に話したこと・約束を時計に静かに出す（2026-11-24。s25 の 大10。初めはオフ）
+        defaults(S25TWhisperRules.onKey, "録音中に、話している相手を時計に（耳打ち）", "時計", false),
     ]
 }
 
@@ -458,22 +460,20 @@ struct S22SettingsSearchView: View {
                     Button("全部初めに戻す", role: .destructive) { resetAll = true }
                 }
             }
+            // 30 日触っていないスイッチは「くわしい」の奥へ（消さない。探すとき・変えた所だけのときは全部。2026-11-24。s25 の 片5）
+            let fold = S25TSettingsFold.split(entries.map(\.id), sums: Tally.sums(days: S25TSettingsFold.days),
+                                              changed: Set(entries.filter { $0.get(pipeline) != $0.defaultOn }.map(\.id)),
+                                              today: ReviewRules.dayKey(.now), searching: !query.isEmpty || changedOnly)
+            let shown = Set(fold.shown)
             Section {
-                ForEach(entries) { entry in
-                    let on = entry.get(pipeline)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Toggle(entry.label, isOn: Binding(get: { on }, set: { ask(entry, $0) }))
-                        HStack {
-                            Text(entry.group + "・初めは" + (entry.defaultOn ? "オン" : "オフ")).font(.caption2).foregroundStyle(LL.dim)
-                            Spacer()
-                            if on != entry.defaultOn {
-                                Button("初めに戻す") { apply(entry, entry.defaultOn) }.font(.caption).buttonStyle(.borderless)
-                            }
-                        }
+                ForEach(entries.filter { shown.contains($0.id) }) { entry in settingRow(entry) }
+                if !fold.deep.isEmpty {
+                    DisclosureGroup("くわしい（30 日触っていない \(fold.deep.count) 個）") {
+                        ForEach(entries.filter { !shown.contains($0.id) }) { entry in settingRow(entry) }
                     }
                 }
             } footer: {
-                Text("ここに無い設定は「くわしい設定」から。電池と速さに効くスイッチは、変える前に見込み（仮）を出します。")
+                Text("スイッチは \(S22SettingEntry.all.count) 個。30 日触っていないものは「くわしい」に畳んでいます（消していません）。ここに無い設定は「くわしい設定」から。電池と速さに効くスイッチは、変える前に見込み（仮）を出します。")
             }
         }
         .id(version)
@@ -495,6 +495,20 @@ struct S22SettingsSearchView: View {
                 version += 1
             }
             Button("やめる", role: .cancel) {}
+        }
+    }
+
+    private func settingRow(_ entry: S22SettingEntry) -> some View {
+        let on = entry.get(pipeline)
+        return VStack(alignment: .leading, spacing: 4) {
+            Toggle(entry.label, isOn: Binding(get: { on }, set: { ask(entry, $0) }))
+            HStack {
+                Text(entry.group + "・初めは" + (entry.defaultOn ? "オン" : "オフ")).font(.caption2).foregroundStyle(LL.dim)
+                Spacer()
+                if on != entry.defaultOn {
+                    Button("初めに戻す") { apply(entry, entry.defaultOn) }.font(.caption).buttonStyle(.borderless)
+                }
+            }
         }
     }
 

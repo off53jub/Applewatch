@@ -120,6 +120,8 @@ struct LifeLogApp: App {
         S22Book.install(pipeline, live: !Self.testing && !Self.demo)
         // s23（2026-11-23。S23Notices.swift）: 5 分ごとの見回り（何人でしたか・夜の名前の無い場所・確かめの自動の ○・版）
         S23Book.install(pipeline, live: !Self.testing && !Self.demo)
+        // s25 の A1（2026-11-24。S25TBook.swift）: LINE のタスク候補・下書きの棚を読む・録音中の耳打ち（初めはオフ）
+        S25TBook.install(pipeline, live: !Self.testing && !Self.demo)
         if !Self.testing && !Self.demo {
             Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
                 Task { @MainActor in pipeline.updateHold() }
@@ -141,11 +143,16 @@ struct LifeLogApp: App {
                     .s22Root(pipeline)
                     // 知らせを押したあとの画面（2026-11-23。s23 の 知2〜知7。S23Screens.swift）
                     .s23Root(pipeline)
+                    // LINE の「トーク履歴を送信」で受けた .txt を家の PC へ送るか（2026-11-24。s25 の 連6。S25TViews.swift）
+                    .s25tRoot(pipeline)
                     // 開くときに Face ID（設定でオンにしたときだけ。録音と裏の処理は止めない）
                     .modifier(AppLock())
                     // lifelog:// はウィジェットから（2026-11-12。NoticeActions.swift の NoticeRoute.route(url:)）。ほかは Google のログイン
                     .onOpenURL { url in
-                        if let route = NoticeRoute.route(url: url) {
+                        // 共有で受けたファイル（LINE のトーク履歴の .txt。2026-11-24。s25 の 連6）
+                        if url.isFileURL {
+                            S25TShareBox.shared.received(url)
+                        } else if let route = NoticeRoute.route(url: url) {
                             pipeline.openRoute(route)
                         } else {
                             GIDSignIn.sharedInstance.handle(url)

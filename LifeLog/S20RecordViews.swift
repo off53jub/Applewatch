@@ -401,6 +401,8 @@ struct UnifiedSearchView: View {
                     }
                     ForEach(hits.prefix(30)) { HitRow(hit: $0) }
                 } header: { LLHeader(title: "言葉", symbol: "text.magnifyingglass", trailing: hits.isEmpty ? nil : "\(hits.count) 件") }
+                // 家の PC の記録（母艦）も言葉で引く（押したときだけ。2026-11-24。s25 の 活5）
+                S25TMotherSearchSection(query: q)
             }
         }
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "人・場所・日・言葉")
