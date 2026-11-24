@@ -1,0 +1,112 @@
+name: Nightly
+
+# s25 の 大6（2026-11-24）: 毎晩の通し試験。見本の 1 日（作り物の音声・LINE のトーク履歴・位置）を
+# 録音 → 文字 → 人 → タスク → 便り の順に通して、どこまで届いたかを、版ごとに並べる（pc/s25c_nightly.py）。
+# - 動かすのは GitHub の Windows の機械（家の PC・母艦・本物の記録には触らない。言語モデルも呼ばない）
+# - 結果は実行のまとめ（版ごとの表）と成果物「通し試験の結果」（history.jsonl に前の回から足していく。60 回まで）
+# - 1 行の印「S25C_NIGHTLY: version=… commit=… ok=… ng=… skip=…」をログとまとめに出す（母艦が探せる）
+# - 赤にはしない（どの手順も continue-on-error。落ちたかは表の × で見る）。毎晩の失敗のメールで知らせが増えないように
+# - 初めはオン。止めるときは、リポジトリの変数 S25C_NIGHTLY を off にする（Settings → Secrets and variables → Actions → Variables）
+on:
+  schedule:
+    # 毎晩 3:30（日本時間。UTC 18:30）
+    - cron: '30 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    if: ${{ vars.S25C_NIGHTLY != 'off' }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 部品を入れる
+        continue-on-error: true
+        run: python -m pip install -r pc/requirements.txt
+
+      # モデルは PC の実行（pc.yml）が作り置いたものを読むだけ（ここでは書かない）
+      - uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: |
+            ~/AppData/Local/LifeLogPC/model
+            ~/AppData/Local/LifeLogPC/reazon
+            ~/AppData/Local/LifeLogPC/whisper
+            ~/AppData/Local/LifeLogPC/speaker
+            ~/AppData/Local/LifeLogPC/tagging
+            ~/AppData/Local/LifeLogPC/enhance
+            ~/AppData/Local/LifeLogPC/vad
+          key: lifelog-pc-models-${{ hashFiles('pc/lifelog_pc.py') }}
+          restore-keys: lifelog-pc-models-
+
+      - name: モデルを取ってくる
+        continue-on-error: true
+        run: |
+          python pc/lifelog_pc.py --download > dl.txt 2>&1 || { tail -c 2000 dl.txt; exit 1; }
+          tail -3 dl.txt
+
+      - name: 録音 → 文字（見本の音声）
+        continue-on-error: true
+        run: |
+          python pc/lifelog_pc.py --test pc/testdata/sample.m4a --hints "今日、会議、東京" --enhance > test.txt 2>&1 || { tail -c 2000 test.txt; rm -f test.txt; exit 1; }
+          cat test.txt
+
+      - name: 声の特徴
+        continue-on-error: true
+        run: |
+          python pc/lifelog_pc.py --check-extras pc/testdata/sample.m4a > extras.txt 2>&1 || { tail -c 2000 extras.txt; exit 1; }
+          grep -E '^(OK|NG|話し手)' extras.txt | head -20
+
+      - name: 前の回の結果を取る
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p prev
+          for id in $(gh run list --repo "$REPO" --workflow nightly.yml --status completed --limit 10 --json databaseId --jq '.[].databaseId'); do
+            [ "$id" = "${{ github.run_id }}" ] && continue
+            if gh run download "$id" --repo "$REPO" -n "通し試験の結果" -D prev 2>/dev/null; then echo "前の結果: 実行 $id"; break; fi
+          done
+          ls -la prev || true
+
+      - name: 通して、版ごとに並べる
+        continue-on-error: true
+        run: |
+          mkdir -p out
+          args=(--out out/result.json --history-out out/history.jsonl --summary "$GITHUB_STEP_SUMMARY")
+          [ -f test.txt ] && args+=(--asr test.txt)
+          [ -f extras.txt ] && args+=(--extras extras.txt)
+          [ -f prev/history.jsonl ] && args+=(--history-in prev/history.jsonl)
+          python pc/s25c_nightly.py "${args[@]}" | tee out/log.txt
+          mark=$(grep -m1 '^S25C_NIGHTLY:' out/log.txt || true)
+          [ -n "$mark" ] && echo "::notice::$mark"
+          # 前の結果が取れなかった晩は、そこから並べ直しになる（前の成果物は 90 日残るので、手で取って足せる）
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: 通し試験の結果
+          path: out
+          retention-days: 90
+          if-no-files-found: warn

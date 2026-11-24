@@ -61,6 +61,8 @@ struct LifeLogApp: App {
         if !Self.testing && !Self.demo { BackupKeeper.applyPendingRestore() }
         #if DEBUG && targetEnvironment(simulator)
         if Self.demo { DemoData.install() }
+        // s25 の 堅6: UI テストの見本を足す（S25CUIHooks.swift。引数があるときだけ）
+        if Self.demo { S25CUIHooks.afterDemoInstall() }
         #endif
         let pipeline = Pipeline()
         #if DEBUG && targetEnvironment(simulator)
@@ -120,6 +122,10 @@ struct LifeLogApp: App {
         S22Book.install(pipeline, live: !Self.testing && !Self.demo)
         // s23（2026-11-23。S23Notices.swift）: 5 分ごとの見回り（何人でしたか・夜の名前の無い場所・確かめの自動の ○・版）
         S23Book.install(pipeline, live: !Self.testing && !Self.demo)
+        #if DEBUG && targetEnvironment(simulator)
+        // s25 の 堅6: UI テストで、知らせを押したときと同じ道で画面を開く（S25CUIHooks.swift。引数があるときだけ）
+        if Self.demo { S25CUIHooks.start(pipeline) }
+        #endif
         if !Self.testing && !Self.demo {
             Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
                 Task { @MainActor in pipeline.updateHold() }
