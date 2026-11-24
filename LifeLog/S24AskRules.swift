@@ -9,7 +9,7 @@ import UserNotifications
 
 // MARK: - 設定の名前（UserDefaults）
 
-enum S24Settings {
+enum S24AskSettings {
     /// 減1 本人に聞く問いの、全部を合わせた 1 日の上限（仮 3。設定で 1〜10）
     static let questionCapKey = "s24.questionCap"
     static let questionCapDefault = 3

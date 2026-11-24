@@ -77,7 +77,7 @@ final class S20Book {
     /// 「同じ人か」は設定でだけ出す（取り決め C4）・答えで直る行の多い順（2026-11-24。s24 の 当1・減2。S24Rules.swift）
     func openItems(now: Date = .now) -> [ReviewItem] {
         let visible = ReviewRules.visible(review?.items ?? [], answered: Set(answered.keys), later: later, now: now)
-        return S24AskRules.reviewItems(visible, samePersonAsk: S24Settings.isOn(S24Settings.samePersonAskKey),
+        return S24AskRules.reviewItems(visible, samePersonAsk: S24AskSettings.isOn(S24AskSettings.samePersonAskKey),
                                        today: ReviewRules.dayKey(now))
     }
 

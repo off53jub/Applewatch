@@ -18,7 +18,7 @@ extension Pipeline {
             ("話し手の疑い", speakerDoubtCount),
             // 2026-11-15（強化案 56）: 日をまたぐ組と「◯◯さんかも」も同じ段で数える
             // 「同じ人か」は設定でだけ出す（取り決め C4。初めはオフ。2026-11-24。s24 の 当1）
-            ("同じ人かも", S24Settings.isOn(S24Settings.samePersonAskKey) ? samePersonGroups.count + samePersonMaybes.count : 0),
+            ("同じ人かも", S24AskSettings.isOn(S24AskSettings.samePersonAskKey) ? samePersonGroups.count + samePersonMaybes.count : 0),
             // 正しさの抜き取り（2026-11-15。強化案 41。SettleFeeds.swift。まだ答えていない日の1つ）
             ("合ってる？", pendingCheckCount),
             // 自分を知る（2026-11-19。s18。KnowMe.swift。今日の問い・今週の見立て・抜き打ちのまだの数）
@@ -49,7 +49,7 @@ extension Pipeline {
             }
         }
         // 問いの全体の上限（1 日 3 問・仮）を超えない。今日すでに知らせで聞いた分は引く（2026-11-24。s24 の 減1・減4）
-        return S24AskRules.badge(NightReviewRules.badge(counts, cap: FixView.dailyCap), cap: S24Settings.questionCap,
+        return S24AskRules.badge(NightReviewRules.badge(counts, cap: FixView.dailyCap), cap: S24AskSettings.questionCap,
                                  asked: S24Gate.counts().asked)
     }
 
@@ -147,7 +147,7 @@ struct FixView: View {
             // 話し手の疑い（家の PC から。2026-11-13。HomeFeeds.swift）。名前は自動では変えない
             SpeakerDoubtsSection()
             // 同じ人かも（家の PC から。2026-11-13。SamePerson.swift）。押すまでは何も変えない
-            if S24Settings.isOn(S24Settings.samePersonAskKey) { SamePersonSection() }
+            if S24AskSettings.isOn(S24AskSettings.samePersonAskKey) { SamePersonSection() }
             // 合ってる？（家の PC から1日1つ。2026-11-15。強化案 41。SettleFeeds.swift）
             CheckClaimSection()
             // 自分を知る（2026-11-19。s18。KnowMeViews.swift）

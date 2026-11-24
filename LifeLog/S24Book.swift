@@ -59,8 +59,8 @@ enum S24Gate {
             // 今日もう聞いた同じ問い（「あとで」の出し直しなど）は、もう 1 問とは数えない
             let again = lane == .question && askedList.contains(key)
             let d = S24NoticeRules.decide(lane: lane, immediate: immediate, asked: again ? 0 : askedList.count, shown: shownCount,
-                                          questionCap: S24Settings.questionCap,
-                                          dailyCapOn: S24Settings.isOn(S24Settings.dailyCapOnKey), quiet: quiet)
+                                          questionCap: S24AskSettings.questionCap,
+                                          dailyCapOn: S24AskSettings.isOn(S24AskSettings.dailyCapOnKey), quiet: quiet)
             if d == .pass {
                 if lane == .question {
                     let merged = S24AskRules.daySet(adding: [key], saved: UserDefaults.standard.string(forKey: askedKey), day: day)
@@ -103,10 +103,10 @@ enum S24Gate {
     /// 形6・形7 題の頭の印と、時計を震わせない（録音・期限・急ぎ以外は静かに届ける）。何度通しても同じ
     static func style(_ content: UNMutableNotificationContent, id: String) {
         let lane = S24NoticeRules.lane(identifier: id, category: content.categoryIdentifier, userInfo: content.userInfo)
-        if S24Settings.isOn(S24Settings.marksKey), !content.title.isEmpty {
+        if S24AskSettings.isOn(S24AskSettings.marksKey), !content.title.isEmpty {
             content.title = S24NoticeRules.marked(content.title, lane: lane)
         }
-        if S24Settings.isOn(S24Settings.watchQuietKey), S24NoticeRules.quietOnWatch(lane), content.interruptionLevel != .timeSensitive {
+        if S24AskSettings.isOn(S24AskSettings.watchQuietKey), S24NoticeRules.quietOnWatch(lane), content.interruptionLevel != .timeSensitive {
             content.interruptionLevel = .passive
         }
     }
@@ -123,12 +123,12 @@ enum S24Book {
 
     // MARK: 減10 今週は聞かないで
 
-    static func quietNow(_ now: Date = .now) -> Bool { S24Quiet.active(until: S24Settings.quietUntil, now: now) }
+    static func quietNow(_ now: Date = .now) -> Bool { S24Quiet.active(until: S24AskSettings.quietUntil, now: now) }
 
     /// 入れる・やめる。入れたら、もう頼んである問いと便りを取り消す（録音・期限・急ぎは残す）
     static func setQuiet(_ on: Bool, now: Date = .now) {
         if on {
-            UserDefaults.standard.set(S24Quiet.until(from: now).timeIntervalSince1970, forKey: S24Settings.quietUntilKey)
+            UserDefaults.standard.set(S24Quiet.until(from: now).timeIntervalSince1970, forKey: S24AskSettings.quietUntilKey)
             Tally.add("s24.quiet.on")
             let center = UNUserNotificationCenter.current()
             center.getPendingNotificationRequests { pending in
@@ -139,7 +139,7 @@ enum S24Book {
                 center.removePendingNotificationRequests(withIdentifiers: ids)
             }
         } else {
-            UserDefaults.standard.removeObject(forKey: S24Settings.quietUntilKey)
+            UserDefaults.standard.removeObject(forKey: S24AskSettings.quietUntilKey)
             Tally.add("s24.quiet.off")
         }
     }
@@ -210,7 +210,7 @@ extension TaskBook {
     /// 「今日の候補」がオフなら、前のように全部
     func todayCandidates(now: Date = .now) -> [Item] {
         let all = candidates
-        guard S24Settings.isOn(S24Settings.candidateTodayKey) else { return all }
+        guard S24AskSettings.isOn(S24AskSettings.candidateTodayKey) else { return all }
         let strong = all.filter { !S24TaskRules.isWeak($0) }
         let key = "s24.todayCandidates"
         let picks = S24TaskRules.todayPicks(strong: strong, saved: UserDefaults.standard.string(forKey: key),

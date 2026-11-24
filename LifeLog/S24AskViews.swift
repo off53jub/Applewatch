@@ -6,8 +6,8 @@ import SwiftUI
 struct S24TodayQuestionsSection: View {
     /// 直すものがあるか
     let hasAny: Bool
-    @AppStorage(S24Settings.questionCapKey) private var cap = S24Settings.questionCapDefault
-    @AppStorage(S24Settings.quietUntilKey) private var quietUntil: Double = 0
+    @AppStorage(S24AskSettings.questionCapKey) private var cap = S24AskSettings.questionCapDefault
+    @AppStorage(S24AskSettings.quietUntilKey) private var quietUntil: Double = 0
 
     var body: some View {
         let asked = S24Gate.counts().asked
@@ -32,21 +32,21 @@ struct S24TodayQuestionsSection: View {
 
 /// 「知らせの便りと履歴」の上に置く s24 の切り替え
 struct S24NoticeSettingsSection: View {
-    @AppStorage(S24Settings.questionCapKey) private var cap = S24Settings.questionCapDefault
-    @AppStorage(S24Settings.quietUntilKey) private var quietUntil: Double = 0
-    @AppStorage(S24Settings.foundNightKey) private var foundNight = true
-    @AppStorage(S24Settings.dailyCapOnKey) private var dailyCapOn = true
-    @AppStorage(S24Settings.promiseNoticeKey) private var promiseNotice = false
-    @AppStorage(S24Settings.samePersonAskKey) private var samePersonAsk = false
-    @AppStorage(S24Settings.watchQuietKey) private var watchQuiet = true
-    @AppStorage(S24Settings.marksKey) private var marks = true
-    @AppStorage(S24Settings.candidateTodayKey) private var candidateToday = true
+    @AppStorage(S24AskSettings.questionCapKey) private var cap = S24AskSettings.questionCapDefault
+    @AppStorage(S24AskSettings.quietUntilKey) private var quietUntil: Double = 0
+    @AppStorage(S24AskSettings.foundNightKey) private var foundNight = true
+    @AppStorage(S24AskSettings.dailyCapOnKey) private var dailyCapOn = true
+    @AppStorage(S24AskSettings.promiseNoticeKey) private var promiseNotice = false
+    @AppStorage(S24AskSettings.samePersonAskKey) private var samePersonAsk = false
+    @AppStorage(S24AskSettings.watchQuietKey) private var watchQuiet = true
+    @AppStorage(S24AskSettings.marksKey) private var marks = true
+    @AppStorage(S24AskSettings.candidateTodayKey) private var candidateToday = true
 
     var body: some View {
         let quiet = S24Quiet.active(until: quietUntil > 0 ? Date(timeIntervalSince1970: quietUntil) : nil, now: .now)
         let counts = S24Gate.counts()
         Section {
-            Toggle(isOn: Binding(get: { quiet }, set: { S24Book.setQuiet($0); quietUntil = UserDefaults.standard.double(forKey: S24Settings.quietUntilKey) })) {
+            Toggle(isOn: Binding(get: { quiet }, set: { S24Book.setQuiet($0); quietUntil = UserDefaults.standard.double(forKey: S24AskSettings.quietUntilKey) })) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("今週は聞かないで")
                     Text(quiet ? Date(timeIntervalSince1970: quietUntil).formatted(.dateTime.month().day().hour().minute()) + " まで、問いと便りを止めています。"

@@ -245,7 +245,7 @@ final class S24Tests: XCTestCase {
         XCTAssertEqual(S24AskRules.left(cap: 3, asked: 1), 2)
         XCTAssertEqual(S24AskRules.clampCap(0), 1)
         XCTAssertEqual(S24AskRules.clampCap(40), 10)
-        XCTAssertEqual(S24Settings.questionCapDefault, 3)
+        XCTAssertEqual(S24AskSettings.questionCapDefault, 3)
     }
 
     func testAskedSetCountsEachQuestionOnce() {
@@ -274,11 +274,11 @@ final class S24Tests: XCTestCase {
     // MARK: 減5・減8・急3・初めの値
 
     func testDefaults() {
-        XCTAssertEqual(S24Settings.defaults[S24Settings.promiseNoticeKey], false)
-        XCTAssertEqual(S24Settings.defaults[S24Settings.samePersonAskKey], false)
-        XCTAssertEqual(S24Settings.defaults[S24Settings.foundNightKey], true)
-        XCTAssertEqual(S24Settings.defaults[S24Settings.dailyCapOnKey], true)
-        XCTAssertEqual(S24Settings.defaults[S24Settings.candidateTodayKey], true)
+        XCTAssertEqual(S24AskSettings.defaults[S24AskSettings.promiseNoticeKey], false)
+        XCTAssertEqual(S24AskSettings.defaults[S24AskSettings.samePersonAskKey], false)
+        XCTAssertEqual(S24AskSettings.defaults[S24AskSettings.foundNightKey], true)
+        XCTAssertEqual(S24AskSettings.defaults[S24AskSettings.dailyCapOnKey], true)
+        XCTAssertEqual(S24AskSettings.defaults[S24AskSettings.candidateTodayKey], true)
     }
 
     func testOpenedKind() {

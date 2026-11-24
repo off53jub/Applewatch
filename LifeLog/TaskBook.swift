@@ -855,7 +855,7 @@ extension Pipeline {
     func deliverFound(_ added: [TaskBook.Item]) {
         let strong: [TaskBook.Item] = added.filter { !S24TaskRules.isWeak($0) }
         guard !strong.isEmpty else { return }
-        if S24Settings.isOn(S24Settings.foundNightKey) {
+        if S24AskSettings.isOn(S24AskSettings.foundNightKey) {
             S24Book.holdFound(strong.map(\.id), all: tasks.items)
             return
         }
@@ -1301,7 +1301,7 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
         // 出すのは「約束の知らせ」がオンのときだけ（初めはオフ。台帳と一覧の材料は残す。2026-11-24。s24 の 減5・取り決め C5）
         if request.content.categoryIdentifier == PromiseRules.category {
             Task { @MainActor in PromiseInbox.shared.poke() }
-            guard S24Settings.isOn(S24Settings.promiseNoticeKey) else {
+            guard S24AskSettings.isOn(S24AskSettings.promiseNoticeKey) else {
                 Tally.add("s24.promise.silenced")
                 completionHandler([])
                 return
