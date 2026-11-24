@@ -10,7 +10,7 @@ struct TasksWidget: Widget {
             TasksView(entry: entry)
                 .containerBackground(for: .widget) { LLWidgetBackground() }
                 // 押すと「タスク」タブを開く（2026-11-12。LifeLog の NoticeRoute.route(url:)）
-                .widgetURL(URL(string: "lifelog://tasks"))
+                .widgetURL(URL(string: "lifelog://tasks?w=tasks"))
         }
         .configurationDisplayName("LifeLog のやること")
         .description("今日までの頼まれごと（3件まで）と、確かめ待ちの数を出します。押すと LifeLog のタスクを開きます。")

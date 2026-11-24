@@ -9,7 +9,7 @@ struct TodayBandWidget: Widget {
         StaticConfiguration(kind: WidgetState.bandKind, provider: StatusProvider()) { entry in
             TodayBandView(entry: entry)
                 .containerBackground(for: .widget) { Color.clear }
-                .widgetURL(URL(string: "lifelog://today"))
+                .widgetURL(URL(string: "lifelog://today?w=band"))
         }
         .configurationDisplayName("LifeLog の今日の帯")
         .description("今日の会話と録れた時間を、1 本の帯で小さく出します。")

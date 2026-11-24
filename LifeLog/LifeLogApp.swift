@@ -159,6 +159,7 @@ struct LifeLogApp: App {
                         if url.isFileURL {
                             S25TShareBox.shared.received(url)
                         } else if let route = NoticeRoute.route(url: url) {
+                            S26DWidgetUse.noteOpen(url)  // ウィジェットから開いた数（?w=。2026-11-25。s26 の 絵8）
                             pipeline.openRoute(route)
                         } else {
                             GIDSignIn.sharedInstance.handle(url)
@@ -182,6 +183,7 @@ struct LifeLogApp: App {
                 pipeline.processQueue()
                 S22Book.tick()  // ウィジェットの答え・電池の見本（2026-11-22。s22）
                 S23Book.shared.tick()  // 何人でしたか・版など（2026-11-23。s23）
+                S26DWidgetUse.countInstalled()  // 置かれているウィジェットを 1 日 1 回数える（2026-11-25。s26 の 絵8）
             }
             if phase == .background {
                 pipeline.appMovedToBackground()
