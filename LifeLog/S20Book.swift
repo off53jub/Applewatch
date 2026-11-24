@@ -77,8 +77,10 @@ final class S20Book {
     /// 「同じ人か」は設定でだけ出す（取り決め C4）・答えで直る行の多い順（2026-11-24。s24 の 当1・減2。S24Rules.swift）
     func openItems(now: Date = .now) -> [ReviewItem] {
         let visible = ReviewRules.visible(review?.items ?? [], answered: Set(answered.keys), later: later, now: now)
-        return S24AskRules.reviewItems(visible, samePersonAsk: S24AskSettings.isOn(S24AskSettings.samePersonAskKey),
-                                       today: ReviewRules.dayKey(now))
+        let kept = S24AskRules.reviewItems(visible, samePersonAsk: S24AskSettings.isOn(S24AskSettings.samePersonAskKey),
+                                           today: ReviewRules.dayKey(now))
+        // 発言も声も無い「この声は誰？」は後ろへ（消さない。2026-11-25。s26 の S26V）
+        return S26VVoice.order(kept)
     }
 
     /// 確かめ待ちの数（「今日」・時計の文字盤に出す）
