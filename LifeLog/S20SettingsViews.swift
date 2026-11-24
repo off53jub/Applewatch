@@ -139,7 +139,7 @@ struct AppearanceView: View {
             } header: {
                 LLHeader(title: "画面", symbol: "circle.lefthalf.filled")
             } footer: {
-                Text("暗い画面が先（夜の青）。明るい画面も同じ色の意味で作っています。")
+                Text("暗い画面が先（夜の青）。明るい画面も同じ色の意味で作っています。「日なた」は明るい画面の文字をさらに濃く、地を白くします（外で読みやすく）。")
             }
             Section {
                 Toggle("朝・昼・夜で地の色を少し変える", isOn: $dayTint)
@@ -166,6 +166,7 @@ struct AppearanceView: View {
             } header: {
                 LLHeader(title: "色の意味", symbol: "swatchpalette")
             }
+            S26DAppearanceSections()  // 色の役割・震え（2026-11-25。s26 の 絵2・絵7。S26DKit.swift）
         }
         .navigationTitle("見た目")
         .navigationBarTitleDisplayMode(.inline)
@@ -185,7 +186,7 @@ struct AppearanceView: View {
             }
         } label: {
             HStack {
-                RoundedRectangle(cornerRadius: 10).fill(name == nil ? LL.bg : Color(llHex: 0x1C5A9A))
+                RoundedRectangle(cornerRadius: LL.Radius.small).fill(name == nil ? LL.bg : Color(llHex: 0x1C5A9A))
                     .frame(width: 44, height: 44)
                     .overlay(Image(systemName: name == nil ? "waveform.badge.mic" : "waveform").foregroundStyle(name == nil ? LL.accent : Color.white))
                 Text(title).foregroundStyle(LL.text)

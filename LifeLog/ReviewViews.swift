@@ -618,7 +618,7 @@ struct SelfClaimView: View {
                 if on { selected.remove(clip.line.time) } else { selected.insert(clip.line.time) }
             } label: {
                 Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(on ? LL.accent : .secondary)
+                    .foregroundStyle(on ? LL.accent : LL.dim)
             }
             .buttonStyle(.borderless)
             Button {

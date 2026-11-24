@@ -66,7 +66,10 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         # 家の PC が見えない通知を送るのに使うチームの ID（例 ABCDE12345.。2026-11-07）
         AppIdentifierPrefix: $(AppIdentifierPrefix)
-        UILaunchScreen: {}
+        # 起動の画面: 夜の青の地に、アイコンの波の印（2026-11-25。s26 の 絵11。Assets の S26DLaunchBg・S26DLaunchMark）
+        UILaunchScreen:
+          UIColorName: S26DLaunchBg
+          UIImageName: S26DLaunchMark
         # 暗号は HTTPS などの標準のものだけ（TestFlight で毎回聞かれないように。2026-11-07）
         ITSAppUsesNonExemptEncryption: false
         # 画面の向き（TestFlight に上げるのに要る。iPhone は縦だけ、iPad は全部。2026-11-07）

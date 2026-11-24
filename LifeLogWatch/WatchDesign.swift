@@ -13,6 +13,7 @@ extension LLHaptic {
         case .confirm: type = .notification
         case .done: type = .success
         case .failed: type = .failure
+        case .arrived: type = .click  // 届いた（ごく軽く。s26 の 絵7）
         }
         WKInterfaceDevice.current().play(type)
     }

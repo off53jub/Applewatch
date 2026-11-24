@@ -853,7 +853,7 @@ struct S23TodaySection: View {
                 if let newer {
                     VStack(alignment: .leading, spacing: 6) {
                         Label("新しい版（\(newer)）があるようです", systemImage: "arrow.down.app")
-                        HStack {
+                        LLAdaptiveStack(spacing: LL.Space.s) {  // 文字がとても大きいときは縦に（s26 の 絵10）
                             Button("TestFlight を開く") { book.openTestFlight() }.buttonStyle(LLPillButtonStyle(filled: true))
                             Button("この版は知らせない") { book.dismissBuild(newer) }.buttonStyle(LLPillButtonStyle(tint: LL.dim))
                         }
@@ -870,7 +870,7 @@ struct S23TodaySection: View {
                         .buttonStyle(.borderless)
                         if open {
                             Text(pick.how).font(.callout).foregroundStyle(LL.dim)
-                            HStack(spacing: 16) {
+                            LLAdaptiveStack(spacing: LL.Space.l) {  // 文字がとても大きいときは縦に（s26 の 絵10）
                                 Button("確かめた", systemImage: "checkmark") { mark(pick.id, true) }
                                 Button("動かなかった", systemImage: "xmark", role: .destructive) { mark(pick.id, false) }
                                 Button("今日は出さない") { hiddenDay = today }
