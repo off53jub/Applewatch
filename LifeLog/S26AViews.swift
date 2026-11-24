@@ -229,8 +229,6 @@ struct S26ALinkView: View {
                 .navigationBarTitleDisplayMode(.inline)
         case .waiting:
             S26UWaitingView()
-                .navigationTitle("操作待ち")
-                .navigationBarTitleDisplayMode(.inline)
         }
     }
 
