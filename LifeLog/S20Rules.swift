@@ -473,6 +473,20 @@ struct ReviewItem: Codable, Equatable, Identifiable {
     var clips: [Clip]? = nil
     /// この 1 つの答えで直る行の数の見込み（母艦が付けるときだけ。多い順に聞く。2026-11-24。s24 の 減2）
     var impact: Int? = nil
+
+    /// 声の問いのその人の発言（母艦の Build-SpeakerTop.py。3 つまで・別の日を優先。2026-11-25。s26 の S26V）
+    struct Sample: Codable, Equatable {
+        /// "YYYY-MM-DD"
+        var day: String? = nil
+        /// "HH:MM:SS"
+        var time: String? = nil
+        /// 40 字まで
+        var text: String? = nil
+    }
+
+    /// 声の問いの話し手の番号（記録の行の話し手「人物5413」の数字。無い古い問いは nil）
+    var speaker_id: String? = nil
+    var samples: [Sample]? = nil
 }
 
 struct ReviewDone: Codable, Equatable {

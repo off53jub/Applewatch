@@ -257,10 +257,13 @@ struct S23ReviewView: View {
             Section {
                 Text(item?.question ?? fallbackQuestion).font(.title3.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
                 // 声を聞いて答える（voice_pair は 2 つとも聞ける）
-                if let clips = item?.clips, !clips.isEmpty {
+                // 話し手を聞く問いは、発言 → 声 → 名前のボタン（確かめ待ちの画面と同じ部品。2026-11-25。s26 の S26V）
+                if let item, S26VVoice.isVoiceAsk(item) {
+                    S26VVoiceBlock(item: item)
+                } else if let clips = item?.clips, !clips.isEmpty {
                     ClipChooser(clips: clips)
                 }
-                if let evidence = item?.evidence, !evidence.isEmpty {
+                if item.map(S26VVoice.isVoiceAsk) != true, let evidence = item?.evidence, !evidence.isEmpty {
                     ForEach(Array(evidence.prefix(3).enumerated()), id: \.offset) { _, e in
                         Text(e.text).font(.callout).foregroundStyle(LL.dim)
                     }

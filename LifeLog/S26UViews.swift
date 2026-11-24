@@ -285,7 +285,9 @@ enum S26UPileSource {
     static func cards(_ pipeline: Pipeline, now: Date = .now) -> [S26UPile.Card] {
         let today = ReviewRules.dayKey(now)
         var groups: [S26UPile.Kind: [S26UPile.Card]] = [:]
-        groups[.review] = S20Book.shared.openItems(now: now).map { S26UPile.Card(kind: .review, id: $0.id, impact: $0.impact) }
+        // 発言も声も無い「この声は誰？」は答えられないので山に出さない（確かめ待ちの画面には後ろに残る。s26 の S26V）
+        groups[.review] = S26VVoice.forPile(S20Book.shared.openItems(now: now))
+            .map { S26UPile.Card(kind: .review, id: $0.id, impact: $0.impact) }
         groups[.listen] = pipeline.reviewNudge.items(for: today).filter { !$0.isAnswered }
             .map { S26UPile.Card(kind: .listen, id: $0.id) }
         groups[.ask] = pipeline.asks.open.filter { !$0.choices.isEmpty }.map { S26UPile.Card(kind: .ask, id: $0.id) }
@@ -381,6 +383,10 @@ struct S26UPileView: View {
                 .fixedSize(horizontal: false, vertical: true)
             if let detail = detail(c) {
                 Text(detail).font(.callout).foregroundStyle(LL.dim).fixedSize(horizontal: false, vertical: true)
+            }
+            // 話し手を聞く問いは、発言 3 つ → 声 → 名前のボタン（確かめ待ちの画面と同じ部品。2026-11-25。s26 の S26V）
+            if c.kind == .review, let item = reviewItem(c.id), S26VVoice.isVoiceAsk(item) {
+                S26VVoiceBlock(item: item)
             }
             buttons(c)
         }
