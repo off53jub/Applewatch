@@ -762,6 +762,7 @@ enum MothershipOutbox {
         guard let data = try? JSONEncoder().encode(list) else { return }
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: url, options: .atomic)
+        WriteMeter.note("outbox", data.count)  // まだ測っていなかった（2026-11-25。s26 の 軽10）
     }
 
     /// 1つためる（すぐには送らない。送るのは send）

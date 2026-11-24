@@ -51,20 +51,38 @@ struct S21PresetSection: View {
     }
 
     private func apply(_ preset: S21Preset) {
-        let v = preset.values(hasCloudKey: pipeline.settings.hasAPIKey)
-        if let x = v.chunkLength { pipeline.chunkLength = x }
-        if let x = v.batterySaver { pipeline.chunkBatterySaver = x }
-        if let x = v.skipSilence { pipeline.skipSilence = x }
-        if let x = v.dropNoVoice { pipeline.dropNoVoice = x }
-        if let x = v.standby { pipeline.standbyOn = x }
-        if let x = v.watchDirect { pipeline.homePC.watchDirect = x }
-        if let x = v.watchRelay { pipeline.homePC.watchRelay = x }
-        if let x = v.useCloud, pipeline.settings.hasAPIKey { pipeline.settings.useCloud = x }
-        if let x = v.correction, pipeline.llmKey != nil { pipeline.correctionOn = x }
-        if let x = v.speakers { pipeline.speakerLabelsOn = x }
+        let count = pipeline.applyPreset(preset)
         LLHaptic.done.play()
+        note = "「\(preset.label)」にしました（\(count) 個のスイッチ。時計には、つながったときに伝わります）"
+    }
+}
+
+extension Pipeline {
+    /// 録り方の組をまとめて切り替える（設定・「今日」・コントロールセンターから同じ道で。2026-11-25。s26 の 軽3）。変えたスイッチの数
+    @discardableResult
+    func applyPreset(_ preset: S21Preset) -> Int {
+        let v = preset.values(hasCloudKey: settings.hasAPIKey)
+        if let x = v.chunkLength { chunkLength = x }
+        if let x = v.batterySaver { chunkBatterySaver = x }
+        if let x = v.skipSilence { skipSilence = x }
+        if let x = v.dropNoVoice { dropNoVoice = x }
+        if let x = v.standby { standbyOn = x }
+        if let x = v.watchDirect { homePC.watchDirect = x }
+        if let x = v.watchRelay { homePC.watchRelay = x }
+        if let x = v.useCloud, settings.hasAPIKey { settings.useCloud = x }
+        if let x = v.correction, llmKey != nil { correctionOn = x }
+        if let x = v.speakers { speakerLabelsOn = x }
         Tally.add("s21.preset." + preset.rawValue)
-        note = "「\(preset.label)」にしました（\(v.count) 個のスイッチ。時計には、つながったときに伝わります）"
+        return v.count
+    }
+
+    /// いまの組（自分で選んだ組なら nil）
+    var currentPreset: S21Preset? {
+        S21Preset.matching(S21Preset.Values(chunkLength: chunkLength, batterySaver: chunkBatterySaver, skipSilence: skipSilence,
+                                            dropNoVoice: dropNoVoice, standby: standbyOn, watchDirect: homePC.watchDirect,
+                                            watchRelay: homePC.watchRelay, useCloud: settings.useCloud, correction: correctionOn,
+                                            speakers: speakerLabelsOn),
+                           hasCloudKey: settings.hasAPIKey)
     }
 }
 

@@ -67,7 +67,9 @@ struct ChunkCutter {
     /// 実際に使う長さ（設定が短めでも、電池のために5分にしているあいだは、ふつう）。
     /// 録り方の実験の日（2026-11-15。RecordingExperiment）は、その日の組の長さ（電池のための5分は、それより優先）
     static var current: Length {
-        let planned: Length = RecordingExperiment.length(base: length, combo: RecordingExperiment.current())
+        let local: Length = RecordingExperiment.length(base: length, combo: RecordingExperiment.current())
+        // iPhone の録り方の指図があれば、それに従う（時計だけ。古い・無いときは今までの決まり。2026-11-25。s26 の 軽6。S26UWatchPlan）
+        let planned: Length = S26UWatchPlan.length(local: local, plan: S26UWatchPlan.saved, meeting: RecordingExperiment.meetingNow, now: .now)
         // 寝ている時間（1:00〜6:00・充電していない）も 5 分に（2026-11-22。s21 の 電3。時計だけが入れる）
         let sleeping: Bool = UserDefaults.standard.bool(forKey: S21Watch.sleepSavingKey)
         return effective(planned, saving: batterySaving || sleeping)
@@ -114,6 +116,8 @@ struct ChunkCutter {
         S23Rec.addSettings(to: &context)
         // 時計に溜まり続けたら時計が自分で送り直す（2026-11-24。s24 の 急6。初めはオン）
         S24Watch.addSettings(to: &context)
+        // その日の録り方の指図（区切りの長さ・音質。新しい時計だけが読む。2026-11-25。s26 の 軽6。S26UWatchPlan）
+        S26UWatchPlan.addSettings(to: &context)
     }
 
     /// 時計が iPhone から届いた設定を読む（区切りの長さと「電池が少ないときは5分に」。次の区切りから効く）
@@ -128,6 +132,7 @@ struct ChunkCutter {
         S22Watch.readSettings(context)
         S23Rec.readSettings(context)
         S24Watch.readSettings(context)
+        S26UWatchPlan.readSettings(context)
     }
 
     /// 静かな瞬間をこれだけ待つ

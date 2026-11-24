@@ -413,9 +413,13 @@ struct DiagnosticsView: View {
     @State private var items: [DiagnosticItem] = []
     @State private var writing = false
     @State private var note: String?
+    /// 本人が何もできない ok でない行は畳む（2026-11-25。s26 の 軽10。初めはオン。S26UViews.swift）
+    @AppStorage(S26UCheckRows.key) private var foldNoAction = true
 
     var body: some View {
-        let sections = items.reduce(into: [String]()) { if !$0.contains($1.section) { $0.append($1.section) } }
+        let split = S26UCheckFold.split(items, on: foldNoAction)
+        let rows = split.shown
+        let sections = rows.reduce(into: [String]()) { if !$0.contains($1.section) { $0.append($1.section) } }
         LLForm {
             // 6 つの丸の信号（2026-11-22。s22 の 見6・見7。S22DesignKit.swift）。数えているあいだは骨組み（見14）
             if items.isEmpty {
@@ -441,7 +445,7 @@ struct DiagnosticsView: View {
             S22CheckupTopSection(items: items)
             ForEach(sections, id: \.self) { section in
                 Section(section) {
-                    ForEach(items.filter { $0.section == section }) { item in
+                    ForEach(rows.filter { $0.section == section }) { item in
                         HStack(alignment: .firstTextBaseline) {
                             // 赤は自分で動くものだけ・待てば直るものは灰色（2026-11-22。s22 の 見7）
                             if item.ok != nil {
@@ -461,9 +465,11 @@ struct DiagnosticsView: View {
                     }
                 }
             }
+            S26UFoldedCheckSection(items: split.folded)
         }
         .navigationTitle("自己点検")
         .countsOpen("diagnostics")
+        .s26uHelp("diagnostics")
         .task {
             items = await pipeline.diagnosticItems()
             // 学び直しの材料の数を家の PC に聞き直して、出し直す（家の PC を使っていて、少し聞いていないときだけ。2026-11-07）

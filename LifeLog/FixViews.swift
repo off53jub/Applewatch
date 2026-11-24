@@ -81,6 +81,8 @@ struct FixTab: View {
 struct FixView: View {
     @Environment(Pipeline.self) private var pipeline
     @State private var reviewCount = 0
+    /// 答えるものを 1 つの山に（2026-11-25。s26 の 軽4。初めはオン。S26UViews.swift）
+    @AppStorage(S26UPile.key) private var pileOn = true
     /// 1日にやる数の目安（画面の案内とタブの数字）
     static let dailyCap = 5
 
@@ -103,7 +105,7 @@ struct FixView: View {
             // 確かめ待ちを 1 つの列で ○×（2026-11-21。s20 の 次3・体11〜15。S20ReviewViews.swift）
             // 今日の 3 問（仮）と「今週は聞かないで」（2026-11-24。s24 の 減1・減4・減10。S24Views.swift）
             S24TodayQuestionsSection(hasAny: total > 0)
-            ReviewDeckEntrySection()
+            if pileOn { S26UPileEntrySection() } else { ReviewDeckEntrySection() }
             if total == 0 {
                 Section {
                     ContentUnavailableView("今は直すものはありません", systemImage: "checkmark.circle",
@@ -232,6 +234,7 @@ struct FixView: View {
         }
         .navigationTitle("直す")
         .countsOpen("confirmBox")
+        .s26uHelp("confirmBox")
         // すべての日を読むので、1 日ごとに譲る（2026-11-16）
         .task(id: pipeline.people.flatMap(\.samples)) {
             if let count = await pipeline.voiceReviewCount() { reviewCount = count }

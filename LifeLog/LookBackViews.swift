@@ -123,6 +123,7 @@ struct LookBackTab: View {
             }
             .navigationTitle("ふり返り")
             .countsOpen("lookBack")
+            .s26uHelp("lookBack")
             .settingsGear()
         }
     }

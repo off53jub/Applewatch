@@ -224,6 +224,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         out[HolidayRules.autoResumedKey] = HolidayRules.count(counts, HolidayRules.autoResumedKey, day: today)
         if let last = defaults.string(forKey: HolidayRules.lastStallKey) { out[HolidayRules.lastStallKey] = last }
         if let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String { out[HolidayRules.watchBuildKey] = build }
+        // iPhone の録り方の指図で動けるか・いま動いているか（2026-11-25。s26 の 軽6。古い iPhone のアプリは読み飛ばす）
+        for (key, value) in S26UWatchPlan.watchState(now: now) { out[key] = value }
         if let samples = defaults.array(forKey: Self.batterySamplesKey) as? [[Double]], !samples.isEmpty {
             out[HolidayRules.batteryAtKey] = samples
         }

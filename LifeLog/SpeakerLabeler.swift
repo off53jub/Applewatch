@@ -105,10 +105,15 @@ actor SpeakerLabeler {
     private func isOwnID(_ n: Int) -> Bool { idFloor >= 100_000 ? n >= 100_000 : n < 100_000 }
 
     private func allocateID() -> String {
-        let n = max(store.nextID, idFloor)
+        // 次の番号は小さい控えにもすぐ残す（声の帳はまとめて書くので、落ちても番号を使い回さないように。2026-11-25。s26 の 軽10）
+        let n = max(store.nextID, idFloor, UserDefaults.standard.integer(forKey: Self.nextIDKey))
         store.nextID = n + 1
+        UserDefaults.standard.set(n + 1, forKey: Self.nextIDKey)
         return String(n)
     }
+
+    /// 次の番号の控え（UserDefaults。声の帳より先に進むことがある）
+    static let nextIDKey = "s26u.speakerNextID"
 
     /// 人を消し、ほかの端末にも消したと伝える印を残す。
     private func forget(where match: (Person) -> Bool) {
@@ -1218,12 +1223,17 @@ actor SpeakerLabeler {
     // 2026-11-16: 書き込み過多（iPhone が 1 日に 16GB を超えて書いた）の 3 割がここだった。区切りを聞き分けるたびに、
     // 覚えている人の全部（声の特徴つき）を書き直していた。人の番号・名前・隠す印・本人が直した声（pinned）が変わったときは
     // すぐ書き、声の特徴の覚え足しだけのときは saveDelay まとめて書く（落ちても失うのは数分の覚え足しだけで、番号は使い回さない）
-    private static let saveDelay: Duration = .seconds(180)
+    // 2026-11-25（s26 の 軽10）: それでも 11/22 は 1 日に 650MB（帳が 1MB を超え、名前の無い新しい声が増えるたびにすぐ書いていた）。
+    // 名前の無い声が増えた・番号が進んだだけのときはまとめて書く（番号は allocateID が小さい控えに残すので使い回さない）。
+    // まとめる間は帳の大きさから決める（S26UWrite.delay。1 日 100MB・仮。長くても 30 分）
+    private static let saveDelay: TimeInterval = 180
     private var savedShape: String?
     private var saveTask: Task<Void, Never>?
+    private var lastSavedBytes = 0
 
     private static func shape(_ s: Store) -> String {
-        "\(s.nextID)|" + s.people.map { "\($0.id):\($0.name ?? ""):\($0.hidden == true ? 1 : 0):\($0.pinnedCount)" }
+        let kept = s.people.filter { $0.id == selfID || $0.name != nil || $0.hidden == true || $0.pinnedCount > 0 }
+        return "\(s.removed?.count ?? 0)|" + kept.map { "\($0.id):\($0.name ?? ""):\($0.hidden == true ? 1 : 0):\($0.pinnedCount)" }
             .joined(separator: ",")
     }
 
@@ -1234,8 +1244,9 @@ actor SpeakerLabeler {
             return
         }
         guard saveTask == nil else { return }
+        let wait = S26UWrite.delay(base: Self.saveDelay, lastBytes: lastSavedBytes)
         saveTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.saveDelay)
+            try? await Task.sleep(for: .seconds(wait))
             await self?.saveNow()
         }
     }
@@ -1247,6 +1258,7 @@ actor SpeakerLabeler {
         guard let loadedStore, let data = try? JSONEncoder().encode(loadedStore) else { return }
         try? data.write(to: Self.storeURL, options: .atomic)
         WriteMeter.note("speakers", data.count)  // 書き込みの多い所を測る（2026-11-22。s21 の 速5）
+        lastSavedBytes = data.count
         savedShape = Self.shape(loadedStore)
     }
 }

@@ -80,20 +80,30 @@ struct S20SettingsSection: View {
     }
 
     private func apply(_ scene: LifeScene) {
+        let count = pipeline.applyScene(scene)
+        current = scene.rawValue
+        LLHaptic.done.play()
+        changed = "\(scene.label)にしました（\(count) 個のスイッチ）"
+    }
+}
+
+extension Pipeline {
+    /// 場面のセットをまとめて切り替える（設定と「今日」から同じ道で。2026-11-25。s26 の 軽3）。変えたスイッチの数
+    @discardableResult
+    func applyScene(_ scene: LifeScene) -> Int {
         let values = SceneSets.values(for: scene)
         for (key, value) in values {
             switch key {
-            case .stopAlerts: pipeline.stopAlertsOn = value
-            case .places: pipeline.places.isOn = value
-            case .batterySaver: pipeline.chunkBatterySaver = value
+            case .stopAlerts: stopAlertsOn = value
+            case .places: places.isOn = value
+            case .batterySaver: chunkBatterySaver = value
             default: UserDefaults.standard.set(value, forKey: key.rawValue)
             }
         }
-        current = scene.rawValue
+        UserDefaults.standard.set(scene.rawValue, forKey: SceneSets.currentKey)
         HolidayNudges.shared.sendWatchContext()
-        LLHaptic.done.play()
-        changed = "\(scene.label)にしました（\(values.count) 個のスイッチ）"
         Tally.add("s20.scene." + scene.rawValue)
+        return values.count
     }
 }
 
