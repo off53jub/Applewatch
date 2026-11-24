@@ -176,7 +176,7 @@ def check_split_and_self() -> int:
     mother.mkdir(parents=True)
     store, days = build_world(home)
     logs: list[str] = []
-    cfg = {"speaker_split": {"min_items": 20, "min_cluster": 10}}
+    cfg = {"speaker_split": {"min_items": 20, "min_cluster": 10}, "same_person_ask": True}  # s24 当1: 問いを写すのは設定で戻したとき
     before = {d: json.dumps(p, sort_keys=True, default=str) for d, p in days.items()}
 
     out = splitcand.run(home, store, mother, cfg, logs.append, heavy=False, today=TODAY)

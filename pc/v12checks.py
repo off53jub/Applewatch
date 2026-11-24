@@ -408,6 +408,7 @@ def check_http(main) -> int:
             quality.start(home, FakeStore({}), None, None, fake_embed, lambda _m: None)
             config = main.load_config()
             config["lifelog_home"] = str(Path(folder) / "base")
+            config["same_person_ask"] = True  # s24 当1: 「同じ人か」の問いは設定で戻したときだけ出す（止めた形は v24checks_s24）
             main.save_config(config)
             server = main.Server(("127.0.0.1", 0), main.Handler)
             threading.Thread(target=server.serve_forever, daemon=True).start()

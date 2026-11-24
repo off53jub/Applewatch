@@ -391,6 +391,7 @@ def check_http(main) -> int:
             main.Handler.engine = main.Ensemble(ops.fake_engines())
             config = dict(old_config)
             config["lifelog_home"] = mother
+            config["same_person_ask"] = True  # s24 当1: 「同じ人か」の問いは設定で戻したときだけ出す（止めた形は v24checks_s24）
             main.save_config(config)
             server = main.Server(("127.0.0.1", 0), main.Handler)
             threading.Thread(target=server.serve_forever, daemon=True).start()

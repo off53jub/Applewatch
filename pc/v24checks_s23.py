@@ -504,6 +504,10 @@ def run_all() -> int:
 
             traceback.print_exc()
             failed += say(False, f"{check.__name__} が途中で落ちました: {error!r}")
+    # s24（2026-11-24）: 急3・急7・当1・減3・減5・当2・当5・当7・当8・当11・当12（CI の手順を増やさずに動かす）
+    import v24checks_s24
+
+    failed += v24checks_s24.run_all()
     return failed
 
 
