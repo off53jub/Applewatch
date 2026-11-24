@@ -32,7 +32,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
         run: |
-          IGNORE='^(pc/|docs/|LifeLogUITests/)|\.md$|^\.github/workflows/(pc|testflight)\.yml$|^\.github/scripts/(screens|screens_diff|grid|contrast|words|notice_hints|whatsnew|asc|test_ci_scripts)\.py$'
+          IGNORE='^(pc/|docs/|LifeLogUITests/)|\.md$|^\.github/workflows/(pc|testflight|nightly|s26c-mac-night)\.yml$|^\.github/scripts/(screens|screens_diff|grid|contrast|words|notice_hints|whatsnew|asc|test_ci_scripts|s26c_[a-z_]+|test_[a-z0-9_]+)\.py$'
           files=""
           ok=false
           if [ "$EVENT" = "pull_request" ]; then
@@ -47,7 +47,7 @@ jobs:
           rest=$(echo "$files" | grep -Ev "$IGNORE" || true)
           if [ "$ok" = "true" ] && [ -z "$rest" ]; then app=false; else app=true; fi
           # 画面の写真の見回りには効かない変更（時計だけ・テストだけ）なら、見回りも飛ばす
-          IGNORE_UI='^(pc/|docs/|LifeLogTests/|LifeLogWatch/|LifeLogWatchWidgets/)|\.md$|^\.github/workflows/(pc|testflight)\.yml$'
+          IGNORE_UI='^(pc/|docs/|LifeLogTests/|LifeLogWatch/|LifeLogWatchWidgets/)|\.md$|^\.github/workflows/(pc|testflight|nightly|s26c-mac-night)\.yml$|^\.github/scripts/(contrast|words|notice_hints|whatsnew|asc|test_ci_scripts|s26c_[a-z_]+|test_[a-z0-9_]+)\.py$'
           rest_ui=$(echo "$files" | grep -Ev "$IGNORE_UI" || true)
           if [ "$ok" = "true" ] && [ -z "$rest_ui" ]; then ui=false; else ui=true; fi
           echo "ui=$ui" >> "$GITHUB_OUTPUT"
@@ -207,45 +207,8 @@ jobs:
           fi
           echo "status=$status" >> "$GITHUB_OUTPUT"
 
-      # s25 の 堅6（2026-11-24）: 本人が実機で確かめていたもの（タスクの今日の候補 3 件・「今日」の上の 3 枚・知らせを押した先）を
-      #   シミュレーターで通す（LifeLogUITests/S25CFlows.swift。見本の記録）。上で組み立てたものをそのまま使う。
-      #   必須にはしない: ここが落ちても screens は赤にしない（continue-on-error）。結果は実行のまとめと成果物「実機の確かめ」に出す
-      - name: 実機の確かめを通す（必須ではない）
-        if: always() && steps.tour.outcome != 'skipped'
-        continue-on-error: true
-        run: |
-          udid=$(xcrun simctl list devices available | grep -m1 -E "^[[:space:]]+iPhone" | grep -oE "[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}")
-          set +e
-          xcodebuild test-without-building -project LifeLog.xcodeproj -scheme LifeLogUITests -destination "id=$udid" \
-            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" -only-testing:LifeLogUITests/S25CFlows \
-            -resultBundlePath "$RUNNER_TEMP/flows.xcresult" CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/flows.log" | grep -E "error:|Test Case|failed|XCTAssert"
-          status=${PIPESTATUS[0]}
-          {
-            echo "### 実機の確かめ（s25 の 堅6・必須ではない）"
-            echo
-            for t in testTodayCandidatesAreThree testTodayTopThreeCards testNoticeTapsOpenTheirScreens; do
-              if grep -qE "${t}.' passed" "$RUNNER_TEMP/flows.log"; then r="通った"
-              elif grep -qE "${t}.' failed" "$RUNNER_TEMP/flows.log"; then r="落ちた"
-              else r="動かなかった"; fi
-              echo "- ${t}: ${r}"
-            done
-            grep -E "error:.*S25CFlows|XCTAssert" "$RUNNER_TEMP/flows.log" | sort -u | head -10 | sed 's/^/    /'
-          } >> "$GITHUB_STEP_SUMMARY"
-          mkdir -p "$RUNNER_TEMP/flows"
-          if [ -d "$RUNNER_TEMP/flows.xcresult" ]; then
-            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/flows.xcresult" --output-path "$RUNNER_TEMP/flows" || true
-          fi
-          cp "$RUNNER_TEMP/flows.log" "$RUNNER_TEMP/flows/" || true
-          [ "$status" -eq 0 ] || echo "::warning::実機の確かめ（S25CFlows）が通らなかった（必須ではない）"
-          exit 0
-
-      - uses: actions/upload-artifact@v4
-        if: always() && steps.tour.outcome != 'skipped'
-        continue-on-error: true
-        with:
-          name: 実機の確かめ
-          path: ${{ runner.temp }}/flows
-          if-no-files-found: ignore
+      # s25 の 堅6 の実機の確かめ（S25CFlows）は、s26 の C（2026-11-25）から PR ごとには動かさない（Mac の機械が足りないので）。
+      #   毎晩と手動の「Mac の夜の確かめ」（s26c-mac-night.yml）で動かす
 
       - name: 写真を取り出して一覧の画像にする
         if: always()
@@ -356,6 +319,8 @@ jobs:
           { python3 .github/scripts/words.py . "$RUNNER_TEMP/report" || echo "言葉の走査に失敗した（報告だけ・落とさない）"; } | tee -a "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/report/words.md"
           # s23 知8: 知らせの本文に「押すとどうなるか」の言葉があるかを数える（報告だけ・落とさない）
           { python3 .github/scripts/notice_hints.py . "$RUNNER_TEMP/report" || echo "知らせの本文の走査に失敗した（報告だけ・落とさない）"; } | tee -a "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/report/notice_hints.md"
+          # s26 の 絵1: 部品表（S26D の名前のファイル）と Shared/Design/ の外で、色と字の大きさを直に書いた所を数える（報告だけ・落とさない）
+          { python3 .github/scripts/s26c_design_count.py . "$RUNNER_TEMP/report" || echo "色と字の数えに失敗した（報告だけ・落とさない）"; } | tee -a "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/report/s26c_design.md"
       # s23 届6・知8: CI の手伝いの script の確かめ（TestFlight の「テストする内容」の文と、知らせの本文の数え方）
       - name: CI の手伝いの script の確かめ
         run: python3 -m unittest discover -s .github/scripts -p "test_*.py" -v
@@ -368,9 +333,11 @@ jobs:
 
   # s22 見1・見2: 主な 20 画面を 明・暗・文字最大 で撮って 1 枚に並べる。文字最大ではみ出した所も数える（報告だけ）。
   # 必須の検査（build・test）や、ふだんの画面の見回り（screens）とは並べて動かす。ここが落ちても全体は赤にしない（continue-on-error）。
+  # s26 の C（2026-11-25）: Mac の機械が足りないので、PR では「まとめの PR（枝の名前が -all で終わる）」か、札「grid」を付けた PR だけで動かす。
+  #   担当ごとの PR では飛ばす（main への push・手で動かしたときは今までどおり動く）。前のように全部の PR で動かすときは、リポジトリの変数 S26C_GRID_EVERY_PR を on に
   screens-grid:
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.ui != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.ui != 'false' && (github.event_name != 'pull_request' || endsWith(github.head_ref, '-all') || contains(github.event.pull_request.labels.*.name, 'grid') || vars.S26C_GRID_EVERY_PR == 'on') }}
     runs-on: macos-26
     timeout-minutes: 60
     continue-on-error: true

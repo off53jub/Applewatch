@@ -1,0 +1,423 @@
+name: Mac の夜の確かめ
+
+# s26 の C（2026-11-25）: PR ごとには動かさない Mac の仕事を、夜と手動にまとめる（Mac の機械が足りず、s25 で 1 時間以上の順番待ちが出たので）。
+# どれも必須にしない（ジョブは continue-on-error。落ちたかは実行のまとめで見る）。
+#
+# 1. 実機の確かめ（s25 の 堅6・LifeLogUITests/S25CFlows.swift）: 毎晩 1:30（日本時間）。
+#    main が前の晩に通したときから変わっていなければ飛ばす（Mac を使わない）。前は tests.yml の screens の中で PR ごとに動いていた。
+# 2. 新しい SDK の見た目（s26 の 絵9・iOS 27 への備え。Apple の期限は 2027 年 4 月）: 週 1（月曜 2:30）と手動。
+#    GitHub の Mac の機械に入っている中で、いちばん新しい Xcode（ベータも含む）を選び、全部の画面を撮って、
+#    今の見た目（tests.yml の main の「画面の写真」）と比べる（成果物「新しい SDK との差」）。
+#    - ふだんの CI と同じ Xcode しか無い週は、組み立てずに「iOS 27 の SDK はまだ無い」とだけ書く（手で動かすと組み立てる）
+#    - Xcode 27 が今の機械（macos-26）に入れば、次の週から自動でそれを選ぶ。新しい機械（macos-27 など）にしか入らないときは、
+#      下の next-sdk の runs-on の 1 行を替えるだけ
+# このファイルと、確かめの中身（S25CFlows.swift・S25CUIHooks.swift）を変えた PR でも動く（新しい SDK は、事実を書くだけで組み立てない）。
+# 初めはオン。止めるときは、リポジトリの変数 S26C_MAC_NIGHT を off にする（Settings → Secrets and variables → Actions → Variables）
+on:
+  schedule:
+    # 毎晩 1:30（日本時間。UTC 16:30）: 実機の確かめ
+    - cron: '30 16 * * *'
+    # 毎週 月曜 2:30（日本時間。UTC 日曜 17:30）: 新しい SDK の見た目。下の WEEKLY と同じ文字にする
+    - cron: '30 17 * * 0'
+  pull_request:
+    paths: ['.github/workflows/s26c-mac-night.yml', 'LifeLogUITests/S25CFlows.swift', 'LifeLog/S25CUIHooks.swift']
+  workflow_dispatch:
+    inputs:
+      what:
+        description: '動かすもの'
+        type: choice
+        options: ['両方', '実機の確かめ', '新しいSDK']
+        default: '両方'
+
+permissions:
+  contents: read
+  actions: read
+
+# 同じ PR に続けて push したら、古い実行は止める（夜の回・手で動かしたものは止めない）
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # 何を動かすかを決める（ubuntu・数秒。Mac は使わない）
+  plan:
+    if: ${{ vars.S26C_MAC_NIGHT != 'off' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      flows: ${{ steps.p.outputs.flows }}
+      sdk: ${{ steps.p.outputs.sdk }}
+    steps:
+      - id: p
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SCHED: ${{ github.event.schedule }}
+          WEEKLY: '30 17 * * 0'
+          WHAT: ${{ inputs.what }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          flows=no; sdk=no
+          case "$EVENT" in
+            schedule)
+              if [ "$SCHED" = "$WEEKLY" ]; then sdk=yes; else flows=yes; fi ;;
+            workflow_dispatch)
+              [ "$WHAT" != "新しいSDK" ] && flows=yes
+              [ "$WHAT" != "実機の確かめ" ] && sdk=yes ;;
+            pull_request)
+              flows=yes; sdk=yes ;;
+          esac
+          # 夜の回: 同じコミットで前に通し終えていれば飛ばす（「流した印」の段が動いた回があるか）
+          if [ "$EVENT" = "schedule" ] && [ "$flows" = "yes" ]; then
+            for id in $(gh run list --repo "$REPO" --workflow s26c-mac-night.yml --event schedule --limit 15 --json databaseId,headSha --jq ".[] | select(.headSha==\"$SHA\") | .databaseId" || true); do
+              [ "$id" = "$RUN_ID" ] && continue
+              s=$(gh api "repos/$REPO/actions/runs/$id/jobs" --jq '[.jobs[].steps[]? | select(.name=="流した印") | .conclusion] | first // ""' || true)
+              if [ "$s" = "success" ]; then flows=no; echo "main は実行 $id で通したときから変わっていないので、実機の確かめは飛ばす"; break; fi
+            done
+          fi
+          echo "flows=$flows sdk=$sdk"
+          echo "flows=$flows" >> "$GITHUB_OUTPUT"
+          echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
+
+  # 1. 実機の確かめ（S25CFlows）。ふだんの CI と同じ Xcode で
+  flows:
+    name: 実機の確かめ（S25CFlows）
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.flows == 'yes' }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode を選ぶ
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      # TestFlight と同じ版の Haas-ja の Swift 部品（アプリをビルドするのに要る）
+      - name: Haas-ja の Swift 部品を取ってくる
+        run: |
+          set -e
+          rev=62f542657b454afa7873424e3dfb6d7a1d9c270d
+          base=https://huggingface.co/Sanami/haas-ja-coreml/resolve/$rev
+          mkdir -p Vendor/HaasCore/Sources/HaasCore LifeLog/Haas
+          for f in Audio Frontend HaasASR Tokenizer; do
+            curl -fsSL "$base/swift/Sources/HaasCore/$f.swift" -o "Vendor/HaasCore/Sources/HaasCore/$f.swift"
+          done
+          curl -fsSL "$base/swift/Resources/frontend.bin" -o LifeLog/Haas/frontend.bin
+          curl -fsSL "$base/swift/Resources/vocab.json" -o LifeLog/Haas/vocab.json
+          cat > Vendor/HaasCore/Package.swift <<'SWIFT'
+          // swift-tools-version:5.9
+          import PackageDescription
+
+          let package = Package(
+              name: "HaasCoreML",
+              platforms: [.macOS(.v14), .iOS(.v17)],
+              products: [.library(name: "HaasCore", targets: ["HaasCore"])],
+              targets: [.target(name: "HaasCore", path: "Sources/HaasCore")]
+          )
+          SWIFT
+
+      # 画面の見回り（tests.yml の screens）の作り置きを読むだけ（ここでは書かない）
+      - name: SwiftPM の部品の作り置きを戻す
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/spm
+          key: spm-screens-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-screens-${{ runner.os }}-
+      - name: コンパイルの作り置きを戻す
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/cc
+          key: cc-screens-${{ runner.os }}-${{ github.sha }}
+          restore-keys: cc-screens-${{ runner.os }}-
+
+      - name: テスト用のプロジェクトを生成
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec project-tests.yml
+
+      - name: S25CFlows を通す
+        id: flows
+        run: |
+          udid=$(xcrun simctl list devices available | grep -m1 -E "^[[:space:]]+iPhone" | grep -oE "[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}")
+          echo "シミュレーター: $udid"
+          set +e
+          xcodebuild test -project LifeLog.xcodeproj -scheme LifeLogUITests -destination "id=$udid" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" \
+            COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_CAS_PATH="$RUNNER_TEMP/cc" \
+            -only-testing:LifeLogUITests/S25CFlows \
+            -resultBundlePath "$RUNNER_TEMP/flows.xcresult" CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/flows.log" | grep -E "error:|Test Case|failed|XCTAssert"
+          status=${PIPESTATUS[0]}
+          ok=0; ng=0
+          {
+            echo "### 実機の確かめ（s25 の 堅6・必須ではない）"
+            echo
+            for t in testTodayCandidatesAreThree testTodayTopThreeCards testNoticeTapsOpenTheirScreens; do
+              if grep -qE "${t}.' passed" "$RUNNER_TEMP/flows.log"; then r="通った"; ok=$((ok+1))
+              elif grep -qE "${t}.' failed" "$RUNNER_TEMP/flows.log"; then r="落ちた"; ng=$((ng+1))
+              else r="動かなかった"; fi
+              echo "- ${t}: ${r}"
+            done
+            grep -E "error:.*S25CFlows|XCTAssert" "$RUNNER_TEMP/flows.log" | sort -u | head -10 | sed 's/^/    /'
+            echo
+            echo "- \`S26C_FLOWS: commit=${GITHUB_SHA::7} ok=$ok ng=$ng\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::S26C_FLOWS: commit=${GITHUB_SHA::7} ok=$ok ng=$ng"
+          mkdir -p "$RUNNER_TEMP/flows"
+          if [ -d "$RUNNER_TEMP/flows.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/flows.xcresult" --output-path "$RUNNER_TEMP/flows" || true
+          fi
+          cp "$RUNNER_TEMP/flows.log" "$RUNNER_TEMP/flows/" || true
+          # 試しが動いたか（組み立てで落ちたときは、次の晩にもう一度動かす）
+          if grep -q "Test Suite 'S25CFlows'" "$RUNNER_TEMP/flows.log"; then echo "ran=yes" >> "$GITHUB_OUTPUT"; fi
+          [ "$status" -eq 0 ] || echo "::warning::実機の確かめ（S25CFlows）が通らなかった（必須ではない）"
+          exit 0
+
+      # この段が動いた回は「このコミットは通し終えた」とみなす（plan が次の晩に読む。名前を変えない）
+      - name: 流した印
+        if: steps.flows.outputs.ran == 'yes'
+        run: echo "通し終えた ${GITHUB_SHA::7}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: 実機の確かめ
+          path: ${{ runner.temp }}/flows
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # 2. 新しい SDK の見た目（絵9）
+  next-sdk:
+    name: 新しい SDK の見た目（絵9）
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.sdk == 'yes' }}
+    # ↓ iOS 27 の SDK（Xcode 27）が新しい機械にしか入らないときは、この 1 行を macos-27 などに替える
+    runs-on: macos-26
+    timeout-minutes: 100
+    continue-on-error: true
+    env:
+      WANT_IOS: '27'
+    outputs:
+      built: ${{ steps.tour.outputs.built }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: いちばん新しい Xcode を選ぶ
+        id: xc
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          echo "この機械にある Xcode:"; ls -d /Applications/Xcode*.app || true
+          best=""; bestv=""
+          for app in /Applications/Xcode*.app; do
+            [ -L "$app" ] && continue
+            v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist" 2>/dev/null) || continue
+            if [ -z "$bestv" ] || [ "$(printf '%s\n%s\n' "$bestv" "$v" | sort -V | tail -1)" = "$v" ]; then best="$app"; bestv="$v"; fi
+          done
+          usual=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          usualv=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$usual/Contents/Info.plist" 2>/dev/null || echo "?")
+          sudo xcode-select -s "$best"
+          xcodebuild -version
+          sdk=$(xcrun --sdk iphonesimulator --show-sdk-version 2>/dev/null || echo "0")
+          major=${sdk%%.*}
+          ready=no; [ "${major:-0}" -ge "$WANT_IOS" ] 2>/dev/null && ready=yes
+          newer=no; [ "$bestv" != "$usualv" ] && newer=yes
+          go=no
+          if [ "$EVENT" = "workflow_dispatch" ] || [ "$ready" = "yes" ] || [ "$newer" = "yes" ]; then go=yes; fi
+          # 確かめの中身を変えた PR では、事実を書くだけ（組み立ては夜と手動）
+          [ "$EVENT" = "pull_request" ] && go=no
+          {
+            echo "### 新しい SDK の見た目（s26 の 絵9・iOS $WANT_IOS への備え）"
+            echo
+            echo "- いちばん新しい Xcode: **$bestv**（$best）・iPhone のシミュレーターの SDK: **iOS $sdk**"
+            echo "- ふだんの CI（tests.yml・testflight.yml）の Xcode: $usualv"
+            echo "- 機械: ${ImageOS:-?} ${ImageVersion:-?}"
+            if [ "$ready" = "yes" ]; then
+              echo "- iOS $WANT_IOS の SDK がある。この SDK で組み立てて、全部の画面を撮り、今の見た目と比べる"
+            else
+              echo "- **iOS $WANT_IOS の SDK は、まだこの機械に無い**。入ったら、次の週の回から自動でそれを選ぶ。新しい機械（macos-27 など）にしか入らないときは、s26c-mac-night.yml の next-sdk の runs-on の 1 行を替える"
+            fi
+            if [ "$go" = "no" ]; then
+              if [ "$EVENT" = "pull_request" ]; then echo "- PR なので組み立てない（夜と手動で組み立てる）"
+              else echo "- 今回は組み立てない（ふだんと同じ Xcode なので、比べても同じ。手で動かすと組み立てる）"; fi
+            fi
+            echo
+            echo "- \`S26C_NEXT_SDK: xcode=$bestv ios=$sdk want=$WANT_IOS ready=$ready newer=$newer go=$go\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::S26C_NEXT_SDK: xcode=$bestv ios=$sdk want=$WANT_IOS ready=$ready newer=$newer go=$go"
+          { echo "xcode=$bestv"; echo "ios=$sdk"; echo "go=$go"; } >> "$GITHUB_OUTPUT"
+
+      - name: Haas-ja の Swift 部品を取ってくる
+        if: steps.xc.outputs.go == 'yes'
+        run: |
+          set -e
+          rev=62f542657b454afa7873424e3dfb6d7a1d9c270d
+          base=https://huggingface.co/Sanami/haas-ja-coreml/resolve/$rev
+          mkdir -p Vendor/HaasCore/Sources/HaasCore LifeLog/Haas
+          for f in Audio Frontend HaasASR Tokenizer; do
+            curl -fsSL "$base/swift/Sources/HaasCore/$f.swift" -o "Vendor/HaasCore/Sources/HaasCore/$f.swift"
+          done
+          curl -fsSL "$base/swift/Resources/frontend.bin" -o LifeLog/Haas/frontend.bin
+          curl -fsSL "$base/swift/Resources/vocab.json" -o LifeLog/Haas/vocab.json
+          cat > Vendor/HaasCore/Package.swift <<'SWIFT'
+          // swift-tools-version:5.9
+          import PackageDescription
+
+          let package = Package(
+              name: "HaasCoreML",
+              platforms: [.macOS(.v14), .iOS(.v17)],
+              products: [.library(name: "HaasCore", targets: ["HaasCore"])],
+              targets: [.target(name: "HaasCore", path: "Sources/HaasCore")]
+          )
+          SWIFT
+
+      # 部品（SwiftPM）の作り置きだけ読む。コンパイルの作り置きは Xcode が違うと合わないので使わない
+      - name: SwiftPM の部品の作り置きを戻す
+        if: steps.xc.outputs.go == 'yes'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/spm
+          key: spm-screens-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-screens-${{ runner.os }}-
+
+      - name: テスト用のプロジェクトを生成
+        if: steps.xc.outputs.go == 'yes'
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec project-tests.yml
+
+      # いちばん新しい iOS のシミュレーターで、全部の画面を開いて写真を撮る（tests.yml の screens と同じ試し）
+      - name: 新しい SDK で全部の画面を撮る
+        id: tour
+        if: steps.xc.outputs.go == 'yes'
+        run: |
+          # ふだんの CI と同じ名前の iPhone を、いちばん新しい iOS で選ぶ（無ければ、いちばん新しい iOS の iPhone）
+          want=$(xcrun simctl list devices available | grep -m1 -E "^[[:space:]]+iPhone" | sed -E 's/^[[:space:]]+//; s/ \(.*$//')
+          udid=$(xcrun simctl list -j devices available | WANT="$want" python3 -c '
+          import json, os, re, sys
+          want = os.environ.get("WANT", "")
+          best = None
+          for rt, devs in json.load(sys.stdin)["devices"].items():
+              m = re.search(r"iOS-(\d+)-(\d+)", rt)
+              if not m:
+                  continue
+              v = (int(m.group(1)), int(m.group(2)))
+              for d in devs:
+                  if not d["name"].startswith("iPhone"):
+                      continue
+                  k = (v, d["name"] == want)
+                  if best is None or k > best[0]:
+                      best = (k, d["udid"], d["name"])
+          if best:
+              print(best[1])
+              print("シミュレーター: iOS %d.%d %s" % (best[0][0][0], best[0][0][1], best[2]), file=sys.stderr)
+          ')
+          [ -n "$udid" ] || { echo "::warning::iPhone のシミュレーターが見つからない"; echo "built=no" >> "$GITHUB_OUTPUT"; exit 0; }
+          set +e
+          xcodebuild test -project LifeLog.xcodeproj -scheme LifeLogUITests -destination "id=$udid" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" \
+            -skip-testing:LifeLogUITests/ScreenMatrix -skip-testing:LifeLogUITests/S25CFlows \
+            -resultBundlePath "$RUNNER_TEMP/screens.xcresult" CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/ui.log" | grep -E "error:|Test Case|failed|落ちた|XCTAssert"
+          status=${PIPESTATUS[0]}
+          errors=$(grep -cE "^[^ ].*: error:" "$RUNNER_TEMP/ui.log" || true)
+          deprecated=$(grep -E "warning:.*(deprecated|非推奨)" "$RUNNER_TEMP/ui.log" | sort -u | wc -l | tr -d ' ')
+          {
+            echo
+            echo "#### 組み立てと撮影（Xcode ${{ steps.xc.outputs.xcode }}・iOS ${{ steps.xc.outputs.ios }}）"
+            echo
+            echo "- 終わり方: $([ "$status" -eq 0 ] && echo 通った || echo "落ちた（$status）")・組み立ての誤り $errors 行・古くなった API の注意 $deprecated 種類"
+            grep -E "^[^ ].*: error:" "$RUNNER_TEMP/ui.log" | sort -u | head -15 | sed 's/^/    /'
+            if [ "$deprecated" -gt 0 ]; then
+              echo
+              echo "<details><summary>古くなった API の注意（先頭 30）</summary>"
+              echo
+              grep -E "warning:.*(deprecated|非推奨)" "$RUNNER_TEMP/ui.log" | sed -E 's#^.*/(LifeLog[^/]*/|Shared/)#\1#' | sort -u | head -30 | sed 's/^/    /'
+              echo
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p "$RUNNER_TEMP/raw" "$RUNNER_TEMP/screens"
+          if [ -d "$RUNNER_TEMP/screens.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/screens.xcresult" --output-path "$RUNNER_TEMP/raw" || true
+            python3 -m venv "$RUNNER_TEMP/venv"
+            "$RUNNER_TEMP/venv/bin/pip" install --quiet pillow || true
+            "$RUNNER_TEMP/venv/bin/python" .github/scripts/screens.py "$RUNNER_TEMP/raw" "$RUNNER_TEMP/screens" || echo "写真の取り出しに失敗した"
+          fi
+          { echo "xcode=${{ steps.xc.outputs.xcode }}"; echo "ios=${{ steps.xc.outputs.ios }}"; echo "status=$status"; echo "errors=$errors"; echo "deprecated=$deprecated"; } > "$RUNNER_TEMP/screens/sdk.txt"
+          cp "$RUNNER_TEMP/ui.log" "$RUNNER_TEMP/screens/build.log" || true
+          n=$(ls "$RUNNER_TEMP"/screens/*.png 2>/dev/null | wc -l | tr -d ' ')
+          echo "- 撮れた画面: $n 枚" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$n" -gt 0 ]; then echo "built=yes" >> "$GITHUB_OUTPUT"; else echo "built=no" >> "$GITHUB_OUTPUT"; fi
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.tour.outcome == 'success'
+        continue-on-error: true
+        with:
+          name: 新しい SDK の画面の写真
+          path: ${{ runner.temp }}/screens
+          retention-days: 30
+          if-no-files-found: warn
+
+  # 新しい SDK の写真を、今の見た目（tests.yml の main の「画面の写真」）と比べる（ubuntu。screens_diff.py を使い回す。しきい値は仮）
+  next-sdk-diff:
+    name: 新しい SDK と今の見た目の差
+    needs: next-sdk
+    if: ${{ !cancelled() && needs.next-sdk.outputs.built == 'yes' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 新しい SDK の写真を取る
+        uses: actions/download-artifact@v4
+        with:
+          name: 新しい SDK の画面の写真
+          path: ${{ runner.temp }}/cur
+
+      - name: 今の見た目の写真を取る
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/prev"
+          # 同じコミットの main の実行を先に、無ければ新しい順に
+          ids=$(gh run list --repo "$REPO" --workflow tests.yml --branch main --event push --status completed --limit 15 --json databaseId,headSha \
+            --jq "(map(select(.headSha==\"$SHA\")) + map(select(.headSha!=\"$SHA\"))) | .[].databaseId")
+          for id in $ids; do
+            n=$(gh api "repos/$REPO/actions/runs/$id/artifacts" --jq '[.artifacts[] | select(.name=="画面の写真" and .expired==false)] | length')
+            if [ "$n" -gt 0 ]; then
+              gh run download "$id" --repo "$REPO" -n "画面の写真" -D "$RUNNER_TEMP/prev" && echo "比べる相手: tests.yml の実行 $id" && exit 0
+            fi
+          done
+          echo "比べる相手（main の画面の写真）が見つからなかった"
+
+      - name: 比べて、変わった画面を 1 枚に並べる
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet pillow || true
+          sudo apt-get install -y -qq fonts-noto-cjk >/dev/null 2>&1 || true
+          mkdir -p "$RUNNER_TEMP/diff"
+          cp "$RUNNER_TEMP/cur/sdk.txt" "$RUNNER_TEMP/diff/" 2>/dev/null || true
+          {
+            echo "### 新しい SDK と今の見た目の差（s26 の 絵9）"
+            echo
+            echo "一覧の画像の「左: 前の main」が今の見た目（ふだんの Xcode）、「右: 今」が新しい SDK。しきい値は仮。"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          "$RUNNER_TEMP/venv/bin/python" .github/scripts/screens_diff.py "$RUNNER_TEMP/cur" "$RUNNER_TEMP/prev" "$RUNNER_TEMP/diff" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: 新しい SDK との差
+          path: ${{ runner.temp }}/diff
+          retention-days: 30
+          if-no-files-found: warn

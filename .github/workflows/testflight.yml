@@ -32,7 +32,8 @@ jobs:
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
         run: |
-          IGNORE='^(pc/|docs/)|\.md$|^\.github/workflows/(pc|tests)\.yml$'
+          # s26 の C: IPA を作るのに使わない CI の手伝い（画面の写真・数え・夜の仕事・試し）だけの変更でも、Mac を使わない
+          IGNORE='^(pc/|docs/|LifeLogUITests/)|\.md$|^\.github/workflows/(pc|tests|nightly|s26c-mac-night)\.yml$|^\.github/scripts/(screens|screens_diff|grid|contrast|words|notice_hints|s26c_[a-z_]+|test_[a-z0-9_]+)\.py$'
           files=""
           ok=false
           if [ "$EVENT" = "pull_request" ]; then

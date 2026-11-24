@@ -21,6 +21,11 @@ on:
         type: string
         default: ''
 
+# s26 の C（2026-11-25）: 同じ PR に続けて push したら、古い実行は止める（main への push・手で動かしたもの・やり直しは、実行ごとに別の組なので止めない）
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # 試しに文字にする日本語の音声（Mac の読み上げで作った作り物。pc/testdata/sample.m4a）を成果物にする。
   # s25 の 堅5（2026-11-24）: 前は Mac の機械で毎回作っていて、11/23 は Mac の順番待ちのまま始まらず、出荷（windows）まで止まった。

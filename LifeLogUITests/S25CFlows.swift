@@ -60,7 +60,10 @@ final class S25CFlows: XCTestCase {
     // MARK: 1. 今日の候補は 3 件まで
 
     func testTodayCandidatesAreThree() {
-        let app = launch(["-s25cMoreCandidates"])
+        // s26 の C（2026-11-25）: 「今日すでに見せた候補」の覚え（s24.todayCandidates）を、この起動だけ空にする（引数の決まりの層で上書き。保存はしない）。
+        //   見本の候補は起動のたびに id が変わるので、前の試し（知らせを押す 11 回の起動）が覚えた古い id で 3 件の枠が埋まり、
+        //   「今日の候補」が 0 件になっていた（11/24 の main の実行で落ちた理由。仮説: 記録から読んだ。本物の候補は id が変わらないのでアプリの不具合ではない）
+        let app = launch(["-s25cMoreCandidates", "-s24.todayCandidates", "s26c-reset"])
         openTab(app, "タスク")
         // 「やる」のページ（初めに開く所）。見出し「今日の候補」が出る
         XCTAssertNotNil(find(app, "今日の候補"), "タスクに「今日の候補」が出ない")
