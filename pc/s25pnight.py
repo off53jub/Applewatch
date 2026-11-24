@@ -346,7 +346,7 @@ def ping_tick(home: Path, pusher, config: dict, moment: datetime.datetime) -> di
         entry["got"] = True
         quality.update_day(home, day, {"s25p_ping_got": True})
         out = {**(out or {}), "got": True}
-    if entry:
+    if out is not None:   # 変わったときだけ書く（1 分ごとに呼ばれる）
         days[day] = entry
         for old in sorted(days)[:-30]:
             days.pop(old, None)
