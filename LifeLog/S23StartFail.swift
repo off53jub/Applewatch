@@ -62,7 +62,7 @@ enum S23StartFail {
     }
 
     static func body(reason: String) -> String {
-        reason + "\n押すか「" + S23Rec.resumeTitle + "」で、開いてすぐ録音を始めます（30 分以内に LifeLog を開いても始めます）。"
+        reason + "\n押すと（「" + S23Rec.resumeTitle + "」でも）、開いてすぐ録音を始めます。30 分以内に LifeLog を開いても始めます。"
     }
 
     /// 知らせ（「録音を戻す」と同じ分類なので、押すと開いて始める。S23Resume.resume が始める）
