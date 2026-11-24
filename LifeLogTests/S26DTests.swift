@@ -136,7 +136,7 @@ final class S26DTests: XCTestCase {
         XCTAssertFalse(S26DHapticRules.shouldBuzzArrived(oldCount: 2, freshCount: 0, on: true))
         XCTAssertFalse(S26DHapticRules.shouldBuzzArrived(oldCount: 2, freshCount: 1, on: false))
         // 一覧に全部の型がある
-        XCTAssertEqual(Set(S26DHapticRules.table.map(\.haptic)), Set(LLHaptic.allCases))
+        XCTAssertEqual(Set(S26DHapticRules.table.map { $0.haptic }), Set(LLHaptic.allCases))
     }
 
     // MARK: 絵8 ウィジェット
