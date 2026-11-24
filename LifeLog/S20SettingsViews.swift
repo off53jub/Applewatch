@@ -186,7 +186,7 @@ struct AppearanceView: View {
             }
         } label: {
             HStack {
-                RoundedRectangle(cornerRadius: 10).fill(name == nil ? LL.bg : Color(llHex: 0x1C5A9A))
+                RoundedRectangle(cornerRadius: LL.Radius.small).fill(name == nil ? LL.bg : Color(llHex: 0x1C5A9A))
                     .frame(width: 44, height: 44)
                     .overlay(Image(systemName: name == nil ? "waveform.badge.mic" : "waveform").foregroundStyle(name == nil ? LL.accent : Color.white))
                 Text(title).foregroundStyle(LL.text)

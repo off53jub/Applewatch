@@ -130,7 +130,7 @@ struct ConversationPhotoStrip: View {
                             .resizable()
                             .scaledToFill()
                             .frame(width: 56, height: 56)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .clipShape(RoundedRectangle(cornerRadius: LL.Radius.chip))
                     }
                     // List の行の中でも、押した写真だけが反応するように
                     .buttonStyle(.borderless)
