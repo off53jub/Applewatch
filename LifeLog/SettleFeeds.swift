@@ -47,11 +47,18 @@ struct CostToday: Codable, Equatable, Identifiable {
     var usd: Double
     var cap: Double? = nil
     var stopped: Bool = false
+    /// 止まると困ること 1 行（家の PC が送るときだけ。2026-11-25。s26 の K7）
+    var effect: String? = nil
+    /// 今日の上限（月の残りから毎朝決め直したもの。無ければ cap。s26 の K7・軽2）
+    var cap_today: Double? = nil
     var id: String { purpose }
+
+    /// 今日の上限（cap_today があればそれ）
+    var capNow: Double? { cap_today ?? cap }
 
     /// 今日の上限に届いたか
     var capped: Bool {
-        guard let cap else { return false }
+        guard let cap = capNow else { return false }
         return usd >= cap
     }
 }
@@ -126,6 +133,8 @@ enum SettleFeeds {
         var usd: Double?
         var cap: Double?
         var stopped: Bool?
+        var effect: String?
+        var cap_today: Double?
     }
 
     private struct RawPurpose: Decodable {
@@ -186,7 +195,8 @@ enum SettleFeeds {
         var feed = CostsFeed(month: month, month_usd: spent, projected_usd: money(raw.projected_usd) ?? spent, monthly_usd: cap)
         for row in raw.today ?? [] {
             guard let r = row.value, let purpose = MothershipFeeds.cut(r.purpose, 40), let usd = money(r.usd) else { continue }
-            feed.today.append(CostToday(purpose: purpose, usd: usd, cap: money(r.cap), stopped: r.stopped ?? false))
+            feed.today.append(CostToday(purpose: purpose, usd: usd, cap: money(r.cap), stopped: r.stopped ?? false,
+                                        effect: MothershipFeeds.cut(r.effect, 80), cap_today: money(r.cap_today)))
         }
         for row in raw.month_by_purpose ?? [] {
             guard let r = row.value, let purpose = MothershipFeeds.cut(r.purpose, 40), let usd = money(r.usd) else { continue }
@@ -207,13 +217,10 @@ enum SettleFeeds {
     }
 
     static func statusColor(_ status: String) -> Color {
-        switch status {
-        case "live": return .llGood
-        case "broken": return .llDanger
-        case "retire_candidate": return .llWarn
-        case "unused": return .llWarn
-        default: return .secondary
-        }
+        // 色の役割（s26 の 絵2）: 止まっている＝赤（あなたが動く）・畳む候補と使われていない＝オレンジ・ほかは薄い文字
+        if status == "live" { return .llGood }
+        let role = S26DRoleRules.role(status: status)
+        return role == .machine ? LL.dim : role.color
     }
 
     static func sourceLabel(_ source: String) -> String {
@@ -460,17 +467,12 @@ struct CostsView: View {
                     LabeledContent("今月（" + costs.month + "）", value: ClaudeUsage.dollars(costs.month_usd))
                     LabeledContent("月末の見込み", value: ClaudeUsage.dollars(costs.projected_usd))
                     LabeledContent("月の上限", value: ClaudeUsage.dollars(costs.monthly_usd, whole: true))
+                    S26DCostMonthMeter(costs: costs)  // 今月の横棒（s26 の 絵3）
                 } footer: {
                     Text("見込みは、今月ここまでの額を過ぎた日数で割り、月の日数を掛けたものです（仮の目安）。")
                 }
-                Section("今日") {
-                    if costs.today.isEmpty {
-                        Text("今日はまだ使っていません。").foregroundStyle(LL.dim)
-                    }
-                    ForEach(costs.today) { row in
-                        CostTodayRow(row: row)
-                    }
-                }
+                // 今日: 用途ごとの横棒・「今日はここまで（0 時に戻る）」・止めてある（2026-11-25。s26 の 絵3・軽1。S26DCostViews.swift）
+                S26DCostTodaySections(rows: costs.today)
                 Section("今月の用途") {
                     ForEach(costs.month_by_purpose) { row in
                         LabeledContent(ClaudeJob.label(row.purpose) + "（\(row.calls) 回）", value: ClaudeUsage.dollars(row.usd))
@@ -503,9 +505,9 @@ struct CostTodayRow: View {
 
     private var note: String? {
         if row.stopped { return "止めてあります（家の PC の設定）" }
-        guard let cap = row.cap else { return nil }
+        guard let cap = row.capNow else { return nil }
         let text: String = "1日の上限 " + ClaudeUsage.dollars(cap)
-        return row.capped ? text + "に届いたので、今日はもう頼みません" : text
+        return row.capped ? S26DCostRules.restTitle + "（" + text + "）" : text
     }
 }
 
@@ -524,7 +526,7 @@ struct ClaudeCostRows: View {
             Text("止めてある用途: " + off.stopped.joined(separator: "・")).font(.caption).foregroundStyle(LL.dim)
         }
         if !off.capped.isEmpty {
-            Text("今日の上限に届いた用途: " + off.capped.joined(separator: "・")).font(.caption).foregroundStyle(LL.warn)
+            Text(S26DCostRules.restTitle + ": " + off.capped.joined(separator: "・")).font(.caption).foregroundStyle(LL.warn)
         }
     }
 }
