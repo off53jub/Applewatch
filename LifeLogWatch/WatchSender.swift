@@ -243,6 +243,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         for (key, value) in S22WatchSide.extraState(now: now) { out[key] = value }
         // s23（2026-11-23。S23WatchRec.swift）: 中断から戻るまでの数・止まっていたあいだ・練習の結果（止1・止12・止15）。どれも省ける
         for (key, value) in S23WatchRec.extraState(now: now) { out[key] = value }
+        // s24（2026-11-24。S24WatchRescue.swift）: 溜まり続けたので自分で送り直した回数（今日）と最後の時刻（急6）。どれも省ける
+        for (key, value) in S24WatchRescue.extraState(now: now) { out[key] = value }
         return out
     }
 
@@ -437,7 +439,10 @@ final class WatchSender: NSObject, WCSessionDelegate {
         flushIfDue()
         resendUnacknowledged()
         // 録音中・まだ届いていない区切りがあるときは、iPhone のアプリを起こしておく
-        if isRecording || unsentCount() > 0 || !WCSession.default.outstandingFileTransfers.isEmpty { wakePhone() }
+        let unsent = unsentCount()
+        if isRecording || unsent > 0 || !WCSession.default.outstandingFileTransfers.isEmpty { wakePhone() }
+        // まだ送っていない区切りが 1 時間（仮）増え続けたら、自分で送り直す（家の PC への外の道も試す。2026-11-24。s24 の 急6）
+        S24WatchRescue.check(self, unsent: unsent)
     }
 
     /// 「初めての人と話している」の印を iPhone に送る（その前後の知らない声を、確かめ待ちに出す）

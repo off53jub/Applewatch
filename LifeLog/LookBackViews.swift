@@ -20,84 +20,113 @@ struct LookBackTab: View {
                 TensionLookBackSection()
                 // 話題の糸（2026-11-15。強化案 54。PagesFeeds.swift。写しがあるときだけ）
                 ThreadsLookBackSection()
-                Section {
-                    if hasGood {
-                        NavigationLink {
-                            GoodThingsView()
-                        } label: {
-                            LabeledContent {
-                                if let w = book.thisWeek { Text("今週 お礼 \(w.thanks)・ほめ言葉 \(w.praise)") }
-                            } label: {
+                // 入口は 5 つまで・使わない画面は「ほか」に（2026-11-24。s24 の 形5・減12。S24Views.swift。消さない・戻せる）
+                let entries = S24Entry.split(list: "lookBack", available: available(hasGood: hasGood, hasWork: hasWork))
+                let shown: Set<String> = entries.shown
+                if !hasGood || shown.contains("goodThings") || shown.contains("speaking") {
+                    Section {
+                        if hasGood {
+                            if shown.contains("goodThings") {
+                                NavigationLink {
+                                    GoodThingsView()
+                                } label: {
+                                    LabeledContent {
+                                        if let w = book.thisWeek { Text("今週 お礼 \(w.thanks)・ほめ言葉 \(w.praise)") }
+                                    } label: {
+                                        Label("いいこと帳", systemImage: "hand.thumbsup")
+                                    }
+                                }
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 4) {
                                 Label("いいこと帳", systemImage: "hand.thumbsup")
+                                Text("家の PC の LifeLog PC がいいこと帳を作れるようになると、ここから開けます（お礼・ほめ言葉・済ませたこと）。")
+                                    .font(.caption).foregroundStyle(LL.dim)
                             }
                         }
-                    } else {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Label("いいこと帳", systemImage: "hand.thumbsup")
-                            Text("家の PC の LifeLog PC がいいこと帳を作れるようになると、ここから開けます（お礼・ほめ言葉・済ませたこと）。")
-                                .font(.caption).foregroundStyle(LL.dim)
+                        if shown.contains("speaking") {
+                            NavigationLink {
+                                SpeakingView()
+                            } label: {
+                                Label("話し方の振り返り", systemImage: "person.wave.2")
+                            }
                         }
+                    } header: {
+                        Text("自分")
                     }
-                    NavigationLink {
-                        SpeakingView()
-                    } label: {
-                        Label("話し方の振り返り", systemImage: "person.wave.2")
-                    }
-                } header: {
-                    Text("自分")
                 }
 
                 // 同じ日の朝のまとめを2つの作り手で比べる（2026-11-13。施策 5。両方そろった日があるときだけ）
-                if !pipeline.mothershipFeeds.compare.isEmpty {
+                if shown.contains("briefCompare") {
                     Section("朝のまとめ") {
                         BriefCompareLink()
                     }
                 }
 
-                Section {
-                    if hasWork {
-                        NavigationLink {
-                            WorkWeekView()
-                        } label: {
-                            Label("週のまとめ（週報の下書き）", systemImage: "calendar")
+                if !hasWork || shown.contains("workWeek") || shown.contains("workThreads") || shown.contains("taskScore") {
+                    Section {
+                        if hasWork {
+                            if shown.contains("workWeek") {
+                                NavigationLink {
+                                    WorkWeekView().countsOpen("workWeek")
+                                } label: {
+                                    Label("週のまとめ（週報の下書き）", systemImage: "calendar")
+                                }
+                            }
+                            if shown.contains("workThreads") {
+                                NavigationLink {
+                                    WorkThreadsView().countsOpen("workThreads")
+                                } label: {
+                                    Label("案件ごと", systemImage: "point.3.connected.trianglepath.dotted")
+                                }
+                            }
+                        } else {
+                            Text("「タスク」の上の「仕事のまとめ」に取り込むと、週のまとめと案件ごとの流れが読めます。")
+                                .font(.callout).foregroundStyle(LL.dim)
                         }
-                        NavigationLink {
-                            WorkThreadsView()
-                        } label: {
-                            Label("案件ごと", systemImage: "point.3.connected.trianglepath.dotted")
+                        if shown.contains("taskScore") {
+                            NavigationLink {
+                                TaskScoreView().countsOpen("taskScore")
+                            } label: {
+                                Label("タスクを数で見る", systemImage: "chart.bar")
+                            }
                         }
-                    } else {
-                        Text("「タスク」の上の「仕事のまとめ」に取り込むと、週のまとめと案件ごとの流れが読めます。")
-                            .font(.callout).foregroundStyle(LL.dim)
+                    } header: {
+                        Text("仕事とタスク")
                     }
-                    NavigationLink {
-                        TaskScoreView()
-                    } label: {
-                        Label("タスクを数で見る", systemImage: "chart.bar")
-                    }
-                } header: {
-                    Text("仕事とタスク")
                 }
 
-                Section {
-                    NavigationLink {
-                        FactsView()
-                    } label: {
-                        LabeledContent {
-                            Text("\(pipeline.asks.facts.count) 件")
+                if shown.contains("facts") {
+                    Section {
+                        NavigationLink {
+                            FactsView().countsOpen("facts")
                         } label: {
-                            Label("わかったこと帳", systemImage: "lightbulb")
+                            LabeledContent {
+                                Text("\(pipeline.asks.facts.count) 件")
+                            } label: {
+                                Label("わかったこと帳", systemImage: "lightbulb")
+                            }
                         }
+                    } header: {
+                        Text("覚えたこと")
+                    } footer: {
+                        Text("AI からの質問に答えたことが、ここにたまります。")
                     }
-                } header: {
-                    Text("覚えたこと")
-                } footer: {
-                    Text("AI からの質問に答えたことが、ここにたまります。")
                 }
+                S24OtherSection(other: entries.other)
             }
             .navigationTitle("ふり返り")
             .countsOpen("lookBack")
             .settingsGear()
         }
+    }
+
+    /// いま開ける入口（形5 の数に入れるもの）
+    private func available(hasGood: Bool, hasWork: Bool) -> Set<String> {
+        var keys: Set<String> = ["speaking", "taskScore", "facts"]
+        if hasGood { keys.insert("goodThings") }
+        if !pipeline.mothershipFeeds.compare.isEmpty { keys.insert("briefCompare") }
+        if hasWork { keys.formUnion(["workWeek", "workThreads"]) }
+        return keys
     }
 }

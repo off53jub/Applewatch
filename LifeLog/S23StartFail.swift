@@ -82,13 +82,63 @@ enum S23StartFail {
 /// 直接送っているあいだ、時計は iPhone を起こさないので、iPhone からは「便りが 10 分途切れた」に見える。
 /// 2026-11-24 に、時計は 5 分ごとに家の PC に届いていたのに「時計の録音が届いていません」が出て、
 /// 守4 が裏で iPhone の録音を始めようとして断られた。直接送っているあいだは、この 2 つを動かさない。
+///
+/// 2026-11-24（s24 の 急7・取り決め C2）: 「直接送るがオン」だけで黙ると、外の道が止まったとき（今日は 14:58 から 4 時間）に
+/// 本人に知らせる道が無くなる。いまは、家の PC が GET /watch-route の watchDirectLast で「外の道で 30 分（仮）以内に預かった」と
+/// 言っているあいだだけ黙る。読めない・PC が古い（watchDirectLast が無い）ときは黙らない（前の動きに戻って知らせる）
 @MainActor
 enum S23WatchQuiet {
-    /// 時計が最後に教えてくれた「直接送るがオン」と、今日の録り方の実験（iPhone 経由だけの日でない）から決める
-    static func watchSendsDirect() -> Bool {
+    /// 家の PC が最後に外の道で時計の区切りを預かった時刻（1970 からの秒。0 は無い）と、最後に聞きに行った時刻
+    static let pcLastKey = "s24.watchDirectLast"
+    static let askedKey = "s24.watchDirectAsked"
+
+    /// 時計が最後に教えてくれた「直接送るがオン」・今日の録り方の実験（iPhone 経由だけの日でない）・家の PC に 30 分以内に届いたか、から決める
+    static func watchSendsDirect(now: Date = .now) -> Bool {
         guard WCSession.isSupported() else { return false }
         let watch = WCSession.default.receivedApplicationContext
-        return isDirect(watchDirectOn: watch["pcDirect"] as? Bool, allowed: S21Rules.allowsDirect(S21Book.routeToday()))
+        return S24Watch.quiet(watchDirectOn: watch["pcDirect"] as? Bool, allowed: S21Rules.allowsDirect(S21Book.routeToday()),
+                              pcLast: pcLast, now: now)
+    }
+
+    /// 覚えている「家の PC が最後に預かった時刻」（無ければ nil）
+    static var pcLast: Date? {
+        let t = UserDefaults.standard.double(forKey: pcLastKey)
+        return t > 0 ? Date(timeIntervalSince1970: t) : nil
+    }
+
+    private static func storePCLast(_ date: Date?) {
+        if let date {
+            UserDefaults.standard.set(date.timeIntervalSince1970, forKey: pcLastKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: pcLastKey)
+        }
+    }
+
+    /// 家の PC に GET /watch-route で聞き直す（5 分に 1 回まで。仮）。聞けなかった・PC が古いときは覚えていた時刻を消す（C2）。
+    /// 合言葉が入った答えなので、watchDirectLast だけを読む（宛先と合言葉は今までどおり WatchRoute が 6 時間に 1 回覚える）
+    static func refreshPCLast(_ pc: HomePC, now: Date = .now) async {
+        guard pc.isConfigured, pc.watchDirect else {
+            storePCLast(nil)
+            return
+        }
+        guard S24Watch.askDue(lastAsked: UserDefaults.standard.double(forKey: askedKey), now: now.timeIntervalSince1970) else { return }
+        UserDefaults.standard.set(now.timeIntervalSince1970, forKey: askedKey)
+        guard pc.features.contains("watchroute") else {
+            storePCLast(nil)
+            return
+        }
+        struct Reply: Decodable {
+            let watchDirectLast: String?
+        }
+        do {
+            let data = try await pc.getJSONData("watch-route", timeout: 8)
+            let reply = try JSONDecoder().decode(Reply.self, from: data)
+            storePCLast(S24Watch.parseLast(reply.watchDirectLast))
+            Tally.add(reply.watchDirectLast == nil ? "s24.watchQuiet.noLast" : "s24.watchQuiet.asked")
+        } catch {
+            storePCLast(nil)
+            Tally.add("s24.watchQuiet.failed")
+        }
     }
 
     /// 純粋な判断（テスト用）

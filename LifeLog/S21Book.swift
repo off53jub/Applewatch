@@ -295,6 +295,9 @@ extension Pipeline {
             let wait = max(5, S21Rules.watchQuiet - Date.now.timeIntervalSince(seen))
             try? await Task.sleep(for: .seconds(wait))
             guard !Task.isCancelled, let self else { return }
+            // 動く前に、家の PC が 30 分（仮）以内に時計の区切りを預かっていないかを聞き直す（2026-11-24。s24 の 急7・C2）
+            await S23WatchQuiet.refreshPCLast(self.homePC)
+            guard !Task.isCancelled, !S23WatchQuiet.watchSendsDirect() else { return }
             let action = S21Rules.SilenceAction(rawValue: UserDefaults.standard.string(forKey: S21Rules.silenceActionKey) ?? "") ?? .notify
             Tally.add("s21.watchQuiet")
             guard S21Rules.shouldStartPhone(action: action, watchWanted: true, phoneRecording: self.isRecording,
