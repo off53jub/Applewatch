@@ -13,7 +13,8 @@ extension LL {
 // MARK: - 見た目（暗い画面が先。体5）
 
 enum LLAppearance: String, CaseIterable, Identifiable {
-    case dark, light, system
+    /// sun は日なたの版（明るい画面の文字を濃く・地を白く。2026-11-25。s26 の 絵6。LLSun）
+    case dark, light, sun, system
     var id: String { rawValue }
     static let key = "llAppearance"
 
@@ -21,6 +22,7 @@ enum LLAppearance: String, CaseIterable, Identifiable {
         switch self {
         case .dark: "暗い（夜の青）"
         case .light: "明るい"
+        case .sun: "日なた（外で読みやすく）"
         case .system: "iPhone に合わせる"
         }
     }
@@ -28,7 +30,7 @@ enum LLAppearance: String, CaseIterable, Identifiable {
     var scheme: ColorScheme? {
         switch self {
         case .dark: .dark
-        case .light: .light
+        case .light, .sun: .light
         case .system: nil
         }
     }
@@ -502,7 +504,15 @@ extension LLHaptic {
     func play() {
         switch self {
         case .started:
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            // 言葉どおり短く 2 回（2026-11-25。s26 の 絵7。前は 1 回だった）
+            let g = UIImpactFeedbackGenerator(style: .medium)
+            g.impactOccurred()
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(120))
+                g.impactOccurred()
+            }
+        case .arrived:
+            UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.5)
         case .stopped:
             UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
         case .confirm:
@@ -547,12 +557,14 @@ struct LLPillButtonStyle: ButtonStyle {
 /// 印の名前から色の意味を決めるのは `LLTone.forFix(_:)`（Shared/Design/S22DesignRules.swift）。
 /// A1 の `CheckupFix`（self_・wait・askClaude）とは、合流のときに `LLTone.forFix(fix.rawValue)` でつなぐ（docs/s22-design.md）
 extension LLTone {
+    /// 色の役割（s26 の 絵2。赤＝本人が動く・オレンジ＝待てば戻る・青＝機械が進めている）に合わせた（2026-11-25）。
+    /// 前は 待てば直る＝灰・Claude に頼む＝琥珀だった
     var color: Color {
         switch self {
         case .ok: LL.good
-        case .act: LL.danger
-        case .wait: LL.dim
-        case .claude, .warn: LL.warn
+        case .act, .warn: LLRole.act.color
+        case .wait: LLRole.wait.color
+        case .claude: LLRole.machine.color
         case .unknown: LL.dim.opacity(0.7)
         }
     }
