@@ -475,8 +475,27 @@ def check_summary() -> int:
     return failed
 
 
+
+def check_search() -> int:
+    """K8: POST /mother-search の中身の確かめと、返す形（まとめ役が 2026-11-25 に足した）"""
+    import datetime as _dt
+    failed = 0
+    r = s25pc.search_request(json.dumps({"query": "見本", "k": 99, "days": 7}).encode(), today=_dt.date(2026, 11, 25))
+    failed += say(r["k"] == s25pc.SEARCH_K_MAX and r["frm"] == "2026-11-18", "検索: k の上限と days から始まりの日")
+    try:
+        s25pc.search_request(b'{"query": ""}')
+        failed += say(False, "検索: 空の query を断る")
+    except ValueError:
+        failed += say(True, "検索: 空の query を断る")
+    hits = s25pc.search_hits([{"source": "line", "day": "2026-11-20", "time": "10:00", "text": "見本さんと話した", "path": "x", "score": 0.9},
+                              {"source": "line", "day": "2026-11-20", "text": "ほかの話"}], "見本", 5)
+    failed += say(len(hits) == 1 and "path" not in hits[0] and "score" not in hits[0], "検索: 人でしぼり、path と点を出さない")
+    import appfeeds
+    failed += say(appfeeds.FEEDBACK.get("draft") == ("sent", "edited", "dropped"), "下書きの答えを受ける（K2）")
+    return failed
+
 CHECKS = [check_feeds, check_share, check_bot, check_ping, check_whisper, check_stages, check_mic_calls, check_teacher,
-          check_snorm_precheck, check_summary]
+          check_snorm_precheck, check_summary, check_search]
 
 
 def run_all() -> int:

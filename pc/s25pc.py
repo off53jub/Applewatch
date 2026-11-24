@@ -32,7 +32,7 @@ import s25pnight
 import s25ptrain
 
 GETS = ("/line-tasks", "/drafts", "/whisper-now")
-POSTS = ("/line/share",)
+POSTS = ("/line/share", "/mother-search")
 LIGHT_EVERY = 1800.0
 TICK = 60.0
 FIRST_WAIT = 180.0
@@ -77,13 +77,13 @@ def _log(text: str) -> None:
 
 def features(config: dict | None = None) -> list[str]:
     config = _config() if config is None else config
-    out = ["linetasks", "drafts", "lineshare", "linehook", "ping"]
+    out = ["linetasks", "drafts", "lineshare", "linehook", "ping", "mothersearch"]
     if config.get("whisper_now") is True:
         out.append("whispernow")
     return out
 
 
-FEATURES = ["linetasks", "drafts", "lineshare", "linehook", "ping"]
+FEATURES = ["linetasks", "drafts", "lineshare", "linehook", "ping", "mothersearch"]
 
 
 # MARK: - つなぐ
@@ -288,8 +288,87 @@ def http_get(handler, path: str) -> None:
 
 
 def http_post(handler, path: str) -> None:
-    """POST /line/share（合言葉は lifelog_pc.py が確かめてから）"""
+    """POST /line/share・/mother-search（合言葉は lifelog_pc.py が確かめてから）"""
+    if path == "/mother-search":
+        http_post_search(handler)
+        return
     s25pfeeds.http_post_share(handler, S.home, _log)
+
+
+# MARK: - K8（活5・活7）: POST /mother-search（Claude を通さない、母艦の文の意味の検索。まとめ役が 2026-11-25 に足した）
+
+SEARCH_K_MAX = 30
+
+
+def search_request(data: bytes, today: datetime.date | None = None) -> dict:
+    """{"query", "k"?, "person"?, "sources"?, "days"?} を確かめる。おかしければ ValueError"""
+    try:
+        body = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError("中身が JSON ではありません") from None
+    if not isinstance(body, dict):
+        raise ValueError("中身が JSON ではありません")
+    query = str(body.get("query") or "").strip()[:200]
+    if not query:
+        raise ValueError("query が空です")
+    try:
+        k = max(1, min(int(body.get("k") or 12), SEARCH_K_MAX))
+    except (TypeError, ValueError):
+        k = 12
+    person = str(body.get("person") or "").strip()[:40] or None
+    sources = [str(x) for x in body.get("sources") or [] if isinstance(x, str)][:10] or None
+    frm = None
+    try:
+        days = int(body.get("days")) if body.get("days") is not None else None
+    except (TypeError, ValueError):
+        days = None
+    if days and days > 0:
+        frm = ((today or datetime.date.today()) - datetime.timedelta(days=min(days, 3650))).isoformat()
+    return {"query": query, "k": k, "person": person, "sources": sources, "frm": frm}
+
+
+def search_hits(raw: list[dict], person: str | None, k: int) -> list[dict]:
+    """返す形にそろえる（path と点は出さない）。person があれば、その名前が文か見出しに出るものだけ"""
+    out = []
+    for hit in raw or []:
+        text = str(hit.get("text") or "")
+        label = str(hit.get("label") or "")
+        if person and person not in text and person not in label:
+            continue
+        row = {"source": str(hit.get("source") or ""), "day": str(hit.get("day") or ""),
+               "time": str(hit.get("time") or ""), "text": text[:600]}
+        if label:
+            row["label"] = label
+        out.append(row)
+        if len(out) >= k:
+            break
+    return out
+
+
+def http_post_search(handler) -> None:
+    length = int(handler.headers.get("Content-Length") or 0)
+    if length <= 0 or length > 16_384:
+        handler.send_json(400, {"ok": False, "error": "中身がありません" if length <= 0 else "長すぎます"})
+        return
+    try:
+        request = search_request(handler.rfile.read(length))
+    except ValueError as error:
+        handler.send_json(400, {"ok": False, "error": str(error)})
+        return
+    try:
+        import mothersearch
+
+        index = getattr(mothersearch, "INDEX", None)
+        if index is None:
+            handler.send_json(503, {"ok": False, "error": "母艦の検索がまだ動いていません"})
+            return
+        wide = request["k"] * 4 if request["person"] else request["k"]
+        raw = index.search(request["query"], k=wide, sources=request["sources"], frm=request["frm"])
+    except Exception as error:  # noqa: BLE001
+        _log(f"母艦の検索（/mother-search）に失敗しました: {type(error).__name__}")
+        handler.send_json(503, {"ok": False, "error": "探せませんでした"})
+        return
+    handler.send_json(200, {"ok": True, "hits": search_hits(raw, request["person"], request["k"])})
 
 
 # MARK: - summary.md
