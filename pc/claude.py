@@ -9,6 +9,8 @@
   その日（この PC のローカルの日付）のその purpose の帳簿の合計が上限に届いたら頼まない（前方一致のうち一番長いもの）。
   どちらも 409 {"error", "purpose_off": "stopped"|"daily_cap"}（402 の今月の上限とは分ける。アプリはその用途だけを
   今までの作り方に戻す）。GET /costs（settle.py）が今月・見込み・今日の用途ごとの額を返す。
+  2026-11-25（s26 軽2・取り決め K7）: 1 日の上限は月の残りから決め直す（today_cap。"auto_caps": false で今までどおり）。
+  GET /costs の today の行に省ける "cap_today"（今日の上限）・"effect"（止まると困ること 1 行）を足した。
 - 帳簿: %LOCALAPPDATA%\\LifeLogPC\\claude-usage.jsonl に、1回ごとに1行足す（母艦の scripts も同じ帳簿に足す）。
   会話の文は書かない（数と値段だけ）。月は "at" の YYYY-MM。
 - 上限: 頼む前に、今月の値段の合計が monthly_usd 以上なら断る（1回分だけ少し越えるのはよい）。
@@ -156,6 +158,8 @@ def load_config() -> dict:
     stopped = data.get("stopped")
     if isinstance(stopped, list):
         config["stopped"] = sorted({s for s in stopped if isinstance(s, str) and 0 < len(s) <= 40})
+    if isinstance(data.get("auto_caps"), bool):  # s26 軽2・K7: false で 1 日の上限を月の残りから決めない
+        config["auto_caps"] = data["auto_caps"]
     return config
 
 
@@ -175,9 +179,118 @@ def purpose_gate(purpose: str, config: dict | None = None, day: str | None = Non
     if purpose in config.get("stopped", []):
         return "stopped", "この用途は止めてあります（claude-config.json の stopped）"
     found = cap_for(purpose, config.get("daily_caps") or {})
-    if found is not None and LEDGER.day_usd(day or today(), purpose) >= found[1]:
-        return "daily_cap", f"この用途の今日の上限 ${found[1]:.2f} に届きました"
+    if found is not None:
+        cap = today_cap(purpose, config, day=day)
+        if cap is not None and LEDGER.day_usd(day or today(), purpose) >= cap:
+            return "daily_cap", f"この用途の今日の上限 ${cap:.2f} に届きました"
     return None
+
+
+# MARK: - 1 日の上限を月の残りから決める（s26 軽2・取り決め K7。母艦の scripts/claude_call.py も同じ決め方）
+#
+#   今日の上限(用途) = min(基の上限×4, max(基の上限, 月の残り×0.8 ÷ 月の残り日数 × 用途の直近 7 日の割合))
+# - 基の上限: daily_caps の前方一致のうち一番長いもの（今までの上限）。基の上限が無い用途は上限なし（今までどおり）
+# - 月の残り: monthly_usd − 今月の合計（0 より下は 0）。月の残り日数: 今日を入れて月末まで
+# - 用途の直近 7 日の割合: 昨日までの 7 日の、その基の上限（前方一致の名前）に入る用途の合計 ÷ 基の上限のある用途の合計。
+#   その 7 日に 1 回も使っていない用途と、7 日の合計が 0 のときは 1/用途の数（用途の数＝daily_caps の数）
+# - claude-config.json の "auto_caps": false で今までの決まり（基の上限のまま）。初めはオン。月 $100 の上限は変えない
+
+AUTO_CAP_TIMES = 4.0
+AUTO_CAP_SPEND = 0.8
+AUTO_CAP_DAYS = 7
+
+
+def month_days_left(day: str) -> int:
+    """今日を入れて月末まで何日か"""
+    moment = datetime.date.fromisoformat(day)
+    following = (moment.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
+    return (following - moment).days
+
+
+def recent_shares(caps: dict, day: str, days: int = AUTO_CAP_DAYS) -> dict[str, float]:
+    """基の上限の名前 → 昨日までの days 日の使った割合（使っていない名前は入れない）"""
+    moment = datetime.date.fromisoformat(day)
+    by_prefix: dict[str, float] = {}
+    for back in range(1, days + 1):
+        for purpose, usd in LEDGER.day_by_purpose((moment - datetime.timedelta(days=back)).isoformat()).items():
+            found = cap_for(purpose, caps)
+            if found is not None and usd > 0:
+                by_prefix[found[0]] = by_prefix.get(found[0], 0.0) + usd
+    total = sum(by_prefix.values())
+    return {k: v / total for k, v in by_prefix.items()} if total > 0 else {}
+
+
+def today_cap(purpose: str, config: dict | None = None, day: str | None = None) -> float | None:
+    """その用途の今日の上限（基の上限が無ければ None）"""
+    config = config or load_config()
+    caps = config.get("daily_caps") or {}
+    found = cap_for(purpose, caps)
+    if found is None:
+        return None
+    base = float(found[1])
+    if config.get("auto_caps") is False or base <= 0:
+        return base
+    day = day or today()
+    left = max(0.0, float(config.get("monthly_usd") or 0.0) - LEDGER.month(day[:7])["usd"])
+    shares = recent_shares(caps, day)
+    share = shares.get(found[0], 1.0 / max(1, len(caps)))
+    dynamic = left * AUTO_CAP_SPEND / month_days_left(day) * share
+    return round(min(base * AUTO_CAP_TIMES, max(base, dynamic)), 4)
+
+
+# 止まると困ること（1 行。費用の画面の「今日はここまで」に添える。s26 軽2・K7 の effect。無い用途は出さない・仮）
+EFFECTS = {
+    "today-plan": "今日の三つが朝の分のまま新しくならない",
+    "night-review": "夜の読み直し（話し手が違うかもの疑い）が出ない",
+    "brief-compare": "朝のまとめの比べが片方だけになる",
+    "people-pages": "人のページの「いまの様子」が前のまま",
+    "proposals": "母艦からの新しい提案が出ない",
+    "proposal-research": "提案の下調べが付かない",
+    "minutes": "会議のまとめが下書きのまま",
+    "correct": "聞き違いの直しの候補が出ない",
+    "misheard": "聞き違いの見つけ出しが止まる",
+    "weekly": "週のふり返りが前の週のまま",
+    "week": "週のまとめが前の週のまま",
+    "place-guess": "場所の名前の見当が付かない（町と駅だけ）",
+    "rehearse-seeds": "話す練習の種が前のまま",
+    "day": "1 日のまとめが Claude なしの形になる",
+    "threads": "話題の糸が前のまま",
+    "threads-daily": "今日の話題の糸が増えない",
+    "broadcast": "便りの文が決まった形のままになる",
+    "headline": "会話の見出しが機械の決まりの形になる",
+    "notes": "会話のメモが付かない",
+    "unify": "同じ話のまとめが分かれたまま",
+    "tasks": "会話からのタスクの候補が言葉の決まりだけになる",
+    "promises": "約束の拾い出しが言葉の決まりだけになる",
+    "activity": "1 日の動きの説明が数だけになる",
+    "questions": "母艦からの問いが増えない",
+    "prep": "会う前の一枚が前のまま",
+    "mark-sure": "「まとめて OK」の印が増えない",
+    "photo-notes": "写真の控えが増えない",
+    "photo-sign": "写真の看板・レシートが読まれない",
+    "checks": "正しさの抜き取りが増えない",
+    "wish": "欲しい物の拾い出しが止まる",
+    "digest-fallback": "日次ダイジェストの代役が動かない",
+    "replies": "返事の下書きが出ない",
+    "meeting-live": "会議中の耳打ちが止まる",
+    "speaking-coach": "話し方の成績表が前のまま",
+    "link-search": "つながりの探し直しが止まる",
+    "profile-candidates": "プロフィールの候補が増えない",
+    "asr-judge": "割れた行は多数決の文のまま",
+    "honne": "本音メモの読み直しが止まる",
+    "askmother": "「聞く」の答えが探した文だけになる",
+    "paypay-shot": "PayPay の写真が読まれない",
+    "s25-precheck": "迷った問いを先に見ない（今の問いのまま）",
+    "know-": "見立て・自分を知る分の作り直しが止まる",
+}
+
+
+def effect_for(purpose: str) -> str | None:
+    best = None
+    for prefix, text in EFFECTS.items():
+        if purpose.startswith(prefix) and (best is None or len(prefix) > len(best[0])):
+            best = (prefix, text)
+    return best[1] if best is not None else None
 
 
 # MARK: - 値段と帳簿
@@ -364,8 +477,16 @@ def costs_report(when: float | None = None) -> dict:
     rows = []
     for purpose in names:
         found = cap_for(purpose, config["daily_caps"])
-        rows.append({"purpose": purpose, "usd": round(spent_today.get(purpose, 0.0), 6),
-                     "cap": found[1] if found is not None else None, "stopped": purpose in config["stopped"]})
+        row = {"purpose": purpose, "usd": round(spent_today.get(purpose, 0.0), 6),
+               "cap": found[1] if found is not None else None, "stopped": purpose in config["stopped"]}
+        # s26 軽2・K7（省ける）: 今日の上限（月の残りから決めたもの）と、止まると困ること 1 行
+        cap_today = today_cap(purpose, config, day=day) if found is not None else None
+        if cap_today is not None:
+            row["cap_today"] = cap_today
+        effect = effect_for(purpose)
+        if effect:
+            row["effect"] = effect
+        rows.append(row)
     rows.sort(key=lambda r: (-r["usd"], r["purpose"]))
     by_month = [{"purpose": p, "usd": round(u, 6), "calls": int(got["purpose_calls"].get(p, 0))}
                 for p, u in got["by_purpose"].items()]

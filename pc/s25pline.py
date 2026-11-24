@@ -16,6 +16,10 @@ POST /line/hook（外の道＝Tailscale Funnel の受け口 watchroute.py から
     （HOME/s25p/line-letters.json。母艦のファイルは書かない）
 - 返事の鍵は環境変数 LINE_CHANNEL_ACCESS_TOKEN（linehook.access_token。表示も記録もしない）。鍵が無ければ答えない。
 記録（log.txt）には数だけ（文・名前・userId は書かない）。初めはオン（LINE の管理画面で Webhook の URL を入れるまでは何も来ない）。
+2026-11-25（s26 結9・取り決め K3）: 返事の終わりに、押すとアプリのその所が開くリンクを 1 行足す（link_line）。
+  「◯◯さん」→ lifelog://person/<名前を URL エンコード>・日のまとめ → lifelog://day/YYYY-MM-DD・
+  便り → その便りに "link"（lifelog:// の形）があればそれ、無ければ lifelog://drafts は付けない（付けるのは link があるものだけ）。
+  LINE が lifelog:// を押せる字にするかは確かめていない（仮。押せなければ、長押しで写して Safari に貼る）。
 """
 
 from __future__ import annotations
@@ -43,6 +47,26 @@ PERSON = re.compile(r"^(.{1,20}?)(さん|くん|ちゃん|様|さま)$")
 SUMMARY_WORDS = ("まとめ",)
 LETTER_WORDS = ("便り", "たより")
 _lock = threading.Lock()
+LINK = re.compile(r"lifelog://(person/[^\s]{1,300}|day/\d{4}-\d{2}-\d{2}|talk/[^\s]{1,120}|task/[^\s]{1,120}|drafts|waiting)")
+
+
+def person_link(name: str) -> str:
+    """K3: lifelog://person/<名前を URL エンコード>"""
+    import urllib.parse
+
+    return "lifelog://person/" + urllib.parse.quote(name, safe="")
+
+
+def day_link(day: str) -> str:
+    return f"lifelog://day/{day}"
+
+
+def with_link(text: str, link: str | None) -> str:
+    """返事の終わりにリンクを 1 行（形が K3 に合わないものは足さない。5,000 字に収める）"""
+    if not link or not LINK.fullmatch(link):
+        return text[:REPLY_MAX]
+    tail = "\n" + link
+    return text[:REPLY_MAX - len(tail)] + tail
 
 
 def _bare(text: str) -> str:
@@ -95,7 +119,8 @@ def letters_answer(home: Path, feed: dict, now: datetime.datetime | None = None)
     parts = []
     for x in picked:
         at = str(x.get("at") or "")[5:16].replace("T", " ")
-        parts.append((f"［{at}］" if at else "") + x["text"].strip())
+        link = x.get("link") if isinstance(x.get("link"), str) and LINK.fullmatch(x["link"]) else None
+        parts.append((f"［{at}］" if at else "") + x["text"].strip() + (f"\n{link}" if link else ""))
     rest = len(fresh) - len(picked)
     body = "\n\n".join(parts) + (f"\n\n（ほかに {rest} 件。もう一度送ると続きを返します）" if rest > 0 else "")
     return body[:REPLY_MAX]
@@ -126,14 +151,16 @@ def answer(text: str, home: Path, mother: Path | None, today: datetime.date | No
         name = who.group(1)
         people = feed.get("people") if isinstance(feed.get("people"), dict) else {}
         line = people.get(name) or people.get(bare)
-        return "person", (str(line)[:REPLY_MAX] if isinstance(line, str) and line.strip() else f"{name}さんの 1 行はまだありません")
+        text = str(line) if isinstance(line, str) and line.strip() else f"{name}さんの 1 行はまだありません"
+        return "person", with_link(text, person_link(name))
     if bare in SUMMARY_WORDS:
         summary = feed.get("summary")
         return "summary", (summary[:REPLY_MAX] if isinstance(summary, str) and summary.strip() else "まとめはまだありません")
     back = linehook.day_word(raw)
     if back is not None and mother is not None:
         day = ((today or datetime.date.today()) - datetime.timedelta(days=back)).isoformat()
-        return "day", linehook.day_summary(mother, day) or f"{day} のまとめはまだありません（ふつうは次の朝にできます）"
+        text = linehook.day_summary(mother, day) or f"{day} のまとめはまだありません（ふつうは次の朝にできます）"
+        return "day", with_link(text, day_link(day))
     return "letters", letters_answer(home, feed)
 
 

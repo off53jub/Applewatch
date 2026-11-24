@@ -29,7 +29,13 @@ import claude  # noqa: E402
 import ops  # noqa: E402
 import settle  # noqa: E402
 from v6checks import KEY, Client, say  # noqa: E402
-from v11checks import FakeClaude, put_config, put_key, reset_files  # noqa: E402
+from v11checks import FakeClaude, put_key, reset_files  # noqa: E402
+from v11checks import put_config as _put_config  # noqa: E402
+
+
+def put_config(body: dict) -> None:
+    """ここでは基の上限そのものの決まりを確かめる（s26 K7 の月の残りから決める上限は v26checks_s26p.py が確かめる）"""
+    _put_config({"auto_caps": False, **body} if isinstance(body, dict) else body)
 
 SECRET_CLAIM = "見本の秘密の主張"
 SECRET_TITLE = "見本の秘密の施策"
@@ -159,7 +165,9 @@ def check_costs() -> int:
                   and "weekly" not in rows and set(rows["misheard"]) == {"purpose", "usd", "calls"},
                   f"month_by_purpose: 今月の用途ごとの額と回数（{got.get('month_by_purpose')}）")
     failed += say(set(got) == {"available", "month", "month_usd", "projected_usd", "monthly_usd", "today", "month_by_purpose"}
-                  and set(got["today"][0]) == {"purpose", "usd", "cap", "stopped"}, "GET /costs の形は約束どおり")
+                  and {"purpose", "usd", "cap", "stopped"} <= set(got["today"][0])
+                  <= {"purpose", "usd", "cap", "stopped", "cap_today", "effect"},   # s26 K7: 省ける cap_today・effect
+                  "GET /costs の形は約束どおり")
     # 見込み: 11/15 の正午に $14.5 → 14.5 日で割って 30 日
     noon = time.mktime((2026, 11, 15, 12, 0, 0, 0, 0, -1))
     failed += say(abs(claude.projected(14.5, noon) - 30.0) < 1e-6 and abs(claude.projected(1.0, time.mktime((2026, 2, 1, 3, 0, 0, 0, 0, -1))) - 28.0) < 1e-6,
