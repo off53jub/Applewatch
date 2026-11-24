@@ -1524,6 +1524,7 @@ struct TaskBookView: View {
         }
         .navigationTitle(scope == .all ? "タスク" : "タスク（\(scope.label)）")
         .countsOpen("taskBook")
+        .s26uHelp("taskBook")
         .toolbar {
             // 仕事｜仕事以外｜全部 と、知らせの設定（2026-11-12。前は上の2段めの切り替えと、ベルのボタン）
             ToolbarItem(placement: .topBarLeading) {

@@ -26,7 +26,9 @@ enum CloudLog {
     /// ファイルと同じ中身のアプリの中の写し（読めたあと・足したあと。lock の中だけで触る）
     nonisolated(unsafe) private static var cache: [Entry]?
     nonisolated(unsafe) private static var writePending = false
+    // 2026-11-25（s26 の 軽10）: 11/22 は 1 日に 367MB。まとめる間を記録の大きさから決める（S26UWrite.delay。1 日 100MB・仮）
     private static let writeDelay: TimeInterval = 120
+    nonisolated(unsafe) private static var lastBytes = 0
 
     static func load() -> [Entry] {
         lock.withLock {
@@ -60,7 +62,8 @@ enum CloudLog {
             // ファイルには writeDelay 秒まとめて書く（落ちたら、失うのは数分の送った記録だけ）
             guard !writePending else { return }
             writePending = true
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + writeDelay) { CloudLog.flush() }
+            let wait = S26UWrite.delay(base: writeDelay, lastBytes: lastBytes)
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + wait) { CloudLog.flush() }
         }
     }
 
@@ -71,6 +74,7 @@ enum CloudLog {
             guard let cache, let data = try? JSONEncoder().encode(cache) else { return }
             try? data.write(to: url, options: .atomic)
             WriteMeter.note("cloudLog", data.count)  // 書き込みの多い所を測る（2026-11-22。s21 の 速5）
+            lastBytes = data.count
         }
     }
 

@@ -128,6 +128,8 @@ struct LifeLogApp: App {
         #endif
         // s25 の A1（2026-11-24。S25TBook.swift）: LINE のタスク候補・下書きの棚を読む・録音中の耳打ち（初めはオフ）
         S25TBook.install(pipeline, live: !Self.testing && !Self.demo)
+        // s26 の A2（2026-11-25。S26UBook.swift）: 操作待ち・機械がしたこと・すきまの 1 件を読む・時計への録り方の指図・コントロールセンター
+        S26UBook.install(pipeline, live: !Self.testing && !Self.demo)
         if !Self.testing && !Self.demo {
             Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
                 Task { @MainActor in pipeline.updateHold() }

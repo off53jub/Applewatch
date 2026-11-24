@@ -36,6 +36,8 @@ struct S22Widgets: WidgetBundle {
         S22ReviewWidget()
         // ロック画面の今日の帯（s22 の 見18。TodayBandWidget.swift）
         TodayBandWidget()
+        // コントロールセンターの「録り方の組を替える」（2026-11-25。s26 の 軽3。S26UControls.swift）
+        S26UPresetControl()
     }
 }
 

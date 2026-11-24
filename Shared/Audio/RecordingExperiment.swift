@@ -112,7 +112,9 @@ enum RecordingExperiment {
 
     /// 時計の録音の音質（会議モードは 48kbps）
     static func watchBitrate(now: Date = .now) -> Int {
-        bitrate(combo: current(now: now), meeting: meetingNow, meetingRate: meetingBitrate)
+        let local = bitrate(combo: current(now: now), meeting: meetingNow, meetingRate: meetingBitrate)
+        // iPhone の録り方の指図があれば、それに従う（会議モードのあいだは時計の決まり。2026-11-25。s26 の 軽6。S26UWatchPlan）
+        return S26UWatchPlan.bitrate(local: local, plan: S26UWatchPlan.saved, meeting: meetingNow, now: now)
     }
 
     // MARK: iPhone と時計のあいだ
