@@ -22,4 +22,10 @@ final class S23StartFailTests: XCTestCase {
         XCTAssertFalse(S23StartFail.isPending(at: 1_000_000 - 31 * 60, now: now))
         XCTAssertFalse(S23StartFail.isPending(at: 0, now: now))
     }
+
+    func testWatchDirectSilencesQuietAlert() {
+        XCTAssertTrue(S23WatchQuiet.isDirect(watchDirectOn: true, allowed: true))
+        XCTAssertFalse(S23WatchQuiet.isDirect(watchDirectOn: true, allowed: false))  // iPhone 経由だけの日
+        XCTAssertFalse(S23WatchQuiet.isDirect(watchDirectOn: nil, allowed: true))    // 古い版の時計
+    }
 }

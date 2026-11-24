@@ -1,4 +1,5 @@
 import Foundation
+import WatchConnectivity
 import UserNotifications
 
 /// iPhone の録音を始められなかったとき（2026-11-24）。
@@ -74,5 +75,24 @@ enum S23StartFail {
         content.interruptionLevel = UrgentNotice.level(for: S23Resume.stalledID)
         content.categoryIdentifier = S23Rec.phoneResumeCategory
         NoticeGate.add(UNNotificationRequest(identifier: S23Resume.stalledID, content: content, trigger: nil))
+    }
+}
+
+/// 時計が家の PC に直接送っているか（2026-11-24）。
+/// 直接送っているあいだ、時計は iPhone を起こさないので、iPhone からは「便りが 10 分途切れた」に見える。
+/// 2026-11-24 に、時計は 5 分ごとに家の PC に届いていたのに「時計の録音が届いていません」が出て、
+/// 守4 が裏で iPhone の録音を始めようとして断られた。直接送っているあいだは、この 2 つを動かさない。
+@MainActor
+enum S23WatchQuiet {
+    /// 時計が最後に教えてくれた「直接送るがオン」と、今日の録り方の実験（iPhone 経由だけの日でない）から決める
+    static func watchSendsDirect() -> Bool {
+        guard WCSession.isSupported() else { return false }
+        let watch = WCSession.default.receivedApplicationContext
+        return isDirect(watchDirectOn: watch["pcDirect"] as? Bool, allowed: S21Rules.allowsDirect(S21Book.routeToday()))
+    }
+
+    /// 純粋な判断（テスト用）
+    nonisolated static func isDirect(watchDirectOn: Bool?, allowed: Bool) -> Bool {
+        watchDirectOn == true && allowed
     }
 }

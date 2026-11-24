@@ -477,7 +477,9 @@ final class Pipeline {
         receiver.onWatchRecording = { [weak self] recording, at in
             guard let self else { return }
             // 時計は区切るたびに知らせてくる。しばらく知らせが無ければ通知する
-            if recording, stopAlertsOn {
+            // 時計が家の PC に直接送っているあいだは、iPhone は起こされず便りが途切れて見える＝誤報になるので鳴らさない
+            // （家の PC の見張りが「時計の区切りが届かない」を LINE で知らせる。2026-11-24。S23StartFail.swift）
+            if recording, stopAlertsOn, !S23WatchQuiet.watchSendsDirect() {
                 Self.scheduleWatchAlert(after: (at ?? .now).addingTimeInterval(Self.watchSilence))
             } else {
                 Self.cancelWatchAlert()
