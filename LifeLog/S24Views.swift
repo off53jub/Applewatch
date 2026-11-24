@@ -220,7 +220,7 @@ struct S24TodayAskSection: View {
                     let names = keys.compactMap { S24Entry.of($0)?.title }
                     S24RoleLabel(text: "30 日開かなかった画面（" + names.joined(separator: "・") + "）を「ほか」に畳みますか？", role: .ask)
                         .font(.callout)
-                    HStack(spacing: 12) {
+                    LLAdaptiveStack(spacing: LL.Space.m) {  // 文字がとても大きいときは縦に（s26 の 絵10）
                         Button("畳む") {
                             S24FoldBook.shared.answerOffer(fold: keys)
                             foldOffer = []
