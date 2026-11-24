@@ -378,13 +378,16 @@ private struct TodayView: View {
         let pcQuiet: String? = PCSilence.todayLine(configured: pipeline.homePC.isConfigured, last: PCSilence.lastContactNow(), now: .now)
         // 期限が3日以内の決めごと（2026-11-15。強化案 61。PagesFeeds.swift）
         let decisionsDue: [DecisionItem] = PagesBook.shared.dueSoon()
-        if sign != nil || held || !stale.isEmpty || noLogin || pcQuiet != nil || !decisionsDue.isEmpty {
+        // 時計の版が iPhone より古いまま 24 時間（仮）。知らせは増やさずここだけ（2026-11-24。s25 の 堅3。S25UViews.swift）
+        let watchLag: String? = S25UBook.watchLagLine()
+        if sign != nil || held || !stale.isEmpty || noLogin || pcQuiet != nil || !decisionsDue.isEmpty || watchLag != nil {
             // 色の役割は 3 つ: 赤＝いま本人が動く・青＝機械が進めている・灰＝待てば直る（2026-11-24。s24 の 形8。S24Alerts.role）
             Section("気をつけること") {
                 DecisionDueRows(items: decisionsDue)
                 if let pcQuiet {
                     S24RoleLabel(text: pcQuiet, role: S24Alerts.role(.pcQuiet))
                 }
+                if let watchLag { S25UWatchLagRow(text: watchLag) }
                 if let sign {
                     // 無料の署名は7日で切れ、切れるとアプリが起動しなくなって録音が止まる
                     S24RoleLabel(text: "署名の期限 \(sign)。切れる前に Sideloadly で入れ直してください（記録は消えません）",
@@ -866,9 +869,10 @@ private struct SettingsView: View {
         self.onClose = onClose
     }
     @AppStorage(AppLock.key) private var appLock = false
-    @State private var exportNote: String?
     @AppStorage(ClaudeRoute.useKey) private var useClaude = true
     @AppStorage(ClaudeRoute.workKey) private var claudeForWork = true
+    /// 引き算の版（設定・点検を少なく見せる。初めはオン。2026-11-24。s25 の 大1。S25UViews.swift）
+    @AppStorage(S25USimple.key) private var simple = true
 
     var body: some View {
         NavigationStack {
@@ -900,6 +904,17 @@ private struct SettingsView: View {
     /// 点検（毎日見るもの・調子が悪いとき）
     @ViewBuilder
     private func checkPage() -> some View {
+        if simple {
+            // 引き算の版: 自己点検・聞き取りの成績・報告の棚と「ほかの点検」だけ（ほかは S25UMoreCheckView。消していない）
+            S25UCheckMainSection()
+        } else {
+            fullCheckPage()
+        }
+    }
+
+    /// s24 までの点検の並び
+    @ViewBuilder
+    private func fullCheckPage() -> some View {
         Section {
             NavigationLink("自己点検（実機で動いたか・画面を開いた回数も）") { DiagnosticsView() }
             NavigationLink("聞き取りの成績") { ListenQualityView() }
@@ -925,6 +940,51 @@ private struct SettingsView: View {
         ReflectionCheckSection()
         // 入れた施策の様子・Claude の費用（2026-11-15。強化案 36・37。SettleFeeds.swift）
         SettleCheckSection()
+        SettingsBackupSection()
+    }
+
+    /// 設定の「ふだん」（本人がふだん触るものだけ。2026-11-13。施策 18）と、ほかの全部の入口「くわしい設定」
+    @ViewBuilder
+    private func everydayPage() -> some View {
+        if simple {
+            // 引き算の版: 場面のセット・設定を探す・Face ID と Claude・くわしい設定と「ほかの設定」だけ（ほかは S25UMoreSettingsView）
+            S20SettingsSection(showRest: false)
+            S22SettingsEntrySection()
+            Section {
+                Toggle("開くときに Face ID", isOn: $appLock)
+                Toggle("Claude を使う", isOn: $useClaude)
+                    .onChange(of: useClaude) { _, _ in ClaudeRoute.resetPauses() }
+            } header: {
+                Text("ふだん")
+            } footer: {
+                Text("Face ID をオンにすると、アプリが前に出るたびに確かめるまで記録を隠します（録音と文字起こしは続きます）。")
+            }
+            S25USimpleSection(simple: $simple)
+            detailedLink()
+        } else {
+            fullEverydayPage()
+        }
+    }
+
+    private func detailedLink() -> some View {
+        Section {
+            NavigationLink {
+                DetailedSettingsView()
+            } label: {
+                Label("くわしい設定", systemImage: "slider.horizontal.3")
+            }
+        } footer: {
+            Text("Google ドライブ・同期・Apple Watch・文字起こし・話者・言語モデル・音声・ほかのアプリとつなぐ、など。")
+        }
+    }
+}
+
+/// 控えと掃除（点検のいちばん下。引き算の版では「ほかの点検」の中。2026-11-24 に SettingsView から分けた）
+struct SettingsBackupSection: View {
+    @Environment(Pipeline.self) private var pipeline
+    @State private var exportNote: String?
+
+    var body: some View {
         Section {
             NavigationLink("登録の控え") { BackupView() }
             NavigationLink("記録の掃除") { CleanupView() }
@@ -948,9 +1008,12 @@ private struct SettingsView: View {
         }
     }
 
-    /// 設定の「ふだん」（本人がふだん触るものだけ。2026-11-13。施策 18）と、ほかの全部の入口「くわしい設定」
+}
+
+extension SettingsView {
+    /// s24 までの設定の並び（設定の「ふだん」と「くわしい設定」の入口）
     @ViewBuilder
-    private func everydayPage() -> some View {
+    fileprivate func fullEverydayPage() -> some View {
         // 場面のセット・見た目・寝ているあいだ・知らせ・説明（2026-11-21。s20 の 体31〜37。S20SettingsViews.swift）
         S20SettingsSection()
         // 設定を探す・変えた所だけ・初めに戻す（2026-11-22。s22 の 楽8・楽9。S22Views.swift）
@@ -976,15 +1039,9 @@ private struct SettingsView: View {
         }
         // 休日の知らせ・時計の外出モード・映画館で休む（2026-11-21。s19。Holiday.swift）
         HolidaySettingsSection()
-        Section {
-            NavigationLink {
-                DetailedSettingsView()
-            } label: {
-                Label("くわしい設定", systemImage: "slider.horizontal.3")
-            }
-        } footer: {
-            Text("Google ドライブ・同期・Apple Watch・文字起こし・話者・言語モデル・音声・ほかのアプリとつなぐ、など。")
-        }
+        // 引き算の版に戻すスイッチ（2026-11-24。s25 の 大1）
+        S25USimpleSection(simple: $simple)
+        detailedLink()
     }
 }
 

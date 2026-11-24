@@ -422,6 +422,8 @@ struct S22SettingEntry: Identifiable {
         // 今日は上の 3 枚だけ・入口は 5 つまで（2026-11-24。s24 の 形1・形5。初めはオン。切ると前の並び）
         defaults(S24Today.foldKey, "今日は上の 3 枚だけ（ほかは畳む）", "見た目", true),
         defaults(S24Entries.limitKey, "入口は 5 つまで（ほかは「ほか」に）", "見た目", true),
+        // 設定・点検・ふり返りを少なく見せる（2026-11-24。s25 の 大1。初めはオン。切ると前の並び）
+        defaults(S25USimple.key, "設定を少なく見せる（引き算の版）", "見た目", true),
     ]
 }
 

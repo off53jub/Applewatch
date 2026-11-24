@@ -4,6 +4,8 @@ import SwiftUI
 /// 自分をふり返る画面（いいこと帳・話し方・仕事の週・案件・タスクの数・わかったこと）を1か所にまとめた。
 struct LookBackTab: View {
     @Environment(Pipeline.self) private var pipeline
+    /// 引き算の版（時間の家計簿・緊張した場面・話題の糸は「ほかのふり返り」へ。初めはオン。2026-11-24。s25 の 大1）
+    @AppStorage(S25USimple.key) private var simple = true
 
     var body: some View {
         let book = pipeline.good
@@ -15,11 +17,15 @@ struct LookBackTab: View {
                 S20LookBackSection()
                 // 今週のふり返り・見立ての台帳・使われ方の数（2026-11-13。施策 2・3・1。MothershipFeeds.swift。写しがあるときだけ）
                 WeeklyLookBackSection()
-                TimeLedgerSection()  // 時間の家計簿（2026-11-15。強化案 60。DraftActions.swift。写しがあるときだけ）
-                // 緊張した場面（心拍が上がった時刻と会話。2026-11-15。強化案 52。CoachTension.swift。写しがあるときだけ）
-                TensionLookBackSection()
-                // 話題の糸（2026-11-15。強化案 54。PagesFeeds.swift。写しがあるときだけ）
-                ThreadsLookBackSection()
+                if simple {
+                    S25UMoreLookBackLink()
+                } else {
+                    TimeLedgerSection()  // 時間の家計簿（2026-11-15。強化案 60。DraftActions.swift。写しがあるときだけ）
+                    // 緊張した場面（心拍が上がった時刻と会話。2026-11-15。強化案 52。CoachTension.swift。写しがあるときだけ）
+                    TensionLookBackSection()
+                    // 話題の糸（2026-11-15。強化案 54。PagesFeeds.swift。写しがあるときだけ）
+                    ThreadsLookBackSection()
+                }
                 // 入口は 5 つまで・使わない画面は「ほか」に（2026-11-24。s24 の 形5・減12。S24Views.swift。消さない・戻せる）
                 let entries = S24Entry.split(list: "lookBack", available: available(hasGood: hasGood, hasWork: hasWork))
                 let shown: Set<String> = entries.shown

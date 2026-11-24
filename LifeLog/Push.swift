@@ -23,7 +23,12 @@ enum PushWake {
         case diag
         /// 試しの通知（PC の画面のボタン）
         case test
+        /// 知らせの道の見張り（家の PC が 1 日 1 回送る静かな試し。届いた印を次の様子で返す。2026-11-24。s25 の 堅4・K6）
+        case ping
     }
+
+    /// 静かな試しが届いた数の名前（K6。家の PC と母艦がこの名前で読む）
+    nonisolated static let pingTally = "s25.ping.got"
 
     /// 届いたときに動かす相手（LifeLogApp が起動時に入れる）
     static weak var pipeline: Pipeline?
@@ -103,6 +108,10 @@ enum PushWake {
             return
         }
         Tally.add("push." + wake.rawValue)
+        if wake == .ping {
+            Tally.add(Self.pingTally)
+            UserDefaults.standard.set(Date.now, forKey: S25UBook.pingAtKey)
+        }
         UserDefaults.standard.set(Date.now, forKey: lastKey)
         // 文字起こしができた知らせなら、次の取り込みで1分を待たずに PC から先に入れる区切りを見る（版 10。PCFirst.swift）
         if wake == .job { PCFirst.jobPushed(Self.job(from: userInfo)) }
@@ -248,7 +257,7 @@ extension Pipeline {
             }
         case .nightly:
             if PCDiag.nightlyPending(doneFor: PCDiag.nightlyDoneFor, now: .now) { PushWake.requestNightlyNow() }
-        case .diag, .test:
+        case .diag, .test, .ping:
             break
         }
         await sendPCDiag(reason: "push-" + kind.rawValue, timeout: max(3, min(8, left())))

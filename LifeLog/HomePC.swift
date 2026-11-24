@@ -646,7 +646,8 @@ final class HomePC {
         var components = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)
         var items = [URLQueryItem(name: "name", value: name)]
         let sent = Date.now
-        Latency.noteSent(name, at: sent)
+        // 送ったときの道も覚える（Wi-Fi 待ち・外の道・まとめて送りを数える。2026-11-24。s25 の 早3。S25UNet）
+        Latency.noteSent(name, at: sent, net: S25UNet.now.rawValue, cellular: useCellular)
         items += Self.timeItems(Latency.marks(name), sent: sent)
         // 待ち合わせを付けるか。付けなかったわけも数える（50 件中 1 件しか待ち合わせで渡していなかった。2026-11-22。s21 の 速1）
         let wait = S21Rules.jobWait(accepts: Self.acceptsJobWait, staged: PCJobUploader.stagedCount, maxWaiting: Self.maxWaiting)
