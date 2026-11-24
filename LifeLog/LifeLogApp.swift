@@ -130,6 +130,8 @@ struct LifeLogApp: App {
         S25TBook.install(pipeline, live: !Self.testing && !Self.demo)
         // s26 の A2（2026-11-25。S26UBook.swift）: 操作待ち・機械がしたこと・すきまの 1 件を読む・時計への録り方の指図・コントロールセンター
         S26UBook.install(pipeline, live: !Self.testing && !Self.demo)
+        // s26 の A1（2026-11-25。S26ABook.swift）: 端末の合図・体の音・曲・写真の食事と名刺・予定で録り方・実績・検索
+        S26ABook.install(pipeline, live: !Self.testing && !Self.demo)
         if !Self.testing && !Self.demo {
             Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
                 Task { @MainActor in pipeline.updateHold() }
@@ -166,6 +168,10 @@ struct LifeLogApp: App {
                         } else {
                             GIDSignIn.sharedInstance.handle(url)
                         }
+                    }
+                    // iPhone の検索（Spotlight）で押した人・日・会話を開く（2026-11-25。s26 の 軽7。S26ABook.swift）
+                    .onContinueUserActivity(S26ASpotlight.activityType) { activity in
+                        if let route = S26ASpotlight.route(activity) { pipeline.openRoute(route) }
                     }
                     .task {
                         guard !Self.demo else { return }

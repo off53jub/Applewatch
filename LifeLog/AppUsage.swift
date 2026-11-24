@@ -38,6 +38,8 @@ struct RecordAppUsageIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult {
         MothershipOutbox.enqueueAppUsage(app: app, event: event.rawValue)
+        // 端末の合図（集中モード・開いていた分。2026-11-25。s26 の 集12・集19。S26ABook.swift）
+        S26ASignalsStore.shared.appUsage(app: app, event: event.rawValue)
         return .result()
     }
 }

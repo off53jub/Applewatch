@@ -281,9 +281,15 @@ final class HealthLink {
         HKQuantityType(.distanceWalkingRunning), HKObjectType.workoutType(),
         // 心拍変動（2026-11-21。s19 の 休45。許可が 1 つ増える）
         HKQuantityType(.heartRateVariabilitySDNN),
+        // 体重・体脂肪・BMI と体の記録（2026-11-25。s26 の 集1・集2。取り決め K1。許可の画面は 1 回で済む）
+        HKQuantityType(.bodyMass), HKQuantityType(.bodyFatPercentage), HKQuantityType(.bodyMassIndex),
+        HKQuantityType(.respiratoryRate), HKQuantityType(.oxygenSaturation), HKQuantityType(.appleSleepingWristTemperature),
+        HKQuantityType(.vo2Max), HKQuantityType(.flightsClimbed), HKQuantityType(.timeInDaylight),
+        HKQuantityType(.environmentalAudioExposure), HKQuantityType(.headphoneAudioExposure),
     ]
-    /// 読む種類を足したら上げる（前に許可した人にも、足した種類だけをもう一度聞く。2026-11-19。3 は心拍変動。2026-11-21）
-    static let readsVersion = 3
+    /// 読む種類を足したら上げる（前に許可した人にも、足した種類だけをもう一度聞く。2026-11-19。3 は心拍変動。2026-11-21。
+    /// 4 は体重と体の記録。2026-11-25。s26 の 集1・集2）
+    static let readsVersion = 4
     static let readsVersionKey = "healthReadsVersion"
 
     /// 前の版で許可した人に、足した種類だけを 1 回聞く（アプリを開いているときだけ。聞いたら版を覚える）
@@ -399,7 +405,62 @@ final class HealthLink {
             day.hrvMin = v.minimumQuantity()?.doubleValue(for: ms)
             day.hrvMax = v.maximumQuantity()?.doubleValue(for: ms)
         }
+        await addBodyExtras(&day, dayStart: dayStart, dayEnd: dayEnd, nightFrom: nightFrom, nightTo: nightTo)
         return day
+    }
+
+    /// 体重・体脂肪・BMI と体の記録（2026-11-25。s26 の 集1・集2・集3。取り決め K1。許可が無ければ空のまま）。
+    /// 体重はヘルスケアに無い日だけ、アプリで入れた体重（ショートカットの「体重を入れる」）を使う
+    private func addBodyExtras(_ day: inout HealthExport.Day, dayStart: Date, dayEnd: Date, nightFrom: Date, nightTo: Date) async {
+        let perMinute = HKUnit.count().unitDivided(by: .minute())
+        day.weightKg = await lastSample(.bodyMass, from: dayStart, to: dayEnd)?.quantity.doubleValue(for: .gramUnit(with: .kilo))
+            ?? S26AWeightBook.weight(on: day.day)
+        day.bodyFatPercent = await lastSample(.bodyFatPercentage, from: dayStart, to: dayEnd)
+            .map { $0.quantity.doubleValue(for: .percent()) * 100 }
+        day.bmi = await lastSample(.bodyMassIndex, from: dayStart, to: dayEnd)?.quantity.doubleValue(for: .count())
+        day.respiratoryRate = await statistics(.respiratoryRate, from: dayStart, to: dayEnd, options: .discreteAverage)?
+            .averageQuantity()?.doubleValue(for: perMinute)
+        day.oxygenPercent = await statistics(.oxygenSaturation, from: dayStart, to: dayEnd, options: .discreteAverage)?
+            .averageQuantity().map { $0.doubleValue(for: .percent()) * 100 }
+        day.wristTempC = await statistics(.appleSleepingWristTemperature, from: nightFrom, to: nightTo, options: .discreteAverage)?
+            .averageQuantity()?.doubleValue(for: .degreeCelsius())
+        let vo2Unit: HKUnit = HKUnit.literUnit(with: .milli).unitDivided(by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: .minute()))
+        day.vo2Max = await statistics(.vo2Max, from: dayStart, to: dayEnd, options: .discreteAverage)?
+            .averageQuantity()?.doubleValue(for: vo2Unit)
+        day.flights = await statistics(.flightsClimbed, from: dayStart, to: dayEnd, options: .cumulativeSum)?
+            .sumQuantity()?.doubleValue(for: .count())
+        day.daylightMinutes = await statistics(.timeInDaylight, from: dayStart, to: dayEnd, options: .cumulativeSum)?
+            .sumQuantity()?.doubleValue(for: .minute())
+        let dB = HKUnit.decibelAWeightedSoundPressureLevel()
+        day.environmentDB = await statistics(.environmentalAudioExposure, from: dayStart, to: dayEnd, options: .discreteAverage)?
+            .averageQuantity()?.doubleValue(for: dB)
+        day.headphoneDB = await statistics(.headphoneAudioExposure, from: dayStart, to: dayEnd, options: .discreteAverage)?
+            .averageQuantity()?.doubleValue(for: dB)
+        // せき・いびき（録音の音の種類から数えた数だけ。S26ABook.swift の S26ABodySounds）
+        let sounds = S26ABodySounds.counts(on: day.day)
+        day.coughs = sounds.coughs
+        day.snoreMinutes = sounds.snoreMinutes
+    }
+
+    /// その時間のいちばん新しい記録（体重など、その日の最後の値を使うもの）
+    private func lastSample(_ id: HKQuantityTypeIdentifier, from start: Date, to end: Date) async -> HKQuantitySample? {
+        await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+            let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
+            let query = HKSampleQuery(sampleType: HKQuantityType(id), predicate: predicate, limit: 1,
+                                      sortDescriptors: [sort]) { _, samples, _ in
+                continuation.resume(returning: samples?.first as? HKQuantitySample)
+            }
+            store.execute(query)
+        }
+    }
+
+    /// アプリの画面に出す、いちばん新しい体重（30 日以内。ヘルスケアに無ければアプリで入れた体重。2026-11-25。s26 の 集1）
+    func latestWeight(now: Date = .now) async -> (kg: Double, at: Date)? {
+        if enabled, available, let s = await lastSample(.bodyMass, from: now.addingTimeInterval(-30 * 86400), to: now) {
+            return (s.quantity.doubleValue(for: .gramUnit(with: .kilo)), s.endDate)
+        }
+        return S26AWeightBook.latest()
     }
 
     /// その時間にゴルフのワークアウトがあったか（2026-11-21。s19 の 休32。スコアを一言の促しに使う）
@@ -574,12 +635,14 @@ final class ContactsLink {
 
     /// 文の中で「〇〇さん」などと呼ばれた名前のうち、読みが連絡先の人の姓・名と同じものの、連絡先での書き方。
     func mentioned(in texts: [String]) async -> [String] {
-        guard enabled, authorized else { return [] }
+        // 人の名前の読みの辞書（人のページの名前と別名・予定の相手。2026-11-25。s26 の 聞12。S26ABook.swift）は、連絡先が使えなくても引く
+        let extra = S26ANameDict.shared.names
+        guard (enabled && authorized) || !extra.isEmpty else { return [] }
         let called = Set(texts.flatMap { Self.called(in: $0) }.map(Self.reading).filter { $0.count >= 2 })
         guard !called.isEmpty else { return [] }
-        let names = await load()
+        let names = enabled && authorized ? await load() : []
         var result: [String] = []
-        for name in names where called.contains(name.reading) && !result.contains(name.written) {
+        for name in names + extra where called.contains(name.reading) && !result.contains(name.written) {
             result.append(name.written)
             if result.count >= 8 { break }
         }
