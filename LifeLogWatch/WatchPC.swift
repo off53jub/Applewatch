@@ -250,8 +250,13 @@ final class WatchPC: @unchecked Sendable {
         let publicKey = WatchKeychain.read(account: WatchKeychain.publicAccount)
         let homeKey = WatchKeychain.read()
         let busy = lock.withLock { publicBusyUntil.map { now < $0 } ?? false }
+        // 直接送るがオフでも、溜まり続けて時計が自分で送り直したあとの 30 分（仮）は試す（2026-11-24。s24 の 急6。S24WatchRescue）
+        let direct = S24Watch.directNow(stored: defaults.object(forKey: WatchDelivery.directKey) as? Bool ?? false,
+                                        rescueOn: S24Watch.rescueOn,
+                                        rescueUntil: defaults.double(forKey: S24Watch.rescueUntilKey),
+                                        now: now.timeIntervalSince1970)
         guard let route = WatchDelivery.directRoute(
-            direct: defaults.object(forKey: WatchDelivery.directKey) as? Bool ?? false,
+            direct: direct,
             publicURL: defaults.string(forKey: WatchDelivery.publicURLKey), hasPublicKey: publicKey != nil,
             publicUsable: !busy && !Self.publicRefused,
             homeAddress: defaults.string(forKey: WatchDelivery.addressKey), hasHomeKey: homeKey != nil) else { return false }
@@ -362,10 +367,11 @@ final class WatchPC: @unchecked Sendable {
     // MARK: - 残っている古い区切りを追いかけて送る（2026-11-07）
 
     /// 時計に残っていて、まだ PC に送っていない古い区切りを1つ送る（送れたら次へ。1回に3つまで）。
-    /// fresh なら数を3に戻す（区切ったとき・ふつうの区切りが送れたとき）。ほかの区切りを送っている途中なら、それが終わってから
-    func catchUp(fresh: Bool = true) {
+    /// fresh なら数を3に戻す（区切ったとき・ふつうの区切りが送れたとき）。ほかの区切りを送っている途中なら、それが終わってから。
+    /// limit は fresh のときの数（溜まり続けて時計が自分で送り直すときは多め。2026-11-24。s24 の 急6）
+    func catchUp(fresh: Bool = true, limit: Int = WatchDelivery.catchUpLimit) {
         let ready = lock.withLock { () -> Bool in
-            if fresh { catchUpLeft = WatchDelivery.catchUpLimit }
+            if fresh { catchUpLeft = max(catchUpLeft, limit) }
             return catchUpLeft > 0 && catchingUp == nil && sending.isEmpty
         }
         guard ready, let candidates = self.candidates, let power = self.power else { return }

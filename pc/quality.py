@@ -366,6 +366,10 @@ def http_get(handler, url) -> None:
                 body = s22voice.adjust_same_person(State.home, body, s22voice.current_config())
             except Exception:  # noqa: BLE001 — 足せなくても今までの答えは返す
                 pass
+            # s24 当1（取り決め C4）: 「同じ人か」の問いは config.json の "same_person_ask": true のときだけ出す（初めは出さない）
+            import s24rules
+
+            body = s24rules.hold_same_person(body)
             handler.send_json(200, body)
         elif url.path == "/speaker-check":
             handler.send_json(200, voices.read_check(State.home))

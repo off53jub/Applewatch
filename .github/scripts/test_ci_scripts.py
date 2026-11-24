@@ -54,5 +54,41 @@ class NoticeHintsTests(unittest.TestCase):
             self.assertIn("NOTICE_HINTS: total=3 with=1 without=1 indirect_without=1", out)
 
 
+class ScreensDiffTests(unittest.TestCase):
+    def run_diff(self, cur, prev):
+        out = os.path.join(os.path.dirname(cur), "o")
+        r = subprocess.run([sys.executable, os.path.join(HERE, "screens_diff.py"), cur, prev, out],
+                           capture_output=True, text=True, encoding="utf-8",
+                           env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        return r, out
+
+    def test_no_previous_is_green(self):
+        with tempfile.TemporaryDirectory() as d:
+            cur = os.path.join(d, "cur")
+            os.makedirs(cur)
+            r, _ = self.run_diff(cur, os.path.join(d, "nothing"))
+            self.assertEqual(r.returncode, 0)
+
+    def test_changed_screen_is_listed(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow が無い")
+        with tempfile.TemporaryDirectory() as d:
+            cur, prev = os.path.join(d, "cur"), os.path.join(d, "prev")
+            os.makedirs(cur)
+            os.makedirs(prev)
+            Image.new("RGB", (100, 200), "white").save(os.path.join(prev, "001 今日.png"))
+            Image.new("RGB", (100, 200), "white").save(os.path.join(prev, "002 同じ.png"))
+            Image.new("RGB", (100, 200), "black").save(os.path.join(cur, "001 今日.png"))
+            Image.new("RGB", (100, 200), "white").save(os.path.join(cur, "002 同じ.png"))
+            r, out = self.run_diff(cur, prev)
+            self.assertEqual(r.returncode, 0)
+            self.assertIn("変わった 1 枚", r.stdout)
+            self.assertIn("変わった: 001 今日", r.stdout)
+            self.assertNotIn("変わった: 002", r.stdout)
+            self.assertTrue(os.path.exists(os.path.join(out, "diff-sheet-01.jpg")))
+
+
 if __name__ == "__main__":
     unittest.main()

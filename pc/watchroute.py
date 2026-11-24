@@ -9,6 +9,9 @@
 - 預けた仕事には "origin": "watch" を付ける（jobqueue.http_post）。待ち合わせはしない。8MB まで。名前は「年月日-時分秒…-w.m4a」だけ。
 - ふだんの受け口の GET /watch-route（ふだんの合言葉）で、iPhone に宛先と時計の合言葉を渡す（iPhone が時計に渡す）。
   Funnel の設定は、このプログラムは変えない（持ち主が `tailscale funnel` を1回だけ手で打つ）。様子を読むだけ。
+- s24 急7（取り決め C2。2026-11-24）: GET /watch-route の答えに "watchDirectLast"（外の道で最後に時計の区切りを預かった時刻。
+  ISO 8601・この PC の時間帯（+09:00）付き。無ければ null）。預かった（stored）か、もう預かっていた（exists）ときに覚え、
+  HOME/watch-direct-last.json に残す（起動し直しても消えない）。ファイルが無ければ、仕事の一覧の origin watch のいちばん新しい時刻。
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ LOCK_SECONDS = 600.0         # この秒のあいだ、だれにも 429 を返�
 REQUEST_TIMEOUT = 60.0       # 1つの受け付けで、相手を待つ長さ（秒）
 DRAIN_LIMIT = 2 * jobqueue.WATCH_BODY_LIMIT  # 断るときに読み捨てる中身の上限（これより大きければ読まずに閉じる）
 FUNNEL_CACHE = 60.0          # Tailscale の Funnel の様子を覚えておく長さ（秒）
+LAST_FILE = "watch-direct-last.json"  # s24 急7: 外の道で最後に預かった時刻
 TAILSCALE = r"C:\Program Files\Tailscale\tailscale.exe"
 PATHS = {("GET", "/w/ping"), ("POST", "/w/jobs")}
 
@@ -54,6 +58,7 @@ class W:
     # Funnel の様子: (確かめた時刻, Funnel の名前か None)。status は serve の設定（JSON）を読む口（確かめで作り物にする）
     funnel_cache: tuple[float, str | None] | None = None
     status = None
+    last_direct: float | None = None  # s24 急7: 外の道で最後に時計の区切りを預かった時刻（UNIX 秒）
 
 
 def _log(message: str) -> None:
@@ -239,6 +244,8 @@ class WatchHandler(BaseHTTPRequestHandler):
         name = (parse_qs(query_text).get("name") or [""])[0]
         state = jobqueue.http_post(self, queue, query_text, length, origin="watch")
         shown = name if jobqueue.valid_name(name) else "（名前の形が違う）"
+        if state in ("stored", "exists"):
+            note_direct()  # s24 急7: 外の道が生きている印（GET /watch-route の watchDirectLast）
         if state == "stored":
             _log(f"時計から（外の道） {shown}: {length / 1e6:.1f} MB を預かりました")
             try:
@@ -406,12 +413,67 @@ def funnel(force: bool = False) -> str | None:
 # MARK: - ふだんの受け口の GET /watch-route と、見守りの画面
 
 
+def _home() -> Path | None:
+    home = getattr(W.main, "HOME", None)
+    return Path(home) if home is not None else None
+
+
+def note_direct(now: float | None = None) -> None:
+    """s24 急7: 外の道で時計の区切りを預かった時刻を覚える（ファイルにも残す。書けなくても受け付けは続ける）"""
+    now = W.clock() if now is None else now
+    with W.lock:
+        W.last_direct = now
+    home = _home()
+    if home is None:
+        return
+    try:
+        part = home / (LAST_FILE + ".part")
+        part.write_text(json.dumps({"at": round(now, 3)}), encoding="utf-8")
+        os.replace(part, home / LAST_FILE)
+    except OSError:
+        pass
+
+
+def last_direct() -> float | None:
+    """外の道で最後に預かった時刻（覚え → ファイル → 仕事の一覧の origin watch の順に探す）。無ければ None"""
+    with W.lock:
+        if W.last_direct is not None:
+            return W.last_direct
+    home = _home()
+    if home is not None:
+        try:
+            value = json.loads((home / LAST_FILE).read_text(encoding="utf-8")).get("at")
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+                with W.lock:
+                    W.last_direct = float(value)
+                return float(value)
+        except (OSError, ValueError, AttributeError):
+            pass
+    queue = getattr(getattr(W.main, "App", None), "jobs", None)
+    try:
+        times = [float(j.get("queued_at") or 0) for j in queue.listing(origin="watch")] if queue is not None else []
+    except Exception:  # noqa: BLE001
+        times = []
+    times = [t for t in times if t > 0]
+    return max(times) if times else None
+
+
+def iso_local(when: float | None) -> str | None:
+    """UNIX 秒 → この PC の時間帯付きの ISO 8601（秒まで）"""
+    if when is None:
+        return None
+    import datetime
+
+    return datetime.datetime.fromtimestamp(when).astimezone().isoformat(timespec="seconds")
+
+
 def route_info() -> dict | None:
     """GET /watch-route の答え。時計の外の道が動いていなければ None"""
     if not running():
         return None
     host = funnel()
-    return {"url": f"https://{host}" if host else None, "token": W.token, "funnel": bool(host), "port": W.port}
+    return {"url": f"https://{host}" if host else None, "token": W.token, "funnel": bool(host), "port": W.port,
+            "watchDirectLast": iso_local(last_direct())}
 
 
 def http_route(handler) -> None:

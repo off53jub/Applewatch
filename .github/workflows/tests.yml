@@ -32,7 +32,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
         run: |
-          IGNORE='^(pc/|docs/|LifeLogUITests/)|\.md$|^\.github/workflows/(pc|testflight)\.yml$|^\.github/scripts/(screens|grid|contrast|words|notice_hints|whatsnew|asc|test_ci_scripts)\.py$'
+          IGNORE='^(pc/|docs/|LifeLogUITests/)|\.md$|^\.github/workflows/(pc|testflight)\.yml$|^\.github/scripts/(screens|screens_diff|grid|contrast|words|notice_hints|whatsnew|asc|test_ci_scripts)\.py$'
           files=""
           ok=false
           if [ "$EVENT" = "pull_request" ]; then
@@ -249,6 +249,59 @@ jobs:
         if: steps.tour.outputs.status != '0'
         run: exit 1
 
+
+  # s24 形4: 画面の写真を、前の main の実行の写真と比べて、変わった画面だけを 1 枚に並べる（成果物「画面の差」）。
+  # しきい値（画素の 1.0%）は仮。前の写真が取れないときは「比べる相手なし」で緑のまま。報告だけで、ここが落ちても全体は赤にしない（continue-on-error・必須ではない）。
+  screens-diff:
+    needs: screens
+    if: ${{ !cancelled() && needs.screens.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 今回の写真を取る
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: 画面の写真
+          path: ${{ runner.temp }}/cur
+
+      - name: 前の main の写真を取る
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/prev"
+          # 前の main の実行（今の実行以外）を新しい順に見て、写真の成果物が残っている最初のものを使う
+          for id in $(gh run list --repo "$REPO" --workflow tests.yml --branch main --event push --status completed --limit 10 --json databaseId --jq '.[].databaseId'); do
+            [ "$id" = "${{ github.run_id }}" ] && continue
+            n=$(gh api "repos/$REPO/actions/runs/$id/artifacts" --jq '[.artifacts[] | select(.name=="画面の写真" and .expired==false)] | length')
+            if [ "$n" -gt 0 ]; then
+              gh run download "$id" --repo "$REPO" -n "画面の写真" -D "$RUNNER_TEMP/prev" && echo "前の写真: 実行 $id" && exit 0
+            fi
+          done
+          echo "前の写真は見つからなかった"
+
+      - name: 比べて、変わった画面を 1 枚に並べる
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet pillow || true
+          sudo apt-get install -y -qq fonts-noto-cjk >/dev/null 2>&1 || true
+          mkdir -p "$RUNNER_TEMP/diff"
+          "$RUNNER_TEMP/venv/bin/python" .github/scripts/screens_diff.py "$RUNNER_TEMP/cur" "$RUNNER_TEMP/prev" "$RUNNER_TEMP/diff" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: 画面の差
+          path: ${{ runner.temp }}/diff
+          if-no-files-found: warn
 
   # s22 見3・見4: 色の読みやすさと、画面の言葉の見回り。Python だけで数十秒。落とさず、数だけジョブの要約と成果物「色と言葉の報告」に出す。
   report:

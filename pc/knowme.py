@@ -179,7 +179,9 @@ def http_get(handler, path: str, query: str) -> None:
     elif path == "/self-lines":
         handler.send_json(200, selflines.read_day(State.home, (q.get("day") or [datetime.date.today().isoformat()])[0]))
     elif path == "/speaker-split":
-        handler.send_json(200, splitcand.read(State.home))
+        import s24rules  # s24 当1（取り決め C4）: 「A の声と B の声は同じ人ですか」は same_person_ask のときだけ
+
+        handler.send_json(200, s24rules.hold_items(splitcand.read(State.home), State.config()))
     elif path == "/plaud-doubts":
         handler.send_json(200, plauddoubt.listing(State.mother() if State.mother else None, State.store))
     else:

@@ -36,12 +36,14 @@ final class TaskBook {
         /// 話題・感想・報告だけ
         case topic
         case other
-        /// 確かめ待ちのまま7日たった（自動で片づけた。学びには使わない）
+        /// 確かめ待ちのまま日がたった（自動で片づけた。学びには使わない。2026-11-24 から 3 日（仮）。前は 7 日）
         case expired
         /// 知らせの「違う」を押した
         case notice
         /// 確かめ待ちを「全部違う」にした
         case bulk
+        /// 「たぶん違う」（片方のモデルだけが拾った・母艦と同じ条件に足りない）のまま 2 日（仮）たった（自動。学びには使わない。2026-11-24。s24）
+        case expiredWeak
 
         var id: String { rawValue }
 
@@ -52,11 +54,15 @@ final class TaskBook {
             case .notMine: "自分のことではない"
             case .topic: "話題・感想・報告だけ"
             case .other: "そのほか"
-            case .expired: "7日そのまま（自動）"
+            case .expired: "確かめ待ちのまま（自動）"
             case .notice: "知らせから「違う」"
             case .bulk: "まとめて「違う」"
+            case .expiredWeak: "たぶん違うのまま（自動）"
             }
         }
+
+        /// 機械が閉じたもの（本人が決めたものではないので、学びに使わない）
+        var isAuto: Bool { self == .expired || self == .expiredWeak }
 
         /// 本人が選べる理由
         static var choices: [RejectReason] { [.machine, .finished, .notMine, .topic, .other] }
@@ -128,6 +134,9 @@ final class TaskBook {
         var rejectReason: String? = nil
         /// ほかの入り口でも見つかった（「仕事のまとめ 2026-11-10」など。2026-11-10）
         var alsoIn: String? = nil
+        /// 母艦と同じ見つける条件に足りない所（notOwn＝本人の発話が近くに無い・vague＝対象が特定できない）。
+        /// あれば「たぶん違う」に畳む（2026-11-24。s24。前の記録には無い）
+        var weakReason: String? = nil
 
         /// 入り口の言い方。仕事のまとめの宿題は「1日のまとめ」と同じ印（summary）なので、文で見分ける
         var originLabel: String {
@@ -482,7 +491,7 @@ final class TaskBook {
     func reject(_ id: String, reason: RejectReason) {
         guard let i = items.firstIndex(where: { $0.id == id }) else { return }
         // 自動で片づけたものは、本人が決めたものではないので学びに使わない
-        if items[i].state == .candidate && reason != .expired { items[i].fromCandidate = true }
+        if items[i].state == .candidate && !reason.isAuto { items[i].fromCandidate = true }
         items[i].state = .rejected
         items[i].rejectReason = reason.rawValue
         items[i].doneAt = nil
@@ -496,7 +505,7 @@ final class TaskBook {
         var n = 0
         for id in ids {
             guard let i = items.firstIndex(where: { $0.id == id }), items[i].state == .candidate else { continue }
-            if reason != .expired { items[i].fromCandidate = true }
+            if !reason.isAuto { items[i].fromCandidate = true }
             items[i].state = .rejected
             items[i].rejectReason = reason.rawValue
             items[i].updated = .now
@@ -506,16 +515,34 @@ final class TaskBook {
         return n
     }
 
-    /// 確かめ待ちのまま7日たったもの（拾った時刻・最後に触った時刻のどちらからも7日）
-    nonisolated static func expired(_ items: [Item], now: Date = .now, days: Double = 7) -> [Item] {
+    /// 確かめ待ちのまま日がたったもの（拾った時刻・最後に触った時刻のどちらからも。2026-11-24 から 3 日（仮）。前は 7 日）
+    nonisolated static func expired(_ items: [Item], now: Date = .now, days: Double = S24TaskRules.candidateDays) -> [Item] {
         let limit = now.addingTimeInterval(-days * 86400)
         return items.filter { $0.state == .candidate && max($0.said, $0.updated) < limit }
     }
 
-    /// 確かめ待ちのまま7日たったものを、静かに片づける（「違う」にして、理由は「7日そのまま」。学びには使わない）
+    /// 確かめ待ちのまま日がたったものを、静かに片づける（「違う」にして、理由は「確かめ待ちのまま」。学びには使わない）。
+    /// 「たぶん違う」は 2 日（仮）で先に閉じる（2026-11-24。s24）。閉じた数は tally の task.closed.auto・task.closed.weak
     @discardableResult
     func expireCandidates(now: Date = .now) -> Int {
-        rejectAll(Self.expired(items, now: now).map(\.id), reason: .expired)
+        let weak = rejectAll(S24TaskRules.weakExpired(items, now: now).map(\.id), reason: .expiredWeak)
+        if weak > 0 { Tally.add("task.closed.weak", weak) }
+        let old = rejectAll(Self.expired(items, now: now).map(\.id), reason: .expired)
+        if old > 0 { Tally.add("task.closed.auto", old) }
+        return weak + old
+    }
+
+    /// まとめて閉じたものを候補に戻す（「残りは全部いらない」の「戻す」。2026-11-24。s24）
+    func restore(_ ids: [String]) {
+        var n = 0
+        for id in ids {
+            guard let i = items.firstIndex(where: { $0.id == id }), items[i].state == .rejected else { continue }
+            items[i].state = .candidate
+            items[i].rejectReason = nil
+            items[i].fromCandidate = nil
+            n += 1
+        }
+        if n > 0 { save() }
     }
 
     /// ほかの入り口でも見つかったことを残す。確かめ待ちなら「やる」に入れる（2026-11-10）
@@ -803,13 +830,37 @@ extension Pipeline {
                 } else if !items.isEmpty, !MultiModel.secondOpinionOK {
                     Tally.add("second.skipped")
                 }
+                // 母艦と同じ見つける条件（本人の発話が近くにある・対象が特定できる）に足りないものは「たぶん違う」に畳む
+                // （2026-11-24。s24 の 減6。消さずに 2 日（仮）で静かに閉じる）
+                let selfTimes: [Date] = lines.filter { $0.speakerID == SpeakerLabeler.selfID }.map(\.time)
+                for i in items.indices where items[i].source == .conversation && items[i].state == .candidate {
+                    let near: Bool = S24TaskRules.selfSpoke(near: items[i].said, selfTimes: selfTimes)
+                    if let reason = S24TaskRules.ownerCheck(what: items[i].what, selfSpokeNear: near) {
+                        items[i].weakReason = reason
+                        Tally.add("task.weak." + reason)
+                    }
+                }
                 found += items
             }
         }
         let added = tasks.add(found)
-        // 相手か期限が分かるもの・★のものがあるときだけ知らせる。無いものは黙って確かめ待ちへ（2026-11-10）
-        guard Self.worthNotice(added), let notice = Self.foundNotice(added) else { return }
-        Self.notifyTasks(title: notice.title, body: notice.body, ids: added.map(\.id))
+        // 相手か期限が分かるもの・★のものがあるときだけ知らせる。無いものは黙って確かめ待ちへ（2026-11-10）。
+        // 「たぶん違う」は知らせない（2026-11-24。s24）
+        let strong: [TaskBook.Item] = added.filter { !S24TaskRules.isWeak($0) }
+        guard Self.worthNotice(strong) else { return }
+        deliverFound(strong)
+    }
+
+    /// 見つけたものを知らせる。「夜の 1 通にまとめる」（初めはオン。s24 の 減6）なら、その場では出さず夜の 1 通にためる
+    func deliverFound(_ added: [TaskBook.Item]) {
+        let strong: [TaskBook.Item] = added.filter { !S24TaskRules.isWeak($0) }
+        guard !strong.isEmpty else { return }
+        if S24AskSettings.isOn(S24AskSettings.foundNightKey) {
+            S24Book.holdFound(strong.map(\.id), all: tasks.items)
+            return
+        }
+        guard let notice = Self.foundNotice(strong) else { return }
+        Self.notifyTasks(title: notice.title, body: notice.body, ids: strong.map(\.id))
     }
 
     /// 新しく帳に入ったものの知らせの題と文（2026-11-10）。入ったものが無ければ nil。
@@ -901,8 +952,7 @@ extension Pipeline {
             TaskBook.Item(what: todo.what, dueText: TaskBook.cleanDue(todo.due), said: c.start, day: day,
                           place: c.place, quote: "議事録「\(title)」の宿題", source: .minutes, state: .candidate, work: true)
         })
-        guard let notice = Self.foundNotice(added) else { return }
-        Self.notifyTasks(title: notice.title, body: notice.body, ids: added.map(\.id))
+        deliverFound(added)
         tasksChanged()
     }
 
@@ -1020,7 +1070,8 @@ extension Pipeline {
         let old = await center.pendingNotificationRequests().map(\.identifier).filter { $0.hasPrefix(Self.taskNotifyPrefix) }
         center.removePendingNotificationRequests(withIdentifiers: old)
         let open = tasks.open
-        let candidates = tasks.candidates
+        // 確かめ待ちは「今日の候補」（3 件まで・仮）だけを数える（2026-11-24。s24。溜まった数を出さない）
+        let candidates = tasks.todayCandidates()
         // 期限に時刻があるものは、その1時間前に1件ずつ知らせる（2026-11-10）
         if Self.taskDueHourOn {
             for (at, item) in Self.dueHourNotices(open, now: .now) {
@@ -1038,7 +1089,8 @@ extension Pipeline {
                 NoticeStats.countOnce(NoticeActions.dueCategory, key: item.id + "|" + String(Int(at.timeIntervalSince1970)))
             }
         }
-        guard Self.taskRemindOn, !open.isEmpty || !candidates.isEmpty else { return }
+        // 「今週は聞かないで」のあいだは朝夕の便りも止める（期限の 1 時間前は続ける。2026-11-24。s24 の 減10）
+        guard Self.taskRemindOn, !S24Book.quietNow(), !open.isEmpty || !candidates.isEmpty else { return }
         let cal = Calendar.current
         let now = Date.now
         let today = cal.startOfDay(for: now)
@@ -1238,9 +1290,22 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         let request = notification.request
-        // 会話のあとの約束（家の PC から届く。2026-11-13。Promises.swift）は開いているあいだも出し、「今日」の欄を読み直す
+        // 家の PC からの急ぎ（取り決め C1。2026-11-24。s24 の 急3）は、開いているあいだも出して数える
+        if S24Urgent.isUrgent(request.content.userInfo) {
+            NoticeGate.noteShown(identifier: request.identifier, category: request.content.categoryIdentifier, date: notification.date,
+                                 kind: S24Urgent.kind)
+            completionHandler([.banner, .list, .sound])
+            return
+        }
+        // 会話のあとの約束（家の PC から届く。2026-11-13。Promises.swift）は「今日」の欄を読み直す。
+        // 出すのは「約束の知らせ」がオンのときだけ（初めはオフ。台帳と一覧の材料は残す。2026-11-24。s24 の 減5・取り決め C5）
         if request.content.categoryIdentifier == PromiseRules.category {
             Task { @MainActor in PromiseInbox.shared.poke() }
+            guard S24AskSettings.isOn(S24AskSettings.promiseNoticeKey) else {
+                Tally.add("s24.promise.silenced")
+                completionHandler([])
+                return
+            }
             NoticeGate.noteShown(identifier: request.identifier, category: request.content.categoryIdentifier, date: notification.date)
             completionHandler([.banner, .list, .sound])
             return
@@ -1256,10 +1321,25 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
     /// 知らせのボタン・知らせそのものを押されたとき（2026-11-10。中身は NoticeActions.swift）
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
+        // 開いた数・ボタンを押した数（同じ知らせは 1 回だけ。2026-11-24。s24 の 減8。S24Book.swift）
+        S24Book.noteResponse(response)
         // 「録音が止まっています」の「録音を戻す」（2026-11-23。s23 の 止8。中身は S23Resume.swift）
         if S23Resume.handle(response, completion: completionHandler) { return }
         let request = response.notification.request
         let content = request.content
+        // 家の PC からの急ぎ（取り決め C1。2026-11-24。s24 の 急3）: 押したら「いま起きていること」の 1 枚
+        if S24Urgent.isUrgent(content.userInfo) {
+            let identifier: String = request.identifier
+            let copy = content.mutableCopy() as? UNMutableNotificationContent
+            NoticeGate.noteShown(identifier: identifier, category: content.categoryIdentifier, date: response.notification.date,
+                                 kind: S24Urgent.kind)
+            Task { @MainActor in
+                // 名前は APNs の番号なので、数える種類は urgent にそろえる
+                S23Notices.perform(.status(S24Urgent.kind), identifier: S24Urgent.kind, content: copy ?? UNMutableNotificationContent())
+                completionHandler()
+            }
+            return
+        }
         // 押された知らせを履歴に印（体験の数字。2026-11-21。s20 の 体38。S20Book.swift）
         let openedID: String = request.identifier
         Task { @MainActor in S20Book.shared.noteOpened(id: openedID) }
@@ -1383,6 +1463,18 @@ struct TaskBookView: View {
     @State private var rejecting: TaskBook.Item?
     /// 「全部違う」にするもの（2026-11-10）
     @State private var rejectingAll: [String]?
+    /// 「やること｜約束・決めごと」（2026-11-24。s24 の 減9）
+    @State private var shelf = Shelf.todo
+    /// 「残りは全部いらない」で閉じたもの（「戻す」のため。2026-11-24。s24）
+    @State private var closedRest: [String]?
+    @State private var showRest = false
+    @State private var showWeak = false
+
+    /// やることの棚と、約束・決めごとの棚（2026-11-24。s24 の 減9）
+    enum Shelf: String, CaseIterable, Identifiable {
+        case todo = "やること", promises = "約束・決めごと"
+        var id: String { rawValue }
+    }
     /// 頼まれごとを済みにしたあとの返事の下書き（2026-11-12。TaskReply.swift）
     @State private var replyDraft: TaskReply.Draft?
     /// 期限に時刻があるものを1時間前に知らせる（Pipeline.taskDueHourKey と同じ名前）
@@ -1563,7 +1655,12 @@ struct TaskBookView: View {
 
     private func title(_ p: Page, _ book: TaskBook.Lists) -> String {
         switch p {
-        case .todo: let n = book.todo.count + book.candidates.count + homeExtra(scope).count; return n > 0 ? "やる \(n)" : "やる"
+        // 確かめ待ちは今日の候補だけ・約束は別の棚なので数えない（2026-11-24。s24 の 減4・減9）
+        case .todo:
+            let picks = Set(pipeline.tasks.todayCandidates().map(\.id))
+            let n = book.todo.filter { $0.kindOrDefault != .promise }.count + book.candidates.filter { picks.contains($0.id) }.count
+                + homeExtra(scope).count
+            return n > 0 ? "やる \(n)" : "やる"
         case .waiting: return book.waiting.isEmpty ? "待ち" : "待ち \(book.waiting.count)"
         case .people, .done: return p.rawValue
         }
@@ -1588,6 +1685,47 @@ struct TaskBookView: View {
 
     @ViewBuilder
     private func todoPage(_ book: TaskBook.Lists) -> some View {
+        // やることだけの棚と、約束・決めごとの棚（2026-11-24。s24 の 減9。タブの中の切り替え）
+        Section {
+            Picker("棚", selection: $shelf) {
+                ForEach(Shelf.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+        }
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+        .listRowSeparator(.hidden)
+        if shelf == .promises {
+            promisesShelf(book)
+        } else {
+            todoShelf(book)
+        }
+    }
+
+    /// 約束・決めごとの棚（約束の知らせは初めはオフ。台帳と一覧の材料はそのまま。2026-11-24。s24 の 減5・減9）
+    @ViewBuilder
+    private func promisesShelf(_ book: TaskBook.Lists) -> some View {
+        // 決めごと（母艦の帳面のまだ決めていないもの。1 タップで選ぶ。2026-11-15。強化案 61。PagesFeeds.swift）
+        DecisionsTaskSection()
+        // 会話のあとの約束（家の PC から。押すまでタスクには入らない。Promises.swift）
+        PromisesSection()
+        let promises: [TaskBook.Item] = book.todo.filter { $0.kindOrDefault == .promise }
+        if !promises.isEmpty {
+            Section {
+                ForEach(promises) { openRow($0) }
+            } header: {
+                Text("約束")
+            }
+        }
+        Section {
+            EmptyView()
+        } footer: {
+            Text("約束と決めごとは、やることの一覧と分けてここに置きます。約束の知らせは初めは出しません（「知らせの便りと履歴」で戻せます）。")
+        }
+    }
+
+    @ViewBuilder
+    private func todoShelf(_ book: TaskBook.Lists) -> some View {
         // 職場の Claude の答えを取り込んだ「仕事のまとめ」（2026-11-08。仕事以外だけを見ているときは出さない。2026-11-12 から「やる」のいちばん上）
         if scope != .life {
             Section {
@@ -1602,8 +1740,6 @@ struct TaskBookView: View {
                 }
             }
         }
-        // 決めごと（母艦の帳面のまだ決めていないもの。1 タップで選ぶ。2026-11-15。強化案 61。PagesFeeds.swift）
-        DecisionsTaskSection()
         // 今日の三つ（期限を過ぎた・今日までのもの、家の PC が選んだもの。朝の「昨日と今日」と同じ選び方。2026-11-09）。
         // 押すと「解き方」（手順・だいたいの時間・送る文の下書き。2026-11-10）
         let three = pipeline.todayThree()
@@ -1617,38 +1753,55 @@ struct TaskBookView: View {
                 if three.contains(where: \.hasHowTo) { Text("押すと、解き方が出ます。") }
             }
         }
-        if !book.candidates.isEmpty {
+        // 確かめ待ちは「今日の候補」（1 日 3 件・仮）だけを上に。残りと「たぶん違う」は畳む。数は出さない（2026-11-24。s24。本人の困りごと）
+        let picks = Set(pipeline.tasks.todayCandidates().map(\.id))
+        let parts = S24TaskRules.split(book.candidates, today: book.candidates.filter { picks.contains($0.id) }.map(\.id))
+        if !parts.today.isEmpty {
             Section {
-                ForEach(book.candidates) { item in
-                    TaskRow(item: item, player: player) { editing = item }
-                    HStack(spacing: 20) {
-                        Button("入れる", systemImage: "plus.circle") { change(item.id, .open) }
-                        Button("直して入れる", systemImage: "pencil") {
-                            var copy = item
-                            copy.state = .open
-                            editing = copy
-                        }
-                        // 違う理由を選ぶ（2026-11-10。数がたまれば、次にどこを直すかが分かる）
-                        Button("違う", systemImage: "xmark", role: .destructive) { rejecting = item }
-                    }
-                    .buttonStyle(.borderless)
-                    .font(.subheadline)
-                }
+                ForEach(parts.today) { candidateRow($0) }
             } header: {
-                HStack {
-                    Text("確かめてほしい（\(book.candidates.count) 件）")
-                    Spacer()
-                    if book.candidates.count >= 2 {
-                        Button("全部違う", role: .destructive) { rejectingAll = book.candidates.map(\.id) }
-                            .font(.caption)
+                Text("今日の候補")
+            } footer: {
+                Text("会話・議事録・写真・1日のまとめから拾ったものから、1 日 3 件までを出します。合っていれば「入れる」、違えば「違う」（同じものはもう出しません）。\(Int(S24TaskRules.candidateDays))日そのままのものは、自動で片づけます。")
+            }
+        }
+        if !parts.rest.isEmpty || !parts.weak.isEmpty {
+            Section {
+                if !parts.rest.isEmpty {
+                    DisclosureGroup("ほかの候補", isExpanded: $showRest) {
+                        ForEach(parts.rest) { candidateRow($0) }
                     }
+                }
+                if !parts.weak.isEmpty {
+                    DisclosureGroup("たぶん違う", isExpanded: $showWeak) {
+                        ForEach(parts.weak) { candidateRow($0) }
+                    }
+                }
+                Button("残りは全部いらない", systemImage: "tray.and.arrow.up", role: .destructive) {
+                    let ids: [String] = (parts.rest + parts.weak).map(\.id)
+                    withAnimation { closedRest = pipeline.tasks.rejectRest(ids) }
                 }
             } footer: {
-                Text("会話・議事録・写真・1日のまとめから拾ったものです。合っていれば「入れる」、違えば「違う」（同じものはもう出しません）。7日そのままのものは、自動で片づけます。")
+                Text("「たぶん違う」は、2 つの言語モデルの片方だけが拾ったものと、本人の発話が近くに無い・何をするかがはっきりしないものです。\(Int(S24TaskRules.weakDays))日そのままなら静かに閉じます。")
+            }
+        }
+        if let closed = closedRest, !closed.isEmpty {
+            Section {
+                HStack {
+                    Text("残りを閉じました").foregroundStyle(LL.dim)
+                    Spacer()
+                    Button("戻す") {
+                        withAnimation { pipeline.tasks.restore(closed) }
+                        closedRest = nil
+                    }
+                    .buttonStyle(.borderless)
+                }
             }
         }
         // アプリのタスクと、家の PC が拾ったやることを、1つの一覧に混ぜる（2026-11-10。同じものらしければアプリのタスクだけ）
-        let apps = Dictionary(uniqueKeysWithValues: TaskBook.grouped(book.todo).map { ($0.bucket, $0.items) })
+        // 約束は「約束・決めごと」の棚へ（2026-11-24。s24 の 減9）
+        let apps = Dictionary(uniqueKeysWithValues: TaskBook.grouped(book.todo.filter { $0.kindOrDefault != .promise })
+            .map { ($0.bucket, $0.items) })
         let homes = Dictionary(grouping: homeExtra(scope)) { OneTaskList.bucket($0, now: .now) }
         let buckets = TaskBook.Bucket.allCases.filter { apps[$0] != nil || homes[$0] != nil }
         if buckets.isEmpty {
@@ -1754,6 +1907,24 @@ struct TaskBookView: View {
                 Label("入り口ごとの数", systemImage: "chart.bar")
             }
         }
+    }
+
+    /// 確かめ待ちの 1 行と「入れる」「直して入れる」「違う」
+    @ViewBuilder
+    private func candidateRow(_ item: TaskBook.Item) -> some View {
+        TaskRow(item: item, player: player) { editing = item }
+        HStack(spacing: 20) {
+            Button("入れる", systemImage: "plus.circle") { change(item.id, .open) }
+            Button("直して入れる", systemImage: "pencil") {
+                var copy = item
+                copy.state = .open
+                editing = copy
+            }
+            // 違う理由を選ぶ（2026-11-10。数がたまれば、次にどこを直すかが分かる）
+            Button("違う", systemImage: "xmark", role: .destructive) { rejecting = item }
+        }
+        .buttonStyle(.borderless)
+        .font(.subheadline)
     }
 
     /// 「頼まれた 2・約束 1」

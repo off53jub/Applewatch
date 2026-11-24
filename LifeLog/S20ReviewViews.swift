@@ -309,7 +309,8 @@ struct ReviewDeckEntrySection: View {
                 HStack {
                     Label("確かめる（○×）", systemImage: "hand.raised")
                     Spacer()
-                    Text(count > 0 ? "\(count) 枚" : "なし").foregroundStyle(count > 0 ? LL.accent : LL.dim).monospacedDigit()
+                    // 溜まった数は出さない（2026-11-24。s24 の 減4）
+                    Text(count > 0 ? "あります" : "なし").foregroundStyle(count > 0 ? LL.accent : LL.dim)
                 }
             }
         } footer: {

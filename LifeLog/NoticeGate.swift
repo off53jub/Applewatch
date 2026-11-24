@@ -105,9 +105,11 @@ enum NoticeGate {
     /// すぐ出す知らせを、束ねの決まりを通して出す（時刻を決めた知らせは、そのまま頼む）
     static func add(_ original: UNNotificationRequest, now: Date = .now) {
         // 押すとどうなるか・長押しの 1 行を文に足し、質問なら答えそびれの控えに残す（2026-11-23。s23 の 知8・知9・知13）
-        let request: UNNotificationRequest = S23Notices.prepared(original)
+        let prepared: UNNotificationRequest = S23Notices.prepared(original)
         // 止めた種類・朝夕の便りに回すもの（2026-11-21。s20 の 体16・体19。S20Notices.swift）
-        guard S20Notices.pass(request, now: now) else { return }
+        guard S20Notices.pass(prepared, now: now) else { return }
+        // 問いの全体の上限・知らせ全体の上限・「今週は聞かないで」・時計を震わせない・題の印（2026-11-24。s24 の 減1・減7・減10・形6・形7。S24Book.swift）
+        guard let request: UNNotificationRequest = S24Gate.filter(prepared, now: now) else { return }
         let center = UNUserNotificationCenter.current()
         guard NoticeBundle.isImmediate(request.trigger) else {
             center.add(request)
@@ -150,8 +152,8 @@ enum NoticeGate {
         center.add(UNNotificationRequest(identifier: NoticeBundle.bundleID, content: content, trigger: nil))
     }
 
-    /// 見えた知らせを1つ数える（同じものは1回だけ）
-    static func noteShown(identifier: String, category: String, date: Date) {
+    /// 見えた知らせを1つ数える（同じものは1回だけ）。kind を渡せば、その種類で数える（家の PC からの急ぎ＝urgent。2026-11-24。s24 の 急3）
+    static func noteShown(identifier: String, category: String, date: Date, kind: String? = nil) {
         let key: String = NoticeBundle.key(identifier: identifier, date: date)
         let fresh: Bool = lock.withLock { () -> Bool in
             var seen: [String] = UserDefaults.standard.stringArray(forKey: seenKey) ?? []
@@ -161,14 +163,16 @@ enum NoticeGate {
             return true
         }
         guard fresh else { return }
-        Tally.add("notice.shown." + NoticeBundle.kind(identifier: identifier, category: category), 1, at: date)
+        Tally.add("notice.shown." + (kind ?? NoticeBundle.kind(identifier: identifier, category: category)), 1, at: date)
     }
 
     /// 通知センターに残っている知らせを数える（アプリを開いたとき・裏で起きたとき）
     static func scanDelivered() async {
         let list: [UNNotification] = await UNUserNotificationCenter.current().deliveredNotifications()
         for n in list {
-            noteShown(identifier: n.request.identifier, category: n.request.content.categoryIdentifier, date: n.date)
+            let urgent: Bool = S24Urgent.isUrgent(n.request.content.userInfo)
+            noteShown(identifier: n.request.identifier, category: n.request.content.categoryIdentifier, date: n.date,
+                      kind: urgent ? S24Urgent.kind : nil)
         }
     }
 }

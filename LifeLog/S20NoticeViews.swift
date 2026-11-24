@@ -19,6 +19,8 @@ struct NoticeHistoryView: View {
         LLList {
             // 答えそびれた質問・知らせの棚卸し（2026-11-23。s23 の 知1・知13。S23Screens.swift）
             S23NoticeLinks()
+            // 溜めない（問いの上限・今週は聞かないで・夜の 1 通・約束・同じ人か・時計・題の印。2026-11-24。s24。S24Views.swift）
+            S24NoticeSettingsSection()
             Section {
                 Toggle(isOn: $digestOn) {
                     VStack(alignment: .leading, spacing: 2) {

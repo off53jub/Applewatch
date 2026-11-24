@@ -298,7 +298,8 @@ def check_routes(main) -> int:
         off = home_client.call("GET", "/watch-route")
         body = off[1] if isinstance(off[1], dict) else {}
         ok = no_key[0] == 401 and wrong_key[0] == 401 and with_token[0] == 401 and off[0] == 200 \
-            and set(body) == {"url", "token", "funnel", "port"} and body.get("token") == token \
+            and set(body) == {"url", "token", "funnel", "port", "watchDirectLast"} and body.get("token") == token \
+            and isinstance(body.get("watchDirectLast"), str) and body["watchDirectLast"][-6:-3] in ("+09", "+00") \
             and body.get("port") == wport and body.get("funnel") is False and body.get("url") is None \
             and off[2].get("cache-control") == "no-store"
         failed += say(ok, f"GET /watch-route: ふだんの合言葉でだけ答え（無い・違う・時計の合言葉は 401）、"

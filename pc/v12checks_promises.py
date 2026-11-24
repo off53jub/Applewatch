@@ -303,7 +303,7 @@ def check_watcher() -> int:
         home = Path(folder)
         book = home / "book.json"
         watcher = promises.Watcher(home, lambda: store, lambda: pusher, logged.append,
-                                   lambda: {"task_book_file": str(book)})
+                                   lambda: {"task_book_file": str(book), "promise_push": True})  # s24 減5: 知らせは設定で戻したとき
         result = watcher.tick()
         failed += say(result["skipped"] == "アプリから設定がまだ届いていない" and not fake.calls and not pusher.sent,
                       "見回り: アプリから設定が届くまでは何もしない")

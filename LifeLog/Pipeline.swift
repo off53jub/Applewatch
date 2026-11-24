@@ -484,6 +484,23 @@ final class Pipeline {
             } else {
                 Self.cancelWatchAlert()
             }
+            // 黙ってよいのは、家の PC が「外の道で 30 分（仮）以内に預かった」と言っているあいだだけ（2026-11-24。s24 の 急7・取り決め C2）。
+            // PC に聞き直して（5 分に 1 回まで）、答えが変わったら知らせの予約を合わせる
+            if recording, stopAlertsOn {
+                let seen = at ?? .now
+                Task { [weak self] in
+                    guard let self else { return }
+                    let before = S23WatchQuiet.watchSendsDirect()
+                    await S23WatchQuiet.refreshPCLast(self.homePC)
+                    let after = S23WatchQuiet.watchSendsDirect()
+                    guard before != after, self.stopAlertsOn else { return }
+                    if after {
+                        Self.cancelWatchAlert()
+                    } else {
+                        Self.scheduleWatchAlert(after: seen.addingTimeInterval(Self.watchSilence))
+                    }
+                }
+            }
             guard watchRecording != recording else { return }
             watchRecording = recording
             updateStandby()

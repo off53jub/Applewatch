@@ -409,6 +409,8 @@ struct S22SettingEntry: Identifiable {
                         get: { _ in S22Book.hourlyOn }, set: { _, on in S22Book.setHourly(on) }),
         defaults(RecordingExperiment.onKey, "録り方の実験（1 日ずつ）", "時計", true, after: { _ in S21Book.settingsChanged?() }),
         defaults(S21Rules.routeOnKey, "直接送るの実験（4 日）", "時計", true, after: { $0.scheduleWatchPCSync() }),
+        // 時計に 1 時間（仮）溜まり続けたら、時計が自分で送り直す（家の PC への外の道も試す。2026-11-24。s24 の 急6。初めはオン）
+        defaults(S24Watch.rescueKey, "時計に溜まり続けたら時計が自分で送り直す", "時計", true, after: { _ in S21Book.settingsChanged?() }),
         defaults(S21Book.shakeKey, "振って「いまの画面が変」を送る", "知らせ", true),
         defaults(S22Notices.trainKey, "電車の中で「いま 3 問だけ」", "知らせ", true),
         defaults(S22Notices.whoKey, "会話が終わってすぐ「誰と話した？」", "知らせ", false),
@@ -417,6 +419,9 @@ struct S22SettingEntry: Identifiable {
         defaults("morningCheck", "毎朝、前の日の点検を知らせる", "知らせ", true),
         defaults("secondOpinion", "もう1つの言語モデルでも見比べる", "文字", false),
         defaults(S22Device.readerKey, "iPad は読むだけ（iPad のときだけ効く）", "端末", S22Rules.readerDefault(isPad: S22Device.isPad)),
+        // 今日は上の 3 枚だけ・入口は 5 つまで（2026-11-24。s24 の 形1・形5。初めはオン。切ると前の並び）
+        defaults(S24Today.foldKey, "今日は上の 3 枚だけ（ほかは畳む）", "見た目", true),
+        defaults(S24Entries.limitKey, "入口は 5 つまで（ほかは「ほか」に）", "見た目", true),
     ]
 }
 
@@ -510,6 +515,7 @@ struct S22SettingsSearchView: View {
     private func apply(_ entry: S22SettingEntry, _ on: Bool) {
         entry.set(pipeline, on)
         Tally.add("s22.settings.changed")
+        Tally.add(S24Settings.tallyName(entry.id))  // よく触る設定を数える（2026-11-24。s24 の 形2）
         version += 1
     }
 }
