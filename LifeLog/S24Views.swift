@@ -254,12 +254,8 @@ struct S24TodayAskSection: View {
                     S24RoleLabel(text: "答えそびれた質問があります", role: .ask).font(.callout)
                 }
             case .nothing:
-                Label {
-                    Text(S24Today.noneText).foregroundStyle(LL.dim)
-                } icon: {
-                    Image(systemName: "checkmark.circle").foregroundStyle(LL.dim)
-                }
-                .accessibilityLabel(S24Today.noneText)
+                // ほかに聞くことが無いときだけ、名前の無い声の「この声は誰？」（1 日 3 問の中。2026-11-24。s25 の 大9）
+                S25TVoiceAskRow()
             }
         } header: {
             Text("今日の 1 問")

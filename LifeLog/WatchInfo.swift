@@ -100,6 +100,17 @@ struct WatchInfo: Codable, Equatable {
     }
     var meeting: Meeting? = nil
 
+    /// その場の耳打ち（録音中に、いま話している相手の名前・前に話したこと・約束。設定でオンのときだけ・初めはオフ。
+    /// 相手が変わったときに 1 回だけ出し、10 分（仮）で外す。2026-11-24。s25 の 大10・取り決め K7。S25TBook.swift）
+    struct Whisper: Codable, Equatable {
+        var person: String
+        var lastTalk: String? = nil
+        var promises: [String] = []
+        /// 出した時刻
+        var at: Double
+    }
+    var whisper: Whisper? = nil
+
     /// 時計に送る applicationContext の名前
     static let contextKey = "watchInfo"
     /// 送る大きさの上限（applicationContext は小さく保つ）
@@ -302,6 +313,7 @@ extension Pipeline {
         info.last = lastTalkForWatch()
         info.draft = draftForWatch()
         info.meeting = MeetingLiveBook.shared.watchMeeting()  // 会議の相棒（2026-11-15。MeetingLive.swift）
+        info.whisper = S25TWhisperBook.shared.watchWhisper(now: now)  // 耳打ち（初めはオフ。2026-11-24。s25 の 大10）
         info.reviewWaiting = S20Book.shared.waitingCount  // 確かめ待ちの数（2026-11-21。s20 の 体22）
         info.reviewAsk = S22Book.watchReviewAsk()  // 時計で ○× で答える 1 問（2026-11-22。s22 の 楽13）
         let today = watchDayKey.string(from: now)

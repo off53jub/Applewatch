@@ -92,7 +92,7 @@ def split(rows: list[dict], seed: int) -> tuple[list[dict], list[dict]]:
     random.Random(seed).shuffle(rows)
     def is_auto(r: dict) -> bool:
         # s22 確16: PLAUD と合う行の材料（"pc-plaud"）も試験には使わない
-        return isinstance(r.get("source"), dict) and (r["source"].get("origin") in ("pc-auto", "pc-plaud")
+        return isinstance(r.get("source"), dict) and (r["source"].get("origin") in ("pc-auto", "pc-plaud", "pc-plaud-teacher")
                                                       or r["source"].get("auto") is True)
 
     auto = [r for r in rows if is_auto(r)]
@@ -102,6 +102,18 @@ def split(rows: list[dict], seed: int) -> tuple[list[dict], list[dict]]:
         return human[count:] + auto, human[:count]
     count = max(1, round(len(rows) * HOLDOUT))
     return rows[count:], rows[:count]
+
+
+def is_auto(r: dict) -> bool:
+    """自動の材料（正しい文をモデルか PLAUD が書いたもの）か"""
+    return isinstance(r.get("source"), dict) and (r["source"].get("origin") in ("pc-auto", "pc-plaud", "pc-plaud-teacher")
+                                                  or r["source"].get("auto") is True)
+
+
+def split_human_all(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """s25 大4: 学ぶのは自動の材料だけ、試すのは人が確かめた材料の全部"""
+    rows = sorted(rows, key=lambda r: r.get("hash") or r["audio"])
+    return [r for r in rows if is_auto(r)], [r for r in rows if not is_auto(r)]
 
 
 # MARK: - 文字の誤りの割合（CER）
@@ -144,6 +156,11 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=5e-4, help="学ぶ速さ（既定 0.0005）")
     parser.add_argument("--rank", type=int, default=32, help="LoRA の大きさ（既定 32）")
     parser.add_argument("--seed", type=int, default=0)
+    # s25 大4（2026-11-24）: PLAUD の文を先生にした学び直しの前後を、人が確かめた材料（正解集と同じもの）の全部で測る
+    parser.add_argument("--test-human-all", action="store_true",
+                        help="人が確かめた材料を全部試験に使い、学ぶのは自動の材料だけにする")
+    parser.add_argument("--candidate", action="store_true",
+                        help="良くなっても入れ替えず、personal/model.candidate に置く（切り替えるかは本人）")
     args = parser.parse_args()
 
     home = Path(args.home)
@@ -170,7 +187,9 @@ def main() -> None:
         refuse(f"学び直す部品が足りません（{error}）。\n" + INSTALL_HINT)
 
     torch.manual_seed(args.seed)
-    train_rows, test_rows = split(rows, args.seed)
+    train_rows, test_rows = split_human_all(rows) if args.test_human_all else split(rows, args.seed)
+    if not train_rows or not test_rows:
+        refuse("学ぶ材料か試す材料がありません（--test-human-all のときは、自動の材料と人が確かめた材料の両方が要ります）。")
     say(f"材料 {len(rows)} 個（学ぶ {len(train_rows)} 個・試す {len(test_rows)} 個）。GPU: {torch.cuda.get_device_name(0)}")
 
     say(f"元のモデル {BASE} を読み込んでいます…（初回は約1.5GB を取ってきます）")
@@ -310,6 +329,18 @@ def main() -> None:
             "cer_before": round(before, 4), "cer_after": round(after, 4), "epochs": args.epochs,
             "rank": args.rank, "lr": args.lr}
     (new_dir / "trained.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if args.candidate:  # s25 大4: 入れ替えない。候補として置くだけ
+        candidate_dir = home / "personal" / "model.candidate"
+        try:
+            if candidate_dir.exists():
+                shutil.rmtree(candidate_dir)
+            new_dir.rename(candidate_dir)
+        except OSError as error:
+            refuse(f"候補を置けませんでした（{error}）。新しいモデルは {new_dir} にあります。")
+        shutil.rmtree(work_dir, ignore_errors=True)
+        say(f"候補として置きました（入れ替えていません。{candidate_dir}）。切り替えるかは本人が決めます。")
+        return
 
     # 入れ替える（前のモデルは model.old に1つだけ残す）
     old_dir = home / "personal" / "model.old"

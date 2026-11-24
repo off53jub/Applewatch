@@ -450,6 +450,14 @@ def write_summary(now: float | None = None) -> Path | None:
     except Exception as error:  # noqa: BLE001 — 数えられなくても、ほかは書く
         s24_worries, s24_lines = [], [f"- （s24 の数を書けませんでした: {type(error).__name__}）"]
     worries = worries + s24_worries
+    # s25（2026-11-24。担当 P）: LINE の口・静かな試し・段の待ち・夜の時間割・マイクの比べ・学び直しの候補（s25pc.py）
+    try:
+        import s25pc
+
+        s25_worries, s25_lines = s25pc.summary_lines(O.diag, now)
+    except Exception as error:  # noqa: BLE001 — 数えられなくても、ほかは書く
+        s25_worries, s25_lines = [], [f"- （s25 の数を書けませんでした: {type(error).__name__}）"]
+    worries = worries + s25_worries
     lines = ["# LifeLog の実機の様子（家の PC の LifeLog PC が書き直します）", "",
              f"書いた時刻: {time.strftime('%Y-%m-%d %H:%M', time.localtime(now))}（この PC の時刻）。"
              "iPhone が POST /diag で送った様子・TestFlight の報告・通知・学び直しの様子をまとめたものです。",
@@ -476,6 +484,9 @@ def write_summary(now: float | None = None) -> Path | None:
     if s24_lines:
         lines += ["", "## s24 の数（急ぎの知らせ・問いを閉じる・当たりの測り。pc/s24pc.py）", ""]
         lines.extend(s24_lines)
+    if s25_lines:
+        lines += ["", "## s25 の数（LINE の口・知らせの道・速さ・マイク・学び直し。pc/s25pc.py）", ""]
+        lines.extend(s25_lines)
     lines += ["", "## 端末ごと", ""]
     lines.extend(devices or ["（まだ様子が届いていません）", ""])
     lines += ["## TestFlight の報告（新しい 10 件）", ""]

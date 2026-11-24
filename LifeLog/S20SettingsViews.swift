@@ -12,8 +12,17 @@ struct S20SettingsSection: View {
     @Environment(Pipeline.self) private var pipeline
     @AppStorage(SceneSets.currentKey) private var current = ""
     @State private var changed: String?
+    /// 場面のセットを出すか・よく使うと説明を出すか（引き算の版では分けて置く。2026-11-24。s25 の 大1。S25USimple）
+    var showScene = true
+    var showRest = true
 
     var body: some View {
+        if showScene { sceneSection() }
+        if showRest { restSections() }
+    }
+
+    @ViewBuilder
+    private func sceneSection() -> some View {
         Section {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 ForEach(LifeScene.allCases) { scene in
@@ -48,6 +57,10 @@ struct S20SettingsSection: View {
         } footer: {
             Text("押すと、その場面に合わせて下のスイッチをまとめて切り替えます。細かい設定は「くわしい設定」の奥にあります。")
         }
+    }
+
+    @ViewBuilder
+    private func restSections() -> some View {
         Section {
             NavigationLink { AppearanceView() } label: { Label("見た目（暗い・明るい・アイコン）", systemImage: "paintpalette") }
             NavigationLink { SleepPauseView() } label: { Label("寝ているあいだは録音を休む", systemImage: "moon.zzz") }

@@ -83,6 +83,15 @@ struct WatchInfo: Codable {
         var updated: Double?
     }
     var meeting: Meeting?
+
+    /// その場の耳打ち（録音中に、いま話している相手。iPhone の設定でオンのときだけ。2026-11-24。s25 の 大10）
+    struct Whisper: Codable {
+        var person: String
+        var lastTalk: String?
+        var promises: [String]?
+        var at: Double
+    }
+    var whisper: Whisper?
 }
 
 /// 時計の画面の中身（頼まれごと・次の予定・さっきの会話・聞く・朝の読み上げ）を持つ。

@@ -450,6 +450,8 @@ struct PersonView: View {
                         // 仕事のまとめで、この人の出てくる行（2026-11-10。WorkInsights.swift）
                         if person.isNamed {
                             PersonDigestSection(name: person.displayName)
+                            // 会話と LINE を同じ時系列で（2026-11-24。s25 の 活7）
+                            S25TPersonTimelineSection(person: person)
                         }
                     }
                     if !clues.talks.isEmpty {

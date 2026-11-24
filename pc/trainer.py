@@ -441,6 +441,10 @@ class AutoTrainer:
         self.waiting = ""
         self.thread: threading.Thread | None = None
         self.lock = threading.Lock()
+        # s25 大4（2026-11-24。s25ptrain.py）: 1 回だけの時間帯と引数を渡す口（now → {"window", "args"} か None）と、終わりの知らせ
+        self.once: Callable[[float], dict | None] | None = None
+        self.on_once: Callable[[dict], None] | None = None
+        self.once_args: list[str] | None = None
 
     def configure(self, config: dict) -> None:
         self.config = train_config(config)
@@ -479,6 +483,16 @@ class AutoTrainer:
             return
         window = next_window(now, self.config["days"], self.config["start"], self.config["end"])
         inside = window is not None and window[0] <= now < window[1]
+        once = None
+        if not inside and self.once is not None:  # s25 大4: この版で 1 回だけの時間帯
+            try:
+                once = self.once(now)
+            except Exception:  # noqa: BLE001
+                once = None
+            if once is not None and once["window"][0] <= now < once["window"][1]:
+                window, inside = once["window"], True
+            else:
+                once = None
         if not self.runtime.ready():
             if not self._prepare_if_time(now) and not self.runtime.preparing:
                 self.waiting = "学び直しの部品を用意する時を待っています（夜 1:00〜5:00）"
@@ -494,6 +508,7 @@ class AutoTrainer:
             return
         self.state["attempted"] = window[0]
         self.save()
+        self.once_args = list(once["args"]) if once is not None else None
         self.start(count)
 
     def _prepare_if_time(self, now: float) -> bool:
@@ -531,7 +546,7 @@ class AutoTrainer:
         args = self.config.get("args")
         if args is None:
             args = SMALLER[min(int(self.state.get("smaller") or 0), len(SMALLER) - 1)]
-        return [self.python(), str(self.script), "--home", str(self.home), *args]
+        return [self.python(), str(self.script), "--home", str(self.home), *args, *(self.once_args or [])]
 
     def _trained(self) -> dict:
         return _read_json(self.home / "personal" / "model" / "trained.json")
@@ -575,6 +590,14 @@ class AutoTrainer:
             result["seconds"] = round(self.clock() - started, 1)
             self.state["last"] = result
             self.save()
+            if self.once_args is not None:  # s25 大4: 1 回だけの学び直しが終わった
+                result["once"] = True
+                self.once_args = None
+                if self.on_once is not None:
+                    try:
+                        self.on_once(result)
+                    except Exception:  # noqa: BLE001
+                        pass
             self.phase = "GPU のモデルを戻しています"
             try:
                 self.gpu.release("train", wait=True)

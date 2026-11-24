@@ -109,6 +109,13 @@ targets:
         GIDClientID: $(GOOGLE_CLIENT_ID)
         CFBundleURLTypes:
           - CFBundleURLSchemes: [$(GOOGLE_REVERSED_CLIENT_ID), lifelog]
+        # LINE の「トーク履歴を送信」の .txt を、共有で LifeLog に渡せるようにする（受けたら家の PC へ送るかを聞く。
+        # 2026-11-24。s25 の 連6・取り決め K3。S25TBook.swift）。写しを受け取る形（その場では開かない）
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: テキスト
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.plain-text]
+        LSSupportsOpeningDocumentsInPlace: false
   LifeLogWatch:
     type: application
     platform: watchOS

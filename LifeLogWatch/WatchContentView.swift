@@ -363,6 +363,11 @@ private struct LastTalkPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
                 PageTitle(text: "さっきの会話", symbol: "text.bubble")
+                // その場の耳打ち（いま話している相手。震わせない。10 分で消える。2026-11-24。s25 の 大10）
+                if let whisper = board.info?.whisper, Date().timeIntervalSince1970 - whisper.at < 600 {
+                    S25TWhisperGlance(whisper: whisper)
+                    Divider()
+                }
                 // 会議の相棒（会議モードのあいだの宿題・聞き忘れ・決まったこと。2026-11-15）
                 if let meeting = board.info?.meeting {
                     MeetingGlance(meeting: meeting)
@@ -508,6 +513,24 @@ private struct StatusPage: View {
                 }
                 // あと何個・約何分・いま送り直す・電池の先回り・確かめ待ちの ○×（2026-11-22。s22 の 楽6・楽13・楽19）
                 S22WatchStatusExtras()
+            }
+        }
+    }
+}
+
+// MARK: - 耳打ち（2026-11-24。s25 の 大10）
+
+private struct S25TWhisperGlance: View {
+    let whisper: WatchInfo.Whisper
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label(whisper.person, systemImage: "person.wave.2").font(.caption.bold())
+            if let last = whisper.lastTalk {
+                Text("前回: " + last).font(.caption2).foregroundStyle(LL.dim)
+            }
+            ForEach(Array((whisper.promises ?? []).enumerated()), id: \.offset) { _, p in
+                Text("約束: " + p).font(.caption2)
             }
         }
     }

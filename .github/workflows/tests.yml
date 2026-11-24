@@ -200,12 +200,52 @@ jobs:
           udid=$(xcrun simctl list devices available | grep -m1 -E "^[[:space:]]+iPhone" | grep -oE "[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}")
           echo "シミュレーター: $udid"
           set +e
-          xcodebuild test             -project LifeLog.xcodeproj -scheme LifeLogUITests             -destination "id=$udid"             -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm"             COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_CAS_PATH="$RUNNER_TEMP/cc"             -skip-testing:LifeLogUITests/ScreenMatrix -resultBundlePath "$RUNNER_TEMP/screens.xcresult"             CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/ui.log" | grep -E "error:|Test Case|failed|落ちた|XCTAssert"
+          xcodebuild test             -project LifeLog.xcodeproj -scheme LifeLogUITests             -destination "id=$udid"             -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm"             COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_CAS_PATH="$RUNNER_TEMP/cc"             -skip-testing:LifeLogUITests/ScreenMatrix -skip-testing:LifeLogUITests/S25CFlows -resultBundlePath "$RUNNER_TEMP/screens.xcresult"             CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/ui.log" | grep -E "error:|Test Case|failed|落ちた|XCTAssert"
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             grep -E "error:|落ちた|XCTAssert" "$RUNNER_TEMP/ui.log" | sort -u | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
           fi
           echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      # s25 の 堅6（2026-11-24）: 本人が実機で確かめていたもの（タスクの今日の候補 3 件・「今日」の上の 3 枚・知らせを押した先）を
+      #   シミュレーターで通す（LifeLogUITests/S25CFlows.swift。見本の記録）。上で組み立てたものをそのまま使う。
+      #   必須にはしない: ここが落ちても screens は赤にしない（continue-on-error）。結果は実行のまとめと成果物「実機の確かめ」に出す
+      - name: 実機の確かめを通す（必須ではない）
+        if: always() && steps.tour.outcome != 'skipped'
+        continue-on-error: true
+        run: |
+          udid=$(xcrun simctl list devices available | grep -m1 -E "^[[:space:]]+iPhone" | grep -oE "[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}")
+          set +e
+          xcodebuild test-without-building -project LifeLog.xcodeproj -scheme LifeLogUITests -destination "id=$udid" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" -only-testing:LifeLogUITests/S25CFlows \
+            -resultBundlePath "$RUNNER_TEMP/flows.xcresult" CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/flows.log" | grep -E "error:|Test Case|failed|XCTAssert"
+          status=${PIPESTATUS[0]}
+          {
+            echo "### 実機の確かめ（s25 の 堅6・必須ではない）"
+            echo
+            for t in testTodayCandidatesAreThree testTodayTopThreeCards testNoticeTapsOpenTheirScreens; do
+              if grep -qE "${t}.' passed" "$RUNNER_TEMP/flows.log"; then r="通った"
+              elif grep -qE "${t}.' failed" "$RUNNER_TEMP/flows.log"; then r="落ちた"
+              else r="動かなかった"; fi
+              echo "- ${t}: ${r}"
+            done
+            grep -E "error:.*S25CFlows|XCTAssert" "$RUNNER_TEMP/flows.log" | sort -u | head -10 | sed 's/^/    /'
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p "$RUNNER_TEMP/flows"
+          if [ -d "$RUNNER_TEMP/flows.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/flows.xcresult" --output-path "$RUNNER_TEMP/flows" || true
+          fi
+          cp "$RUNNER_TEMP/flows.log" "$RUNNER_TEMP/flows/" || true
+          [ "$status" -eq 0 ] || echo "::warning::実機の確かめ（S25CFlows）が通らなかった（必須ではない）"
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.tour.outcome != 'skipped'
+        continue-on-error: true
+        with:
+          name: 実機の確かめ
+          path: ${{ runner.temp }}/flows
+          if-no-files-found: ignore
 
       - name: 写真を取り出して一覧の画像にする
         if: always()

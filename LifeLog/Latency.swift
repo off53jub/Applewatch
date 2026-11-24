@@ -29,6 +29,9 @@ enum Latency {
         var watchSent: Date? = nil
         /// 音声が iPhone に届く前に、家の PC の答えだけで記録に入れた（版 10。PCFirst.swift）
         var pcFirst: Bool? = nil
+        /// 送り始めたときの道（wifi・cell・none）と、モバイル通信で送ってよい設定だったか（2026-11-24。s25 の 早3。S25UWait）
+        var net: String? = nil
+        var cellular: Bool? = nil
     }
 
     /// 1つの区切りの、区間ごとの秒数（分からない区間は nil）
@@ -52,6 +55,13 @@ enum Latency {
         var handoff: Double? = nil
         /// PC から先に記録に入れた区切り（時計→iPhone の区間が無い。ふつうの中央値には入れず、別に数える。版 10）
         var pcFirst: Bool? = nil
+        /// s25 の 早1・早3（2026-11-24。S25UWait）: 送り始めた時刻・iPhone で待った（届いた → 送り始めた）・
+        /// 送る道（送り始めた → PC が受け終わった）・送ったときの道・モバイル通信で送ってよかったか
+        var sent: Date? = nil
+        var phoneWait: Double? = nil
+        var transfer: Double? = nil
+        var net: String? = nil
+        var cellular: Bool? = nil
     }
 
     /// 直近の中央値
@@ -108,18 +118,26 @@ enum Latency {
     /// 区切りができた・届いた（初めの1回だけ覚える）。時計の区切りなら、時計で区切った時刻と送り始めた時刻も（分かれば）
     static func noteChunk(_ name: String, start: Date, end: Date, arrived: Date, watch: Bool,
                           watchCut: Date? = nil, watchSent: Date? = nil) {
+        var added = false
         update { store in
             guard store.marks[name] == nil else { return }
             store.marks[name] = Marks(watch: watch, chunkStart: start, chunkEnd: end, arrived: arrived,
                                       watchCut: watchCut, watchSent: watchSent)
+            added = true
         }
+        // 時計の録音を使った回数（2026-11-24。s25 の 大2・K5。S25UFeatures）
+        if added && watch { Tally.add(S25UFeatures.tallyName("app-watch")) }
     }
 
-    /// PC に送り始めた
-    static func noteSent(_ name: String, at date: Date = .now) {
+    /// PC に送り始めた。net はそのときの道（wifi・cell・none）、cellular はモバイル通信で送ってよい設定か（s25 の 早3）
+    static func noteSent(_ name: String, at date: Date = .now, net: String? = nil, cellular: Bool? = nil) {
         update { store in
             guard var marks = store.marks[name] else { return }
-            if marks.sent == nil { marks.sent = date }
+            if marks.sent == nil {
+                marks.sent = date
+                marks.net = net
+                marks.cellular = cellular
+            }
             store.marks[name] = marks
         }
     }
@@ -185,6 +203,11 @@ enum Latency {
         return summarize(samples, now: now)
     }
 
+    /// 測った値（直近 48 時間。s25 の 早1・早3 の段ごとの様子に使う。S25UWait）
+    static func samples() -> [Sample] {
+        lock.withLock { loadLocked().samples }
+    }
+
     /// テスト用に消す
     static func reset() {
         lock.withLock {
@@ -213,7 +236,12 @@ enum Latency {
                total: span(m.chunkEnd, applied),
                watchWait: m.watch ? span(m.watchCut, m.watchSent) : nil,
                handoff: m.watch ? span(m.watchSent, m.arrived) : nil,
-               pcFirst: m.pcFirst == true ? true : nil)
+               pcFirst: m.pcFirst == true ? true : nil,
+               sent: m.sent,
+               phoneWait: span(m.arrived, m.sent),
+               transfer: span(m.sent, m.received),
+               net: m.net,
+               cellular: m.cellular)
     }
 
     static func median(_ values: [Double]) -> Double? {
@@ -268,6 +296,8 @@ enum Latency {
                          watchKnown.joined(separator: "・") + "（時計で待った＝区切ってから時計が送り始めるまで。受け渡し＝送り始めてから iPhone のアプリが受け取るまで）",
                          nil))
         }
+        // 段ごと（時計で待った・iPhone で待った・iPhone→PC・PC の作業。2026-11-24。s25 の 早1。S25UWait）
+        if let line = S25UWait.line(samples(), now: now) { rows.append(("段ごと（ふつう）", line, nil)) }
         return rows + pcFirstRows(s, text: text)
     }
 

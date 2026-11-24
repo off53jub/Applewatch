@@ -9,26 +9,46 @@ on:
   pull_request:
     paths: ['pc/**', '.github/workflows/pc.yml', '.github/scripts/swift_precheck.py']
   workflow_dispatch:
+    inputs:
+      # s25 の 堅5（2026-11-24）: main の出荷が落ちたときの「やり直し 1 回」は、この 2 つを付けて自分を呼ぶ。
+      # 手で動かすときも release を入れれば、main の版をリリースにする（初めは false＝今までどおり作るだけ）
+      release:
+        description: 'main のときに、家の PC が入れ替える版としてリリースにする'
+        type: boolean
+        default: false
+      retry_of:
+        description: 'やり直しのもとの実行の番号（自動のやり直しが入れる。手では空のまま）'
+        type: string
+        default: ''
 
 jobs:
-  # 試しに文字にする日本語の音声を作る（Mac の読み上げ）
+  # 試しに文字にする日本語の音声（Mac の読み上げで作った作り物。pc/testdata/sample.m4a）を成果物にする。
+  # s25 の 堅5（2026-11-24）: 前は Mac の機械で毎回作っていて、11/23 は Mac の順番待ちのまま始まらず、出荷（windows）まで止まった。
+  #   音声はいつも同じ文なので、前の実行で作ったもの（32 KB）を pc/testdata に置き、ここは ubuntu で確かめて渡すだけにした。
+  #   windows はこのジョブを待たない（checkout の pc/testdata を使う）。必須のチェックの名前「sample」はそのまま
   sample:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: 試す音声を作る
+      - uses: actions/checkout@v4
+      - name: 試す音声を確かめる
         run: |
-          say -v Kyoko -o s.aiff "今日の会議では、来月の予算と、新しいシステムの導入について話し合いました。"
-          afconvert s.aiff -o sample.m4a -f m4af -d 'aac@16000' -c 1 -b 32000
+          cp pc/testdata/sample.m4a sample.m4a
           ls -la sample.m4a
+          # 中身が入れ替わっていないか（作り直したときは、この値も直す）
+          echo "01471e8fecc3c902ba39d5efad9149163ce372cebc26e2e6013af66cfc8c6fb6  sample.m4a" | sha256sum -c -
       - uses: actions/upload-artifact@v4
         with:
           name: sample
           path: sample.m4a
 
   windows:
-    needs: sample
     runs-on: windows-latest
     timeout-minutes: 60
+    # s25 の 堅2: 作ったリリースの名前（release-result が 1 行にする）
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      release: ${{ steps.release.outcome }}
     # main に入ったときに、自分で入れ替える版のリリースを作るため
     permissions:
       contents: write
@@ -43,9 +63,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v4
-        with:
-          name: sample
+      # 試す音声（s25 の 堅5。前は Mac のジョブの成果物を待っていた）
+      - name: 試す音声を置く
+        run: cp pc/testdata/sample.m4a sample.m4a && ls -la sample.m4a
 
       - name: 部品を入れる
         run: python -m pip install -r pc/requirements.txt pyinstaller==6.22.3
@@ -288,6 +308,11 @@ jobs:
           cat extras.txt
           while IFS= read -r line; do echo "::notice::$line"; done < <(grep -E '^(OK|NG|話し手|周りの音|雑音|Silero|この PC)' extras.txt)
 
+      # s25 の 大6: 毎晩の通し試験（nightly.yml）と同じ段を、この版でも 1 回通して、まとめに表を出す（報告だけ・落とさない）
+      - name: 見本の 1 日を通す（報告だけ）
+        continue-on-error: true
+        run: python pc/s25c_nightly.py --asr test.txt --extras extras.txt --summary "$GITHUB_STEP_SUMMARY"
+
       # 版 6 の部品（jobqueue・dashboard・updater・semantic・v6checks）は pc/ にあるので、--paths pc で探させ、念のため名前でも入れる。
       # 版 7（records）の部品（records・recordsui・v7checks_records）も同じ。
       # 版 7（ops）の部品（ops・diag・apns・ascfeedback・trainer・gpu・v7checks_ops）と、見えない通知の HTTP/2（httpx2 と h2）・
@@ -380,8 +405,10 @@ jobs:
 
       # main に入ったときだけ、家の PC が自分で入れ替える版として GitHub のリリースにする（pc-v6-回の番号）。
       # --latest=false --prerelease なので、アプリのリリース（v2026.MM.DD-N）がいつも「Latest」のまま。
+      # s25 の 堅5: main の push のほか、やり直し（workflow_dispatch の release=true）でも作る。作った名前は release-result が読む
       - name: 自分で入れ替える版としてリリースにする（main のときだけ）
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: release
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.release))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -399,7 +426,80 @@ jobs:
           sha256sum LifeLogPC.zip | sed 's/ \*/  /' > LifeLogPC.zip.sha256
           cat LifeLogPC.zip.sha256
           ls -la LifeLogPC.zip
-          gh release create "$TAG" LifeLogPC.zip LifeLogPC.zip.sha256 --title "$TAG" --target "${{ github.sha }}" \
-            --latest=false --prerelease \
-            --notes "家の PC の LifeLog PC（版 ${VER}、作った回 ${{ github.run_number }}）。版 6 からの LifeLog PC は、これを自分で取ってきて入れ替えます。手で入れるときは LifeLogPC.zip を展開します。"
+          # s25 の 堅5: GitHub の一時的な失敗に備えて、やり直しは 1 回（30 秒あけて）。途中までできたリリースがあれば、ファイルを上書きで足す
+          made=false
+          for attempt in 1 2; do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" LifeLogPC.zip LifeLogPC.zip.sha256 --clobber && made=true
+            else
+              gh release create "$TAG" LifeLogPC.zip LifeLogPC.zip.sha256 --title "$TAG" --target "${{ github.sha }}" \
+                --latest=false --prerelease \
+                --notes "家の PC の LifeLog PC（版 ${VER}、作った回 ${{ github.run_number }}）。版 6 からの LifeLog PC は、これを自分で取ってきて入れ替えます。手で入れるときは LifeLogPC.zip を展開します。" \
+                && made=true
+            fi
+            [ "$made" = true ] && break
+            echo "::warning::リリースを作れなかった（${attempt} 回目）。30 秒あけてもう一度"
+            sleep 30
+          done
+          [ "$made" = true ] || { echo "::error::リリース $TAG を作れなかった"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "::notice::リリース $TAG を作りました"
+
+  # s25 の 堅2・堅5（2026-11-24）: 家の PC の出荷（main のリリース）が、できたか・できなかったかを、TestFlight と同じ形の 1 行で必ず出す。
+  #   ログ・注記（annotations）・実行のまとめ（$GITHUB_STEP_SUMMARY）に出す。母艦（M2）は「PC_RELEASE_RESULT:」で探す:
+  #     PC_RELEASE_RESULT: released tag=pc-vN-M run=R
+  #     PC_RELEASE_RESULT: not-released reason=... run=R retry=dispatched|no
+  #       reason は build-failed（組み立て・確かめで落ちた）・release-failed（リリースを作る所で落ちた）・cancelled（止めた・時間切れ）・
+  #       skipped（windows が始まらなかった）・no-tag（成功なのに名前が無い）
+  #   できなかったときは、1 回だけ自分（pc.yml）を main で動かし直す（release=true・retry_of=この実行）。やり直しの実行が落ちたら、もうやらない。
+  #   後から main に新しい push の実行があれば、そちらが出荷するので、やり直さない。初めはオン
+  release-result:
+    needs: windows
+    if: ${{ always() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.release)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: 家の PC の出荷をまとめる
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RESULT: ${{ needs.windows.result }}
+          TAG: ${{ needs.windows.outputs.tag }}
+          REL: ${{ needs.windows.outputs.release }}
+          RUN: ${{ github.run_id }}
+          RETRY_OF: ${{ inputs.retry_of }}
+        run: |
+          retry=no
+          if [ "$RESULT" = "success" ] && [ -n "$TAG" ]; then
+            line="PC_RELEASE_RESULT: released tag=$TAG run=$RUN"
+            echo "::notice::$line"
+            msg="家の PC の版 $TAG をリリースにしました（家の PC は自分で取ってきて入れ替えます）"
+          else
+            case "$RESULT" in
+              success) reason="no-tag" ;;
+              cancelled) reason="cancelled" ;;
+              skipped) reason="skipped" ;;
+              *) if [ "$REL" = "failure" ]; then reason="release-failed"; else reason="build-failed"; fi ;;
+            esac
+            # やり直し 1 回（やり直しの実行ではしない・後から新しい main の実行があればしない）
+            if [ -z "$RETRY_OF" ]; then
+              newest=$(gh run list --repo "$REPO" --workflow pc.yml --branch main --event push --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || echo "")
+              if [ -n "$newest" ] && [ "$newest" -gt "$RUN" ] 2>/dev/null; then
+                echo "後から新しい main の実行（$newest）があるので、やり直さない"
+              elif gh workflow run pc.yml --repo "$REPO" --ref main -f release=true -f retry_of="$RUN"; then
+                retry=dispatched
+              else
+                echo "::warning::やり直しを始められなかった"
+              fi
+            fi
+            line="PC_RELEASE_RESULT: not-released reason=$reason run=$RUN retry=$retry"
+            echo "::warning::$line（家の PC に新しい版は届いていません）"
+            msg="家の PC の版をリリースにできませんでした（理由: $reason）"
+            [ "$retry" = dispatched ] && msg="$msg。1 回だけ自動でやり直しています"
+            [ -n "$RETRY_OF" ] && msg="$msg。これは実行 $RETRY_OF のやり直しでした（もうやり直しません）"
+          fi
+          echo "$line"
+          { echo "### 家の PC の出荷"; echo; echo "$msg"; echo; echo "\`$line\`"; } >> "$GITHUB_STEP_SUMMARY"
