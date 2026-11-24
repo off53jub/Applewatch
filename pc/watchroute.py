@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 
 import jobqueue
 import linehook  # s20 追10: POST /line/webhook（LINE の webhook。署名で守る）
+import s25pline  # s25 K4: POST /line/hook（LINE の Bot。返信だけ。署名で守る）
 
 WATCH_PORT = 47617
 TOKEN_FILE = "watch-token.txt"
@@ -190,8 +191,8 @@ class WatchHandler(BaseHTTPRequestHandler):
             self.discard_body()
             self.send_json(429, {"error": "しばらく受け付けません"}, {"Retry-After": str(int(LOCK_SECONDS))})
             return
-        if method == "POST" and url.path == linehook.PATH:  # s20 追10: 署名で守る（ふだんの合言葉は使わない）
-            self.line_webhook()
+        if method == "POST" and url.path in (linehook.PATH, s25pline.PATH):  # s20 追10・s25 K4: 署名で守る（ふだんの合言葉は使わない）
+            self.line_webhook(s25pline.handle if url.path == s25pline.PATH else linehook.handle)
             return
         if (method, url.path) not in PATHS:
             self.discard_body()
@@ -208,7 +209,7 @@ class WatchHandler(BaseHTTPRequestHandler):
             return
         self.jobs(url.query)
 
-    def line_webhook(self) -> None:
+    def line_webhook(self, handle=None) -> None:
         """POST /line/webhook: 署名を確かめ、本人の文字だけ母艦の inbox/line_notes.jsonl に足す（中身は linehook.py）"""
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -227,8 +228,8 @@ class WatchHandler(BaseHTTPRequestHandler):
             mother = main.mothership.home(main.load_config())
         except Exception:  # noqa: BLE001 — 母艦が見つからなければ、記録せず返事もしない
             pass
-        status, answer = linehook.handle(body, self.headers.get("X-Line-Signature"), main.HOME, main.load_config(),
-                                         mother, _log)
+        status, answer = (handle or linehook.handle)(body, self.headers.get("X-Line-Signature"), main.HOME,
+                                                     main.load_config(), mother, _log)
         self.send_json(status, answer)
 
     def jobs(self, query_text: str) -> None:

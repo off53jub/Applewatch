@@ -13,6 +13,8 @@
 - urgent（2026-11-24。s24 急3・取り決め C1。s24pc.py の POST /notify/urgent）も目に見える通知。LINE が使えないときの急ぎ
   （録音が止まった・期限など）。1 端末 1 日 8 回まで（同じ key は 24 時間に 1 回まで、は s24pc.py が見る）。
   中身は {"aps": {"alert", "sound", "thread-id": "urgent"}, "lifelog": {"kind": "urgent", "key": key}}。1 時間で届けるのをあきらめる。
+- ping（2026-11-24。s25 堅4・取り決め K6。s25pnight.py）: 1 日 1 回の静かな試し（見えない通知・lifelog.kind "ping"）。
+  アプリは受けたら tally "s25.ping.got" を足して次の様子（POST /diag）で返す。20 時間に 1 回まで・6 時間で届けるのをあきらめる。
 記録（log.txt）には、端末の種類・送った種類・答えの番号だけを書く（トークン・通知の文は書かない）。
 """
 
@@ -35,15 +37,16 @@ TOPIC_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]{0,150}")
 TOPIC = "com.off53jub.lifelog"
 HOSTS = {"production": "https://api.push.apple.com", "development": "https://api.sandbox.push.apple.com"}
 JWT_EVERY = 45 * 60          # APNs の JWT は 20 分〜60 分ごとに作り直す
-KINDS = ("wake", "job", "nightly", "diag", "test", "promise", "urgent")
+KINDS = ("wake", "job", "nightly", "diag", "test", "promise", "urgent", "ping")
 # 目に見える通知の種類（ほかは見えない通知）
 ALERT_KINDS = ("test", "promise", "urgent")
 # (秒, 回数): その秒の間に送ってよい回数（端末ごと）
 LIMITS = {"job": ((600, 1),), "wake": ((3600, 2), (86400, 12)), "diag": ((3600, 1), (86400, 4)),
           "nightly": ((20 * 3600, 1),), "test": ((10, 1),), "promise": ((600, 1), (86400, 6)),
-          "urgent": ((86400, 8),)}
+          "urgent": ((86400, 8),), "ping": ((20 * 3600, 1),)}
 # APNs が届けるのをあきらめるまでの秒（端末が電波の無い所にいるとき）
-EXPIRE = {"job": 3600, "wake": 1800, "diag": 3600, "nightly": 3 * 3600, "test": 600, "promise": 3600, "urgent": 3600}
+EXPIRE = {"job": 3600, "wake": 1800, "diag": 3600, "nightly": 3 * 3600, "test": 600, "promise": 3600, "urgent": 3600,
+          "ping": 6 * 3600}
 TEST_ALERT = {"title": "LifeLog PC", "body": "テストの通知です（家の PC から届きました）"}
 PROMISE_CATEGORY = "promise"
 URGENT_THREAD = "urgent"

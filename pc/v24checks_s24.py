@@ -491,6 +491,10 @@ def run_all() -> int:
             traceback.print_exc()
             failed += say(False, f"{check.__name__} が途中で落ちました: {error!r}")
     s24pc.S.main, s24pc.S.home, s24pc.S.token, s24rules.CONFIG = saved
+    # s25（2026-11-24。担当 P）: K1〜K4・K6・K7・連16・早1〜3・大3・大4・大9・活1（CI の手順を増やさずに動かす）
+    import v25checks_s25p
+
+    failed += v25checks_s25p.run_all()
     return failed
 
 
