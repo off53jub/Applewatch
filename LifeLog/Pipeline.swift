@@ -361,7 +361,15 @@ final class Pipeline {
         }
         // 録音が止まらない（2026-11-23。s23。S23Resume.swift）: 知らせの「録音を戻す」（止8）・毎日の見回り（止11）・
         // 中断の練習（止15）・電話が終わったらすぐ戻す（止4。設定がオンのときだけ）
-        S23Resume.resume = { [weak self] way in self?.recorder.kick(way) }
+        S23Resume.resume = { [weak self] way in
+            guard let self else { return }
+            // 始められなかった録音（裏から始めようとして iOS に断られた）なら、ここで始める（2026-11-24。S23StartFail.swift）
+            if !self.isRecording, S23StartFail.isPending() {
+                Task { await self.handle(.startRecordingInApp) }
+                return
+            }
+            self.recorder.kick(way)
+        }
         S23Resume.drill = { [weak self] in await self?.recorder.drill() ?? (false, 0) }
         S23PhoneBook.dailyKick = { [weak self] in self?.recorder.kick("daily") }
         S23Calls.shared.onChange = { [weak self] inCall in
@@ -469,7 +477,9 @@ final class Pipeline {
         receiver.onWatchRecording = { [weak self] recording, at in
             guard let self else { return }
             // 時計は区切るたびに知らせてくる。しばらく知らせが無ければ通知する
-            if recording, stopAlertsOn {
+            // 時計が家の PC に直接送っているあいだは、iPhone は起こされず便りが途切れて見える＝誤報になるので鳴らさない
+            // （家の PC の見張りが「時計の区切りが届かない」を LINE で知らせる。2026-11-24。S23StartFail.swift）
+            if recording, stopAlertsOn, !S23WatchQuiet.watchSendsDirect() {
                 Self.scheduleWatchAlert(after: (at ?? .now).addingTimeInterval(Self.watchSilence))
             } else {
                 Self.cancelWatchAlert()
@@ -1475,6 +1485,7 @@ final class Pipeline {
             return
         }
         if isRecording {
+            S23StartFail.clearPending()  // 自分で止めたら、開いたときに始める印も消す（2026-11-24）
             endLive()
             recorder.stop()
             isRecording = false
@@ -1492,15 +1503,21 @@ final class Pipeline {
             standby.suspend()
             try recorder.start()
             isRecording = true
+            S23StartFail.clearPending()  // 前に始められなかった印を消す（2026-11-24）
             if fromButton { buttonRecordingStarted = started }
             message = ""
         } catch {
             RecordingActivity.end()
             standby.resume()
-            message = "録音を始められませんでした: \(error.localizedDescription)"
+            // 生の英語（OSStatus error 560557684 など）は出さず、やさしい 1 行に（2026-11-24。S23StartFail.swift）
+            let background = UIApplication.shared.applicationState != .active
+            let why = S23StartFail.reason(error, background: background)
+            message = "録音を始められませんでした: " + why
+            Tally.add("s23.start.fail." + S23StartFail.code(error))
             if fromButton, stopAlertsOn {
-                Self.notify(id: "phone-stopped", title: "iPhone の録音を始められませんでした",
-                            body: error.localizedDescription + " LifeLog を開いて始めてください。")
+                // 開いたら自動で始める印（30 分）。知らせを押すか「録音を始める」でも始める
+                S23StartFail.markPending()
+                S23StartFail.notify(reason: why)
             }
         }
     }
@@ -1580,6 +1597,11 @@ final class Pipeline {
         RunClock.becameActive()
         // アラーム・電話のあとで戻せていない録音を、開いたときに今すぐ流し直す（2026-11-23。Recorder.swift）
         recorder.resumeIfInterrupted()
+        // 裏から始めようとして断られた録音（30 分以内）は、開いたときに始める（2026-11-24。S23StartFail.swift）
+        if !isRecording, S23StartFail.isPending() {
+            Tally.add("s23.start.onOpen")
+            Task { await handle(.startRecordingInApp) }
+        }
         updateHold()
         if email != nil { Task { await sync.run() } }
         if UIDevice.current.userInterfaceIdiom != .pad { Task { await scheduleMeetingBriefs() } }

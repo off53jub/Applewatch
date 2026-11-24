@@ -288,7 +288,8 @@ extension Pipeline {
             Task { await self.handle(.stopRecording) }
         }
         let wanted = state.wanted ?? state.recording
-        guard wanted, stopAlertsOn else { return }
+        // 時計が家の PC に直接送っているあいだは、便りが途切れて見えても録れている（2026-11-24。誤って iPhone で録り始めていた）
+        guard wanted, stopAlertsOn, !S23WatchQuiet.watchSendsDirect() else { return }
         let seen = state.at
         s.quietTask = Task { [weak self] in
             let wait = max(5, S21Rules.watchQuiet - Date.now.timeIntervalSince(seen))
