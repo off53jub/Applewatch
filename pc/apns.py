@@ -10,6 +10,9 @@
 - promise（2026-11-13。施策 13。promises.py）だけは目に見える通知（test と同じ alert）。会話のあとの約束・頼まれごと。
   1日6回・10分に1回まで。1時間で届けるのをあきらめる。カテゴリ "promise"（アプリの「タスクに入れる」「いらない」）。
   文は promises.py が作る（60 文字まで。アプリの「通知に中身を出さない」がオンなら中身を入れない）。
+- urgent（2026-11-24。s24 急3・取り決め C1。s24pc.py の POST /notify/urgent）も目に見える通知。LINE が使えないときの急ぎ
+  （録音が止まった・期限など）。1 端末 1 日 8 回まで（同じ key は 24 時間に 1 回まで、は s24pc.py が見る）。
+  中身は {"aps": {"alert", "sound", "thread-id": "urgent"}, "lifelog": {"kind": "urgent", "key": key}}。1 時間で届けるのをあきらめる。
 記録（log.txt）には、端末の種類・送った種類・答えの番号だけを書く（トークン・通知の文は書かない）。
 """
 
@@ -32,16 +35,19 @@ TOPIC_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]{0,150}")
 TOPIC = "com.off53jub.lifelog"
 HOSTS = {"production": "https://api.push.apple.com", "development": "https://api.sandbox.push.apple.com"}
 JWT_EVERY = 45 * 60          # APNs の JWT は 20 分〜60 分ごとに作り直す
-KINDS = ("wake", "job", "nightly", "diag", "test", "promise")
+KINDS = ("wake", "job", "nightly", "diag", "test", "promise", "urgent")
 # 目に見える通知の種類（ほかは見えない通知）
-ALERT_KINDS = ("test", "promise")
+ALERT_KINDS = ("test", "promise", "urgent")
 # (秒, 回数): その秒の間に送ってよい回数（端末ごと）
 LIMITS = {"job": ((600, 1),), "wake": ((3600, 2), (86400, 12)), "diag": ((3600, 1), (86400, 4)),
-          "nightly": ((20 * 3600, 1),), "test": ((10, 1),), "promise": ((600, 1), (86400, 6))}
+          "nightly": ((20 * 3600, 1),), "test": ((10, 1),), "promise": ((600, 1), (86400, 6)),
+          "urgent": ((86400, 8),)}
 # APNs が届けるのをあきらめるまでの秒（端末が電波の無い所にいるとき）
-EXPIRE = {"job": 3600, "wake": 1800, "diag": 3600, "nightly": 3 * 3600, "test": 600, "promise": 3600}
+EXPIRE = {"job": 3600, "wake": 1800, "diag": 3600, "nightly": 3 * 3600, "test": 600, "promise": 3600, "urgent": 3600}
 TEST_ALERT = {"title": "LifeLog PC", "body": "テストの通知です（家の PC から届きました）"}
 PROMISE_CATEGORY = "promise"
+URGENT_THREAD = "urgent"
+URGENT_KEY_MAX = 64
 ALERT_MAX = 120             # 目に見える通知の題・文の長さの上限（文字）
 HISTORY = 50
 DEAD_KEEP = 90 * 86400
@@ -64,6 +70,11 @@ def payload(kind: str, job: str | None = None, alert: dict | None = None, extra:
         if (extra or {}).get("day"):
             body["lifelog"]["day"] = str(extra["day"])[:10]
         return body
+    if kind == "urgent":
+        shown = {"title": str((alert or {}).get("title") or "")[:ALERT_MAX],
+                 "body": str((alert or {}).get("body") or "")[:ALERT_MAX]}
+        return {"aps": {"alert": shown, "sound": "default", "thread-id": URGENT_THREAD},
+                "lifelog": {"kind": "urgent", "key": str((extra or {}).get("key") or "")[:URGENT_KEY_MAX]}}
     body: dict = {"aps": {"content-available": 1}, "lifelog": {"kind": kind}}
     if kind == "job" and job:
         body["lifelog"]["job"] = job
@@ -319,7 +330,7 @@ class Pusher:
              respect_limits: bool = True, alert: dict | None = None, extra: dict | None = None) -> list[dict]:
         """kind の通知を、devices（None なら使えるトークンのある全部の端末）に送る。端末ごとの結果の並びを返す。
         鍵・チーム・部品が無いときは何もせず、理由だけを返す（記録には書かない）。
-        alert・extra は promise のときだけ使う（payload を参照）。"""
+        alert・extra は promise・urgent のときだけ使う（payload を参照）。"""
         if kind not in KINDS:
             raise ValueError(f"知らない通知の種類です: {kind}")
         found = self.key()

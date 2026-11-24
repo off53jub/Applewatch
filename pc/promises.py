@@ -515,6 +515,12 @@ class Watcher:
         settings = self.settings() or {}
         if not pending or not settings.get("on"):
             return 0
+        # s24 減5（取り決め C5）: 約束の知らせは config.json の "promise_push": true のときだけ（初めは送らない）。
+        # 拾うこと・台帳・GET /promises-now は今までどおり（送らなかったものは alerted のまま false）
+        import s24rules
+
+        if not s24rules.promise_push(self.config() or {}):
+            return 0
         pusher = self.pusher()
         if pusher is None or not pusher.ready():
             return 0

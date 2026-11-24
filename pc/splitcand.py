@@ -242,7 +242,9 @@ def run(home: Path, store, mother: Path | None, config: dict, log: Callable[[str
     _write(target, built)
     copied = 0
     if mother_copy and mother is not None and Path(mother).is_dir():
-        copied = int(_write(Path(mother) / MOTHER_FILE, built))
+        import s24rules  # s24 当1（取り決め C4）: 母艦の確かめ待ちにも、same_person_ask のときだけ問いを写す
+
+        copied = int(_write(Path(mother) / MOTHER_FILE, s24rules.hold_items(built, config)))
     s = built["summary"]
     log(f"集まりすぎの話し手: 話し手 {s['speakers']}・見た {s['checked']}・候補 {s['candidates']}（惜しい {s['near_misses']}）・母艦へ {copied}")
     return {"checked": s["checked"], "candidates": s["candidates"], "copied": copied}

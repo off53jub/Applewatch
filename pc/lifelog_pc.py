@@ -205,6 +205,7 @@ import s22pc  # s22（2026-11-22）: 楽5・楽20・確1〜確30 の家の PC �
 import s22models  # s22 確2・確13・確15: モデルの切り替えの口（初めは今のまま）
 import s22text  # s22 確12・確21・確11: 決まり文句の票・行の時刻・区切りの境目
 import s23pc  # s23（2026-11-23）: 続1〜続4・続8・続10・試4・届7・止1/続5 の受け口（中身は s23pc.py・s23voice.py・s23gaps.py ほか）
+import s24pc  # s24（2026-11-24）: 急3・急7・当1・減3・減5・当2・当5・当7・当8・当11・当12（中身は s24pc.py・s24rules.py・s24night.py）
 
 VERSION = 10
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
@@ -2293,6 +2294,8 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(s22pc.FEATURES)
     # s23: headcount（POST /headcount）・s23checks（GET /s23/checks）・voicepairs・noisygold（確かめ待ちの問い）
     found.extend(s23pc.FEATURES)
+    # s24: urgent（POST /notify/urgent）・pcqclose（家の PC の問いを 3 日で閉じる）
+    found.extend(s24pc.FEATURES)
     # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
     if watchroute.running():
         found.append("watchroute")
@@ -2673,6 +2676,10 @@ def start_v6(threads: int) -> None:
         s23pc.start(sys.modules[__name__])
     except Exception as error:  # noqa: BLE001
         log(f"s23 の見回りを始められませんでした: {type(error).__name__}")
+    try:  # s24（2026-11-24）: 急ぎの知らせの口・問いを閉じる・同じ人かの問いを止める・夜の測り（s24pc.py）
+        s24pc.start(sys.modules[__name__])
+    except Exception as error:  # noqa: BLE001
+        log(f"s24 の見回りを始められませんでした: {type(error).__name__}")
     # 2026-11-13（施策 9・10・11）: 夜の流れ（品質の記録・同じ人かも・夜の読み直し。quality.py）
     quality.start(HOME, App.records, App.jobs, lambda: mothership.home(load_config()),
                   lambda p, r: extra_model("speaker", 1).embed(load_audio(p.read_bytes()), r), log)
@@ -3202,6 +3209,9 @@ class Handler(BaseHTTPRequestHandler):
                     promises.http_post(self, log)
                 else:
                     askmother.http_post(self, load_config(), log, App.records)
+            return
+        if url.path in s24pc.POSTS:  # s24 急3: POST /notify/urgent（合言葉は X-LifeLog-Local。中で確かめる）
+            s24pc.http_post(self, url.path)
             return
         if url.path in s23pc.POSTS:  # s23 続5: POST /headcount（会話のあとに本人が答えた人数。HOME/s23/headcount.jsonl）
             if self.authorized():
