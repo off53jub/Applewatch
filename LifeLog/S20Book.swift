@@ -74,8 +74,11 @@ final class S20Book {
     // MARK: 確かめ待ち（体11〜15）
 
     /// いま見せるもの
+    /// 「同じ人か」は設定でだけ出す（取り決め C4）・答えで直る行の多い順（2026-11-24。s24 の 当1・減2。S24Rules.swift）
     func openItems(now: Date = .now) -> [ReviewItem] {
-        ReviewRules.visible(review?.items ?? [], answered: Set(answered.keys), later: later, now: now)
+        let visible = ReviewRules.visible(review?.items ?? [], answered: Set(answered.keys), later: later, now: now)
+        return S24AskRules.reviewItems(visible, samePersonAsk: S24AskSettings.isOn(S24AskSettings.samePersonAskKey),
+                                       today: ReviewRules.dayKey(now))
     }
 
     /// 確かめ待ちの数（「今日」・時計の文字盤に出す）
@@ -93,6 +96,8 @@ final class S20Book {
         UserDefaults.standard.set(answered, forKey: Self.answeredKey)
         UserDefaults.standard.set(later, forKey: Self.laterKey)
         Tally.add("s20.review.answered")
+        // 1 日 3 問（仮）の上限に入れる（知らせで聞いた同じ問いは 2 回数えない。2026-11-24。s24 の 減1）
+        S24Gate.noteAnswered(key: "q:" + item.id, now: now)
         if let shown = cardShownAt { noteAnswerSeconds(now.timeIntervalSince(shown)) }
         cardShownAt = now
     }
@@ -131,10 +136,12 @@ final class S20Book {
     }
 
     func noteOpened(id: String) {
+        // 履歴に無い知らせ（時刻を決めて頼んだもの・家の PC から届いたもの）も、開いた数には数える
+        // （2026-11-24。s24 の 減8。前は履歴にあるものだけ数えていて、ほとんど 0 だった）
+        bumpUX { $0.notifOpened += 1 }
         guard let i = notices.lastIndex(where: { $0.id == id }) else { return }
         notices[i].opened = true
         saveNotices()
-        bumpUX { $0.notifOpened += 1 }
     }
 
     func setMuted(_ kind: String, _ on: Bool) {

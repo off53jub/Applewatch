@@ -302,6 +302,13 @@ enum S23StatusRules {
             Card(what: "時計の LifeLog が新しくなったあと、まだ開かれていません。", steps: [
                 "時計で LifeLog を 1 回開く（開くと録音が戻ります）",
             ], record: false)
+        case "urgent":
+            // 家の PC からの急ぎ（取り決め C1。2026-11-24。s24 の 急3）
+            Card(what: "家の PC から急ぎの知らせが来ました。", steps: [
+                "知らせの文に書いてあることを先に見る",
+                "録音が止まっていれば、下の「録音を始める」",
+                "分からないときは「自己点検」で理由を見る",
+            ], record: true)
         default:
             Card(what: "いまの様子を確かめてください。", steps: ["「自己点検」で理由を見る"], record: false)
         }
