@@ -83,7 +83,12 @@ final class S26ATests: XCTestCase {
         // 半分重なった窓は 1 回のせき。離れていれば 2 回
         XCTAssertEqual(S26ABodySoundRules.coughCount([(0, 1), (0.5, 1.5), (5, 6)]), 2)
         // いびきは 5 秒より短いかたまりは数えない
-        let snores: [(start: Double, end: Double)] = (0..<60).map { (start: Double($0), end: Double($0) + 1) } + [(start: 100, end: 102)]
+        var snores: [(start: Double, end: Double)] = []
+        for i in 0..<60 {
+            let s: Double = Double(i)
+            snores.append((start: s, end: s + 1.0))
+        }
+        snores.append((start: 100.0, end: 102.0))
         XCTAssertEqual(S26ABodySoundRules.snoreMinutes(snores), 1.0, accuracy: 0.02)
         // 23 時のいびきは次の日、3 時はその日
         XCTAssertEqual(S26ABodySoundRules.snoreDay(at(24, 23), calendar: cal), "2026-11-25")
