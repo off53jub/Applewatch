@@ -256,10 +256,12 @@ final class Vocabulary {
     }
 
     /// 場所が分からないときは時刻で決める。平日の8時〜19時は職場。
+    /// 2026-11-26: 祝日（計算で出す JapanHoliday）は職場にしない（前は祝日の旅先やダンスの会話も職場になっていた）
     static func context(byTime date: Date) -> SpeakerLabeler.Context {
         let calendar = Calendar.current
         let weekday = calendar.component(.weekday, from: date)
         let hour = calendar.component(.hour, from: date)
+        if JapanHoliday.isHoliday(date) { return .other }
         return (2...6).contains(weekday) && (8..<19).contains(hour) ? .work : .other
     }
 }

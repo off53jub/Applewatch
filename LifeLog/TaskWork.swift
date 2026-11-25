@@ -47,6 +47,8 @@ enum DayOff {
     /// 休みの日か（土日か、休みの終日の予定がある）
     static func isOff(_ day: Date, allDay: [AllDay], calendar: Calendar = .current) -> Bool {
         if calendar.isDateInWeekend(day) { return true }
+        // 2026-11-26: カレンダーに祝日が入っていなくても、計算で祝日を見る
+        if JapanHoliday.isHoliday(day) { return true }
         return allDay.contains { isOffEvent($0) }
     }
     /// 休みの理由（2026-11-21。s19 の 休1。母艦の state/holiday/days.json の why と同じ言葉）。
@@ -55,6 +57,7 @@ enum DayOff {
     static func reason(_ day: Date, allDay: [AllDay], calendar: Calendar = .current) -> String? {
         if calendar.isDateInWeekend(day) { return HolidayRules.whyWeekend }
         if allDay.contains(where: { $0.holidayCalendar && isOffEvent($0) }) { return HolidayRules.whyHoliday }
+        if JapanHoliday.isHoliday(day) { return HolidayRules.whyHoliday }
         if allDay.contains(where: { isOffEvent($0) }) { return HolidayRules.whyLeave }
         return nil
     }

@@ -64,8 +64,8 @@ final class TaskWorkTests: XCTestCase {
         XCTAssertTrue(DayOff.isOff(day(7), allDay: [], calendar: cal))   // 土曜
         XCTAssertTrue(DayOff.isOff(day(8), allDay: [], calendar: cal))   // 日曜
         XCTAssertFalse(DayOff.isOff(day(9), allDay: [], calendar: cal))  // 月曜
-        // 許可が無ければ祝日も分からない（文化の日・火曜）
-        XCTAssertFalse(DayOff.isOff(day(3), allDay: [], calendar: cal))
+        // 2026-11-26: カレンダーの許可が無くても、祝日は計算で分かる（文化の日・火曜）
+        XCTAssertTrue(DayOff.isOff(day(3), allDay: [], calendar: cal))
     }
 
     func testHolidayCalendarEventsAreOff() {
@@ -81,8 +81,8 @@ final class TaskWorkTests: XCTestCase {
         XCTAssertFalse(DayOff.isOff(day(12), allDay: [DayOff.AllDay(title: "七五三", holidayCalendar: true)], calendar: cal))
         XCTAssertFalse(DayOff.isOff(day(12), allDay: [DayOff.AllDay(title: "何かの日", notes: "行事", holidayCalendar: true)],
                                     calendar: cal))
-        // ほかのカレンダーの「文化の日」という題だけでは休みとみなさない
-        XCTAssertFalse(DayOff.isOff(day(3), allDay: [DayOff.AllDay(title: "文化の日")], calendar: cal))
+        // ほかのカレンダーの「文化の日」という題だけでは休みとみなさない（祝日ではない日で確かめる。11/3 は計算で祝日）
+        XCTAssertFalse(DayOff.isOff(day(10), allDay: [DayOff.AllDay(title: "文化の日")], calendar: cal))
     }
 
     func testLeaveEventsAreOff() {
