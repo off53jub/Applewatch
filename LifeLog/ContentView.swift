@@ -55,6 +55,8 @@ struct ContentView: View {
                         NoticeNoteView(title: title, text: body)
                     case .link(let link):
                         S26ALinkView(link: link)  // lifelog://person/… など（2026-11-25。s26 の 結9。S26AViews.swift）
+                    case .work(let link):
+                        S27WRootView(link: link)  // 仕事の画面（2026-11-25。s27 の 場1・K6。S27WViews.swift）
                     }
                 }
                 .toolbar {
@@ -232,6 +234,7 @@ private struct TodayView: View {
                 // ほかは「ほかのカード」に畳む（設定の「今日は上の 3 枚だけ」を切ると前の並び。並びは S24Today.layout）
                 let layout = S24Today.layout(fold: todayFold, part: part)
                 ForEach(layout.top) { card($0, talks: talks) }
+                S27WTodaySection()  // 「仕事: 宿題 N・会議 N」の 1 行（2026-11-25。s27 の 場2。S27WViews.swift）
                 // よく触る設定 3 つ（2026-11-24。s24 の 形2。S24Views.swift）
                 // 2026-11-25（s26 の 軽3・軽5・軽11）: よく変える 3 つ（組・場面も）・すきまの 1 件・本人の操作待ち（S26UViews.swift）
                 S26UTodaySection(fold: todayFold)
@@ -272,7 +275,9 @@ private struct TodayView: View {
         case .s22: S22TodaySection()
         // 新しい版・今日の 1 つの確かめ・答えそびれた質問（2026-11-23。s23 の 届4・試5・知13。S23Screens.swift）
         case .s23: S23TodaySection()
-        case .prep: PrepCardSection()
+        case .prep:
+            PrepCardSection()
+            S27WPrepSection()  // 次の会議の案件の 1 枚（2026-11-25。s27 の 場8。S27WViews.swift）
         // 朝の「昨日と今日」（2026-11-09。MorningBrief.swift）
         case .morningBrief: MorningBriefSection()
         case .oneYearAgo: OneYearAgoSection()
@@ -958,6 +963,7 @@ private struct SettingsView: View {
             // 引き算の版: 場面のセット・設定を探す・Face ID と Claude・くわしい設定と「ほかの設定」だけ（ほかは S25UMoreSettingsView）
             S20SettingsSection(showRest: false)
             S22SettingsEntrySection()
+            S27WSettingsSection()  // 仕事の画面（伏せる・社内のお知らせ。2026-11-25。s27 の 守2・他3）
             Section {
                 Toggle("開くときに Face ID", isOn: $appLock)
                 Toggle("Claude を使う", isOn: $useClaude)
