@@ -28,6 +28,7 @@ final class JapanHolidayTests: XCTestCase {
         XCTAssertNil(JapanHoliday.name(year: 2027, month: 9, day: 22))
     }
 
+    @MainActor
     func testWorkByTimeSkipsHolidays() {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
