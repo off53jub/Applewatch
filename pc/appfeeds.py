@@ -641,6 +641,10 @@ def parse_feedback(data: bytes) -> dict:
         return parse_review(body)
     if kind == "shake":  # s21 使10: 振って「いまの画面が変」
         return parse_shake(body)
+    if isinstance(kind, str) and kind.startswith("work_"):  # s27 K4: 仕事の画面の答え（s27pwork.py）
+        import s27pwork
+
+        return s27pwork.parse_feedback(body)
     if not isinstance(kind, str) or kind not in FEEDBACK:
         raise ValueError("kind は " + "・".join(FEEDBACK) + " のどれかです")
     if body.get("value") not in FEEDBACK[kind]:
@@ -789,7 +793,8 @@ def http_post_feedback(handler, base: Path, data: bytes, log) -> None:
                 extra = None
             handler = _Quiet(handler)
     _http_inbox(handler, base, data, log, parse_feedback, FEEDBACK_FILE, "使われ方の記録", True,
-                lambda r: r["kind"] if r["kind"] in ("shake", "review") else f"{r['kind']} {r.get('value', '答え')}")
+                lambda r: r["kind"] if r["kind"] in ("shake", "review") or r["kind"].startswith("work_")  # 仕事の中身は書かない
+                else f"{r['kind']} {r.get('value', '答え')}")
 
 
 def http_post_mood(handler, base: Path, data: bytes, log) -> None:
