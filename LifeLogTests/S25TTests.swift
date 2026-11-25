@@ -96,6 +96,15 @@ final class S25TTests: XCTestCase {
         // 精算が先・答えたものは出さない・3 つまで
         XCTAssertEqual(S25TDrafts.shelf(drafts, handled: []).map(\.id), ["s1", "r1", "c1"])
         XCTAssertEqual(S25TDrafts.shelf(drafts, handled: ["s1"]).map(\.id), ["r1", "c1", "x1"])
+        // 家の PC がカレンダーを直す下書き（source line-calendar）はいちばん先
+        let fixData = json(["version": 1, "items": [
+            ["id": "s2", "kind": "settle", "title": "精算", "body": "本文", "expires": "2026-11-30", "source": "M2"],
+            ["id": "g1", "kind": "calendar", "title": "日が変わったかも", "body": "本文", "expires": "2026-11-30", "source": "line-calendar"],
+        ]])
+        let fixes = S25TDrafts.decode(fixData, today: "2026-11-24")
+        XCTAssertEqual(S25TDrafts.shelf(fixes, handled: []).map(\.id), ["g1", "s2"])
+        XCTAssertTrue(S25TDrafts.isCalendarFix(fixes[1]))
+        XCTAssertFalse(S25TDrafts.isCalendarFix(fixes[0]))
         XCTAssertEqual(S25TDrafts.shareText(drafts[0]), "宛先: 山田\n\n了解です")
         XCTAssertEqual(S25TDrafts.shareText(drafts[1]), "1 人 12,000 円")
         XCTAssertEqual(S25TDrafts.kindLabel("settle"), "精算")
