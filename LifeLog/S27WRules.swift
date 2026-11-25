@@ -1148,7 +1148,7 @@ enum S27WRules {
         case "work_confirm":
             guard HomeFeeds.isID(id), !value.isEmpty, value.count <= 200 else { return nil }
         case "work_edit":
-            guard HomeFeeds.isID(id), id.hasPrefix("wp-") || id.hasPrefix("wm-"), !value.isEmpty else { return nil }
+            guard canEdit(id), !value.isEmpty else { return nil }
         case "work_numbers":
             guard id.isEmpty || HomeFeeds.isID(id) else { return nil }
             guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.count <= textLimit else { return nil }
@@ -1162,6 +1162,11 @@ enum S27WRules {
         }
         let object: [String: String] = ["kind": kind, "id": id, "value": value, "day": day]
         return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
+    /// 直せる id か（K1 の台帳の id だけ。台帳ができる前の仮の id は、あとで変わるので直す口を出さない）
+    static func canEdit(_ id: String) -> Bool {
+        HomeFeeds.isID(id) && (id.hasPrefix("wp-") || id.hasPrefix("wm-"))
     }
 
     /// 人8 直した欄だけの JSON の文（{"name":…,"team":…}）。何も直していなければ nil。名前は空にできない

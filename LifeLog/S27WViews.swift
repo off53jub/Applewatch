@@ -732,7 +732,9 @@ struct S27WProjectView: View {
             if book.board?.project(id) != nil {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        Button("名前・顧客・種類を直す", systemImage: "pencil") { editing = true }
+                        if S27WRules.canEdit(id) {
+                            Button("名前・顧客・種類を直す", systemImage: "pencil") { editing = true }
+                        }
                         Button("数を貼る", systemImage: "number") { pasting = true }
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -926,7 +928,7 @@ struct S27WPersonView: View {
         .navigationTitle(book.board?.person(id).map { book.name($0) } ?? "人")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if book.board?.person(id) != nil {
+            if book.board?.person(id) != nil && S27WRules.canEdit(id) {
                 ToolbarItem(placement: .primaryAction) {
                     Button("直す") { editing = true }
                 }

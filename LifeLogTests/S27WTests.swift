@@ -235,6 +235,8 @@ final class S27WTests: XCTestCase {
         XCTAssertNil(S27WRules.editValue(["org": "どこか"]))
         XCTAssertNil(S27WRules.editValue(["secret": "x"]))
         XCTAssertEqual(S27WRules.editValue(["kind": "side"]), #"{"kind":"side"}"#)
+        XCTAssertTrue(S27WRules.canEdit("wm-00000001"))
+        XCTAssertFalse(S27WRules.canEdit("wx-00000001"), "台帳ができる前の仮の id は直さない")
     }
 
     func testPrunedEditsAndDoneIDs() {
