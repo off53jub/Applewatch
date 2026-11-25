@@ -30,14 +30,15 @@ final class JapanHolidayTests: XCTestCase {
 
     @MainActor
     func testWorkByTimeSkipsHolidays() {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        // 時刻の判定は端末の暦（Calendar.current）で見るので、同じ暦で時刻を作る（CI は UTC）。
+        // 12 時は UTC でも東京でも同じ日付になる
+        let cal = Calendar.current
         func at(_ m: Int, _ d: Int, _ h: Int) -> Date {
             cal.date(from: DateComponents(year: 2026, month: m, day: d, hour: h))!
         }
         // 祝日（月曜・勤労感謝の日）の昼は職場にしない
-        XCTAssertEqual(Vocabulary.context(byTime: at(11, 23, 11)), .other)
+        XCTAssertEqual(Vocabulary.context(byTime: at(11, 23, 12)), .other)
         // ふつうの平日の昼は今までどおり職場
-        XCTAssertEqual(Vocabulary.context(byTime: at(11, 24, 11)), .work)
+        XCTAssertEqual(Vocabulary.context(byTime: at(11, 24, 12)), .work)
     }
 }
