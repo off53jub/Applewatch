@@ -33,7 +33,7 @@ final class S27WTests: XCTestCase {
      "people":[{"id":"wm-00000002","name":"見本先輩","org":"self_company","team":null,"role":null,"projects":["wp-00000004"],
                 "ball":{"me":1,"them":0}},
                {"id":"wm-00000001","name":"見本さん","org":"client","team":"見本チーム","role":"窓口","projects":["wp-00000001"]},
-               {"id":"wm-00000003","name":"林","org":"unknown"}],
+               {"id":"wm-00000003","name":"甲","org":"unknown"}],
      "side":{"status":"moved","last_day":"2026-11-24","items":[]},
      "monthly_other":null}
     """
@@ -101,7 +101,7 @@ final class S27WTests: XCTestCase {
     func testPeopleSortedByNameOnly() {
         // 守3: 数（ball）で並べない
         let names = S27WRules.sortedPeople(board.people).map(\.name)
-        XCTAssertEqual(names, ["見本さん", "林", "見本先輩"].sorted())
+        XCTAssertEqual(names, ["見本さん", "甲", "見本先輩"].sorted())
     }
 
     func testStuckIsOldestThree() {
@@ -114,7 +114,7 @@ final class S27WTests: XCTestCase {
         let mask = S27WMask.make(board)
         XCTAssertEqual(mask.names["見本先輩"], "人1")
         XCTAssertEqual(mask.names["見本さん"], "人2")
-        XCTAssertNil(mask.names["林"], "1 文字の名前は伏せない（仮）")
+        XCTAssertNil(mask.names["甲"], "1 文字の名前は伏せない（仮）")
         XCTAssertEqual(mask.names["見本商事"], "顧客1")
         XCTAssertEqual(mask.apply("見本商事の見本さんに送る"), "顧客1の人2に送る")
         XCTAssertEqual(mask.apply("見本先輩から聞いた"), "人1から聞いた", "長い名前から置き換える")
