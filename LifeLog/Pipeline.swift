@@ -3847,7 +3847,8 @@ final class Pipeline {
     }
 
     func vocabularyContext(at time: Date) -> SpeakerLabeler.Context {
-        places.registeredContext(at: time) ?? calendar.context(at: time) ?? Vocabulary.context(byTime: time)
+        // 2026-11-26: 時刻で決めるときは、休みの日（土日・祝日・有休などの終日の予定）を職場にしない
+        places.registeredContext(at: time) ?? calendar.context(at: time) ?? (isDayOff(time) ? .other : Vocabulary.context(byTime: time))
     }
 
     /// その場で聞き取ってほしい言葉（名前を付けた人の名前も入れる）。
