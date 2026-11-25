@@ -315,6 +315,8 @@ def run_all() -> int:
 
             traceback.print_exc()
             failed += say(False, f"{check.__name__} が途中で落ちました: {error!r}")
+    import v28checks_sub   # 2026-11-26 定額の枠（CI の手順は増やさない）
+    failed += v28checks_sub.run_all()
     return failed
 
 
