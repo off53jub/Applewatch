@@ -9,18 +9,20 @@ import WidgetKit
 @main
 struct LifeLogWidgets: WidgetBundle {
     var body: some Widget {
+        // 並び（2026-11-25。s26 の 絵8）: 選ぶ画面で上に出るよう、今日の様子・1 問と帯・頼まれごとを先に。
+        // 使われた数がまだ無いので、どれも消さない（数は S26DWidgetUse が 1 日 1 回数える。数がそろったら 2〜3 種に絞る）
         RecordControl()
         MarkControl()
-        LauncherWidget()
         StatusWidget()
-        // 今日までの頼まれごとと確かめ待ちの数（2026-11-10）
-        TasksWidget()
-        // 今週のお礼とほめ言葉の数（2026-11-12）
-        GoodWidget()
-        // 充電中（StandBy）の今日のまとめ（2026-11-21。s20 の 追3。TodayStandByWidget.swift）
-        TodayStandByWidget()
         // s22 の 2 つ（楽14 の 1 問・見18 の今日の帯）は、束が 10 個を超えないよう別の束にまとめる（2026-11-22）
         S22Widgets().body
+        // 今日までの頼まれごとと確かめ待ちの数（2026-11-10）
+        TasksWidget()
+        // 充電中（StandBy）の今日のまとめ（2026-11-21。s20 の 追3。TodayStandByWidget.swift）
+        TodayStandByWidget()
+        // 今週のお礼とほめ言葉の数（2026-11-12）
+        GoodWidget()
+        LauncherWidget()
         RecordingLiveActivity()
         // 会議モードのあいだの「決まったこと・宿題・聞き忘れ」（2026-11-15。強化案 50。MeetingActivityWidget.swift）
         MeetingLiveActivity()
@@ -34,6 +36,8 @@ struct S22Widgets: WidgetBundle {
         S22ReviewWidget()
         // ロック画面の今日の帯（s22 の 見18。TodayBandWidget.swift）
         TodayBandWidget()
+        // コントロールセンターの「録り方の組を替える」（2026-11-25。s26 の 軽3。S26UControls.swift）
+        S26UPresetControl()
     }
 }
 

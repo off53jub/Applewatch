@@ -294,7 +294,9 @@ def check_motherquery(base: Path) -> int:
     tools = lifelog_mcp.Tools(home, None, {"lifelog_home": str(base)})
     names = {t["name"] for t in lifelog_mcp.TOOLS}
     failed += say({"search_place", "where_at", "day_timeline", "list_promises", "get_person_page", "get_place_page"} <= names
-                  and all(t["annotations"]["readOnlyHint"] for t in lifelog_mcp.TOOLS), "MCP に 6 つ足した（どれも読むだけ）")
+                  and all(t["annotations"]["readOnlyHint"] for t in lifelog_mcp.TOOLS
+                          if t["name"] not in ("add_note", "add_person_fact")),  # s26 結7: 候補を置く 2 つだけが書く
+                  "MCP に 6 つ足した（どれも読むだけ）")
     failed += say(tools.call("where_at", {"day": DAY, "time": "09:30"})["here"][0]["place"] == "たぶんつばめ図書館"
                   and tools.call("search_place", {"name": "ひばり"})["count"] == 1
                   and tools.call("day_timeline", {"day": DAY})["excluded_conversations"] == 1

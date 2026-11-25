@@ -345,7 +345,14 @@ struct BandGlowLayer: View {
             }
         }
         .allowsHitTesting(false)
-        .onChange(of: talks) { old, new in flash(BandGlow.fresh(old: old, new: new)) }
+        .onChange(of: talks) { old, new in
+            let fresh = BandGlow.fresh(old: old, new: new)
+            // 文字が届いたらごく軽く震える（開いた直後は震えない。2026-11-25。s26 の 絵7）
+            if S26DHapticRules.shouldBuzzArrived(oldCount: old.count, freshCount: fresh.count, on: S26DHapticRules.arrivedOn) {
+                LLHaptic.arrived.play()
+            }
+            flash(fresh)
+        }
     }
 
     private func flash(_ spans: [BandSpan]) {

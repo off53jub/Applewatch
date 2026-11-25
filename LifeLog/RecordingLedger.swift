@@ -89,16 +89,19 @@ final class RecordingLedger {
 
     // 2026-11-16: 区切りが届く・文字にする・様子が変わるたびに 14 日分を書き直していた（書き込み過多の 16%）。
     // 中身はアプリの中の写しが正なので、ファイルには saveDelay まとめて書く（落ちたら数分の記録を失うだけ）
-    private static let saveDelay: Duration = .seconds(120)
+    // 2026-11-25（s26 の 軽10）: 11/22 は 1 日に 486MB。まとめる間を帳の大きさから決める（S26UWrite.delay。1 日 100MB・仮。長くても 30 分）
+    private static let saveDelay: TimeInterval = 120
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private var lastBytes = 0
 
     private func save() {
         let old = Date.now.addingTimeInterval(-Double(Self.keepDays) * 24 * 3600)
         chunks.removeAll { $0.start < old }
         states.removeAll { $0.at < old }
         guard saveTask == nil else { return }
+        let wait = S26UWrite.delay(base: Self.saveDelay, lastBytes: lastBytes)
         saveTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.saveDelay)
+            try? await Task.sleep(for: .seconds(wait))
             self?.saveNow()
         }
     }
@@ -110,6 +113,7 @@ final class RecordingLedger {
         guard let data = try? JSONEncoder().encode(Store(chunks: chunks, states: states)) else { return }
         try? data.write(to: Self.url, options: .atomic)
         WriteMeter.note("recordings", data.count)  // 書き込みの多い所を測る（2026-11-22。s21 の 速5）
+        lastBytes = data.count
     }
 
     static func source(of url: URL) -> String {

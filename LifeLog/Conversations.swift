@@ -1933,6 +1933,7 @@ final class ConversationLog {
               let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
         else { return }
         cacheUse += 1
+        WriteMeter.note("conversations", data.count)  // まだ測っていなかった（2026-11-25。s26 の 軽10）
         remember(day, log, modified: modified, bytes: data.count)
     }
 

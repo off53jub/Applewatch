@@ -397,7 +397,7 @@ struct MisheardView: View {
         var searchStart = result.startIndex
         while let range = result[searchStart...].range(of: wrong) {
             result[range].inlinePresentationIntent = .stronglyEmphasized
-            result[range].foregroundColor = .orange
+            result[range].foregroundColor = LL.warn
             searchStart = range.upperBound
         }
         return result

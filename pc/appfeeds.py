@@ -616,7 +616,9 @@ FEEDBACK = {"today_three": ("done", "skipped"), "brief": ("read",), "weekly": ("
             # 見立ての ○×（1）・黙って入れたものの抜き打ち（81）（2026-11-19。s18。knowapp.py）
             "hypothesis": ("right", "wrong", "unsure"), "spot": ("right", "wrong", "unsure"),
             # 下書きの棚の答え（2026-11-25。s25 の 大8・取り決め K2。母艦が読む）
-            "draft": ("sent", "edited", "dropped")}
+            "draft": ("sent", "edited", "dropped"),
+            # 機械がしたことを戻す（2026-11-25。s26 の 軽9・取り決め K4。id は GET /machine-actions の id。母艦 M2 が次の回で戻す）
+            "undo": ("undo",)}
 APP_EVENTS = ("open", "close", "focus_on", "focus_off")
 _inbox_lock = threading.Lock()
 

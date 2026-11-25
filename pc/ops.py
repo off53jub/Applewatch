@@ -458,6 +458,14 @@ def write_summary(now: float | None = None) -> Path | None:
     except Exception as error:  # noqa: BLE001 — 数えられなくても、ほかは書く
         s25_worries, s25_lines = [], [f"- （s25 の数を書けませんでした: {type(error).__name__}）"]
     worries = worries + s25_worries
+    # s26（2026-11-25。担当 P）: 配る口・上限の決め方・機械の正解・マイク・影の比べ・声の見込み・学び直しの候補（s26pc.py）
+    try:
+        import s26pc
+
+        s26_worries, s26_lines = s26pc.summary_lines(O.diag, now)
+    except Exception as error:  # noqa: BLE001 — 数えられなくても、ほかは書く
+        s26_worries, s26_lines = [], [f"- （s26 の数を書けませんでした: {type(error).__name__}）"]
+    worries = worries + s26_worries
     lines = ["# LifeLog の実機の様子（家の PC の LifeLog PC が書き直します）", "",
              f"書いた時刻: {time.strftime('%Y-%m-%d %H:%M', time.localtime(now))}（この PC の時刻）。"
              "iPhone が POST /diag で送った様子・TestFlight の報告・通知・学び直しの様子をまとめたものです。",
@@ -487,6 +495,9 @@ def write_summary(now: float | None = None) -> Path | None:
     if s25_lines:
         lines += ["", "## s25 の数（LINE の口・知らせの道・速さ・マイク・学び直し。pc/s25pc.py）", ""]
         lines.extend(s25_lines)
+    if s26_lines:
+        lines += ["", "## s26 の数（配る口・上限・機械の正解・マイク・影の比べ・声の見込み。pc/s26pc.py）", ""]
+        lines.extend(s26_lines)
     lines += ["", "## 端末ごと", ""]
     lines.extend(devices or ["（まだ様子が届いていません）", ""])
     lines += ["## TestFlight の報告（新しい 10 件）", ""]

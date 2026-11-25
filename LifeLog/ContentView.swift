@@ -53,6 +53,8 @@ struct ContentView: View {
                         NoticeScreenView(screen: screen)
                     case .note(let title, let body):
                         NoticeNoteView(title: title, text: body)
+                    case .link(let link):
+                        S26ALinkView(link: link)  // lifelog://person/… など（2026-11-25。s26 の 結9。S26AViews.swift）
                     }
                 }
                 .toolbar {
@@ -231,7 +233,8 @@ private struct TodayView: View {
                 let layout = S24Today.layout(fold: todayFold, part: part)
                 ForEach(layout.top) { card($0, talks: talks) }
                 // よく触る設定 3 つ（2026-11-24。s24 の 形2。S24Views.swift）
-                if todayFold { S24QuickSettingsSection() }
+                // 2026-11-25（s26 の 軽3・軽5・軽11）: よく変える 3 つ（組・場面も）・すきまの 1 件・本人の操作待ち（S26UViews.swift）
+                S26UTodaySection(fold: todayFold)
                 TodayMoreRow(open: $moreOpen, detail: todayFold
                              ? "休日の顔・予定の前・朝のまとめ・夜の10秒・約束・答え合わせ・返事・下書き・電池 など"
                              : "予定の前・約束・答え合わせ・返事・下書き")
@@ -242,6 +245,7 @@ private struct TodayView: View {
             }
             .navigationTitle("今日")
             .countsOpen("today")
+            .s26uHelp("today")  // 「?」の 2 行と色の意味（2026-11-25。s26 の 軽1）
             .onAppear { S22Launch.todayShown() }  // 開いてから今日の画面まで（2026-11-22。s22 の 楽21）
             .safeAreaInset(edge: .bottom, spacing: 0) { recordBar() }
             // 「使い方」は下の帯へ（2026-11-22。s22 の 見21。片手で届く所）。歯車はどのタブでも右上のまま
@@ -757,6 +761,7 @@ private struct DaysPage: View {
         .onChange(of: byMeaning) { if query.count >= 2 { run() } }
         .navigationTitle("記録")
         .countsOpen("recordsDays")  // 開いた回数（2026-11-13。施策 17）
+        .s26uHelp("recordsDays")
         .onAppear { days = pipeline.recordedDays() }
         .refreshable { days = pipeline.recordedDays() }
         // ほかの端末から記録が届いたら出し直す
@@ -885,6 +890,8 @@ private struct SettingsView: View {
                 }
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                // 本人の操作待ち・機械がしたこと（届いているときだけ。2026-11-25。s26 の 軽5・軽9。S26UViews.swift）
+                S26USettingsTopSection()
                 if part == .check {
                     checkPage()
                 } else {
@@ -893,6 +900,7 @@ private struct SettingsView: View {
             }
             .navigationTitle(part == .check ? "点検" : "設定")
             .countsOpen("settings")  // 開いた回数（2026-11-13。施策 17）
+            .s26uHelp("settings")
             .toolbar {
                 if let onClose {
                     ToolbarItem(placement: .confirmationAction) { Button("閉じる", action: onClose) }
@@ -1059,6 +1067,7 @@ private struct DetailedSettingsView: View {
     var body: some View {
         LLList {
             sections(pipeline.settings)
+            S26USwitchesSection()  // s26 の見せ方の切り替え（2026-11-25。S26UViews.swift）
         }
         .navigationTitle("くわしい設定")
         .countsOpen("detailedSettings")
@@ -1173,6 +1182,9 @@ private struct DetailedSettingsView: View {
 
                 // 会話の横に、その時間に撮った写真を出す（2026-11-07。DayPhotos.swift）
                 DayPhotoSettingsSection()
+
+                // 取るデータと入口（体重・端末の合図・曲・予定で録り方・実績・検索。2026-11-25。s26 の A1。S26AViews.swift）
+                S26ASettingsLinkSection()
 
                 Section {
                     NavigationLink {

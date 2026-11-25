@@ -33,8 +33,8 @@ struct TodayReachRow: View {
                     .padding(.horizontal, LL.Space.m)
                     .padding(.vertical, typeSize.isAccessibilitySize ? LL.Space.s : 0)
                     .frame(minHeight: 44)
-                    .background(LL.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 22))
-                    .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(LL.accent, lineWidth: LL.Stroke.thin))
+                    .background(LL.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: LL.Radius.big))
+                    .overlay(RoundedRectangle(cornerRadius: LL.Radius.big).strokeBorder(LL.accent, lineWidth: LL.Stroke.thin))
                 }
                 .accessibilityLabel("確かめ待ち \(waiting) 件。押すと答えるカードを開きます")
             } else {

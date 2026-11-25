@@ -21,6 +21,10 @@
 - get_place_page      場所のページ（母艦の places/<名前>.md）                                              2026-11-16
   （この 6 つは母艦（config.json の lifelog_home。ふだん D:\\Lifelog）を読むだけ。--exclude-work のときは、年表の会話の行・
    人と場所のページ・約束は出さない）
+  2026-11-25（s26 結7。中身は s26pmcp.py。母艦を読むだけ）:
+- get_body・search_line・list_photos・day_actuals・events_since  体・LINE・写真・予定の実績・出来事の流れ（K8）
+- add_note・add_person_fact  書く道具は**候補を置くだけ**（母艦 inbox/mcp_candidates.jsonl に 1 行。台帳・人物ノートは直さない）
+- get_conversation に、場面の見込みを声で確かめた「たぶん」の名前（"maybe_person"。s26 結1。確定ではない）
   （search_text・search_meaning も、include_digest（既定 true）なら digest_hits に仕事のまとめの行を別に付ける。
    hits の形は変えない。仕事のまとめは職場の話なので、--exclude-work のときは出さない。ファイルは読むだけ）
 
@@ -48,6 +52,7 @@ import gpu
 import mothership
 import motherquery  # 2026-11-16（強化案 129）: 場所・年表・約束・人と場所のページ（母艦を読むだけ）
 import records
+import s26pmcp  # 2026-11-25（s26 結7）: 体・LINE・写真・予定の実績・出来事の流れと、候補を置く道具
 import semantic
 
 NAME = "lifelog"
@@ -63,7 +68,8 @@ CONTEXT = 2               # 意味で探すときに前後に付ける行の数
 DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 INSTRUCTIONS = ("家の PC（LifeLog PC）にある会話の記録を読むための道具です。読むだけで、記録は変えられません。"
                 "職場の会話と、職場かどうか分からない会話は返しません（外した数だけ返します）。"
-                "時刻の local はこの PC の時刻です。会話の id は get_conversation に渡します。")
+                "時刻の local はこの PC の時刻です。会話の id は get_conversation に渡します。"
+                "add_note・add_person_fact は候補を置くだけで、台帳や人物ノートは変えません（決めるのは本人）。")
 
 
 def default_home() -> Path:
@@ -361,8 +367,11 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["name"], "properties": {
          "name": {"type": "string", "description": "場所の名前"}}}},
 ]
+TOOLS += s26pmcp.TOOLS
 for _tool in TOOLS:
-    _tool["annotations"] = {"readOnlyHint": True, "openWorldHint": False}
+    _tool["annotations"] = {"readOnlyHint": _tool["name"] not in s26pmcp.WRITE_TOOLS, "openWorldHint": False}
+    if _tool["name"] in s26pmcp.WRITE_TOOLS:
+        _tool["annotations"].update(destructiveHint=False, idempotentHint=False)
 
 
 class Tools:
@@ -381,7 +390,10 @@ class Tools:
                   "get_conversation": self.get_conversation, "search_digest": self.search_digest,
                   "get_digest": self.get_digest, "search_place": self.search_place, "where_at": self.where_at,
                   "day_timeline": self.day_timeline, "list_promises": self.list_promises,
-                  "get_person_page": self.get_person_page, "get_place_page": self.get_place_page}.get(name)
+                  "get_person_page": self.get_person_page, "get_place_page": self.get_place_page,
+                  "get_body": self.get_body, "search_line": self.search_line, "list_photos": self.list_photos,
+                  "day_actuals": self.day_actuals, "events_since": self.events_since, "add_note": self.add_note,
+                  "add_person_fact": self.add_person_fact}.get(name)
         if method is None:
             raise LookupError(f"知らない道具です: {name}")
         return method(args)
@@ -475,6 +487,42 @@ class Tools:
 
     def get_place_page(self, args: dict) -> dict:
         return self._page(args, False)
+
+    # MARK: s26 結7（体・LINE・写真・予定の実績・出来事の流れ・候補を置く。中身は s26pmcp.py）
+
+    def get_body(self, args: dict) -> dict:
+        return s26pmcp.get_body(self._mother(), _text(args, "day", required=True, limit=10))
+
+    def search_line(self, args: dict) -> dict:
+        if not INCLUDE_WORK:
+            return {"hits": [], "message": "LINE には職場の話も混ざるので、この起動（--exclude-work）では出せません"}
+        start, end = _range(args)
+        return s26pmcp.search_line(self._mother(), _text(args, "query", required=True), start, end,
+                                   _count(args, "limit", LIMIT_DEFAULT, LIMIT_MAX))
+
+    def list_photos(self, args: dict) -> dict:
+        return s26pmcp.list_photos(self._mother(), _text(args, "day", required=True, limit=10))
+
+    def day_actuals(self, args: dict) -> dict:
+        day = _text(args, "day", required=True, limit=10)
+        parsed = self.reader.day(day) if records.valid_day(day) else None
+        spans = []
+        for c in (parsed or {}).get("conversations") or []:
+            if is_open(c):
+                a, b = local_time(c["start"])[11:16], local_time(c["end"])[11:16]
+                spans.append((int(a[:2]) * 60 + int(a[3:]), int(b[:2]) * 60 + int(b[3:])))
+        return s26pmcp.day_actuals(self._mother(), day, spans)
+
+    def events_since(self, args: dict) -> dict:
+        return s26pmcp.events_since(self._mother(), _text(args, "since", limit=40),
+                                    _count(args, "limit", 100, 300))
+
+    def add_note(self, args: dict) -> dict:
+        return s26pmcp.add_note(self._mother(), _text(args, "text", required=True, limit=1000), _text(args, "day", limit=10))
+
+    def add_person_fact(self, args: dict) -> dict:
+        return s26pmcp.add_person_fact(self._mother(), _text(args, "name", required=True, limit=40),
+                                       _text(args, "fact", required=True, limit=500), _text(args, "evidence", limit=300))
 
     def get_digest(self, args: dict) -> dict:
         day = _day(args, "day")
@@ -598,7 +646,16 @@ class Tools:
             # 職場の会話かどうかも言わずに断る（中身・見出し・相手は返さない）
             return {"conversation": None, "excluded_work": 1,
                     "message": "この会話は出せません（職場の会話か、職場かどうか分からない会話です）"}
-        return {"conversation": dict(brief(day, c), lines=[line_out(line) for line in c["lines"]]), "excluded_work": 0}
+        out = dict(brief(day, c), lines=[line_out(line) for line in c["lines"]])
+        try:  # s26 結1: 場面の見込みを声で確かめた「たぶん」（確定ではない・本人の答えが上）
+            import s26pvoice
+
+            maybe = s26pvoice.read_maybe(self.home).get(conversation_id(day, c))
+            if maybe:
+                out["maybe_person"] = maybe
+        except Exception:  # noqa: BLE001
+            pass
+        return {"conversation": out, "excluded_work": 0}
 
     def search_meaning(self, args: dict) -> dict:
         query = _text(args, "query", required=True, limit=semantic.TEXT_MAX)

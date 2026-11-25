@@ -257,10 +257,13 @@ struct S23ReviewView: View {
             Section {
                 Text(item?.question ?? fallbackQuestion).font(.title3.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
                 // 声を聞いて答える（voice_pair は 2 つとも聞ける）
-                if let clips = item?.clips, !clips.isEmpty {
+                // 話し手を聞く問いは、発言 → 声 → 名前のボタン（確かめ待ちの画面と同じ部品。2026-11-25。s26 の S26V）
+                if let item, S26VVoice.isVoiceAsk(item) {
+                    S26VVoiceBlock(item: item)
+                } else if let clips = item?.clips, !clips.isEmpty {
                     ClipChooser(clips: clips)
                 }
-                if let evidence = item?.evidence, !evidence.isEmpty {
+                if item.map(S26VVoice.isVoiceAsk) != true, let evidence = item?.evidence, !evidence.isEmpty {
                     ForEach(Array(evidence.prefix(3).enumerated()), id: \.offset) { _, e in
                         Text(e.text).font(.callout).foregroundStyle(LL.dim)
                     }
@@ -853,7 +856,7 @@ struct S23TodaySection: View {
                 if let newer {
                     VStack(alignment: .leading, spacing: 6) {
                         Label("新しい版（\(newer)）があるようです", systemImage: "arrow.down.app")
-                        HStack {
+                        LLAdaptiveStack(spacing: LL.Space.s) {  // 文字がとても大きいときは縦に（s26 の 絵10）
                             Button("TestFlight を開く") { book.openTestFlight() }.buttonStyle(LLPillButtonStyle(filled: true))
                             Button("この版は知らせない") { book.dismissBuild(newer) }.buttonStyle(LLPillButtonStyle(tint: LL.dim))
                         }
@@ -870,7 +873,7 @@ struct S23TodaySection: View {
                         .buttonStyle(.borderless)
                         if open {
                             Text(pick.how).font(.callout).foregroundStyle(LL.dim)
-                            HStack(spacing: 16) {
+                            LLAdaptiveStack(spacing: LL.Space.l) {  // 文字がとても大きいときは縦に（s26 の 絵10）
                                 Button("確かめた", systemImage: "checkmark") { mark(pick.id, true) }
                                 Button("動かなかった", systemImage: "xmark", role: .destructive) { mark(pick.id, false) }
                                 Button("今日は出さない") { hiddenDay = today }

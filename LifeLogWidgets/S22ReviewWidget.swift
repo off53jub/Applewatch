@@ -10,7 +10,7 @@ struct S22ReviewWidget: Widget {
         StaticConfiguration(kind: WidgetState.reviewKind, provider: StatusProvider()) { entry in
             S22ReviewWidgetView(entry: entry)
                 .containerBackground(for: .widget) { LLWidgetBackground() }
-                .widgetURL(URL(string: "lifelog://review"))
+                .widgetURL(URL(string: "lifelog://review?w=review"))
         }
         .configurationDisplayName("LifeLog の 1 問")
         .description("確かめ待ちの 1 問に ○ か × で答えます。答えはアプリが次に動いたときに送ります。")

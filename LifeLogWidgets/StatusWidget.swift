@@ -12,7 +12,7 @@ struct StatusWidget: Widget {
             StatusView(entry: entry)
                 .containerBackground(for: .widget) { LLWidgetBackground() }
                 // 押すと「今日」タブを開く（2026-11-12）
-                .widgetURL(URL(string: "lifelog://today"))
+                .widgetURL(URL(string: "lifelog://today?w=status"))
         }
         .configurationDisplayName("LifeLog の様子")
         .description("録音しているか、今日までの頼まれごと、次の予定、家の PC を出します。押すと LifeLog を開きます。")

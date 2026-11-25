@@ -86,6 +86,8 @@ enum LLHaptic: String, CaseIterable, Sendable {
     case done
     /// うまくいかなかった
     case failed
+    /// 文字が届いた（画面を開いているときだけ・ごく軽く。2026-11-25。s26 の 絵7）
+    case arrived
 
     /// 画面と docs に出す言葉
     var label: String {
@@ -95,6 +97,7 @@ enum LLHaptic: String, CaseIterable, Sendable {
         case .confirm: "確かめて（軽く 1 回）"
         case .done: "完了（上がる 2 回）"
         case .failed: "うまくいかない（下がる 3 回）"
+        case .arrived: "届いた（ごく軽く 1 回）"
         }
     }
 }
@@ -106,7 +109,9 @@ extension Color {
         return Color(llHex: dark)
         #else
         return Color(uiColor: UIColor { traits in
-            UIColor(llHex: traits.userInterfaceStyle == .dark ? dark : light)
+            // 日なたの版（s26 の 絵6）: 明るい画面の文字を濃く・地を白く（LLSun。Shared/Design/S26DRules.swift）
+            if traits.userInterfaceStyle == .dark { return UIColor(llHex: dark) }
+            return UIColor(llHex: LLSun.isOn ? LLSun.adjust(light) : light)
         })
         #endif
     }
@@ -118,7 +123,9 @@ extension Color {
         #else
         return Color(uiColor: UIColor { traits in
             let hour = Calendar.current.component(.hour, from: Date())
-            return UIColor(llHex: LLDayTint.bgHex(hour: hour, dark: traits.userInterfaceStyle == .dark, enabled: LLDayTint.isOn))
+            let dark = traits.userInterfaceStyle == .dark
+            if !dark && LLSun.isOn { return UIColor(llHex: 0xFFFFFF) }  // 日なたの版は地を白に（s26 の 絵6）
+            return UIColor(llHex: LLDayTint.bgHex(hour: hour, dark: dark, enabled: LLDayTint.isOn))
         })
         #endif
     }

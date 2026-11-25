@@ -207,6 +207,7 @@ import s22text  # s22 確12・確21・確11: 決まり文句の票・行の時�
 import s23pc  # s23（2026-11-23）: 続1〜続4・続8・続10・試4・届7・止1/続5 の受け口（中身は s23pc.py・s23voice.py・s23gaps.py ほか）
 import s24pc  # s24（2026-11-24）: 急3・急7・当1・減3・減5・当2・当5・当7・当8・当11・当12（中身は s24pc.py・s24rules.py・s24night.py）
 import s25pc  # s25（2026-11-24。担当 P）: K1〜K4・K6・K7・連16・早1〜4・大3・大4・大9・活1（中身は s25pc.py ほか s25p*.py）
+import s26pc  # s26（2026-11-25。担当 P）: K4〜K8・聞1〜7・聞11・聞15・集3・結1・結4（中身は s26pc.py ほか s26p*.py）
 
 VERSION = 10
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
@@ -2299,6 +2300,8 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(s24pc.FEATURES)
     # s25: linetasks・drafts・lineshare・linehook・ping（と、"whisper_now" がオンのときの whispernow）
     found.extend(s25pc.features())
+    # s26: machineactions・waiting・gaptask・events（母艦の写しを配る口。K4・K5・K6・K8）
+    found.extend(s26pc.features())
     # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
     if watchroute.running():
         found.append("watchroute")
@@ -2687,6 +2690,10 @@ def start_v6(threads: int) -> None:
         s25pc.start(sys.modules[__name__])
     except Exception as error:  # noqa: BLE001
         log(f"s25 の見回りを始められませんでした: {type(error).__name__}")
+    try:  # s26（2026-11-25）: 配る口・夜の影の比べ（機械の正解・マイク・全部聞く・声の見込み）・学び直しを候補に（s26pc.py）
+        s26pc.start(sys.modules[__name__])
+    except Exception as error:  # noqa: BLE001
+        log(f"s26 の見回りを始められませんでした: {type(error).__name__}")
     # 2026-11-13（施策 9・10・11）: 夜の流れ（品質の記録・同じ人かも・夜の読み直し。quality.py）
     quality.start(HOME, App.records, App.jobs, lambda: mothership.home(load_config()),
                   lambda p, r: extra_model("speaker", 1).embed(load_audio(p.read_bytes()), r), log)
@@ -3106,6 +3113,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.authorized():
                 s25pc.http_get(self, path)
             return
+        if path in s26pc.GETS:  # s26 K4・K5・K6・K8: GET /machine-actions・/waiting・/gap-task・/events（s26pfeeds.py）
+            if self.authorized():
+                s26pc.http_get(self, path, url.query)
+            return
         if path in s23pc.GETS:  # s23 試4: GET /s23/checks（s22 の 7 つを新しい版で 1 回ずつ呼んだ結果）
             if self.authorized():
                 s23pc.http_get(self, path, url.query)
@@ -3224,6 +3235,10 @@ class Handler(BaseHTTPRequestHandler):
         if url.path in s25pc.POSTS:  # s25 K3: POST /line/share（LINE の「トーク履歴を送信」の .txt。HOME/line-share）
             if self.authorized():
                 s25pc.http_post(self, url.path)
+            return
+        if url.path in s26pc.POSTS:  # s26 結4: POST /face-name（顔のまとまりに名前。この PC の中からだけ）
+            if self.authorized():
+                s26pc.http_post(self, url.path)
             return
         if url.path in s24pc.POSTS:  # s24 急3: POST /notify/urgent（合言葉は X-LifeLog-Local。中で確かめる）
             s24pc.http_post(self, url.path)

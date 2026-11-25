@@ -31,14 +31,23 @@ enum SoundScene {
     }
 
     /// 録音のどこで、どの背景の音がしていたか（約1秒ごと、半分ずつ重ねて）。調べられなければ空。
-    static func windows(in url: URL) -> [Window] {
+    static func windows(in url: URL) -> [Window] { scan(in: url).windows }
+
+    /// 背景の音と、体の音（せき・いびき。2026-11-25。s26 の 集3。行の「背景の音」には入れず、数えるだけ）
+    struct Scan: Sendable {
+        var windows: [Window] = []
+        /// label は "cough" か "snore"
+        var body: [Window] = []
+    }
+
+    static func scan(in url: URL) -> Scan {
         guard let analyzer = try? SNAudioFileAnalyzer(url: url),
-              let request = try? SNClassifySoundRequest(classifierIdentifier: .version1) else { return [] }
+              let request = try? SNClassifySoundRequest(classifierIdentifier: .version1) else { return Scan() }
         request.overlapFactor = 0.5
         let observer = Observer()
-        guard (try? analyzer.add(request, withObserver: observer)) != nil else { return [] }
+        guard (try? analyzer.add(request, withObserver: observer)) != nil else { return Scan() }
         analyzer.analyze()
-        return observer.windows
+        return Scan(windows: observer.windows, body: observer.body)
     }
 
     /// start〜end 秒の行のあいだ、いちばん長く聞こえていた背景の音（行の3割以上で聞こえていたもの）。
@@ -55,6 +64,7 @@ enum SoundScene {
 
     private final class Observer: NSObject, SNResultsObserving {
         var windows: [Window] = []
+        var body: [Window] = []
 
         func request(_ request: SNRequest, didProduce result: SNResult) {
             guard let result = result as? SNClassificationResult else { return }
@@ -63,6 +73,13 @@ enum SoundScene {
             for c in result.classifications.prefix(5) where c.confidence >= 0.4 {
                 if let label = SoundScene.label(for: c.identifier) {
                     windows.append(Window(start: start, end: end, label: label))
+                    break
+                }
+            }
+            // せき・いびき（強さ 0.5 以上・仮）
+            for c in result.classifications.prefix(8) where c.confidence >= S26ABodySoundRules.minConfidence {
+                if let kind = S26ABodySoundRules.kind(c.identifier) {
+                    body.append(Window(start: start, end: end, label: kind))
                     break
                 }
             }

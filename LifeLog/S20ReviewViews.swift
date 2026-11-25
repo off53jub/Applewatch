@@ -95,10 +95,13 @@ struct ReviewDeckView: View {
             }
             Text(item.question).font(.title3.weight(.semibold)).foregroundStyle(LL.text)
                 .fixedSize(horizontal: false, vertical: true)
-            if let clips = item.clips, !clips.isEmpty {
+            // 話し手を聞く問いは、発言 3 つ → 声 → 名前のボタンの順で、根拠を閉じずに見せる（2026-11-25。s26 の S26V）
+            if S26VVoice.isVoiceAsk(item) {
+                S26VVoiceBlock(item: item)
+            } else if let clips = item.clips, !clips.isEmpty {
                 ClipChooser(clips: clips)
             }
-            if let evidence = item.evidence, !evidence.isEmpty {
+            if !S26VVoice.isVoiceAsk(item), let evidence = item.evidence, !evidence.isEmpty {
                 Button {
                     withAnimation(LL.Motion.fade) { showEvidence.toggle() }
                 } label: {

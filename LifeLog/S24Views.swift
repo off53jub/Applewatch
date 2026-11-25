@@ -6,12 +6,12 @@ import SwiftUI
 // MARK: - 形8 色の役割
 
 extension LLRole {
-    /// 赤＝いま本人が動く・青＝機械が進めている・灰＝待てば直る・問いは文字の色のまま
+    /// 赤＝いま本人が動く・青＝機械が進めている・オレンジ＝待てば戻る（s26 の 絵2 で灰から替えた）・問いは文字の色のまま
     var color: Color {
         switch self {
         case .act: LL.danger
         case .machine: LL.accent
-        case .wait: LL.dim
+        case .wait: LL.warn
         case .ask: LL.text
         }
     }
@@ -220,7 +220,7 @@ struct S24TodayAskSection: View {
                     let names = keys.compactMap { S24Entry.of($0)?.title }
                     S24RoleLabel(text: "30 日開かなかった画面（" + names.joined(separator: "・") + "）を「ほか」に畳みますか？", role: .ask)
                         .font(.callout)
-                    HStack(spacing: 12) {
+                    LLAdaptiveStack(spacing: LL.Space.m) {  // 文字がとても大きいときは縦に（s26 の 絵10）
                         Button("畳む") {
                             S24FoldBook.shared.answerOffer(fold: keys)
                             foldOffer = []

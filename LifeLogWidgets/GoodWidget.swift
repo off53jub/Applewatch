@@ -10,7 +10,7 @@ struct GoodWidget: Widget {
             GoodView(entry: entry)
                 .containerBackground(for: .widget) { LLWidgetBackground() }
                 // 押すといいこと帳を開く（2026-11-12。LifeLog の NoticeRoute.route(url:)）
-                .widgetURL(URL(string: "lifelog://good"))
+                .widgetURL(URL(string: "lifelog://good?w=good"))
         }
         .configurationDisplayName("LifeLog のいいこと帳")
         .description("今週のお礼とほめ言葉の数を出します。押すといいこと帳を開きます。")

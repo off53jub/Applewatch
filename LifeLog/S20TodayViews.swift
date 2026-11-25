@@ -144,7 +144,8 @@ struct CaptureDotSheet: View {
         NavigationStack {
             LLList {
                 Section {
-                    HStack(spacing: LL.Space.m) {
+                    // 文字がとても大きいときは丸の下に文を積む（2026-11-25。s26 の 絵10）
+                    LLAdaptiveStack(spacing: LL.Space.m) {
                         CaptureDotView(dot: dot, state: state).frame(width: 96)
                         VStack(alignment: .leading, spacing: LL.Space.xs) {
                             CertaintyBadge(certainty: state.certainty, text: reasonTitle)

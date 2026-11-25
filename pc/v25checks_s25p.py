@@ -166,8 +166,11 @@ def check_bot() -> int:
     body = event("まとめ", 1)
     st, _ = s25pline.handle(body, "bad", home, {}, mother, LOGS.append, sender)
     failed += say(st == 401 and not replies, "K4: 署名が違えば 401（中身を見ない）")
-    for n, (text, want) in enumerate((("まとめ", "今日のまとめの文"), ("甲さん", "甲さんとは 11/20 に話した"),
-                                      ("丙さん", "丙さんの 1 行はまだありません"), ("メモ 駅で傘を買う", "入れました"))):
+    # s26 結9（2026-11-25）: 人の返事の終わりに lifelog://person/<名前> の 1 行（K3）
+    for n, (text, want) in enumerate((("まとめ", "今日のまとめの文"),
+                                      ("甲さん", "甲さんとは 11/20 に話した" + chr(10) + s25pline.person_link("甲")),
+                                      ("丙さん", "丙さんの 1 行はまだありません" + chr(10) + s25pline.person_link("丙")),
+                                      ("メモ 駅で傘を買う", "入れました"))):
         body = event(text, 10 + n)
         replies.clear()
         st, _ = s25pline.handle(body, sig(body), home, {}, mother, LOGS.append, sender)
@@ -510,6 +513,10 @@ def run_all() -> int:
             traceback.print_exc()
             failed += say(False, f"{check.__name__} が途中で落ちました: {error!r}")
     s25pc.S.main, s25pc.S.home = saved
+    # s26（2026-11-25。担当 P）の確かめも続けて（CI の手順を増やさないため）
+    import v26checks_s26p
+
+    failed += v26checks_s26p.run_all()
     return failed
 
 

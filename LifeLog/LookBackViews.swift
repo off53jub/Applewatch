@@ -15,6 +15,7 @@ struct LookBackTab: View {
             LLList {
                 // 数を小さなグラフで・物語・休日のページ・面談の 1 枚・検品表（2026-11-21。s20 の 体3・体23〜26。S20LookBackViews.swift）
                 S20LookBackSection()
+                S26DLookBackLinks()  // 同じ形の線・月の 1 枚（2026-11-25。s26 の 絵4・絵5。S26DTrends.swift）
                 // 今週のふり返り・見立ての台帳・使われ方の数（2026-11-13。施策 2・3・1。MothershipFeeds.swift。写しがあるときだけ）
                 WeeklyLookBackSection()
                 if simple {
@@ -123,6 +124,7 @@ struct LookBackTab: View {
             }
             .navigationTitle("ふり返り")
             .countsOpen("lookBack")
+            .s26uHelp("lookBack")
             .settingsGear()
         }
     }

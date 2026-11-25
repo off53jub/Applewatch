@@ -548,6 +548,8 @@ extension Pipeline {
         // s25（2026-11-24。S25UBook.diagState。どれも省ける）: 文字になるまでの段ごと・iPhone→PC の中身（早1・早3）・
         // 初めはオフのまま 30 日の設定（片3）・静かな試しが届いた時刻（堅4・K6）・時計の版が古いまま（堅3）・引き算の版（大1）
         for (key, value) in S25UBook.diagState(self) { state[key] = value }
+        // s26（2026-11-25。S26UBook.diagState。どれも省ける）: 時計が録り方の指図で動いているか（軽6）・操作待ちと機械がしたことの数
+        for (key, value) in S26UBook.diagState(self) { state[key] = value }
         return state
     }
 

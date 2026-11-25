@@ -9,7 +9,7 @@ struct TodayStandByWidget: Widget {
         StaticConfiguration(kind: WidgetState.todayKind, provider: StatusProvider()) { entry in
             TodayStandByView(state: entry.state)
                 .containerBackground(for: .widget) { LLWidgetBackground() }
-                .widgetURL(URL(string: "lifelog://today"))
+                .widgetURL(URL(string: "lifelog://today?w=standby"))
         }
         .configurationDisplayName("LifeLog の今日のまとめ")
         .description("会話の数・録った時間・今日の三つ・確かめ待ち。充電中の StandBy で大きく見られます。")

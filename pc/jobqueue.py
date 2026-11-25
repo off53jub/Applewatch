@@ -877,6 +877,11 @@ def parse_params(query: dict) -> dict:
     scene = (query.get("scene") or [""])[0]
     if scene in ("train", "car", "shop", "outside", "home"):
         params["scene"] = scene
+    # s26 聞2（2026-11-25）: 省ける mic（どのマイクで録ったか。"builtin"・"external"・"airpods"・"bluetooth"）。
+    # 外付けのマイクが届いたら、アプリが付けて送る受け口（同じ物差しで「拾えた割合」を比べる。s26pnight.mic_scenes）
+    mic = (query.get("mic") or [""])[0]
+    if mic in ("builtin", "external", "airpods", "bluetooth"):
+        params["mic"] = mic
     return params
 
 

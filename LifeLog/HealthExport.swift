@@ -36,6 +36,30 @@ enum HealthExport {
         var hrvMax: Double? = nil
         /// ワークアウト（始まりがその日のもの）
         var workouts: [Workout] = []
+        /// 体重・体脂肪・BMI と体の記録（2026-11-25。s26 の 集1・集2。取り決め K1。Health Auto Export と同じ名前で書く。無い日は書かない）。
+        /// 体重・体脂肪・BMI はその日の最後の値、ほかはその日の平均（階段・日光は合計）。手首の温度は睡眠と同じ夜の分
+        var weightKg: Double? = nil
+        /// 体脂肪（0〜100 の %）
+        var bodyFatPercent: Double? = nil
+        var bmi: Double? = nil
+        /// 呼吸数（1 分あたり）
+        var respiratoryRate: Double? = nil
+        /// 血中酸素（0〜100 の %）
+        var oxygenPercent: Double? = nil
+        /// 寝ているあいだの手首の温度（℃）
+        var wristTempC: Double? = nil
+        /// 最大酸素摂取量（ml/(kg·min)）
+        var vo2Max: Double? = nil
+        /// 上った階の数
+        var flights: Double? = nil
+        /// 日光を浴びた時間（分）
+        var daylightMinutes: Double? = nil
+        /// まわりの音の大きさ・イヤホンの音量（dBA の平均）
+        var environmentDB: Double? = nil
+        var headphoneDB: Double? = nil
+        /// せきの回数・いびきの分（2026-11-25。s26 の 集3。録音の音の種類から数だけ。文は残さない）
+        var coughs: Int? = nil
+        var snoreMinutes: Double? = nil
 
         struct Workout: Equatable {
             var name: String
@@ -61,7 +85,15 @@ enum HealthExport {
         var isEmpty: Bool {
             (steps ?? 0) == 0 && heartMin == nil && heartMax == nil && heartAverage == nil && resting == nil && sleep == nil
                 && (activeKcal ?? 0) == 0 && (exerciseMinutes ?? 0) == 0 && (standMinutes ?? 0) == 0 && workouts.isEmpty
-                && hrv == nil
+                && hrv == nil && !hasBodyExtras
+        }
+
+        /// s26 で足した体の記録が 1 つでもあるか（体重だけの日も書く）
+        var hasBodyExtras: Bool {
+            let values: [Double?] = [weightKg, bodyFatPercent, bmi, respiratoryRate, oxygenPercent, wristTempC, vo2Max,
+                                     environmentDB, headphoneDB]
+            return values.contains { $0 != nil } || (flights ?? 0) > 0 || (daylightMinutes ?? 0) > 0
+                || (coughs ?? 0) > 0 || (snoreMinutes ?? 0) > 0
         }
     }
 
@@ -129,6 +161,7 @@ enum HealthExport {
             if let high = d.hrvMax { entry["Max"] = rounded(high) }
             metrics.append(["name": "heart_rate_variability", "units": "ms", "data": [entry]])
         }
+        metrics += bodyMetrics(d, date: date)
         var workouts: [[String: Any]] = []
         for w in d.workouts {
             // duration は時間（母艦の Process-HealthInbox.ps1 が 60 を掛けて分にする）
@@ -140,6 +173,31 @@ enum HealthExport {
         }
         let object: [String: Any] = ["source": "LifeLog", "day": d.day, "data": ["metrics": metrics, "workouts": workouts]]
         return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
+    /// s26 で足した体の記録（取り決め K1 の名前と単位。値の無いものは書かない）
+    static func bodyMetrics(_ d: Day, date: String) -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        func add(_ name: String, _ units: String, _ value: Double?, digits: Double = 10, positive: Bool = false) {
+            guard let value, value.isFinite, !positive || value > 0 else { return }
+            out.append(["name": name, "units": units, "data": [["date": date, "qty": (value * digits).rounded() / digits]]])
+        }
+        add("weight_body_mass", "kg", d.weightKg, digits: 100, positive: true)
+        add("body_fat_percentage", "%", d.bodyFatPercent, positive: true)
+        add("body_mass_index", "count", d.bmi, positive: true)
+        add("respiratory_rate", "count/min", d.respiratoryRate, positive: true)
+        add("blood_oxygen_saturation", "%", d.oxygenPercent, positive: true)
+        add("apple_sleeping_wrist_temperature", "degC", d.wristTempC, digits: 100)
+        add("vo2_max", "ml/(kg·min)", d.vo2Max, positive: true)
+        add("flights_climbed", "count", d.flights, positive: true)
+        add("time_in_daylight", "min", d.daylightMinutes, positive: true)
+        add("environmental_audio_exposure", "dBASPL", d.environmentDB, positive: true)
+        add("headphone_audio_exposure", "dBASPL", d.headphoneDB, positive: true)
+        if let c = d.coughs, c > 0 {
+            out.append(["name": "lifelog_cough_count", "units": "count", "data": [["date": date, "qty": c]]])
+        }
+        add("lifelog_snore_minutes", "min", d.snoreMinutes, positive: true)
+        return out
     }
 
     static func dayDate(_ key: String, calendar: Calendar = .current) -> Date? {
