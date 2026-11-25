@@ -208,6 +208,7 @@ import s23pc  # s23（2026-11-23）: 続1〜続4・続8・続10・試4・届7・
 import s24pc  # s24（2026-11-24）: 急3・急7・当1・減3・減5・当2・当5・当7・当8・当11・当12（中身は s24pc.py・s24rules.py・s24night.py）
 import s25pc  # s25（2026-11-24。担当 P）: K1〜K4・K6・K7・連16・早1〜4・大3・大4・大9・活1（中身は s25pc.py ほか s25p*.py）
 import s26pc  # s26（2026-11-25。担当 P）: K4〜K8・聞1〜7・聞11・聞15・集3・結1・結4（中身は s26pc.py ほか s26p*.py）
+import s27pwork  # s27（2026-11-25。担当 P）: 仕事の画面の口 K5（/work・/work/confirm・/work/ask・/work-board）と K4（中身は s27pwork.py）
 
 VERSION = 10
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
@@ -2302,6 +2303,8 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(s25pc.features())
     # s26: machineactions・waiting・gaptask・events（母艦の写しを配る口。K4・K5・K6・K8）
     found.extend(s26pc.features())
+    # s27: work・workconfirm・workask・workboard（仕事の画面の口。K5。s27pwork.py）
+    found.extend(s27pwork.FEATURES)
     # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
     if watchroute.running():
         found.append("watchroute")
@@ -3116,6 +3119,10 @@ class Handler(BaseHTTPRequestHandler):
         if path in s26pc.GETS:  # s26 K4・K5・K6・K8: GET /machine-actions・/waiting・/gap-task・/events（s26pfeeds.py）
             if self.authorized():
                 s26pc.http_get(self, path, url.query)
+            return
+        if path in s27pwork.GETS:  # s27 K5: GET /work・/work/confirm・/work/ask・/work-board（s27pwork.py）
+            if self.authorized():
+                s27pwork.http_get(self, path, url.query, mothership.home(load_config()))
             return
         if path in s23pc.GETS:  # s23 試4: GET /s23/checks（s22 の 7 つを新しい版で 1 回ずつ呼んだ結果）
             if self.authorized():
