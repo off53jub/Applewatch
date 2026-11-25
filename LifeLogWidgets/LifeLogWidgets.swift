@@ -38,6 +38,8 @@ struct S22Widgets: WidgetBundle {
         TodayBandWidget()
         // コントロールセンターの「録り方の組を替える」（2026-11-25。s26 の 軽3。S26UControls.swift）
         S26UPresetControl()
+        // 仕事の宿題の数と次の会議までの時間だけ（2026-11-25。s27 の 場6・守1。S27WWorkWidget.swift）
+        S27WWorkWidget()
     }
 }
 
