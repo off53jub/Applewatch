@@ -171,7 +171,11 @@ final class S26ATests: XCTestCase {
     func testMusicStartNeedsSixSeconds() {
         let w: [(start: Double, end: Double, label: String)] = [(0, 1, "音楽"), (0.5, 1.5, "音楽"), (10, 11, "電車")]
         XCTAssertNil(S26AShazamRules.musicStart(w))
-        let long: [(start: Double, end: Double, label: String)] = (0..<14).map { (start: 20 + Double($0) * 0.5, end: 21 + Double($0) * 0.5, label: "音楽") }
+        var long: [(start: Double, end: Double, label: String)] = []
+        for i in 0..<14 {
+            let s: Double = 20.0 + Double(i) * 0.5
+            long.append((start: s, end: s + 1.0, label: "音楽"))
+        }
         XCTAssertEqual(S26AShazamRules.musicStart(w + long), 20)
     }
 
