@@ -173,12 +173,21 @@ enum S25TDrafts {
         return out
     }
 
-    /// 棚に出すもの: 答えたものを除き、精算 → 返事 → 予定 → 報告 → そのほかの順（同じ種類は届いた順）。shelfMax まで
+    /// 家の PC が Google カレンダーを直す下書き（2026-11-25。母艦 Sync-LineCalendar.py）。押すと家の PC が直す
+    static let calendarFixSource = "line-calendar"
+
+    static func isCalendarFix(_ d: S25TDraft) -> Bool { d.source == calendarFixSource }
+
+    /// 棚に出すもの: 答えたものを除き、カレンダーを直す下書き → 精算 → 返事 → 予定 → 報告 → そのほかの順（同じ種類は届いた順）。shelfMax まで
     static func shelf(_ drafts: [S25TDraft], handled: Set<String>, limit: Int = shelfMax) -> [S25TDraft] {
         let order = ["settle", "reply", "calendar", "report", "other"]
+        func rank(_ d: S25TDraft) -> Int {
+            if isCalendarFix(d) { return -1 }
+            return order.firstIndex(of: d.kind) ?? order.count
+        }
         let alive = drafts.enumerated().filter { !handled.contains($0.element.id) }
         let sorted = alive.sorted { a, b in
-            let x = order.firstIndex(of: a.element.kind) ?? order.count, y = order.firstIndex(of: b.element.kind) ?? order.count
+            let x = rank(a.element), y = rank(b.element)
             return x != y ? x < y : a.offset < b.offset
         }
         return Array(sorted.prefix(limit).map(\.element))

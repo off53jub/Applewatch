@@ -27,6 +27,15 @@ struct S25TDraftShelfSection: View {
                         if let when = draft.when { Text("日時: " + when).font(.caption).foregroundStyle(LL.dim) }
                         Text(draft.body).font(.callout).lineLimit(8)
                         if let evidence = draft.evidence { Text("もと: " + evidence).font(.caption2).foregroundStyle(LL.dim) }
+                        if S25TDrafts.isCalendarFix(draft) {
+                            // 家の PC が Google カレンダーを直す（押したときだけ）。「反映」= sent・「そのまま」= dropped
+                            HStack(spacing: 10) {
+                                Button("カレンダーに反映") { withAnimation { book.answer(draft, action: "sent") } }
+                                    .buttonStyle(LLPillButtonStyle(filled: true))
+                                Button("そのまま") { withAnimation { book.answer(draft, action: "dropped") } }
+                                    .buttonStyle(LLPillButtonStyle(tint: LL.dim))
+                            }
+                        } else {
                         HStack(spacing: 10) {
                             Button("送る") { sharing = draft }
                                 .buttonStyle(LLPillButtonStyle(filled: true))
@@ -43,6 +52,7 @@ struct S25TDraftShelfSection: View {
                             .buttonStyle(LLPillButtonStyle())
                             Button("捨てる") { withAnimation { book.answer(draft, action: "dropped") } }
                                 .buttonStyle(LLPillButtonStyle(tint: LL.dim))
+                        }
                         }
                     }
                     .padding(.vertical, 2)
