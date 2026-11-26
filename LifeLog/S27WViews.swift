@@ -179,12 +179,13 @@ struct S27WHomeView: View {
                 if let results {
                     S27WAnswersSection(query: query, answers: results, fromPC: fromPC)
                 }
+                // 2026-11-26 作り直し: 案件 → トピック → 課題の地図（S27WMapViews.swift）。前の案件の並び・他の案件の箱はここから外した。
+                // 同じ日の夜、本人「長すぎてどこにあるかわからなかった」→ いちばん上へ。下の一覧は 3 件ずつに畳む（S27WItemGroup）
+                S27WGroupsSection(board: board)
                 S27WMorningSection(today: board.today)
                 S27WStuckSection(items: board.today.stuckByMe)
                 S27WDiffSection(diff: board.diff)
                 S27WConfirmEntrySection()
-                // 2026-11-26 作り直し: 案件 → トピック → 課題の地図（S27WMapViews.swift）。前の案件の並び・他の案件の箱はここから外した
-                S27WGroupsSection(board: board)
                 S27WSideSection(side: board.side, projects: S27WRules.sortedByMoved(board.projects, kind: "side"))
                 S27WPeopleSection(people: S27WRules.sortedPeople(board.people))
             } else {
@@ -594,11 +595,22 @@ private struct S27WItemGroup: View {
     let items: [S27WItem]
     var canDone = false
     var emptyText: String?
+    /// 長い一覧は初めの数件だけ（2026-11-26。本人「長すぎてどこにあるかわからなかった」）
+    @State private var expanded = false
 
     var body: some View {
         if !items.isEmpty {
+            let fold = S27WMap.fold(items.count, expanded: expanded)
             S27WSubhead(title: title, note: "\(items.count)")
-            ForEach(items) { item in S27WItemRow(item: item, canDone: canDone) }
+            ForEach(items.prefix(fold.shown)) { item in S27WItemRow(item: item, canDone: canDone) }
+            if items.count > S27WMap.foldLimit {
+                Button(expanded ? "畳む" : "あと \(fold.hidden) 件を見る",
+                       systemImage: expanded ? "chevron.up" : "chevron.down") {
+                    withAnimation { expanded.toggle() }
+                }
+                .buttonStyle(.borderless)
+                .font(LL.TypeScale.note)
+            }
         } else if let emptyText {
             S27WSubhead(title: title, note: emptyText)
         }
