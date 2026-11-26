@@ -84,10 +84,10 @@ enum S27WMapText {
     @MainActor static func legend(_ counts: [S27WState: Int], states: [S27WState] = S27WState.allCases) -> Text {
         var t = Text("")
         for s in states where counts[s, default: 0] > 0 {
-            t = t + Text(Image(systemName: "square.fill")).foregroundStyle(s.color)
-                + Text(" \(s.label) ").foregroundStyle(LL.dim)
-                + Text("\(counts[s, default: 0])").foregroundStyle(LL.text).bold()
-                + Text("　")
+            let mark = Text(Image(systemName: "square.fill")).foregroundStyle(s.color)
+            let label = Text(" \(s.label) ").foregroundStyle(LL.dim)
+            let n = Text("\(counts[s, default: 0])").foregroundStyle(LL.text).bold()
+            t = Text("\(t)\(mark)\(label)\(n)　")
         }
         return t
     }
@@ -170,7 +170,7 @@ struct S27WGroupCard: View {
             }
             if let m = S27WMap.milestones(group, today: t).first {
                 Label {
-                    Text(S27WMapText.milestone(m, today: t)).bold() + Text("　" + book.t(m.title)).foregroundStyle(LL.dim)
+                    Text("\(Text(S27WMapText.milestone(m, today: t)).bold())\(Text("　" + book.t(m.title)).foregroundStyle(LL.dim))")
                 } icon: {
                     Image(systemName: "flag.fill").foregroundStyle(LL.accent)
                 }
@@ -180,7 +180,7 @@ struct S27WGroupCard: View {
             if group.topics.count > 1 {
                 S27WPipGrid(pips: S27WMap.sortedTopics(group.topics, today: t, done: done).map { (S27WMap.topicState($0, today: t, done: done), false) },
                             size: 16, spoken: "トピック \(group.topics.count)。" + S27WMapText.spoken(topicCounts))
-                (Text("トピック \(group.topics.count)　").foregroundStyle(LL.dim) + S27WMapText.legend(topicCounts))
+                Text("\(Text("トピック \(group.topics.count)　").foregroundStyle(LL.dim))\(S27WMapText.legend(topicCounts))")
                     .font(LL.TypeScale.note)
             }
             if !open.isEmpty {
