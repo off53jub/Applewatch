@@ -183,8 +183,8 @@ struct S27WHomeView: View {
                 S27WStuckSection(items: board.today.stuckByMe)
                 S27WDiffSection(diff: board.diff)
                 S27WConfirmEntrySection()
-                S27WProjectsSection(projects: S27WRules.sortedMine(board.projects))
-                S27WOtherSection(projects: S27WRules.sortedByMoved(board.projects, kind: "other"), monthly: board.monthlyOther)
+                // 2026-11-26 作り直し: 案件 → トピック → 課題の地図（S27WMapViews.swift）。前の案件の並び・他の案件の箱はここから外した
+                S27WGroupsSection(board: board)
                 S27WSideSection(side: board.side, projects: S27WRules.sortedByMoved(board.projects, kind: "side"))
                 S27WPeopleSection(people: S27WRules.sortedPeople(board.people))
             } else {
@@ -397,25 +397,6 @@ private struct S27WConfirmEntrySection: View {
 
 // MARK: 場1 案件のカード
 
-private struct S27WProjectsSection: View {
-    let projects: [S27WProject]
-
-    var body: some View {
-        Section {
-            if projects.isEmpty {
-                Text("自分の案件はまだありません").foregroundStyle(LL.dim)
-            }
-            ForEach(projects) { p in
-                NavigationLink { S27WProjectView(id: p.id) } label: { S27WProjectCard(project: p) }
-            }
-        } header: {
-            LLHeader(title: "案件", symbol: "briefcase", trailing: projects.isEmpty ? nil : "\(projects.count)")
-        } footer: {
-            Text("色: 赤＝自分が動く・オレンジ＝相手待ち・灰＝3 勤務日動いていない・緑＝進んでいる（決め方は仮）。")
-        }
-    }
-}
-
 struct S27WProjectCard: View {
     let project: S27WProject
 
@@ -472,66 +453,7 @@ struct S27WSignalChip: View {
     }
 }
 
-// MARK: 他2 他の案件
-
-private struct S27WOtherSection: View {
-    let projects: [S27WProject]
-    let monthly: String?
-
-    var body: some View {
-        if !projects.isEmpty || !(monthly ?? "").isEmpty {
-            Section {
-                if let monthly, !monthly.isEmpty {
-                    Text(book.t(monthly)).font(LL.TypeScale.detail)
-                }
-                ForEach(projects) { p in
-                    NavigationLink { S27WProjectView(id: p.id) } label: { S27WOtherCard(project: p) }
-                }
-            } header: {
-                LLHeader(title: "他の案件（聞いた話）", symbol: "building.2")
-            } footer: {
-                Text("聞いた話です。事実として並べていません。7 日より古い話は薄く、30 日で「古い」の印（仮）。")
-            }
-        }
-    }
-}
-
-private struct S27WOtherCard: View {
-    let project: S27WProject
-
-    var body: some View {
-        let latest = project.heard.max { ($0.day ?? "") < ($1.day ?? "") }
-        let fresh = latest.map { S27WRules.freshness(day: $0.day, old: $0.old, today: S27WFormat.today()) } ?? .faded
-        let stale = project.stale == true || fresh == .old
-        VStack(alignment: .leading, spacing: LL.Space.xs) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(book.name(project)).font(LL.TypeScale.cardTitle)
-                Spacer(minLength: LL.Space.s)
-                if stale { CertaintyBadge(certainty: .stopped, text: "古い") }
-            }
-            if let client = book.client(project) {
-                Text(client).font(LL.TypeScale.note).foregroundStyle(LL.dim)
-            }
-            if let latest {
-                Text(book.t(latest.text)).font(LL.TypeScale.detail)
-                    .foregroundStyle(fresh == .fresh ? LL.text : LL.dim)
-                Text(S27WRules.heardMeta(latest, mask: book.activeMask)).font(LL.TypeScale.note).foregroundStyle(LL.dim)
-            }
-            if !project.people.isEmpty {
-                Text(peopleLine).font(LL.TypeScale.note).foregroundStyle(LL.dim)
-            }
-        }
-        .opacity(stale ? 0.7 : 1)
-    }
-
-    private var peopleLine: String {
-        var names: [String] = []
-        for ref in project.people.prefix(3) { names.append(book.name(ref)) }
-        return "いる人: " + names.joined(separator: "、")
-    }
-}
-
-// MARK: 材8 副業の段（本業と混ぜない）
+// MARK: 副業
 
 private struct S27WSideSection: View {
     let side: S27WSide?

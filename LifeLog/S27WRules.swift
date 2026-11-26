@@ -334,10 +334,13 @@ struct S27WProject: Decodable, Equatable, Identifiable, Sendable {
     var timeline: [S27WItem] = []
     var heard: [S27WHeard] = []
     var stale: Bool?
+    /// 親の案件の id と名前（2026-11-26〜・無くてよい。本人が言った前提で、トピックをまとめる大きい案件）
+    var parent: String?
+    var parentName: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, client, kind, signal, counts, people, milestone, risk, conflicts, progress, items, timeline, heard, stale
-        case statusLine = "status_line", lastMoved = "last_moved"
+        case id, name, client, kind, signal, counts, people, milestone, risk, conflicts, progress, items, timeline, heard, stale, parent
+        case statusLine = "status_line", lastMoved = "last_moved", parentName = "parent_name"
     }
 
     init(id: String, name: String, client: String? = nil, kind: String = "mine", signal: String? = nil,
@@ -370,6 +373,8 @@ struct S27WProject: Decodable, Equatable, Identifiable, Sendable {
         timeline = c.s27wList(.timeline)
         heard = c.s27wList(.heard)
         stale = c.s27w(.stale)
+        parent = c.s27w(.parent)
+        parentName = c.s27w(.parentName)
     }
 
     var signalKind: S27WSignal { S27WSignal(rawValue: signal ?? "") ?? .gray }
