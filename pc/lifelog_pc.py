@@ -279,6 +279,7 @@ def isolate_home() -> Path:
 
     root = Path(tempfile.mkdtemp(prefix="lifelog-check-"))
     os.environ["LOCALAPPDATA"] = str(root)
+    os.environ["LIFELOG_SUBSCRIPTION"] = "0"   # 確かめでは定額の枠（claude -p）を呼ばない（2026-11-26）
     use_home(root / "LifeLogPC")
     _isolated = root
     atexit.register(shutil.rmtree, root, True)

@@ -568,7 +568,7 @@ def image_blocks(images: list | None) -> list[dict]:
 def call(system: str | None, prompt: str, json: bool = False, max_tokens: int = DEFAULT_TOKENS,
          tier: str = "light", purpose: str = "pc", work: bool = False, schema: dict | None = None,
          who: str = "pc", timeout: float | None = None, log: Callable[[str], None] | None = None,
-         images: list | None = None) -> dict:
+         images: list | None = None, route: bool = True) -> dict:
     """Claude に1回頼む。{"text", "data"（json のとき）, "model", "usd", "month_usd", "cap_usd"} を返す。
     images は [(media_type, bytes)]（2026-11-14。文の前に画像を置く）。
     頼めなければ ClaudeError（status と body。鍵は入れない）。おかしな頼み方は ValueError。"""
@@ -583,6 +583,38 @@ def call(system: str | None, prompt: str, json: bool = False, max_tokens: int = 
     cap = config["monthly_usd"]
     if work and not config["work"]:
         raise ClaudeError(403, "職場の会話は Claude に送らない設定です")
+    # 2026-11-26: 定額の枠（claude -p）で済む頼みは先にそちらへ（pc/subscription.py）。だめなら API に戻る
+    if route and not pictures and purpose not in config["stopped"]:
+        try:
+            import subscription
+            plan = subscription.route_for(purpose, tier)
+        except Exception:  # noqa: BLE001
+            plan = None
+        if plan is not None:
+            started = time.time()
+            try:
+                text, answered, equiv = subscription.ask(system, prompt, tier, schema if json else None, plan, purpose)
+                data = parse_json_text(text) if json else None
+            except (subscription.CliFailed, ValueError) as error:
+                if log:
+                    log(f"Claude（{purpose}）: 定額の枠で頼めず API に戻ります（{scrub(str(error))[:120]}）")
+                if not plan.get("fallback_api", True):
+                    raise ClaudeError(503, "定額の枠で頼めませんでした") from None
+            else:
+                try:
+                    append_ledger({"who": who, "purpose": purpose, "model": answered, "in": 0, "out": 0, "cache_read": 0,
+                                   "cache_write": 0, "searches": 0, "batch": False, "usd": 0.0,
+                                   "via": "subscription", "usd_equiv": round(equiv, 6)})
+                except OSError:
+                    pass
+                if log:
+                    log(f"Claude（{purpose}・{answered}・定額の枠）: {len(prompt)} 文字 → {len(text)} 文字、"
+                        f"{time.time() - started:.1f} 秒（API なら ${equiv:.4f}）")
+                result = {"text": text, "model": answered, "usd": 0.0, "month_usd": round(month_usd(), 6),
+                          "cap_usd": config["monthly_usd"], "via": "subscription"}
+                if json:
+                    result["data"] = data
+                return result
     key = load_key()
     if key is None:
         raise ClaudeError(503, "Claude の鍵がありません")
@@ -709,7 +741,8 @@ def http_post(handler, data: bytes, log: Callable[[str], None]) -> None:
         return
     try:
         got = call(request["system"], request["prompt"], json=request["json"], max_tokens=request["max_tokens"],
-                   tier=request["tier"], purpose=request["purpose"], work=request["work"], who="pc", log=log)
+                   tier=request["tier"], purpose=request["purpose"], work=request["work"], who="pc", log=log,
+                   route=False)   # iPhone のアプリからの頼みは待たせないよう API のまま（2026-11-26）
     except ClaudeError as error:
         log(f"{handler.client_address[0]} から /claude（{request['purpose']}）: {error.status} "
             f"{scrub(error.body.get('error', ''))}")
