@@ -258,6 +258,8 @@ final class S27WBook {
     }
 
     func isDone(_ item: S27WItem) -> Bool { item.isDone || localDone[item.id] != nil }
+    /// 端末で済みにした id（仕事の地図の数に入れる）
+    var localDoneIDs: [String] { Array(localDone.keys) }
 
     /// 人8 人・案件の名前・チーム・役割などを直す（直した欄だけ送る）。送れたら true
     @discardableResult
