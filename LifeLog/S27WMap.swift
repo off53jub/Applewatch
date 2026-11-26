@@ -62,6 +62,14 @@ enum S27WMap {
     static let soonDays = 1
     /// 「長くそのまま」の印を付ける日数（仮）
     static let oldDays = 6
+    /// 仕事の画面の一覧で初めに見せる件数（2026-11-26・仮）
+    static let foldLimit = 3
+
+    /// 畳んだ一覧で見せる数と隠す数
+    static func fold(_ count: Int, expanded: Bool, limit: Int = foldLimit) -> (shown: Int, hidden: Int) {
+        let shown = expanded ? count : min(count, limit)
+        return (shown, count - shown)
+    }
     static let openKinds: Set<String> = ["homework", "open", "issue"]
     static let miscID = "wc-misc"
     static let otherGroupID = "g:other"

@@ -88,6 +88,13 @@ final class S27WMapTests: XCTestCase {
         XCTAssertTrue(S27WMap.milestones(gs[1], today: "2026-12-01").isEmpty, "過ぎた節目は出さない")
     }
 
+    func testFoldShowsFirstThree() {
+        XCTAssertEqual(S27WMap.fold(10, expanded: false).shown, 3)
+        XCTAssertEqual(S27WMap.fold(10, expanded: false).hidden, 7)
+        XCTAssertEqual(S27WMap.fold(10, expanded: true).shown, 10)
+        XCTAssertEqual(S27WMap.fold(2, expanded: false).hidden, 0, "少ないときは畳まない")
+    }
+
     func testOldBoardWithoutParentsStillGroups() {
         let old = """
         {"projects":[{"id":"wp-00000001","name":"見本 A","kind":"mine"},{"id":"wp-00000002","name":"見本 B","kind":"mine"}]}
