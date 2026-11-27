@@ -209,6 +209,7 @@ import s24pc  # s24（2026-11-24）: 急3・急7・当1・減3・減5・当2・�
 import s25pc  # s25（2026-11-24。担当 P）: K1〜K4・K6・K7・連16・早1〜4・大3・大4・大9・活1（中身は s25pc.py ほか s25p*.py）
 import s26pc  # s26（2026-11-25。担当 P）: K4〜K8・聞1〜7・聞11・聞15・集3・結1・結4（中身は s26pc.py ほか s26p*.py）
 import s27pwork  # s27（2026-11-25。担当 P）: 仕事の画面の口 K5（/work・/work/confirm・/work/ask・/work-board）と K4（中身は s27pwork.py）
+import s29pc  # s29（2026-11-27。担当 P）: 声を分ける・当てる（声2・3・5・6・7・9・12・13・17・19・22・25・26。中身は s29p*.py）
 
 VERSION = 10
 # 作った回の番号（GitHub Actions が exe の隣の BUILD.txt に書く。Python のままなら 0）
@@ -2305,6 +2306,8 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(s26pc.features())
     # s27: work・workconfirm・workask・workboard（仕事の画面の口。K5。s27pwork.py）
     found.extend(s27pwork.FEATURES)
+    # s29: s29groups・s29answers・s29gates・s29canonical（声を分ける・当てる。s29pc.py）
+    found.extend(s29pc.features())
     # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
     if watchroute.running():
         found.append("watchroute")
@@ -2697,6 +2700,10 @@ def start_v6(threads: int) -> None:
         s26pc.start(sys.modules[__name__])
     except Exception as error:  # noqa: BLE001
         log(f"s26 の見回りを始められませんでした: {type(error).__name__}")
+    try:  # s29（2026-11-27）: 答えた組の受け・名前の無い声のかたまり・s-norm の判断・分け間違い・本番入りの条件（s29pc.py）
+        s29pc.start(sys.modules[__name__])
+    except Exception as error:  # noqa: BLE001
+        log(f"s29 の見回りを始められませんでした: {type(error).__name__}")
     # 2026-11-13（施策 9・10・11）: 夜の流れ（品質の記録・同じ人かも・夜の読み直し。quality.py）
     quality.start(HOME, App.records, App.jobs, lambda: mothership.home(load_config()),
                   lambda p, r: extra_model("speaker", 1).embed(load_audio(p.read_bytes()), r), log)
@@ -3119,6 +3126,10 @@ class Handler(BaseHTTPRequestHandler):
         if path in s26pc.GETS:  # s26 K4・K5・K6・K8: GET /machine-actions・/waiting・/gap-task・/events（s26pfeeds.py）
             if self.authorized():
                 s26pc.http_get(self, path, url.query)
+            return
+        if path in s29pc.GETS:  # s29 声26・声5: GET /s29/gates・/s29/canonical（s29pc.py）
+            if self.authorized():
+                s29pc.http_get(self, path, url.query)
             return
         if path in s27pwork.GETS:  # s27 K5: GET /work・/work/confirm・/work/ask・/work-board（s27pwork.py）
             if self.authorized():
