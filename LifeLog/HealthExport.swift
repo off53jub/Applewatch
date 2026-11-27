@@ -82,6 +82,16 @@ enum HealthExport {
             var awake: TimeInterval = 0
         }
 
+        /// ヘルスケアから読めたものが 1 つでもあるか（アプリ自身が数えるせき・いびきは除く）。
+        /// 2026-11-27: ロック中はヘルスケアを読めず、せき・いびきだけの日が「空でない」として書かれ、睡眠・歩数・心拍が
+        /// 11/25 から母艦に届かなくなっていた。直近の日でこれが false なら、書かずに次の機会に回す
+        var hasHealthData: Bool {
+            var copy = self
+            copy.coughs = nil
+            copy.snoreMinutes = nil
+            return !copy.isEmpty
+        }
+
         var isEmpty: Bool {
             (steps ?? 0) == 0 && heartMin == nil && heartMax == nil && heartAverage == nil && resting == nil && sleep == nil
                 && (activeKcal ?? 0) == 0 && (exerciseMinutes ?? 0) == 0 && (standMinutes ?? 0) == 0 && workouts.isEmpty
@@ -98,6 +108,29 @@ enum HealthExport {
     }
 
     static func fileName(_ day: String) -> String { "lifelog-health-\(day).json" }
+
+    /// ヘルスケアから何も読めない日を待つ日数（これより前の日は、せき・いびきだけでも書く）（2026-11-27・仮）
+    static let waitForHealthDays = 3
+    /// 一度だけ、2026-11-25 からの書いた印を消して書き直す（ロック中にせき・いびきだけで書いた日）
+    static let redoKey = "healthExportRedo20261125"
+    static let redoFrom = "2026-11-25"
+
+    /// 書いた印から、redoFrom 以降を外す（一度だけ。外したら true）
+    static func redoOnce(_ done: inout Set<String>, defaults: UserDefaults = .standard) -> Bool {
+        guard !defaults.bool(forKey: redoKey) else { return false }
+        defaults.set(true, forKey: redoKey)
+        let before = done.count
+        done = done.filter { $0 < redoFrom }
+        return done.count != before
+    }
+
+    /// この日を今書いてよいか: ヘルスケアから読めたものがあるか、待つ日数を過ぎたか
+    static func ready(_ d: Day, now: Date, calendar: Calendar = .current) -> Bool {
+        if d.hasHealthData { return true }
+        guard !d.isEmpty, let start = dayDate(d.day, calendar: calendar),
+              let limit = calendar.date(byAdding: .day, value: waitForHealthDays + 1, to: start) else { return false }
+        return now >= limit
+    }
 
     /// 日が変わってから、これだけたったら前の日を書く（2026-11-15。強化案 46。前は次の日の昼）。
     /// その日の睡眠は「前の日の18時〜その日の昼」なので、日が変わった時点でそろっている。夜中の裏の処理（充電中）で書き、
