@@ -212,6 +212,7 @@ import s27pwork  # s27（2026-11-25。担当 P）: 仕事の画面の口 K5（/w
 import s31plinks  # s31（2026-11-27。担当 p）: GET /links（文字と声の結び。s31plinks.py）
 import s30pwork  # s30（2026-11-27。担当 p）: POST /work/digest・GET /work/run（共有したらすぐ作り直す。中身は s30pwork.py）
 import s33pwork  # s33（2026-11-27。担当 p）: GET /s33・/s33/ports と POST /feedback の ramen_mark・feature_seen・device_ok（s33pwork.py）
+import s35pwork  # s35（2026-11-28。担当 p）: POST /work/photo（仕事のまとめの写真そのものを母艦の inbox へ。K35。s35pwork.py）
 import s34pwork  # s34（2026-11-27。担当 p）: GET /s34・s34p_status.json・自6〜自9（声の見本を確かな場面から・影を機械の物差しで本番に・仮の数。s34pwork.py・s34pvoice.py・s34pswitch.py）
 import s32pwork  # s32（2026-11-27。担当 p）: 知7・知8・知9（仕事の言葉のヒント・番号の候補・会議の出席者。s32pwork.py・s32pnumbers.py）
 import s29pc  # s29（2026-11-27。担当 P）: 声を分ける・当てる（声2・3・5・6・7・9・12・13・17・19・22・25・26。中身は s29p*.py）
@@ -2317,6 +2318,7 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(s31plinks.features(mothership.home(load_config())))
     found.extend(s33pwork.features(mothership.home(load_config())))  # s33: "s33"（GET /s33）
     found.extend(s34pwork.features(mothership.home(load_config())))  # s34: "s34"（GET /s34）
+    found.extend(s35pwork.features(mothership.home(load_config())))  # s35: "workphoto"（POST /work/photo。s35pwork.py）
     # s29: s29groups・s29answers・s29gates・s29canonical（声を分ける・当てる。s29pc.py）
     found.extend(s29pc.features())
     # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
@@ -3297,6 +3299,10 @@ class Handler(BaseHTTPRequestHandler):
         if url.path in s30pwork.POSTS:  # s30 K30-2: POST /work/digest（仕事のまとめを母艦の inbox に置いて作り直しを起こす）
             if self.authorized():
                 s30pwork.http_post(self, url.path, load_config(), mothership.home(load_config()), log)
+            return
+        if url.path in s35pwork.POSTS:  # s35 K35: POST /work/photo（写真を 1 枚ずつ母艦の inbox に。そろったら作り直しを起こす）
+            if self.authorized():
+                s35pwork.http_post(self, url.path, load_config(), mothership.home(load_config()), log)
             return
         if url.path in s26pc.POSTS:  # s26 結4: POST /face-name（顔のまとまりに名前。この PC の中からだけ）
             if self.authorized():

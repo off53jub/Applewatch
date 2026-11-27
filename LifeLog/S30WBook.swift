@@ -4,9 +4,11 @@ import Observation
 // s30（2026-11-27）仕事タブ（S30W）の動き。決まりは S30WRules.swift、画面は S30WViews.swift。
 // - 仕事のまとめを取り込んで「入れる」で保存したあと（WorkDigestImportView の保存のあとに呼ぶ口 1 つ＝saved）、
 //   家の PC の features に "workpush" があれば POST /work/digest（K30-2）へ、そのとき入れたまとめを送る。
-//   送れたら仕事タブの上に「作り直しています」の帯を出し、GET /work/run を 5 秒ごと（最大 3 分・仮）に見て、
+//   送れたら仕事タブの上に「作り直しています」の帯を出し、GET /work/run を 5 秒ごと（最大 6 分・仮。s35 で 3 分から）に見て、
 //   終わったら仕事のデータ（GET /work）を取り直す（S27WBook.refresh）。
 //   送れないとき（口が無い・つながらない・止めてある）は、今までどおり（ドライブの写しで 15 分ごと）と小さく書くだけ。
+// - s35（2026-11-28・K35）: 文を送れたあと、家の PC の features に "workphoto" があれば、同じ id で写真そのものも
+//   POST /work/photo に送る（S35PhotoBook.swift）。写真の無いとき・"workphoto" が無いときは今までどおり。
 // - 柱の中の「済んだかも」「古い」の箱（K30-1 の auto）から戻したものを端末に覚える（家の PC には送らない）。
 // 送り方・鍵は S27WBook の取り方と同じ（HomePC・オーナーの Bearer）。知らせは足さない。中身の文は記録（ログ）に書かない
 // （Tally は数と種類の名前だけ）。
@@ -56,8 +58,10 @@ final class S30WBook {
 
     // MARK: 保存のあと（WorkDigestImportView から）
 
-    /// 仕事のまとめを保存したあとに呼ぶ。そのとき入れたまとめ（保存したばかりで、まだ送っていないもの）を家の PC へ送る
-    func saved(_ entries: [WorkDigest.Entry], now: Date = .now) {
+    /// 仕事のまとめを保存したあとに呼ぶ。そのとき入れたまとめ（保存したばかりで、まだ送っていないもの）を家の PC へ送る。
+    /// s35: photos はまとめの id ごとの写真（S34A が写真から拾った組）、loosePhotos は取り込む画面で読んだ写真
+    /// （縮めた JPEG。送るまとめの最初の 1 件に付ける）。どちらも文を送れたあとに送る
+    func saved(_ entries: [WorkDigest.Entry], now: Date = .now, photos: [String: [Data]] = [:], loosePhotos: [Data] = []) {
         let fresh = S30WRules.fresh(entries, sent: Set(sent), now: now)
         guard !fresh.isEmpty else { return }
         let pc = S27WBook.pipeline?.homePC
@@ -70,10 +74,11 @@ final class S30WBook {
         job?.cancel()
         band = .sending(now)
         let ids: [String] = fresh.map(\.id)
-        job = Task { await self.push(body, ids: ids, pc: pc, postedAt: now) }
+        let shots: [S35PhotoJob] = S35PhotoRules.jobs(for: fresh, byID: photos, loose: loosePhotos)
+        job = Task { await self.push(body, ids: ids, photos: shots, pc: pc, postedAt: now) }
     }
 
-    private func push(_ body: Data, ids: [String], pc: HomePC, postedAt: Date) async {
+    private func push(_ body: Data, ids: [String], photos: [S35PhotoJob], pc: HomePC, postedAt: Date) async {
         var reply: S30WPushReply?
         if let data = try? await pc.postJSONData("work/digest", body: body, timeout: 20) {
             reply = S30WRules.pushReply(data)
@@ -88,16 +93,24 @@ final class S30WBook {
         UserDefaults.standard.set(sent, forKey: Self.sentKey)
         Tally.add("s30w.push")
         Tally.add("s30w.push.entries", ids.count)
-        if reply.run == "off" {
+        // s35: 文のあとに写真（同じ id・1 枚ずつ）。features に "workphoto" が無ければ送らない（S35PhotoBook.send の中で見る）
+        let photosAt = Date.now
+        var photoRun: String?
+        if !photos.isEmpty {
+            photoRun = await S35PhotoBook.shared.send(photos, pc: pc, now: photosAt)
+        }
+        if Task.isCancelled { return }
+        let plan = S35PhotoRules.watchPlan(digestRun: reply.run, photoRun: photoRun, postedAt: postedAt, photosAt: photosAt)
+        if reply.run == "off" && photoRun != "started" {
             band = .fallback(.now, S30WRules.fallbackOff)
             Tally.add("s30w.push.off")
             return
         }
         band = .rebuilding(.now)
-        await watch(pc: pc, postedAt: postedAt, needStartAfter: reply.run == "already")
+        await watch(pc: pc, postedAt: plan.postedAt, needStartAfter: plan.needStartAfter)
     }
 
-    /// GET /work/run を 5 秒ごと（3 分まで）に見て、終わったら GET /work を取り直す
+    /// GET /work/run を 5 秒ごと（6 分まで。S30WRules.pollLimit）に見て、終わったら GET /work を取り直す
     private func watch(pc: HomePC, postedAt: Date, needStartAfter: Bool) async {
         let start = Date.now
         var sawRunning = false

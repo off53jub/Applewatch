@@ -114,6 +114,7 @@ struct S30WHomeView: View {
             book.opened()
             S34ABook.shared.opened()  // s34: GET /s34 を読み直す・写真から仕事のまとめを見る（S34ABook.swift）
             S34APhotoScan.shared.opened()
+            S35PhotoBook.shared.opened()  // s35: 送れなかった写真をその日のうちに 1 回だけ送り直す（S35PhotoBook.swift）
             Tally.add("s30w.open")
         }
         .onChange(of: book.fetchedAt) {

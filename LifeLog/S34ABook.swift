@@ -9,7 +9,9 @@ import UIKit
 // - 円1（K34-3）: 設定の「写真から仕事のまとめを拾う」（初めはオフ）を本人が入れたときだけ、写真の中から職場のまとめ
 //   （決まった見出しが写っているもの）を自分で見つける。文字は iPhone の中の Vision で読む（Pipeline.recognizeText）。
 //   見つけた文字は、仕事のまとめの帳に入れて（同じ日に同じ文があれば入れない）、今の共有と同じ道（S30WBook.saved →
-//   POST /work/digest）で送る。写真そのものは送らない・同じ写真は 2 回読まない・ほかの写真の文字はその場で捨てる。
+//   POST /work/digest）で送る。同じ写真は 2 回読まない・ほかの写真の文字はその場で捨てる。
+//   s35（2026-11-28・K35）: 家の PC の features に "workphoto" があるときだけ、まとめと見た組の写真そのものも
+//   （縮めた JPEG・12 枚まで）同じ id で送る（文のあと。S30WBook.saved → S35PhotoBook）。ほかの写真は送らない。
 //   動くのは、アプリが前にあるとき（10 分に 1 回・仮）と、今ある裏の処理の枠（充電中だけ。S26A の写真の見分けと同じ）。
 //   写真の許可が無ければ何もしない。許可を求めるのは、本人がスイッチを入れたときだけ（S34APhotoScan.turnedOn）。
 // 知らせ・問いは足さない。中身の文は記録（ログ）に書かない（Tally は数と種類の名前だけ）。
@@ -63,6 +65,7 @@ final class S34ABook {
     func tick(now: Date = .now) {
         S34APhotoScan.shared.tick(now: now)
         S34AVoiceBook.shared.tick(now: now)  // 自6・自7 声の見本（S34AVoice.swift。6 時間に 1 回）
+        S35PhotoBook.shared.tick(now: now)  // s35: 送れなかった仕事のまとめの写真を、開いたあと 1 回だけ送り直す（S35PhotoBook.swift）
         guard let pipeline = Self.pipeline else { return }
         noteFeatures(pipeline.homePC.features)
         guard offered else { return }
@@ -268,9 +271,11 @@ final class S34APhotoScan {
         // 文字を読む（iPhone の中だけ）。読んだ文字はこの関数の中だけで持ち、まとめでなければ捨てる
         var shots: [S34AShot] = []
         var times: [String: Date] = [:]
+        var byID: [String: PHAsset] = [:]
         for asset in assets {
             guard let taken = asset.creationDate else { continue }
             times[asset.localIdentifier] = taken
+            byID[asset.localIdentifier] = asset
             if seenSet.contains(asset.localIdentifier) { continue }
             var text = ""
             if let big = await DayPhotos.image(asset, size: CGSize(width: 1800, height: 1800), fit: true, network: false) {
@@ -282,16 +287,24 @@ final class S34APhotoScan {
         let groups = S34APhotoRules.groups(split.now)
 
         var added: [WorkDigest.Entry] = []
+        var photos: [String: [Data]] = [:]
+        let sendPhotos: Bool = S35PhotoRules.offered(pipeline.homePC.features)
         for group in groups {
             let text = S34APhotoRules.text(of: group)
             let taken = group.last?.at ?? now
+            var first: WorkDigest.Entry?
             for piece in S34APhotoRules.days(text, takenAt: taken) {
                 let parsed = WorkDigestParser.parse(piece.text, today: taken)
                 let sections: WorkDigest.Sections? = parsed.found ? parsed.sections : nil
                 if let entry = pipeline.workDigests.add(day: piece.day, text: piece.text, sections: sections, source: .photo, now: now) {
                     added.append(entry)
+                    if first == nil { first = entry }
                 }
             }
+            // s35: 組の写真そのもの（まとめの写真だけ）を縮めて、組の最初のまとめに付ける（何日分かに分かれたときも最初の 1 件・仮）
+            guard sendPhotos, let first else { continue }
+            let jpegs: [Data] = await Self.groupJPEGs(group, assets: byID)
+            if !jpegs.isEmpty { photos[first.id] = jpegs }
         }
 
         // 見た写真を覚える（次の回に回した終わりの組は覚えない）
@@ -321,6 +334,20 @@ final class S34APhotoScan {
         // 今の共有と同じ道: ドライブの写し・退勤の頃の知らせの取り直し（今日の分が入れば出さない）・家の PC へ POST /work/digest
         Task { await pipeline.writeWorkDigests() }
         pipeline.scheduleWorkDigestReminder(now: now)
-        S30WBook.shared.saved(added, now: now)
+        S30WBook.shared.saved(added, now: now, photos: photos)
+    }
+
+    /// s35: 組の写真を、家の PC に送る形（長い辺 2000px 以下の JPEG）に。12 枚まで・撮った順
+    private static func groupJPEGs(_ group: [S34AShot], assets: [String: PHAsset]) async -> [Data] {
+        var out: [Data] = []
+        let side: CGFloat = S35PhotoRules.maxSide
+        for shot in group {
+            if out.count >= S35PhotoRules.limit { break }
+            guard let asset = assets[shot.id],
+                  let big = await DayPhotos.image(asset, size: CGSize(width: side, height: side), fit: true, network: false),
+                  let small = await S35PhotoRules.jpeg(big) else { continue }
+            out.append(small)
+        }
+        return out
     }
 }

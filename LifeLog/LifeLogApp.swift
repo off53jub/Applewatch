@@ -198,6 +198,7 @@ struct LifeLogApp: App {
                 S22Book.tick()  // ウィジェットの答え・電池の見本（2026-11-22。s22）
                 S23Book.shared.tick()  // 何人でしたか・版など（2026-11-23。s23）
                 S26DWidgetUse.countInstalled()  // 置かれているウィジェットを 1 日 1 回数える（2026-11-25。s26 の 絵8）
+                S35PhotoBook.shared.opened()  // 送れなかった仕事のまとめの写真を 1 回だけ送り直す（2026-11-28。s35）
             }
             if phase == .background {
                 pipeline.appMovedToBackground()
