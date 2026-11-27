@@ -293,8 +293,12 @@ final class SamePersonBook {
         fetching = true
         defer { fetching = false }
         fetchedAt = .now
-        guard let body = try? await pc.appFeed("same-person", feature: "sameperson"),
-              let feed = SamePersonRules.decode(body) else { return }
+        guard let body = try? await pc.appFeed("same-person", feature: "sameperson") else { return }
+        // 割れた同じ人のまとまり（s29 の 声19。省ける s29_groups。S29NBook.swift）
+        if S29NGroups.isAvailable(body) {
+            S29NBook.shared.ingestSamePerson(body)
+        }
+        guard let feed = SamePersonRules.decode(body) else { return }
         groups = feed.groups
         maybe = feed.maybe ?? []
         if let data = try? JSONEncoder().encode(feed) { try? data.write(to: Self.url, options: .atomic) }

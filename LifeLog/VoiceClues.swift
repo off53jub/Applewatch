@@ -293,6 +293,7 @@ extension Pipeline {
 
     /// 見直しで「このままでよい」にする（もう出さない）
     func keepSample(_ item: ReviewItem) {
+        S29NHooks.keep(item.sample, of: item.person.id, people: people)  // s29 の 声22
         var kept = UserDefaults.standard.stringArray(forKey: Self.reviewKeptKey) ?? []
         kept = Array((kept + [item.id]).suffix(500))
         UserDefaults.standard.set(kept, forKey: Self.reviewKeptKey)

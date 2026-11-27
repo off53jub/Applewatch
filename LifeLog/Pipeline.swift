@@ -626,6 +626,7 @@ final class Pipeline {
 
     /// 名前を付ける・付け替える。これまでの記録とドキュメントの名前も直す。
     func renamePerson(_ id: String, to name: String) async {
+        S29NHooks.rename(id, to: name, people: people)  // 答えを家の PC の「答えた組」へ（s29 の 声22。S29NBook.swift）
         let old = await speakers.name(of: id)
         await speakers.rename(id, to: name)
         await refreshLines(of: id, previousName: old)
@@ -642,6 +643,7 @@ final class Pipeline {
         let old = await speakers.name(of: source)
         let snapshot = await speakers.snapshot(source)
         let times = conversations.lineTimes { $0.speakerID == source }
+        S29NHooks.merge(source, into: target, people: people, automatic: automatic)  // s29 の 声22
         await speakers.merge(source, into: target)
         await relabel(to: target, renaming: old) { $0.speakerID == source }
         if let snapshot, source != target {
@@ -865,6 +867,12 @@ final class Pipeline {
         people = await speakers.people()
     }
 
+    /// 「知らない人・もう聞かない」を切り替える（s29 の 声21。名前付けの山に出さない。S29NBook.swift）
+    func setQuiet(_ id: String, _ quiet: Bool) async {
+        await speakers.setQuiet(id, quiet)
+        people = await speakers.people()
+    }
+
     /// その人のこれまでの行を、アプリの記録とドキュメントから消す（「消した行」に30日残り、戻せる）。消した行の数を返す。
     func removeLines(of id: String) async -> Int {
         var count = 0
@@ -944,6 +952,7 @@ final class Pipeline {
     /// 声のひとこまを、その人から外す。target を渡すと、その声を target の声として覚え直す。結果の一文を返す。
     func dropSample(_ sample: SpeakerLabeler.Sample, from id: String, moveTo target: String?) async -> String {
         let url = await archive.playableURL(for: sample.audio)
+        S29NHooks.drop(sample, from: id, to: target, people: people)  // s29 の 声22
         if target == SpeakerLabeler.selfID { await speakers.ensureSelf() }
         do {
             let removed = try await speakers.dropSample(sample, from: id, url: url, moveTo: target)
@@ -1386,6 +1395,7 @@ final class Pipeline {
     func fixSpeaker(of line: ConversationLog.Line, next: ConversationLog.Line?, to id: String,
                     scope: SpeakerFix) async {
         if id == SpeakerLabeler.selfID { await speakers.ensureSelf() }
+        S29NHooks.move(line: line, next: next, to: id, everywhere: scope == .everywhere, people: people)  // s29 の 声22
         // 声を覚える。音声が手元にもドライブにも無ければ、名前だけ直す
         if let audio = line.audio, let url = await archive.playableURL(for: audio) {
             let start = line.offset ?? 0
