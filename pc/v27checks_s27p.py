@@ -315,6 +315,10 @@ def run_all() -> int:
 
             traceback.print_exc()
             failed += say(False, f"{check.__name__} が途中で落ちました: {error!r}")
+    # s29（2026-11-27。担当 P）の確かめも続けて（CI の手順を増やさないため）
+    import v29checks_s29p
+
+    failed += v29checks_s29p.run_all()
     return failed
 
 

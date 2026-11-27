@@ -466,6 +466,14 @@ def write_summary(now: float | None = None) -> Path | None:
     except Exception as error:  # noqa: BLE001 — 数えられなくても、ほかは書く
         s26_worries, s26_lines = [], [f"- （s26 の数を書けませんでした: {type(error).__name__}）"]
     worries = worries + s26_worries
+    # s29（2026-11-27。担当 P）: 答えた組・s-norm の判断・分け間違い・本番入りの条件・声のかたまり（s29pc.py）
+    try:
+        import s29pc
+
+        s29_worries, s29_lines = s29pc.summary_lines(O.diag, now)
+    except Exception as error:  # noqa: BLE001 — 数えられなくても、ほかは書く
+        s29_worries, s29_lines = [], [f"- （s29 の数を書けませんでした: {type(error).__name__}）"]
+    worries = worries + s29_worries
     lines = ["# LifeLog の実機の様子（家の PC の LifeLog PC が書き直します）", "",
              f"書いた時刻: {time.strftime('%Y-%m-%d %H:%M', time.localtime(now))}（この PC の時刻）。"
              "iPhone が POST /diag で送った様子・TestFlight の報告・通知・学び直しの様子をまとめたものです。",
@@ -498,6 +506,9 @@ def write_summary(now: float | None = None) -> Path | None:
     if s26_lines:
         lines += ["", "## s26 の数（配る口・上限・機械の正解・マイク・影の比べ・声の見込み。pc/s26pc.py）", ""]
         lines.extend(s26_lines)
+    if s29_lines:
+        lines += ["", "## s29 の数（声を分ける・当てる。pc/s29pc.py・docs/s29-pc.md）", ""]
+        lines.extend(s29_lines)
     lines += ["", "## 端末ごと", ""]
     lines.extend(devices or ["（まだ様子が届いていません）", ""])
     lines += ["## TestFlight の報告（新しい 10 件）", ""]
