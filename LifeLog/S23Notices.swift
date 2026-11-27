@@ -544,7 +544,8 @@ enum S23Notices {
         case .tasks(let ids):
             NoticeStats.count(content.categoryIdentifier.isEmpty ? NoticeRoute.kind(of: identifier) : content.categoryIdentifier,
                               NoticeActions.Action.open.rawValue)
-            pipeline?.openRoute(.tab(.tasks))
+            // 下に置くタブ: 知らせのタスクが全部仕事のものなら仕事タブ（2026-11-27。s30。タスクタブは仕事以外だけ。S30TTabs.swift）
+            pipeline?.openRoute(.tab(S30TTabs.tab(forTasks: ids, in: pipeline?.tasks.items ?? [])))
             open(.tasks(ids: ids))
         case .promises(let ids):
             Tally.add("s23.promise.notice.open")

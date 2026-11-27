@@ -420,8 +420,10 @@ struct S23TasksView: View {
                 LLHeader(title: "この知らせのタスク", symbol: "checklist")
             }
             Section {
-                Button("タスクの一覧で見る") {
-                    pipeline.openRoute(.tab(.tasks))
+                // 全部仕事のタスクなら仕事タブへ（2026-11-27。s30。タスクタブは仕事以外だけ。S30TTabs.swift）
+                let tab = S30TTabs.tab(forTasks: ids, in: pipeline.tasks.items)
+                Button(tab == .work ? "仕事タブで見る" : "タスクの一覧で見る") {
+                    pipeline.openRoute(.tab(tab))
                     S23Present.shared.sheet = nil
                 }
             }

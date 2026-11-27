@@ -2,15 +2,16 @@ import XCTest
 
 /// 全部の画面を開いて写真を撮る（2026-11-06）。
 /// CI のシミュレーターで、見本の記録（作り物）を入れたアプリを起動し、下のタブと設定の一覧の行を1つずつ開く。
-/// 2026-11-12 のタブの組み替えから、「記録」の上の切り替え（日ごと・人・場所・お金）と、歯車の中の「点検」「設定」もそれぞれ開く。
+/// 2026-11-12 のタブの組み替えから、「記録」の上の切り替え（日ごと・人・場所・お金。2026-11-27 から ふり返り も）と、歯車の中の「点検」「設定」もそれぞれ開く。
 /// 開いたとたんに落ちたら失敗にする。写真は結果に残し、CI が一覧の画像にまとめる。
 /// 危ない操作（録音・消す・送る・書く など）の行は押さない。行ごとに起動し直すので、前の操作の影響を受けない。
 final class ScreenTour: XCTestCase {
     private var shot = 0
 
-    private static let tabs = ["今日", "タスク", "直す", "記録", "ふり返り"]
+    /// 下のタブ（2026-11-27。s30 から 今日・タスク・仕事・直す・記録。前のふり返りタブは「記録」の上の切り替えの「ふり返り」）
+    private static let tabs = ["今日", "タスク", "仕事", "直す", "記録"]
     /// 「記録」の上の切り替え（いちばん左の「日ごと」はタブを開いたときに撮る）
-    private static let recordPages = ["日ごと", "人", "場所", "お金"]
+    private static let recordPages = ["日ごと", "人", "場所", "お金", "ふり返り"]
     /// 歯車の中の切り替え
     private static let settingsParts = ["点検", "設定"]
     /// 押さない行（中身を変える・外に送る・権限を求める操作）
@@ -138,7 +139,8 @@ final class ScreenTour: XCTestCase {
                     guard openSegment(app, page) else { continue }
                     guard alive(app, after: tab + " - " + page) else { app = launch(); break }
                     snap(app, tab + " - " + page)
-                    targets += collect(app, tab: tab, settings: false, segment: page, pages: 2, limit: page == "日ごと" ? 8 : 6)
+                    targets += collect(app, tab: tab, settings: false, segment: page, pages: 2,
+                                       limit: page == "日ごと" ? 8 : page == "ふり返り" ? 10 : 6)
                     app.swipeDown()
                     sleep(1)
                 }
@@ -309,17 +311,19 @@ final class ScreenTour: XCTestCase {
         if tapFinding(app, "今日の記録", swipes: 4, place: "今日") {
             snap(app, "今日 - 今日の記録を開いた")
         }
-        // 2. ふり返り: 今週のふり返り → 見立ての台帳、朝のまとめ 比べる
+        // 2. ふり返り（記録の上の切り替え。2026-11-27 の s30 から）: 今週のふり返り → 見立ての台帳、朝のまとめ 比べる
         app.terminate()
         app = launch()
-        openTab(app, "ふり返り")
+        openTab(app, "記録")
+        openSegment(app, "ふり返り")
         snap(app, "ふり返り - 今週のふり返り")
         if tapFinding(app, "見立ての台帳", swipes: 3, place: "ふり返り") {
             snap(app, "ふり返り › 見立ての台帳")
         }
         app.terminate()
         app = launch()
-        openTab(app, "ふり返り")
+        openTab(app, "記録")
+        openSegment(app, "ふり返り")
         if tapFinding(app, "朝のまとめ 比べる", swipes: 5, place: "ふり返り") {
             snap(app, "ふり返り › 朝のまとめ 比べる")
             app.swipeUp()
@@ -531,16 +535,15 @@ final class ScreenTour: XCTestCase {
             let full = appearance == "dark"
             s20Shot(appearance, tab: "今日", row: nil, name: "今日", swipes: full ? 2 : 0)
             s20Shot(appearance, tab: "直す", row: "確かめる（○×）", name: "確かめる", swipes: full ? 1 : 0)
-            s20Shot(appearance, tab: "ふり返り", row: nil, name: "ふり返り")
-            s20Shot(appearance, tab: "ふり返り", row: "検品表（通信簿）", name: "検品表")
+            s20Shot(appearance, tab: "記録", segment: "ふり返り", row: nil, name: "ふり返り")
+            s20Shot(appearance, tab: "記録", segment: "ふり返り", row: "検品表（通信簿）", name: "検品表")
             s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: nil, name: "設定（場面のセット）", swipes: full ? 1 : 0)
             s20Shot(appearance, tab: "記録", segment: "日ごと", row: "1 日の帯で選ぶ", name: "1 日の帯", band: true)
             s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: "知らせの便りと履歴", name: "知らせの履歴")
             if full {
                 s20Shot(appearance, tab: "記録", segment: "日ごと", row: "探す（人・場所", name: "探す")
-                s20Shot(appearance, tab: "ふり返り", row: "今月の物語", name: "今月の物語", swipes: 1)
-                s20Shot(appearance, tab: "ふり返り", row: "休日のページ", name: "休日のページ")
-                s20Shot(appearance, tab: "ふり返り", row: "面談の 1 枚", name: "面談の 1 枚")
+                s20Shot(appearance, tab: "記録", segment: "ふり返り", row: "今月の物語", name: "今月の物語", swipes: 1)
+                s20Shot(appearance, tab: "記録", segment: "ふり返り", row: "休日のページ", name: "休日のページ")
                 s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: "見た目（暗い", name: "見た目")
                 s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: "寝ているあいだは録音を休む", name: "寝ているあいだ")
                 s20Shot(appearance, tab: "今日", settings: true, segment: "設定", row: "一緒にいる人に見せる", name: "一緒にいる人に")
