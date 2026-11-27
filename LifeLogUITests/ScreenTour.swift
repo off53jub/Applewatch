@@ -8,8 +8,9 @@ import XCTest
 final class ScreenTour: XCTestCase {
     private var shot = 0
 
-    /// 下のタブ（2026-11-27。s30 から 今日・タスク・仕事・直す・記録。前のふり返りタブは「記録」の上の切り替えの「ふり返り」）
-    private static let tabs = ["今日", "タスク", "仕事", "直す", "記録"]
+    /// 下のタブ（2026-11-27。s30 から 今日・タスク・仕事・直す・記録。前のふり返りタブは「記録」の上の切り替えの「ふり返り」）。
+    /// 2026-11-28（s36 の 大3）から 今日・仕事・タスク・人・奥。直す・記録は奥の中から開く（openTab が奥を通る）
+    private static let tabs = ["今日", "仕事", "タスク", "人", "奥", "直す", "記録"]
     /// 「記録」の上の切り替え（いちばん左の「日ごと」はタブを開いたときに撮る）
     private static let recordPages = ["日ごと", "人", "場所", "お金", "ふり返り"]
     /// 歯車の中の切り替え
@@ -63,8 +64,27 @@ final class ScreenTour: XCTestCase {
     }
 
     private func openTab(_ app: XCUIApplication, _ tab: String) {
+        _ = app.tabBars.firstMatch.waitForExistence(timeout: 15)
         let b = app.tabBars.buttons[tab]
-        if b.waitForExistence(timeout: 15) { b.tap() }
+        if b.waitForExistence(timeout: 2) {
+            b.tap()
+            sleep(1)
+            return
+        }
+        // s36 の 大3（2026-11-28）: 下の入口は 今日・仕事・タスク・人・奥。直す・記録は「奥」の一覧から開く
+        let rows = ["直す": "s36a.deep.fix", "記録": "s36a.deep.records"]
+        let deep = app.tabBars.buttons["奥"]
+        if let id = rows[tab], deep.exists {
+            deep.tap()
+            sleep(1)
+            let back = app.buttons["s36a.deep.back"]
+            if back.exists {
+                back.tap()
+                sleep(1)
+            }
+            let row = app.buttons[id]
+            if row.waitForExistence(timeout: 5) { row.tap() }
+        }
         sleep(1)
     }
 

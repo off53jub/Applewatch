@@ -498,6 +498,8 @@ enum S30WRules {
 
     /// 箱に入っているか（auto が "done"・"old" で、端末で戻していない）。入っていれば箱の名前
     static func boxed(_ item: S27WItem, restored: Set<String>) -> String? {
+        // s36 大2 (d): 14 日動かない項目（folded）は「古い」の箱に畳む（消さない・戻せる）
+        if item.folded == true, item.auto != "done", !restored.contains(item.id) { return "old" }
         guard let a = item.auto, a == "done" || a == "old", !restored.contains(item.id) else { return nil }
         return a
     }

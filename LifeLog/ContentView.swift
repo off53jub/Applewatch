@@ -14,6 +14,8 @@ struct ContentView: View {
     @State private var firstRun: FirstRun?
     /// 振った（「いまの画面が変」。2026-11-22。s21 の 使10）
     @State private var shook: S21ShakeTarget?
+    /// 下の入口を 今日・仕事・タスク・人 ＋ 奥 にする（2026-11-28。s36 の 大3。初めはオン・奥の一覧の下で前の 5 つに戻せる。S36ARules.swift）
+    @AppStorage(S36ATabs.onKey) private var newTabs = true
 
     /// 今日までのもの・過ぎたもの（待っているものは除く）
     private var lateTasks: Int {
@@ -26,19 +28,7 @@ struct ContentView: View {
 
     var body: some View {
         let fixCount = pipeline.fixBadge(reviewCount: reviewCount)  // 今日やる分だけ（FixViews.swift。2026-11-13）
-        // 下のタブは 今日・タスク・仕事・直す・記録（2026-11-27。s30。S30TTabs.swift）。前のふり返り（lookBack）が選ばれても記録を見せる
-        TabView(selection: Binding(get: { S30TTabs.shown(pipeline.tab) }, set: { pipeline.tab = $0 })) {
-            Tab(value: AppTab.today) { TodayView() } label: { S30TTabLabel(tab: .today) }
-            Tab(value: AppTab.tasks) { TasksTab() } label: { S30TTabLabel(tab: .tasks) }
-                // 確かめ待ちは「今日の候補」（3 件まで・仮）だけを数える（2026-11-24。s24 の 減4）。
-                // 仕事のタスクも今までどおり数える（仕事タブには数字を付けないので、外すと見落とす。2026-11-27。s30。docs/s30-t.md）
-                .badge((badgeLateOnly ? 0 : pipeline.tasks.todayCandidates().count) + lateTasks)
-            Tab(value: AppTab.work) { S30WTab() } label: { S30TTabLabel(tab: .work) }  // 仕事タブの中身は S30W 担当（S30WViews.swift）
-            Tab(value: AppTab.fix) { FixTab() } label: { S30TTabLabel(tab: .fix) }
-                .badge(fixCount)
-            // 記録の上の切り替えに「ふり返り」を入れた（前のふり返りタブの中身。2026-11-27。s30）
-            Tab(value: AppTab.records) { RecordsView() } label: { S30TTabLabel(tab: .records) }
-        }
+        tabs(fixCount: fixCount)
         // 前のふり返り（lookBack）を直に選んだものも、記録の「ふり返り」へ（知らせ・リンクは openRoute で同じにしている）
         .onChange(of: pipeline.tab) {
             if pipeline.tab == .lookBack { pipeline.openRoute(.tab(.lookBack)) }
@@ -105,6 +95,38 @@ struct ContentView: View {
             }
             .environment(pipeline)
             .llRoot()
+        }
+    }
+
+    /// 下の入口。新しい形（s36 の 大3）は 今日・仕事・タスク・人 ＋ 奥（直す・記録・ふり返りは奥の中。S36AViews.swift）。
+    /// 前の形は 今日・タスク・仕事・直す・記録（2026-11-27。s30。S30TTabs.swift）。前のふり返り（lookBack）が選ばれても記録を見せる
+    @ViewBuilder
+    private func tabs(fixCount: Int) -> some View {
+        let taskBadge: Int = (badgeLateOnly ? 0 : pipeline.tasks.todayCandidates().count) + lateTasks
+        if newTabs {
+            TabView(selection: Binding(get: { S36ATabs.shown(pipeline.tab, on: true) },
+                                       set: { pipeline.tab = S36ATabs.selected($0, current: pipeline.tab, on: true) })) {
+                Tab(value: AppTab.today) { TodayView() } label: { S36ATabLabel(tab: .today) }
+                Tab(value: AppTab.work) { S30WTab() } label: { S36ATabLabel(tab: .work) }
+                Tab(value: AppTab.tasks) { TasksTab() } label: { S36ATabLabel(tab: .tasks) }
+                    .badge(taskBadge)
+                Tab(value: AppTab.people) { S36APeopleTab() } label: { S36ATabLabel(tab: .people) }
+                Tab(value: AppTab.deep) { S36ADeepTab(fixCount: fixCount) } label: { S36ATabLabel(tab: .deep) }
+                    .badge(fixCount)
+            }
+        } else {
+            TabView(selection: Binding(get: { S36ATabs.shown(pipeline.tab, on: false) }, set: { pipeline.tab = $0 })) {
+                Tab(value: AppTab.today) { TodayView() } label: { S30TTabLabel(tab: .today) }
+                Tab(value: AppTab.tasks) { TasksTab() } label: { S30TTabLabel(tab: .tasks) }
+                    // 確かめ待ちは「今日の候補」（3 件まで・仮）だけを数える（2026-11-24。s24 の 減4）。
+                    // 仕事のタスクも今までどおり数える（仕事タブには数字を付けないので、外すと見落とす。2026-11-27。s30。docs/s30-t.md）
+                    .badge(taskBadge)
+                Tab(value: AppTab.work) { S30WTab() } label: { S30TTabLabel(tab: .work) }  // 仕事タブの中身は S30W 担当（S30WViews.swift）
+                Tab(value: AppTab.fix) { FixTab() } label: { S30TTabLabel(tab: .fix) }
+                    .badge(fixCount)
+                // 記録の上の切り替えに「ふり返り」を入れた（前のふり返りタブの中身。2026-11-27。s30）
+                Tab(value: AppTab.records) { RecordsView() } label: { S30TTabLabel(tab: .records) }
+            }
         }
     }
 
@@ -647,7 +669,7 @@ private struct LiveView: View {
 
 /// 探す・読む。上の切り替えで 日ごと｜人｜場所｜お金（2026-11-12。前の「人と場所」タブと、行ったお店の奥の支払いをここにまとめた）｜
 /// ふり返り（2026-11-27。s30 で前のふり返りタブを統合。切り替えは 1 段のまま右に足し、検索は今どおり「日ごと」の上）
-private struct RecordsView: View {
+struct RecordsView: View {
     /// 日ごと｜人｜場所｜お金｜ふり返り（2026-11-27。s30 で前のふり返りタブの中身を右に足した。S30TTabs.swift）
     typealias Page = S30TTabs.RecordsPage
 
@@ -815,7 +837,7 @@ private struct DaysPage: View {
 }
 
 /// 人（話した相手。聞き分けが切なら、入れる所だけ）
-private struct PeoplePage: View {
+struct PeoplePage: View {
     @Environment(Pipeline.self) private var pipeline
 
     var body: some View {
@@ -911,6 +933,7 @@ private struct SettingsView: View {
         NavigationStack {
             LLList {
                 S33ASettingsTopSection()  // どこ？（画面と機能を探す。2026-11-27。s33 の 強15。S33AViews.swift）
+                S36ASettingsTopSection()  // よく使う設定（K36-1 の nav.settings_top。無ければ出さない。2026-11-28。s36 の 大3。S36AViews.swift）
                 Section {
                     Picker("見る", selection: $part) {
                         ForEach(Part.allCases) { Text($0.rawValue).tag($0) }

@@ -32,7 +32,7 @@ final class S35PhotoBook {
         var pending: [S35PhotoPending] = Self.loadPending().filter { !ids.contains($0.id ?? "") }
         for job in jobs {
             pending.append(S35PhotoPending(id: job.id, day: job.day, count: job.count, madeOn: today, madeAt: now,
-                                           retried: false, done: []))
+                                           retried: false, done: [], kind: job.kind))
         }
         Self.savePending(pending)
         let outcome: S35PhotoOutcome = await S35PhotoSend.run(jobs, features: pc.features) { body in
@@ -107,7 +107,7 @@ final class S35PhotoBook {
         for item in items {
             guard let id = item.id, let day = item.day, let count = item.count else { continue }
             let pieces: [S35PhotoPiece] = await S35PhotoFiles.read(id: id, count: count, skip: Set(item.done ?? []))
-            if !pieces.isEmpty { jobs.append(S35PhotoJob(id: id, day: day, count: count, pieces: pieces)) }
+            if !pieces.isEmpty { jobs.append(S35PhotoJob(id: id, day: day, count: count, pieces: pieces, kind: item.kind)) }
         }
         if pc.isConfigured, S35PhotoRules.offered(pc.features), !jobs.isEmpty {
             let outcome: S35PhotoOutcome = await S35PhotoSend.run(jobs, features: pc.features) { body in
@@ -165,7 +165,7 @@ enum S35PhotoFiles {
 
     nonisolated static func read(id: String, count: Int, skip: Set<Int>) async -> [S35PhotoPiece] {
         await Task.detached {
-            guard let dir = S35PhotoFiles.place(id), count >= 1, count <= S35PhotoRules.limit else { return [] }
+            guard let dir = S35PhotoFiles.place(id), count >= 1, count <= S35PhotoRules.maxLimit else { return [] }
             var out: [S35PhotoPiece] = []
             for index in 0..<count where !skip.contains(index) {
                 let u = dir.appendingPathComponent("\(index).jpg")

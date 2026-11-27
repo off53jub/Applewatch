@@ -8,6 +8,8 @@ import UIKit
 // - 送る形: 長い辺を 2000px 以下に縮めた JPEG（質 0.75）。1 回のまとめで 12 枚まで。
 // - 体: {"id": まとめの id, "day": "YYYY-MM-DD", "index": 0 から, "count": 枚数, "jpeg_b64": "..."}
 // - 返事: {"ok": true, "have": そろった枚数, "count": n, "run": "started"|"already"|"off"|"waiting"}
+// - s36（2026-11-28・K36-2・細1）: features に "workphoto30" があれば、体に "kind"（digest・cases・bugs）を足し、count は 30 まで。
+//   無ければ今のまま（kind なし・12 枚）。決まりは S36ARules.swift の S36APhotoRules
 
 /// POST /work/photo の 1 枚の体（K35）
 struct S35PhotoBody: Codable, Equatable, Sendable {
@@ -16,8 +18,10 @@ struct S35PhotoBody: Codable, Equatable, Sendable {
     var index: Int?
     var count: Int?
     var jpegB64: String?
+    /// s36（K36-2）: "digest"・"cases"・"bugs"（"workphoto30" のときだけ。nil なら体に入れない）
+    var kind: String?
 
-    enum CodingKeys: String, CodingKey { case id, day, index, count, jpegB64 = "jpeg_b64" }
+    enum CodingKeys: String, CodingKey { case id, day, index, count, kind, jpegB64 = "jpeg_b64" }
 }
 
 /// POST /work/photo の返事（形が違う欄は nil にして、ほかは読む）
@@ -57,22 +61,30 @@ struct S35PhotoJob: Equatable, Sendable {
     var day: String
     var count: Int
     var pieces: [S35PhotoPiece]
+    /// s36: この仕事の枚数の上限（12・"workphoto30" のときは 30）と種類（nil なら体に入れない）
+    var cap: Int = S35PhotoRules.limit
+    var kind: String?
 
-    /// 縮めた JPEG の並びから（12 枚まで・番号は並びの順）
-    init(id: String, day: String, photos: [Data]) {
-        let kept: [Data] = S35PhotoRules.capped(photos)
+    /// 縮めた JPEG の並びから（cap 枚まで・番号は並びの順）
+    init(id: String, day: String, photos: [Data], cap: Int = S35PhotoRules.limit, kind: String? = nil) {
+        let top: Int = min(max(1, cap), S35PhotoRules.maxLimit)
+        let kept: [Data] = S35PhotoRules.capped(photos, limit: top)
         self.id = id
         self.day = day
         self.count = kept.count
         self.pieces = kept.enumerated().map { S35PhotoPiece(index: $0.offset, jpeg: $0.element) }
+        self.cap = top
+        self.kind = kind
     }
 
     /// 送り直し（端末の一時ファイルから読んだ分だけ。count は前のまま）
-    init(id: String, day: String, count: Int, pieces: [S35PhotoPiece]) {
+    init(id: String, day: String, count: Int, pieces: [S35PhotoPiece], kind: String? = nil) {
         self.id = id
         self.day = day
         self.count = count
         self.pieces = pieces.sorted { $0.index < $1.index }
+        self.cap = min(max(S35PhotoRules.limit, count), S35PhotoRules.maxLimit)
+        self.kind = kind
     }
 }
 
@@ -87,6 +99,8 @@ struct S35PhotoPending: Codable, Equatable, Sendable {
     var retried: Bool?
     /// 届いた番号（送り直しでは送らない）
     var done: [Int]?
+    /// s36（K36-2）: 写真の種類（nil は前の形）
+    var kind: String?
 }
 
 /// 送った結果
@@ -113,14 +127,16 @@ enum S35PhotoRules {
     /// JPEG の質（大きすぎたときだけ下げる）
     static let quality: CGFloat = 0.75
     static let fallbackQualities: [CGFloat] = [0.6, 0.45]
-    /// 1 回のまとめの枚数
+    /// 1 回のまとめの枚数（"workphoto30" が無いとき）
     static let limit = 12
+    /// s36 細1: "workphoto30" があるときの枚数（K36-2）
+    static let maxLimit = 30
     /// 1 枚の大きさの上限（家の PC と同じ 3MB）
     static let maxBytes = 3 * 1024 * 1024
     /// 1 枚を送るのを待つ長さ（秒・仮）
     static let postTimeout: TimeInterval = 60
 
-    static func offered(_ features: Set<String>) -> Bool { features.contains(feature) }
+    static func offered(_ features: Set<String>) -> Bool { features.contains(feature) || features.contains(S36APhotoRules.feature30) }
 
     /// まとめの id の形（UUID。一時ファイルの置き場の名前にも使う）
     nonisolated static func isUUID(_ id: String?) -> Bool {
@@ -168,17 +184,18 @@ enum S35PhotoRules {
         return nil
     }
 
-    /// 送れる形のものだけ・12 枚まで（並びの順のまま）
-    nonisolated static func capped(_ photos: [Data]) -> [Data] {
+    /// 送れる形のものだけ・limit 枚まで（並びの順のまま。既定は 12）
+    nonisolated static func capped(_ photos: [Data], limit: Int = S35PhotoRules.limit) -> [Data] {
         let ok: [Data] = photos.filter { isJPEG($0) && $0.count <= maxBytes }
-        return Array(ok.prefix(limit))
+        return Array(ok.prefix(max(0, limit)))
     }
 
     /// 送るまとめ（送る順）に写真を割り当てる。byID はそのまとめの写真（S34A の写真から拾った組）。
     /// loose は取り込む画面の写真で、byID の無い最初のまとめに付ける（何日分かに分けたときは最初の 1 件・仮）。
     /// 写真の無いまとめ・送らないまとめの写真は入れない
     @MainActor
-    static func jobs(for entries: [WorkDigest.Entry], byID: [String: [Data]], loose: [Data]) -> [S35PhotoJob] {
+    static func jobs(for entries: [WorkDigest.Entry], byID: [String: [Data]], loose: [Data],
+                     cap: Int = S35PhotoRules.limit, kind: String? = nil) -> [S35PhotoJob] {
         var out: [S35PhotoJob] = []
         var looseLeft: [Data] = loose
         for e in entries {
@@ -187,16 +204,18 @@ enum S35PhotoRules {
                 photos = looseLeft
                 looseLeft = []
             }
-            let job = S35PhotoJob(id: e.id, day: e.day, photos: photos)
+            let job = S35PhotoJob(id: e.id, day: e.day, photos: photos, cap: cap, kind: kind)
             if job.count > 0 { out.append(job) }
         }
         return out
     }
 
-    /// 1 枚の体（K35 の形そのまま）
-    nonisolated static func body(id: String, day: String, index: Int, count: Int, jpeg: Data) -> Data? {
-        guard count >= 1, count <= limit, index >= 0, index < count, isJPEG(jpeg), jpeg.count <= maxBytes else { return nil }
-        let row = S35PhotoBody(id: id, day: day, index: index, count: count, jpegB64: jpeg.base64EncodedString())
+    /// 1 枚の体（K35 の形そのまま。s36: kind があれば足す・count は cap まで（既定 12・30 を超えない））
+    nonisolated static func body(id: String, day: String, index: Int, count: Int, jpeg: Data,
+                                 kind: String? = nil, cap: Int = S35PhotoRules.limit) -> Data? {
+        let top: Int = min(cap, maxLimit)
+        guard count >= 1, count <= top, index >= 0, index < count, isJPEG(jpeg), jpeg.count <= maxBytes else { return nil }
+        let row = S35PhotoBody(id: id, day: day, index: index, count: count, jpegB64: jpeg.base64EncodedString(), kind: kind)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return try? encoder.encode(row)
@@ -222,7 +241,7 @@ enum S35PhotoRules {
         var wait: [S35PhotoPending] = []
         for p in pending {
             let count: Int = p.count ?? 0
-            let shaped: Bool = S35PhotoRules.isUUID(p.id) && p.day != nil && count >= 1 && count <= limit
+            let shaped: Bool = S35PhotoRules.isUUID(p.id) && p.day != nil && count >= 1 && count <= maxLimit
             guard shaped, p.madeOn == today, p.retried != true else {
                 drop.append(p)
                 continue
@@ -256,7 +275,8 @@ enum S35PhotoSend {
             }
             var got: [Int] = []
             for piece in job.pieces {
-                guard let body = S35PhotoRules.body(id: job.id, day: job.day, index: piece.index, count: job.count, jpeg: piece.jpeg) else {
+                guard let body = S35PhotoRules.body(id: job.id, day: job.day, index: piece.index, count: job.count, jpeg: piece.jpeg,
+                                                    kind: job.kind, cap: job.cap) else {
                     continue
                 }
                 guard let data = try? await post(body), let reply = S35PhotoRules.reply(data) else {

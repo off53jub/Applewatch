@@ -216,6 +216,15 @@ struct WorkDigestImportView: View {
     @State private var problem: String?
     /// s35: 読んだ写真を縮めた JPEG（12 枚まで・メモリの中だけ）。「入れる」のあと、家の PC が写真を受けるときだけ送る
     @State private var photoJPEGs: [Data] = []
+    /// s36（K36-2）: 写真の種類（初めは「まとめ」）。表・一覧は、まとめとは別に写真だけ送る
+    @State private var kind: S36APhotoKind = .digest
+    /// s36 細1: 上限を超えて送らない枚数（画面の中で知らせる）
+    @State private var droppedPhotos = 0
+
+    /// s36: いまの家の PC の features（hello の前は覚えている分）
+    private var features: Set<String> { S36ABook.shared.features(pipeline.homePC.features) }
+    /// s36 細1: 1 回に送る写真の枚数（"workphoto30" なら 30・無ければ 12）
+    private var photoCap: Int { S36APhotoRules.limit(features) }
 
     var body: some View {
         let parsed = WorkDigestParser.parse(text)
@@ -239,8 +248,12 @@ struct WorkDigestImportView: View {
             } footer: {
                 Text("そのまま貼れる頼み方です。日付は、下の「日付」の日になります。")
             }
+            // s36（K36-2）: 写真の種類（家の PC が "workphoto30" を持つときだけ。初めは「まとめ」）
+            if S36APhotoRules.kindsOffered(features) {
+                S36APhotoKindSection(kind: $kind)
+            }
             Section {
-                PhotosPicker(selection: $photoItems, maxSelectionCount: 20, selectionBehavior: .ordered, matching: .images) {
+                PhotosPicker(selection: $photoItems, maxSelectionCount: max(20, photoCap + 10), selectionBehavior: .ordered, matching: .images) {
                     Label("写真・スクショを選ぶ（何枚でも）", systemImage: "photo.on.rectangle")
                 }
                 // コピーしたスクショを、そのまま読み取る（2026-11-10）
@@ -257,6 +270,14 @@ struct WorkDigestImportView: View {
                 if let problem {
                     Text(problem).foregroundStyle(LL.danger)
                 }
+                if !kind.isDigest {
+                    Text("送る写真 \(photoJPEGs.count) 枚（\(photoCap) 枚まで）").font(.footnote).foregroundStyle(LL.dim)
+                }
+                // s36 細1: 上限を超えたら、送る前に画面の中で（知らせではない）
+                if let over = S36APhotoRules.overflowLine(dropped: droppedPhotos, limit: photoCap) {
+                    Text(over).font(.footnote).foregroundStyle(LL.warn)
+                        .accessibilityIdentifier("s36a.photo.over")
+                }
             } header: {
                 Text("読み取る")
             } footer: {
@@ -267,6 +288,8 @@ struct WorkDigestImportView: View {
             } footer: {
                 Text(dateFromText ? "文の【日付】から入れました。違っていれば直してください。" : "文に【日付】が無ければ、今日にします。")
             }
+            // s36: 表・一覧の写真のときは、文の取り込みの所は出さない（写真だけ送る）
+            if kind.isDigest {
             Section {
                 TextEditor(text: $text)
                     .frame(minHeight: 260)
@@ -318,20 +341,33 @@ struct WorkDigestImportView: View {
                     Text("「自分の宿題」の分です。同じものがもうタスクにあれば、入れません。箇条書きの前に書かれた前置きの文は、入れません。")
                 }
             }
+            }  // if kind.isDigest
         }
         .navigationTitle("仕事のまとめを取り込む")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("やめる") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) {
-                Button("入れる") { save() }
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || reading != nil)
+                if kind.isDigest {
+                    Button("入れる") { save() }
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || reading != nil)
+                } else {
+                    // s36（K36-2）: 表・一覧は写真だけを家の PC へ（POST /work/digest は送らない・新しい id）
+                    Button("送る") { sendTable() }
+                        .disabled(photoJPEGs.isEmpty || reading != nil)
+                }
             }
         }
         .onChange(of: photoItems) {
             let picked = photoItems
             guard !picked.isEmpty else { return }
             Task { await load(picked) }
+        }
+        // 種類を変えたら、読んだ写真は持ち越さない（まとめの文は残す）
+        .onChange(of: kind) {
+            photoJPEGs = []
+            droppedPhotos = 0
+            problem = nil
         }
         .fullScreenCover(isPresented: $takingPhoto) {
             CameraPicker { image in
@@ -346,9 +382,11 @@ struct WorkDigestImportView: View {
                 // s35: ショートカットから渡された写真（縮めた JPEG）も一緒に預かる
                 let handed: [Data] = DigestInbox.takePhotos()
                 if !handed.isEmpty {
-                    photoJPEGs = Array(handed.prefix(S35PhotoRules.limit))
+                    photoJPEGs = Array(handed.prefix(photoCap))
                     usedPhoto = true
                 }
+                // s36 細1: 預からなかった枚数も画面の中で知らせる
+                droppedPhotos = DigestInbox.takeDropped() + max(0, handed.count - photoCap)
             }
         }
     }
@@ -385,17 +423,27 @@ struct WorkDigestImportView: View {
         }
         problem = nil
         var texts: [String] = []
+        let cap: Int = photoCap
+        // s36（K36-2）: 表・一覧の写真は文字を読まない（写真だけ送る。家の PC が表の行を写す）
+        let readText: Bool = kind.isDigest
         for (n, image) in images.enumerated() {
-            reading = images.count > 1 ? "文字を読み取っています…（\(n + 1)/\(images.count)）" : "文字を読み取っています…"
-            // 頼まれごと帳の写真と同じ読み取り（iPhone の中・日本語と英語）
-            let read = await Pipeline.recognizeText(image)
-            if !read.isEmpty { texts.append(read) }
-            // s35: 写真そのものも縮めて持っておく（家の PC で Claude が書き起こす。12 枚まで）
-            if photoJPEGs.count < S35PhotoRules.limit, let small = await S35PhotoRules.jpeg(image) {
+            if readText {
+                reading = images.count > 1 ? "文字を読み取っています…（\(n + 1)/\(images.count)）" : "文字を読み取っています…"
+                // 頼まれごと帳の写真と同じ読み取り（iPhone の中・日本語と英語）
+                let read = await Pipeline.recognizeText(image)
+                if !read.isEmpty { texts.append(read) }
+            } else {
+                reading = "写真を縮めています…（\(n + 1)/\(images.count)）"
+            }
+            // s35: 写真そのものも縮めて持っておく（家の PC で Claude が書き起こす。12 枚まで・s36 細1: "workphoto30" なら 30 枚）
+            if photoJPEGs.count >= cap {
+                droppedPhotos += 1
+            } else if let small = await S35PhotoRules.jpeg(image) {
                 photoJPEGs.append(small)
             }
         }
         reading = nil
+        guard readText else { return }
         guard !texts.isEmpty else {
             problem = "文字を読み取れませんでした。明るいところで、まっすぐ撮ってみてください。"
             return
@@ -432,6 +480,15 @@ struct WorkDigestImportView: View {
         let shots: [Data] = usedPhoto ? photoJPEGs : []
         S30WBook.shared.saved(pipeline.workDigests.entries, loosePhotos: shots)
         photoJPEGs = []
+        dismiss()
+    }
+
+    /// s36（K36-2）: テストケースの表・不具合の一覧の写真を、まとめとは別の新しい id で送る（取り込みはしない）
+    private func sendTable() {
+        let day = TaskBook.dayFormat.string(from: date)
+        let note: String = S36ABook.shared.sendTable(kind, day: day, photos: photoJPEGs)
+        photoJPEGs = []
+        onSaved(note)
         dismiss()
     }
 }

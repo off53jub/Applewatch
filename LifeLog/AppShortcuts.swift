@@ -79,15 +79,22 @@ struct ImportDigestIntent: AppIntent {
     func perform() async throws -> some IntentResult {
         var pieces: [String] = []
         var photos: [Data] = []
+        // s36 細1: "workphoto30" があれば 30 枚まで（無ければ 12）。超えた枚数は取り込む画面の中で知らせる（知らせは出さない）
+        let cap: Int = S36APhotoRules.limit(S27WBook.pipeline?.homePC.features ?? [])
+        var dropped = 0
         if let text, !text.isEmpty { pieces.append(text) }
         for file in images ?? [] {
             guard let image = UIImage(data: file.data) else { continue }
             let read: String = await Pipeline.recognizeText(image)
             if !read.isEmpty { pieces.append(read) }
             // s35: 写真そのものも縮めて預ける（取り込む画面の「入れる」のあと、家の PC が受けるときだけ送る）
-            if photos.count < S35PhotoRules.limit, let small = await S35PhotoRules.jpeg(image) { photos.append(small) }
+            if photos.count >= cap {
+                dropped += 1
+            } else if let small = await S35PhotoRules.jpeg(image) {
+                photos.append(small)
+            }
         }
-        DigestInbox.putPhotos(photos)
+        DigestInbox.putPhotos(photos, dropped: dropped)
         DigestInbox.put(pieces.joined(separator: "\n"))
         return .result()
     }
@@ -101,15 +108,24 @@ enum DigestInbox {
     private static var waiting: String?
     /// s35: 一緒に渡された写真（縮めた JPEG・メモリの中だけ）。取り込む画面が開いたら取り出す
     private static var photos: [Data] = []
+    /// s36 細1: 上限を超えて預からなかった枚数（取り込む画面の中で「N 枚までです」と出す）
+    private static var dropped = 0
 
-    static func putPhotos(_ list: [Data]) {
-        photos = Array(list.prefix(S35PhotoRules.limit))
+    static func putPhotos(_ list: [Data], dropped: Int = 0) {
+        photos = Array(list.prefix(S35PhotoRules.maxLimit))
+        self.dropped = dropped + max(0, list.count - S35PhotoRules.maxLimit)
     }
 
     /// 預かっている写真（取り出したら消す）
     static func takePhotos() -> [Data] {
         defer { photos = [] }
         return photos
+    }
+
+    /// 預からなかった枚数（取り出したら 0）
+    static func takeDropped() -> Int {
+        defer { dropped = 0 }
+        return dropped
     }
 
     static func put(_ text: String) {

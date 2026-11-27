@@ -156,8 +156,10 @@ enum NoticeStats {
 
 /// 下のタブ（2026-11-12。前は 今日・タスク・ライブ・記録・人と場所）。
 /// 2026-11-27（s30。S30TTabs.swift）から 今日・タスク・仕事・直す・記録 の 5 つ。lookBack（前のふり返り）は残すが、選ばれたら記録の「ふり返り」へ
+/// 2026-11-28（s36 の 大3。S36ARules.swift の S36ATabs）: 今日・仕事・タスク・人 の 4 つと「奥」。people・deep を足した（直す・記録は奥の中）
 enum AppTab: String, Hashable, CaseIterable {
     case today, tasks, work, fix, records, lookBack
+    case people, deep
 }
 
 /// 知らせ・ウィジェットから開く画面のうち、シートで開くもの（2026-11-12）

@@ -74,7 +74,9 @@ final class S30WBook {
         job?.cancel()
         band = .sending(now)
         let ids: [String] = fresh.map(\.id)
-        let shots: [S35PhotoJob] = S35PhotoRules.jobs(for: fresh, byID: photos, loose: loosePhotos)
+        // s36（K36-2・細1）: "workphoto30" があれば 30 枚まで・kind "digest" を付ける（無ければ今のまま 12 枚・kind なし）
+        let shots: [S35PhotoJob] = S35PhotoRules.jobs(for: fresh, byID: photos, loose: loosePhotos, cap: S36APhotoRules.limit(pc.features),
+                                                      kind: S36APhotoRules.kindField(.digest, pc.features))
         job = Task { await self.push(body, ids: ids, photos: shots, pc: pc, postedAt: now) }
     }
 

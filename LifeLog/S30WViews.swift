@@ -75,7 +75,8 @@ struct S30WHomeView: View {
         LLList {
             S30WBandSection(note: note) { note = nil }
             S34ATestsSection()  // s34 円5 テストの進みの 1 行（いちばん上・あるときだけ。S34AViews.swift）
-            S34APromptSection()  // s34 円2 職場の Claude に貼る 1 つの文（あるときだけ）
+            S34APromptSection()  // s34 円2 職場の Claude に貼る 1 つの文（あるときだけ。s36 の頼み方があるときは出さない）
+            S36AWorkSections()  // s36 大2・大4 頼み方（置く文・毎日の 1 語）・テストと不具合の数・仕事のことを聞く（あるときだけ。S36AViews.swift）
             if let screen {
                 S30WUpperSections(screen: screen, today: today)
             } else {
@@ -115,6 +116,7 @@ struct S30WHomeView: View {
             S34ABook.shared.opened()  // s34: GET /s34 を読み直す・写真から仕事のまとめを見る（S34ABook.swift）
             S34APhotoScan.shared.opened()
             S35PhotoBook.shared.opened()  // s35: 送れなかった写真をその日のうちに 1 回だけ送り直す（S35PhotoBook.swift）
+            S36ABook.shared.opened()  // s36: GET /s36 を読み直す（S36ABook.swift）
             Tally.add("s30w.open")
         }
         .onChange(of: book.fetchedAt) {
