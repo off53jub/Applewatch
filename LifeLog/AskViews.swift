@@ -278,6 +278,14 @@ struct AskView: View {
     @AppStorage(ClaudeRoute.useKey) private var useClaude = true
     @AppStorage(ClaudeRoute.workKey) private var forWork = true
     @State private var motherAnswer: MothershipAnswer?
+    /// s36（大4・K36-4）: "work" なら仕事タブの「仕事のことを聞く」。家の PC に scope "work" を付け、母艦から探す（出どころの表示は今のまま）
+    private let scope: String?
+
+    init(scope: String? = nil) {
+        self.scope = scope
+    }
+
+    private var isWork: Bool { scope == "work" }
 
     private func vote(_ good: Bool) {
         AskFeedback.record(good)
@@ -287,14 +295,21 @@ struct AskView: View {
     var body: some View {
         LLForm {
             Section {
-                TextField("例: 先週田中さんと何を決めた？", text: $question, axis: .vertical)
+                TextField(isWork ? "例: W-001 は誰待ち？ 先週の定例で決まったことは？" : "例: 先週田中さんと何を決めた？",
+                          text: $question, axis: .vertical)
                     .lineLimit(1...4)
                 Button(working ? "探しています…" : "質問する") { run() }
                     .disabled(working || question.trimmingCharacters(in: .whitespaces).isEmpty)
-                Toggle("家の PC の記録も探す（LINE・PLAUD・写真・予定・お金も）", isOn: motherOn)
-                    .disabled(!motherUsable)
+                if !isWork {
+                    Toggle("家の PC の記録も探す（LINE・PLAUD・写真・予定・お金も）", isOn: motherOn)
+                        .disabled(!motherUsable)
+                }
             } footer: {
-                if motherOn.wrappedValue {
+                if isWork {
+                    Text(motherUsable
+                         ? "家の PC が、仕事の台帳・仕事のまとめ・テストケースと不具合の数から先に探し、見つかったものだけをもとに答えます（1分ほどかかります）。答えの下に出どころ（日・だれ・まとめか声か）を出します。"
+                         : "家の PC に聞けないので、iPhone の記録と取り込んだ仕事のまとめから答えます。" + (motherBlocked ?? ""))
+                } else if motherOn.wrappedValue {
                     Text("家の PC が、LINE・PLAUD・予定・写真・体調・場所・1日と週のまとめ・仕事のまとめ・お金の記録を、言葉と意味の両方で探します。人・欲しい物・決めたことの質問なら、欲しい物リスト・決めごと・人のノートの合うところも読みます。Claude が見つかったものだけをもとに答えます（1分ほどかかります）。")
                 } else {
                     Text(plainFooter)
@@ -374,8 +389,8 @@ struct AskView: View {
                 }
             }
         }
-        .navigationTitle("記録に質問する")
-        .countsOpen("ask")
+        .navigationTitle(isWork ? "仕事のことを聞く" : "記録に質問する")
+        .countsOpen(isWork ? "s36aAskWork" : "ask")
     }
 
     private var motherUsable: Bool {
@@ -387,6 +402,7 @@ struct AskView: View {
         Binding<Bool>(
             get: {
                 guard motherUsable else { return false }
+                if isWork { return true }  // 仕事のことを聞くは、いつも家の PC から（s36 大4）
                 let chosen: Bool = motherChosen || UserDefaults.standard.object(forKey: MothershipAsk.toggleKey) != nil
                 return chosen ? fromMothership : true
             },
@@ -415,7 +431,7 @@ struct AskView: View {
         error = ""
         Task {
             do {
-                let got: MothershipAnswer = try await pipeline.askMothership(q)
+                let got: MothershipAnswer = try await pipeline.askMothership(q, scope: scope)
                 motherAnswer = got
                 answer = nil
                 asked = q

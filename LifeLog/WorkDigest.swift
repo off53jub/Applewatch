@@ -162,11 +162,14 @@ enum WorkDigestParser {
         case date, decided, homework, others, topics, checks, words, sources
         // s32（K32-1）
         case meetings, mail, tickets, cases, terms, org, systems, numbering, myrole, answers
+        // s36（2026-11-28・K36-1）: 【済んだ番号】（・W-12 済 など。母艦の Import-WorkDigest が読む。アプリは見せない・前の見出しに混ぜない）
+        case doneRefs
     }
 
     /// 見出しの言い方（長いものを先に）
     static let names: [(part: Part, aliases: [String])] = [
         (.date, ["日付", "日にち"]),
+        (.doneRefs, ["済んだ番号", "すんだ番号"]),  // s36（K36-1）
         // 「出典」は入れない（ふつうの文の行「出典: …」を見出しと読み違えるので）
         (.sources, ["出どころ", "出所", "抜粋元", "抜粋もと"]),
         (.decided, ["決まったこと", "決まった事", "きまったこと"]),
@@ -197,6 +200,8 @@ enum WorkDigestParser {
         var found = false
         /// 【自分の宿題】の箇条書きの前に書かれていた前置きの文（2026-11-10。まとめには残すが、タスクにはしない。保存しない）
         var homeworkLead: [String] = []
+        /// s36（K36-1）: 【済んだ番号】の行（「W-12 済」など。保存しない・見せない。母艦が文から読む）
+        var doneRefs: [String] = []
 
         /// タスクにする宿題（前置きの文を除いたもの）
         var homeworkTasks: [String] {
@@ -405,6 +410,7 @@ enum WorkDigestParser {
                 }
                 if !all.isEmpty { result.sections.sources = all }
             case .date: break
+            case .doneRefs: result.doneRefs += kept  // s36: 前の見出しに混ぜない（文はそのまま残るので、母艦が読む）
             default:
                 // s32 の見出し（同じ行は 1 つだけ。S32ARules.swift）
                 S32ADigest.add(kept, part: part, to: &result.sections)

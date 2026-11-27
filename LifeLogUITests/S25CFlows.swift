@@ -42,8 +42,27 @@ final class S25CFlows: XCTestCase {
     }
 
     private func openTab(_ app: XCUIApplication, _ tab: String) {
+        _ = app.tabBars.firstMatch.waitForExistence(timeout: 15)
         let b = app.tabBars.buttons[tab]
-        if b.waitForExistence(timeout: 15) { b.tap() }
+        if b.waitForExistence(timeout: 2) {
+            b.tap()
+            sleep(1)
+            return
+        }
+        // s36 の 大3（2026-11-28）: 下の入口は 今日・仕事・タスク・人・奥。直す・記録は「奥」の一覧から開く
+        let rows = ["直す": "s36a.deep.fix", "記録": "s36a.deep.records"]
+        let deep = app.tabBars.buttons["奥"]
+        if let id = rows[tab], deep.exists {
+            deep.tap()
+            sleep(1)
+            let back = app.buttons["s36a.deep.back"]
+            if back.exists {
+                back.tap()
+                sleep(1)
+            }
+            let row = app.buttons[id]
+            if row.waitForExistence(timeout: 5) { row.tap() }
+        }
         sleep(1)
     }
 

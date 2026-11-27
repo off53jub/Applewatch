@@ -170,6 +170,7 @@ struct S33AWhereDestination: View {
         case "s33Deep": S33ADeepView()
         case "s34Fixed": S34AFixedView()  // s34（S34AViews.swift）
         case "s34WorkPhoto": S34APhotoSettingsView()
+        case "s36Prompt", "s36Numbers", "s36AskWork", "s36Stop", "s36Tabs": S36AWhereScreen(key: key)  // s36（S36AViews.swift）
         default: LLList { Section { LLEmpty(title: "この画面はまだ開けません", symbol: "questionmark") } }
         }
     }

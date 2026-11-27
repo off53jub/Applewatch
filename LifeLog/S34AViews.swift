@@ -41,7 +41,8 @@ struct S34APromptSection: View {
     var body: some View {
         let book = S34ABook.shared
         let today = ReviewRules.dayKey(.now)
-        if book.usesFeedPrompt(day: today) {
+        // s36 大2: 「職場の Claude への頼み方」（置く文・毎日の 1 語。S36AViews.swift）が出ているときは、そちらだけにする
+        if book.usesFeedPrompt(day: today), !S36ABook.shared.hasPromptPlace {
             Section {
                 Button("職場の Claude に貼る文をコピー（今日）", systemImage: "doc.on.doc") {
                     UIPasteboard.general.string = book.promptText(day: today)

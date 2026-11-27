@@ -51,6 +51,7 @@ final class S34ABook {
     static func install(_ pipeline: Pipeline, live: Bool) {
         self.pipeline = pipeline
         Task { @MainActor in await S34ABook.shared.loadCopy() }
+        Task { @MainActor in await S36ABook.shared.loadCopy() }  // s36: K36-1 の写し（S36ABook.swift）
         guard live, timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
             Task { @MainActor in S34ABook.shared.tick() }
@@ -66,6 +67,7 @@ final class S34ABook {
         S34APhotoScan.shared.tick(now: now)
         S34AVoiceBook.shared.tick(now: now)  // 自6・自7 声の見本（S34AVoice.swift。6 時間に 1 回）
         S35PhotoBook.shared.tick(now: now)  // s35: 送れなかった仕事のまとめの写真を、開いたあと 1 回だけ送り直す（S35PhotoBook.swift）
+        S36ABook.shared.tick(now: now)  // s36: GET /s36（K36-1）を 10 分に 1 回（S36ABook.swift）
         guard let pipeline = Self.pipeline else { return }
         noteFeatures(pipeline.homePC.features)
         guard offered else { return }
@@ -139,6 +141,8 @@ final class S34ABook {
 
     /// 円2: その日の頼み方（届いた 1 つの文が無い・古いときは今の頼み方）
     func promptText(day: String, now: Date = .now) -> String {
+        // s36 大2: K36-1 の毎日の 1 語が届いていて、置く文を 1 回写したことがあればそれ（S36ABook.dailyPrompt）
+        if let daily = S36ABook.shared.dailyPrompt(now: now) { return daily }
         if offered, let text = S34APrompt.pick(feed?.prompt, day: day, fetchedAt: fetchedAt, now: now) {
             return text
         }
@@ -303,7 +307,7 @@ final class S34APhotoScan {
             }
             // s35: 組の写真そのもの（まとめの写真だけ）を縮めて、組の最初のまとめに付ける（何日分かに分かれたときも最初の 1 件・仮）
             guard sendPhotos, let first else { continue }
-            let jpegs: [Data] = await Self.groupJPEGs(group, assets: byID)
+            let jpegs: [Data] = await Self.groupJPEGs(group, assets: byID, cap: S36APhotoRules.limit(pipeline.homePC.features))
             if !jpegs.isEmpty { photos[first.id] = jpegs }
         }
 
@@ -337,12 +341,12 @@ final class S34APhotoScan {
         S30WBook.shared.saved(added, now: now, photos: photos)
     }
 
-    /// s35: 組の写真を、家の PC に送る形（長い辺 2000px 以下の JPEG）に。12 枚まで・撮った順
-    private static func groupJPEGs(_ group: [S34AShot], assets: [String: PHAsset]) async -> [Data] {
+    /// s35: 組の写真を、家の PC に送る形（長い辺 2000px 以下の JPEG）に。12 枚まで（s36: "workphoto30" なら 30 枚）・撮った順
+    private static func groupJPEGs(_ group: [S34AShot], assets: [String: PHAsset], cap: Int) async -> [Data] {
         var out: [Data] = []
         let side: CGFloat = S35PhotoRules.maxSide
         for shot in group {
-            if out.count >= S35PhotoRules.limit { break }
+            if out.count >= cap { break }
             guard let asset = assets[shot.id],
                   let big = await DayPhotos.image(asset, size: CGSize(width: side, height: side), fit: true, network: false),
                   let small = await S35PhotoRules.jpeg(big) else { continue }

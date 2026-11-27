@@ -120,21 +120,27 @@ enum MothershipAsk {
         try? JSONDecoder().decode(MothershipAnswer.self, from: data)
     }
 
-    static func body(_ question: String) -> Data? {
-        try? JSONSerialization.data(withJSONObject: ["question": String(question.prefix(500))], options: [])
+    /// s36（K36-4・大4）: scope "work" のときは仕事の台帳・仕事のデータから先に引いてもらう（家の PC が "askwork" を持つときだけ付ける）
+    static func body(_ question: String, scope: String? = nil) -> Data? {
+        var row: [String: String] = ["question": String(question.prefix(500))]
+        if let scope, scope == "work" || scope == "all" { row["scope"] = scope }
+        return try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys])
     }
 }
 
 extension Pipeline {
     /// 母艦から探して答えてもらう（70秒まで待つ）
-    func askMothership(_ question: String) async throws -> MothershipAnswer {
+    func askMothership(_ question: String, scope: String? = nil) async throws -> MothershipAnswer {
         guard MothershipAsk.usable(features: homePC.features, useClaude: ClaudeRoute.useClaude, forWork: ClaudeRoute.forWork) else {
             throw HomePC.Failure.notConfigured
         }
-        guard let body = MothershipAsk.body(question) else { throw HomePC.Failure.server("質問を送れませんでした") }
+        // scope は家の PC が "askwork" を持つときだけ（無ければ今のまま）
+        let sent: String? = homePC.features.contains(S36ARules.featureAskWork) ? scope : nil
+        guard let body = MothershipAsk.body(question, scope: sent) else { throw HomePC.Failure.server("質問を送れませんでした") }
         let data: Data = try await homePC.postJSONData("ask-mothership", body: body, timeout: 70)
         guard let answer = MothershipAsk.decode(data) else { throw HomePC.Failure.server("答えを読めませんでした") }
         Tally.add(answer.found ? "askmother.found" : "askmother.none")
+        if sent == "work" { Tally.add("s36a.askwork") }
         return answer
     }
 }

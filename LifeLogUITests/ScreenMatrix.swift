@@ -21,7 +21,8 @@ final class ScreenMatrix: XCTestCase {
         Spec(name: "仕事", tab: "仕事"),
         Spec(name: "直す", tab: "直す"),
         Spec(name: "記録 日ごと", tab: "記録", segment: "日ごと"),
-        Spec(name: "記録 人", tab: "記録", segment: "人"),
+        // s36 の 大3（2026-11-28）: 記録の「人」と同じ画面を、新しい下の入口の「人」で撮る（20 画面のまま。奥の一覧は ScreenTour が撮る）
+        Spec(name: "人", tab: "人"),
         Spec(name: "記録 場所", tab: "記録", segment: "場所"),
         Spec(name: "記録 お金", tab: "記録", segment: "お金"),
         Spec(name: "ふり返り", tab: "記録", segment: "ふり返り"),
@@ -73,8 +74,27 @@ final class ScreenMatrix: XCTestCase {
     }
 
     private func openTab(_ app: XCUIApplication, _ tab: String) {
+        _ = app.tabBars.firstMatch.waitForExistence(timeout: 15)
         let b = app.tabBars.buttons[tab]
-        if b.waitForExistence(timeout: 15) { b.tap() }
+        if b.waitForExistence(timeout: 2) {
+            b.tap()
+            sleep(1)
+            return
+        }
+        // s36 の 大3（2026-11-28）: 下の入口は 今日・仕事・タスク・人・奥。直す・記録は「奥」の一覧から開く
+        let rows = ["直す": "s36a.deep.fix", "記録": "s36a.deep.records"]
+        let deep = app.tabBars.buttons["奥"]
+        if let id = rows[tab], deep.exists {
+            deep.tap()
+            sleep(1)
+            let back = app.buttons["s36a.deep.back"]
+            if back.exists {
+                back.tap()
+                sleep(1)
+            }
+            let row = app.buttons[id]
+            if row.waitForExistence(timeout: 5) { row.tap() }
+        }
         sleep(1)
     }
 
