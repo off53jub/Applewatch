@@ -168,6 +168,8 @@ struct S33AWhereDestination: View {
         case "watchUpdate": S22WatchUpdateView()
         case "dataEntry": S26ASettingsView()
         case "s33Deep": S33ADeepView()
+        case "s34Fixed": S34AFixedView()  // s34（S34AViews.swift）
+        case "s34WorkPhoto": S34APhotoSettingsView()
         default: LLList { Section { LLEmpty(title: "この画面はまだ開けません", symbol: "questionmark") } }
         }
     }

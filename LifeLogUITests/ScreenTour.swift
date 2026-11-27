@@ -603,4 +603,28 @@ final class ScreenTour: XCTestCase {
         app.terminate()
         XCTAssertGreaterThan(shot, 2, "s33 の写真が少なすぎる")
     }
+
+    /// s34（2026-11-27。S34AViews.swift）: 仕事タブの上（テストの進み・貼る文）と次の一手・会議の前の 1 枚、
+    /// 点検の「自動で直した数」。撮影の時間の上限に近いので、起動は 1 回だけ
+    func testTourS34A() {
+        let app = launch()
+        openTab(app, "仕事")
+        sleep(2)
+        if alive(app, after: "s34 仕事") { snap(app, "s34 仕事 テストの進み・貼る文") }
+        // 押さずにめくって探す（下書きのコピーは押さない）
+        for _ in 0..<5 {
+            let e = element(app, containing: "止まっている話の次の一手")
+            if e.exists && e.isHittable { break }
+            app.swipeUp()
+            sleep(1)
+        }
+        snap(app, "s34 仕事 次の一手・会議の前の 1 枚")
+        if openSettings(app) {
+            openSegment(app, "点検")
+            snap(app, "s34 点検 自動で直した数の 1 枚")
+            if tapFinding(app, "聞かずに直した", swipes: 2, place: "s34 点検") { snap(app, "s34 自動で直した数") }
+        }
+        app.terminate()
+        XCTAssertGreaterThan(shot, 0, "s34 の写真が無い")
+    }
 }

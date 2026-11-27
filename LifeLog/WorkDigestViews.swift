@@ -22,7 +22,8 @@ struct WorkDigestListView: View {
                 Button("取り込む（写真・スクショ・貼り付け）", systemImage: "square.and.arrow.down") { importing = true }
                 // 職場の Claude への頼み方を、今日の日付にしてコピーする（2026-11-10）
                 Button("職場の Claude への頼み方をコピー（今日）", systemImage: "doc.on.doc") {
-                    UIPasteboard.general.string = WorkDigestPrompt.full(day: TaskBook.dayFormat.string(from: .now))
+                    // s34 円2: その日の 1 つの文が届いていればそれ、無ければ今の頼み方（S34ABook.promptText）
+                    UIPasteboard.general.string = S34ABook.shared.promptText(day: TaskBook.dayFormat.string(from: .now))
                     note = "頼み方をコピーしました。職場の Claude に貼ってください。"
                 }
                 S32APromptButtons { note = $0 }  // s32: 週の台帳・土台・AI からの質問の頼み方（S32AViews.swift）
@@ -132,7 +133,9 @@ struct WorkDigestRow: View {
     }
 
     private var caption: String {
-        var parts: [String] = [entry.addedAt.formatted(date: .omitted, time: .shortened) + " に取り込み", entry.source.label]
+        // s34 円1: 写真から自動で拾ったものは「写真から（自動）」（S34ABook.swift）
+        let source: String = S34APhotoScan.shared.entryIDs.contains(entry.id) ? "写真から（自動）" : entry.source.label
+        var parts: [String] = [entry.addedAt.formatted(date: .omitted, time: .shortened) + " に取り込み", source]
         if let s = entry.sections {
             let counts: [String] = s.lists.map { "\($0.title) \($0.items.count)" }
             parts += counts
@@ -224,7 +227,8 @@ struct WorkDigestImportView: View {
             // 職場の Claude に貼る頼み方を、取り込む画面からもコピーできる（2026-11-12。下の日付の日の分）
             Section {
                 Button("職場の Claude への頼み方をコピー", systemImage: "doc.on.doc") {
-                    UIPasteboard.general.string = WorkDigestPrompt.full(day: TaskBook.dayFormat.string(from: date))
+                    // s34 円2: その日の 1 つの文が届いていればそれ、無ければ今の頼み方（S34ABook.promptText）
+                    UIPasteboard.general.string = S34ABook.shared.promptText(day: TaskBook.dayFormat.string(from: date))
                     promptCopied = "コピーしました。職場の Claude に貼ってください。"
                 }
                 if let promptCopied { Text(promptCopied).font(.footnote).foregroundStyle(LL.dim) }

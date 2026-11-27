@@ -1195,7 +1195,10 @@ enum S33AWhere {
     /// 目次の組の順
     static let places = ["今日", "タスク", "仕事", "直す", "記録", "ふり返り", "設定と点検"]
 
-    static let entries: [S33AWhereEntry] = [
+    /// 目次（s33 の分の後ろに s34 の画面。長い並びに + を付けると Mac で型推論が遅くなるので分けて足す）
+    static let entries: [S33AWhereEntry] = s33Entries + S34AWhere.entries
+
+    private static let s33Entries: [S33AWhereEntry] = [
         S33AWhereEntry(id: "today", name: "今日", aliases: ["ホーム", "録音", "録る", "今日の三つ", "はじめ"], place: "今日", target: .tab(.today)),
         S33AWhereEntry(id: "ramen", name: "ラーメンの印", aliases: ["ラーメン食べた", "ラーメン帳", "杯数"], place: "今日",
                        target: .tab(.today)),
