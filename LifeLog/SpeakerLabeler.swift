@@ -1042,9 +1042,9 @@ actor SpeakerLabeler {
     /// apart は、同じ区切りの中で別の声とされた2人（番号の小さい順の組）。別の人とみなしてまとめない。
     func consolidation(among ids: Set<String>, apart: Set<[String]>,
                        strictness: Strictness) -> [(source: String, target: String)] {
-        // 記録に出さない人は、ほかの声とまとめない
+        // 記録に出さない人・「もう聞かない」にした人（s29 の 声21）は、ほかの声とまとめない
         let members = store.people.filter { p in
-            ids.contains(p.id) && p.hidden != true && p.voices.contains { $0.model == Self.model }
+            ids.contains(p.id) && p.hidden != true && p.quiet != true && p.voices.contains { $0.model == Self.model }
         }
         var result: [(source: String, target: String)] = []
         var gone = Set<String>()
