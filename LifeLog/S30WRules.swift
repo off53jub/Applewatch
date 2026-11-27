@@ -449,9 +449,11 @@ enum S30WRules {
     static let freshWindow: TimeInterval = 120
     /// 1 回に送るまとめの数の上限（仮）
     static let pushLimit = 20
-    /// GET /work/run を見る間（秒）と、見る長さの上限（3 分・仮）
+    /// GET /work/run を見る間（秒）と、見る長さの上限（6 分・仮。s35 で写真を Claude が読むぶん 3 分から延ばした）
     static let pollEvery: TimeInterval = 5
-    static let pollLimit: TimeInterval = 180
+    static let pollLimit: TimeInterval = 360
+    /// 見る長さの上限を分で（帯の文はこの数から作る＝数と文がずれない）
+    static var pollMinutes: Int { Int((pollLimit / 60).rounded()) }
     /// iPhone と家の PC の時計のずれの許し（秒・仮）
     static let runTolerance: TimeInterval = 60
     /// 終わった帯を見せておく長さ（10 分・仮）
@@ -1167,7 +1169,7 @@ enum S30WRules {
         case .sending: "家の PC に送っています"
         case .rebuilding: "作り直しています"
         case .done(_, let ok): ok ? "作り直しました" : "作り直しで止まったところがありました"
-        case .late: "作り直しが 3 分で終わりませんでした"
+        case .late: "作り直しが \(pollMinutes) 分で終わりませんでした"
         case .fallback: nil
         }
     }
@@ -1175,7 +1177,7 @@ enum S30WRules {
     static func bandDetail(_ band: S30WBand, clock: String) -> String {
         switch band {
         case .sending: "取り込んだ仕事のまとめを、家の PC に渡しています。"
-        case .rebuilding: "家の PC が、取り込んだまとめで仕事の画面を作り直しています。終わったら取り直します（5 秒ごとに見ます・3 分まで）。"
+        case .rebuilding: "家の PC が、取り込んだまとめで仕事の画面を作り直しています。終わったら取り直します（\(Int(pollEvery)) 秒ごとに見ます・\(pollMinutes) 分まで）。"
         case .done(_, let ok): ok ? clock + " に取り直しました。" : "届いている分を取り直しました。続きは次の回（15 分ごと）に入ります。"
         case .late: "次の回（15 分ごと）か、下へ引っぱって取り直すと入ります。"
         case .fallback(_, let why): why

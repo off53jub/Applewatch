@@ -362,7 +362,8 @@ final class S30WTests: XCTestCase {
         XCTAssertEqual(S30WRules.remembered(["a", "b", "c"], adding: ["d"], limit: 2), ["c", "d"])
         let at = Date(timeIntervalSince1970: 1_800_000_000)
         XCTAssertNotNil(S30WRules.visible(.rebuilding(at), now: at.addingTimeInterval(170)))
-        XCTAssertNil(S30WRules.visible(.rebuilding(at), now: at.addingTimeInterval(400)), "止まった帯は残さない")
+        // s35 で待つ長さを 6 分（pollLimit 360）にした。止まった帯は pollLimit + 1 分を過ぎたら残さない
+        XCTAssertNil(S30WRules.visible(.rebuilding(at), now: at.addingTimeInterval(S30WRules.pollLimit + 70)), "止まった帯は残さない")
         XCTAssertNotNil(S30WRules.visible(.done(at, ok: true), now: at.addingTimeInterval(300)))
         XCTAssertNil(S30WRules.visible(.fallback(at, S30WRules.fallbackFailed), now: at.addingTimeInterval(700)))
         XCTAssertEqual(S30WRules.bandTitle(.rebuilding(at)), "作り直しています")

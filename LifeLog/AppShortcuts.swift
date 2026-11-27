@@ -78,12 +78,16 @@ struct ImportDigestIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult {
         var pieces: [String] = []
+        var photos: [Data] = []
         if let text, !text.isEmpty { pieces.append(text) }
         for file in images ?? [] {
             guard let image = UIImage(data: file.data) else { continue }
             let read: String = await Pipeline.recognizeText(image)
             if !read.isEmpty { pieces.append(read) }
+            // s35: 写真そのものも縮めて預ける（取り込む画面の「入れる」のあと、家の PC が受けるときだけ送る）
+            if photos.count < S35PhotoRules.limit, let small = await S35PhotoRules.jpeg(image) { photos.append(small) }
         }
+        DigestInbox.putPhotos(photos)
         DigestInbox.put(pieces.joined(separator: "\n"))
         return .result()
     }
@@ -95,6 +99,18 @@ enum DigestInbox {
     /// アプリの準備ができていれば、すぐ取り込む画面を開く（Pipeline が入れる）
     static var opened: ((String) -> Void)?
     private static var waiting: String?
+    /// s35: 一緒に渡された写真（縮めた JPEG・メモリの中だけ）。取り込む画面が開いたら取り出す
+    private static var photos: [Data] = []
+
+    static func putPhotos(_ list: [Data]) {
+        photos = Array(list.prefix(S35PhotoRules.limit))
+    }
+
+    /// 預かっている写真（取り出したら消す）
+    static func takePhotos() -> [Data] {
+        defer { photos = [] }
+        return photos
+    }
 
     static func put(_ text: String) {
         if let opened {

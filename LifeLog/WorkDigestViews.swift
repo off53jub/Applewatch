@@ -214,6 +214,8 @@ struct WorkDigestImportView: View {
     @State private var reading: String?
     @State private var usedPhoto = false
     @State private var problem: String?
+    /// s35: 読んだ写真を縮めた JPEG（12 枚まで・メモリの中だけ）。「入れる」のあと、家の PC が写真を受けるときだけ送る
+    @State private var photoJPEGs: [Data] = []
 
     var body: some View {
         let parsed = WorkDigestParser.parse(text)
@@ -258,7 +260,7 @@ struct WorkDigestImportView: View {
             } header: {
                 Text("読み取る")
             } footer: {
-                Text("何枚かに分けたスクショは、選んだ順につなげます。足すたびに、下の文の後ろに続けます。文字の読み取りは iPhone の中だけで行います。")
+                Text("何枚かに分けたスクショは、選んだ順につなげます。足すたびに、下の文の後ろに続けます。文字の読み取りは iPhone の中で行います。家の PC が写真を受けられるときは、「入れる」のあと写真も縮めて送り、家の PC で読み直します。")
             }
             Section {
                 DatePicker("日付", selection: $date, displayedComponents: .date)
@@ -339,7 +341,15 @@ struct WorkDigestImportView: View {
             .ignoresSafeArea()
         }
         .onAppear {
-            if text.isEmpty && !initialText.isEmpty { addText(initialText, photo: false) }
+            if text.isEmpty && !initialText.isEmpty {
+                addText(initialText, photo: false)
+                // s35: ショートカットから渡された写真（縮めた JPEG）も一緒に預かる
+                let handed: [Data] = DigestInbox.takePhotos()
+                if !handed.isEmpty {
+                    photoJPEGs = Array(handed.prefix(S35PhotoRules.limit))
+                    usedPhoto = true
+                }
+            }
         }
     }
 
@@ -380,6 +390,10 @@ struct WorkDigestImportView: View {
             // 頼まれごと帳の写真と同じ読み取り（iPhone の中・日本語と英語）
             let read = await Pipeline.recognizeText(image)
             if !read.isEmpty { texts.append(read) }
+            // s35: 写真そのものも縮めて持っておく（家の PC で Claude が書き起こす。12 枚まで）
+            if photoJPEGs.count < S35PhotoRules.limit, let small = await S35PhotoRules.jpeg(image) {
+                photoJPEGs.append(small)
+            }
         }
         reading = nil
         guard !texts.isEmpty else {
@@ -414,7 +428,10 @@ struct WorkDigestImportView: View {
             let day = TaskBook.dayFormat.string(from: date)
             onSaved(pipeline.importWorkDigest(day: day, text: text, source: source))
         }
-        S30WBook.shared.saved(pipeline.workDigests.entries)  // s30: いま入れた分を家の PC へ送り、すぐ作り直す（S30WBook.swift）
+        // s30: いま入れた分を家の PC へ送り、すぐ作り直す（S30WBook.swift）。s35: 写真から読んだときは写真も（文のあと）
+        let shots: [Data] = usedPhoto ? photoJPEGs : []
+        S30WBook.shared.saved(pipeline.workDigests.entries, loosePhotos: shots)
+        photoJPEGs = []
         dismiss()
     }
 }
