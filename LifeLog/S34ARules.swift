@@ -835,7 +835,7 @@ enum S34APhotoRules {
 enum S34AWhere {
     static let entries: [S33AWhereEntry] = [
         S33AWhereEntry(id: "s34Fixed", name: "自動で直した数", aliases: ["自動", "直した数", "聞かずに直した", "本番", "影", "戻した", "流し直し",
-                                                              "読み直し", "仮の数", "止まりを直した"],
+                                                              "読み直し", "仮の数", "止まりを直した", "声の見本", "自分の声"],
                        place: "設定と点検", target: .view("s34Fixed")),
         S33AWhereEntry(id: "s34WorkPhoto", name: "写真から仕事のまとめを拾う", aliases: ["写真", "撮るだけ", "スクショ", "職場の画面", "自動で取り込む"],
                        place: "仕事", target: .view("s34WorkPhoto")),

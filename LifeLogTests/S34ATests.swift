@@ -317,4 +317,115 @@ final class S34ATests: XCTestCase {
         // s33 の探し方は前のまま
         XCTAssertEqual(S33AWhere.search("仕事 頼み方").map(\.id), ["workDigest"])
     }
+
+    // MARK: - 自6・自7 家の PC が集めた声の見本（S34AVoice.swift）
+
+    private func sample(_ audio: String, _ offset: Double, _ length: Double = 4, scene: String? = nil) -> S34AVoiceSample {
+        S34AVoiceSample(audio: audio, offset: offset, length: length, scene: scene)
+    }
+
+    func testVoicePeopleReadsOnlyAuto() {
+        let json = """
+        {"available":true,"people":[
+          {"speaker":"自分","speakerID":"me","auto":true,"tier":"tentative",
+           "samples":[{"day":"2026-11-27","audio":"a1.m4a","offset":"12.5","length":4.2,"path":"/audio-clip?audio=a1.m4a","scene":"home","auto":true},
+                      {"audio":"a2.m4a"}]},
+          {"speaker":"見本 花子","speakerID":"12","samples":[{"audio":"b.m4a","offset":1,"length":3}]},
+          {"speaker":"見本 次郎","speakerID":"13","auto":true,"samples":[{"audio":"c.m4a","offset":2,"length":5}]},
+          {"speakerID":"","auto":true,"samples":[]},
+          "こわれた行"]}
+        """
+        let people = S34AVoiceRules.people(Data(json.utf8))
+        XCTAssertEqual(people.map(\.speakerID), ["me", "13"], "s34 の自動の人だけ（s18 の候補・id の無い人・壊れた行は外す）")
+        XCTAssertEqual(people.first?.samples.count, 1, "offset・length の無い見本は外す")
+        XCTAssertEqual(people.first?.samples.first?.offset, 12.5, "数は文字でも読む")
+        XCTAssertEqual(people.first?.samples.first?.scene, "home")
+        XCTAssertEqual(people.first?.samples.first?.key, "a1.m4a|12.50|4.20")
+        XCTAssertTrue(S34AVoiceRules.people(Data(#"{"available":false,"people":[{"speakerID":"me","auto":true,"samples":[]}]}"#.utf8)).isEmpty)
+        XCTAssertTrue(S34AVoiceRules.people(Data("こわれた".utf8)).isEmpty)
+    }
+
+    func testRecordNeeded() {
+        XCTAssertEqual(S34AVoiceRules.recordNeeded(Data(#"{"steps":[],"s34_auto":{"scenes":{"home":2,"work":1,"out":1},"record_needed":false}}"#.utf8)), false)
+        XCTAssertEqual(S34AVoiceRules.recordNeeded(Data(#"{"s34_auto":{"record_needed":true}}"#.utf8)), true)
+        XCTAssertNil(S34AVoiceRules.recordNeeded(Data(#"{"steps":[]}"#.utf8)), "前の PC（s34_auto が無い）")
+        XCTAssertNil(S34AVoiceRules.recordNeeded(Data("x".utf8)))
+        // 札を出さなくするのは、record_needed が false で、端末に自分の自動の見本が 3 個以上あるときだけ
+        XCTAssertTrue(S34AVoiceRules.selfCardDone(recordNeeded: false, autoSelf: 3))
+        XCTAssertFalse(S34AVoiceRules.selfCardDone(recordNeeded: false, autoSelf: 2), "まだ端末に足せていない")
+        XCTAssertFalse(S34AVoiceRules.selfCardDone(recordNeeded: true, autoSelf: 9))
+        XCTAssertFalse(S34AVoiceRules.selfCardDone(recordNeeded: nil, autoSelf: 9))
+    }
+
+    func testAudioName() {
+        XCTAssertTrue(S34AVoiceRules.isAudioName("chunk_2026-11-27_0930.m4a"))
+        XCTAssertFalse(S34AVoiceRules.isAudioName("../secret.wav"))
+        XCTAssertFalse(S34AVoiceRules.isAudioName("a/b.m4a"))
+        XCTAssertFalse(S34AVoiceRules.isAudioName(".hidden"))
+        XCTAssertFalse(S34AVoiceRules.isAudioName(""))
+        XCTAssertFalse(S34AVoiceRules.isAudioName("音声.m4a"))
+    }
+
+    func testVoicePlanOnlyExistingNamedPeople() {
+        let local = [
+            S34AVoiceLocal(id: "me", name: nil, isSelf: true, hidden: false),
+            S34AVoiceLocal(id: "12", name: "見本 花子", isSelf: false, hidden: false),
+            S34AVoiceLocal(id: "13", name: nil, isSelf: false, hidden: false),
+            S34AVoiceLocal(id: "14", name: "見本 三郎", isSelf: false, hidden: true),
+            S34AVoiceLocal(id: "15", name: "見本 四郎", isSelf: false, hidden: false),
+        ]
+        let people = [
+            S34AVoicePerson(speaker: "自分", speakerID: "me", samples: [sample("a.m4a", 1)], auto: true),
+            S34AVoicePerson(speaker: "見本花子", speakerID: "12", samples: [sample("b.m4a", 1)], auto: true),   // 空白の違いは同じ名前
+            S34AVoicePerson(speaker: "見本 太郎", speakerID: "13", samples: [sample("c.m4a", 1)], auto: true),  // 端末で名前が無い
+            S34AVoicePerson(speaker: "見本 三郎", speakerID: "14", samples: [sample("d.m4a", 1)], auto: true),  // 隠している
+            S34AVoicePerson(speaker: "見本 五郎", speakerID: "15", samples: [sample("e.m4a", 1)], auto: true),  // 名前が違う
+            S34AVoicePerson(speaker: "見本 六郎", speakerID: "99", samples: [sample("f.m4a", 1)], auto: true),  // 端末にいない
+        ]
+        let plan = S34AVoiceRules.plan(people, local: local, marks: [], dropped: [])
+        XCTAssertEqual(plan.map(\.person), ["me", "12"], "人は作らない・名前を変えない・隠した人には足さない")
+        // 自分は端末にまだいなくても足す（自分を作るのは声の登録の側）
+        let noSelf = S34AVoiceRules.plan([people[0]], local: [], marks: [], dropped: [])
+        XCTAssertEqual(noSelf.map(\.person), ["me"])
+    }
+
+    func testVoicePlanCapsAndSkips() {
+        let local = [S34AVoiceLocal(id: "12", name: "見本 花子", isSelf: false, hidden: false)]
+        var selfSamples: [S34AVoiceSample] = []
+        for i in 0..<20 { selfSamples.append(sample("s\(i).m4a", Double(i), scene: "home")) }
+        var other: [S34AVoiceSample] = [sample("bad/name.m4a", 1), sample("short.m4a", 1, 1.5), sample("long.m4a", 1, 11),
+                                        sample("dropped.m4a", 1), sample("done.m4a", 1)]
+        for i in 0..<8 { other.append(sample("o\(i).m4a", Double(i))) }
+        let people = [S34AVoicePerson(speaker: "自分", speakerID: "me", samples: selfSamples, auto: true),
+                      S34AVoicePerson(speaker: "見本 花子", speakerID: "12", samples: other, auto: true)]
+        let marks = [S34AVoiceMark(key: sample("done.m4a", 1).key, person: "12", voice: "1.000", scene: nil)]
+        let dropped: Set<String> = [sample("dropped.m4a", 1).key]
+        // 1 回 10 個まで
+        XCTAssertEqual(S34AVoiceRules.plan(people, local: local, marks: marks, dropped: dropped).count, S34AVoiceRules.perRun)
+        let all = S34AVoiceRules.plan(people, local: local, marks: marks, dropped: dropped, limit: 100)
+        XCTAssertEqual(all.filter { $0.person == "me" }.count, S34AVoiceRules.selfMax, "自分は 15 個まで")
+        let hers = all.filter { $0.person == "12" }.map(\.sample.audio)
+        XCTAssertEqual(hers, ["o0.m4a", "o1.m4a", "o2.m4a", "o3.m4a"], "もう 1 個あるので 5 個まで・名前の形・長さ・外した・足した見本は飛ばす")
+        // 同じ回の中でも同じ見本は 1 回だけ
+        let twice = [S34AVoicePerson(speaker: nil, speakerID: "me", samples: [sample("x.m4a", 1), sample("x.m4a", 1)], auto: true)]
+        XCTAssertEqual(S34AVoiceRules.plan(twice, local: [], marks: [], dropped: []).count, 1)
+    }
+
+    func testVoiceMarksLineAndUndo() {
+        var marks: [S34AVoiceMark] = []
+        for i in 0..<3 { marks.append(S34AVoiceMark(key: "m\(i)", person: "me", voice: "\(i).000", scene: "home")) }
+        marks.append(S34AVoiceMark(key: "p1", person: "12", voice: "10.000", scene: nil))
+        marks.append(S34AVoiceMark(key: "p2", person: "12", voice: "11.000", scene: nil))
+        marks.append(S34AVoiceMark(key: "p3", person: "13", voice: "12.000", scene: nil))
+        XCTAssertEqual(S34AVoiceRules.line(marks), "自分 3 個・ほかの人 2 人に 3 個")
+        XCTAssertNil(S34AVoiceRules.line([]))
+        let by = S34AVoiceRules.byPerson(marks)
+        XCTAssertEqual(by["me"], ["0.000", "1.000", "2.000"])
+        XCTAssertEqual(by["12"], ["10.000", "11.000"])
+        XCTAssertEqual(S34AVoiceRules.added(marks, [S34AVoiceMark(key: "n", person: "me", voice: "20.000", scene: nil)], limit: 3).map(\.key),
+                       ["p2", "p3", "n"], "控えは新しいほうから上限まで")
+        // 控えは保存して読み直せる
+        let data = try? JSONEncoder().encode(marks)
+        XCTAssertEqual(data.flatMap { try? JSONDecoder().decode([S34AVoiceMark].self, from: $0) }, marks)
+    }
 }

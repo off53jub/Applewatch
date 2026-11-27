@@ -87,6 +87,9 @@ actor SpeakerLabeler {
         var s29VoiceInfo: [String: S29RVoiceInfo]? = nil
         /// 「知らない人・もう聞かない」（2026-11-27。s29 の 声21。S29N の名前付けの山に出さない。忘れない。nil は前の形）
         var quiet: Bool? = nil
+        /// s34 の自6・自7 で家の PC の見本から足した「自動の印」の声（覚えた時刻の鍵＝S29RVoiceInfo.key）。
+        /// ふだんの自動で覚えた声の 20 個の数には入れず、押し出さない（数の上限は S34AVoiceRules）。外すのは設定の「外す」だけ。nil は前の形
+        var s34Auto: [String]? = nil
 
         var isSelf: Bool { id == SpeakerLabeler.selfID }
         var displayName: String { isSelf ? SpeakerLabeler.selfName : name ?? "人物\(id)" }
@@ -603,6 +606,49 @@ actor SpeakerLabeler {
     }
 
     // MARK: - 登録と手直し
+
+    // MARK: - s34 家の PC が確かな場面から集めた声の見本（自6・自7。S34AVoice.swift）
+
+    /// 自動の見本を足す（登録・手直しの声にはしない＝pinned でない・本人の名前や登録した声は変えない）。
+    /// 今の声がある人は、その声から limit より遠い見本は足さない（取り違えの守り）。自分（me）がまだいなければ作る。
+    /// 返すのは、入力の順に、足した声の覚えた時刻（足さなかったものは nil）
+    func s34aAddAuto(_ embeddings: [[Float]], to id: String, limit: Float) -> [Date?] {
+        if id == Self.selfID { ensureSelf() }
+        var out: [Date?] = []
+        for raw in embeddings {
+            guard let i = index(of: id), !raw.isEmpty else {
+                out.append(nil)
+                continue
+            }
+            let e = Self.normalized(raw)
+            let hasVoice = store.people[i].voices.contains { $0.model == Self.model && $0.embedding.count == e.count }
+            if hasVoice, distance(e, to: store.people[i]) > limit {
+                out.append(nil)
+                continue
+            }
+            let before = Set(store.people[i].voices.map(\.added))
+            addVoice(e, pinned: false, to: i)
+            let added = store.people[i].voices.first { !before.contains($0.added) && !$0.pinned }?.added
+            if let added {
+                // 自動の印（ふだんの自動の声に押し出されないように）
+                store.people[i].s34Auto = (store.people[i].s34Auto ?? []) + [S29RVoiceInfo.key(added)]
+            }
+            out.append(added)
+        }
+        save()
+        return out
+    }
+
+    /// s34 の自動の見本だけを外す（覚えた時刻の鍵＝S29RVoiceInfo.key で見分ける。登録・手直しの声＝pinned は外さない）。外した数
+    func s34aRemoveAuto(_ keys: Set<String>, from id: String) -> Int {
+        guard let i = index(of: id), !keys.isEmpty else { return 0 }
+        let before = store.people[i].voices.count
+        store.people[i].voices.removeAll { !$0.pinned && keys.contains(S29RVoiceInfo.key($0.added)) }
+        store.people[i].s34Auto = (store.people[i].s34Auto ?? []).filter { !keys.contains($0) }
+        let removed = before - store.people[i].voices.count
+        if removed > 0 { save() }
+        return removed
+    }
 
     /// 自分だけが話している録音から、自分の声を登録する。録り直すと前の登録に足す。
     func enrollSelf(from url: URL) async throws {
@@ -1338,7 +1384,10 @@ actor SpeakerLabeler {
     /// 自動で覚えた声は新しい20個まで。登録・手直しの声は50個まで。
     private func trimVoices(_ i: Int) {
         var voices = store.people[i].voices
-        let auto = voices.filter { !$0.pinned }
+        // s34 の自動の印の声は、ふだんの自動の声の数に入れず、押し出さない（S34AVoice.swift）
+        let s34: Set<String> = Set(store.people[i].s34Auto ?? [])
+        func isS34(_ v: Voice) -> Bool { !s34.isEmpty && s34.contains(S29RVoiceInfo.key(v.added)) }
+        let auto = voices.filter { !$0.pinned && !isS34($0) }
         if auto.count > Self.maxAutoVoices, let cutoff = auto.dropLast(Self.maxAutoVoices).last?.added {
             // s29 の 声11: 短い・雑音の多いものから消す（既定オフ。オフのときは、良い順なら残ったはずの数を数える）
             let info = store.people[i].s29VoiceInfo ?? [:]
@@ -1349,11 +1398,11 @@ actor SpeakerLabeler {
             }
             let keep = S29RTrim.keepByQuality(items, max: Self.maxAutoVoices, now: .now)
             if S29RFlags.qualityTrim {
-                voices.removeAll { !$0.pinned && !keep.contains(S29RVoiceInfo.key($0.added)) }
+                voices.removeAll { !$0.pinned && !isS34($0) && !keep.contains(S29RVoiceInfo.key($0.added)) }
             } else {
                 let differ = auto.filter { $0.added <= cutoff && keep.contains(S29RVoiceInfo.key($0.added)) }.count
                 if differ > 0 { Tally.add("s29r.trim.differ", differ) }
-                voices.removeAll { !$0.pinned && $0.added <= cutoff }
+                voices.removeAll { !$0.pinned && !isS34($0) && $0.added <= cutoff }
             }
         }
         let pinned = voices.filter(\.pinned)
@@ -1363,6 +1412,10 @@ actor SpeakerLabeler {
         store.people[i].voices = voices
         if let info = store.people[i].s29VoiceInfo {
             store.people[i].s29VoiceInfo = S29RVoiceInfo.pruned(info, keys: Set(voices.map { S29RVoiceInfo.key($0.added) }))
+        }
+        if !s34.isEmpty {
+            let present: Set<String> = Set(voices.map { S29RVoiceInfo.key($0.added) })
+            store.people[i].s34Auto = (store.people[i].s34Auto ?? []).filter { present.contains($0) }
         }
     }
 

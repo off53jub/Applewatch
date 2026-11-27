@@ -62,6 +62,7 @@ final class S34ABook {
     /// 1 分ごと
     func tick(now: Date = .now) {
         S34APhotoScan.shared.tick(now: now)
+        S34AVoiceBook.shared.tick(now: now)  // 自6・自7 声の見本（S34AVoice.swift。6 時間に 1 回）
         guard let pipeline = Self.pipeline else { return }
         noteFeatures(pipeline.homePC.features)
         guard offered else { return }

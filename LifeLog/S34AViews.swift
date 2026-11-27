@@ -176,12 +176,14 @@ private struct S34ADotLabel: LabelStyle {
 struct S34ACheckSection: View {
     var body: some View {
         let book = S34ABook.shared
-        if book.offered, let feed = book.feed, let head = S34ARules.fixedHeadline(feed) {
+        let voice = S34AVoiceRules.line(S34AVoiceBook.shared.marks)
+        let head: String? = book.offered ? book.feed.flatMap { S34ARules.fixedHeadline($0) } : nil
+        if head != nil || voice != nil {
             Section {
                 NavigationLink {
                     S34AFixedView()
                 } label: {
-                    LLRow(title: head, detail: firstLines(feed), symbol: "wand.and.stars")
+                    LLRow(title: head ?? "自動で足した声の見本", detail: detail(voice), symbol: "wand.and.stars")
                 }
             } header: {
                 Text("自動で直した数")
@@ -191,10 +193,13 @@ struct S34ACheckSection: View {
         }
     }
 
-    private func firstLines(_ feed: S34AFeed) -> String? {
-        let lines = S34ARules.fixedLines(feed).prefix(2)
-        guard !lines.isEmpty else { return nil }
-        return lines.map { $0.title + " " + $0.value }.joined(separator: "\n")
+    private func detail(_ voice: String?) -> String? {
+        var rows: [String] = []
+        if S34ABook.shared.offered, let feed = S34ABook.shared.feed {
+            for line in S34ARules.fixedLines(feed).prefix(2) { rows.append(line.title + " " + line.value) }
+        }
+        if let voice { rows.append("声の見本 " + voice) }
+        return rows.isEmpty ? nil : rows.joined(separator: "\n")
     }
 }
 
@@ -203,6 +208,7 @@ struct S34AFixedView: View {
         let book = S34ABook.shared
         let lines: [S34ALine] = book.feed.map { S34ARules.fixedLines($0) } ?? []
         LLList {
+            S34AVoiceSection()  // 自6・自7 家の PC が集めた声の見本（S34AVoice.swift）
             if !book.offered || lines.isEmpty {
                 Section {
                     LLEmpty(title: "まだ届いていません", symbol: "wand.and.stars",
@@ -287,5 +293,51 @@ struct S34APhotoSettingsView: View {
         .navigationTitle("写真から仕事のまとめ")
         .navigationBarTitleDisplayMode(.inline)
         .countsOpen("s34aWorkPhoto")
+    }
+}
+
+// MARK: - 自6・自7 家の PC が集めた声の見本（S34AVoice.swift）
+
+struct S34AVoiceSection: View {
+    @AppStorage(S34AVoiceBook.onKey) private var on = true
+    @State private var asking = false
+    @State private var note: String?
+
+    var body: some View {
+        let book = S34AVoiceBook.shared
+        Section {
+            Toggle("家の PC が集めた声の見本を足す", isOn: $on)
+            if let line = S34AVoiceRules.line(book.marks) {
+                LLRow(title: "足した見本", value: line)
+            } else {
+                Text(book.running ? "足しています…" : "まだ足した見本はありません").font(LL.TypeScale.note).foregroundStyle(LL.dim)
+            }
+            if book.selfCardDone {
+                S24RoleLabel(text: "自分の声は家・職場・外の見本がそろったので、3 通り録る操作は要りません", role: .machine)
+                    .font(LL.TypeScale.note)
+            }
+            if !book.marks.isEmpty {
+                Button("自動で足した見本だけを外す", systemImage: "arrow.uturn.backward", role: .destructive) { asking = true }
+            }
+            if let note {
+                Text(note).font(LL.TypeScale.note).foregroundStyle(LL.dim)
+            }
+        } header: {
+            Text("自動で足した声の見本")
+        } footer: {
+            HelpNote("家の PC が確かな場面（家でひとり・PLAUD でいちばん近くて多い声・予定の相手が 1 人・出席者の分かる会議）から集めた声の見本を、自分と名前のある人の声に「自動」の印で足します。本人が録った声・手直しした声・付けた名前は変えません。今の声から遠い見本は足しません。自分 15 個・ほかの人 1 人 5 個まで（仮）。話し手の聞き分けがオンのとき、アプリが前にあるか充電中に 6 時間に 1 回。外すと、自動で足した分だけを外し、もう足しません。")
+        }
+        .alert("自動で足した見本を外しますか？", isPresented: $asking) {
+            Button("外す", role: .destructive) {
+                Task {
+                    let n = await book.removeAll()
+                    on = false
+                    note = "\(n) 個を外しました。もう足しません（上のスイッチで戻せます）。"
+                }
+            }
+            Button("やめる", role: .cancel) {}
+        } message: {
+            Text("本人が録った声と手直しした声は残ります。外した見本は、もう一度足すことはありません。")
+        }
     }
 }

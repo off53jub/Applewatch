@@ -114,7 +114,9 @@ final class S29NBook {
         for (id, day) in later where day == today { hidden.insert(id) }
         result = S29NPile.build(people: people, stats: counted.stats, groups: groups, skip: skip, passerby: passerby,
                                 done: hidden, minDays: S29NSettings.minDays, minSeconds: S29NSettings.minSeconds,
-                                selfVoices: selfVoices, selfVoiceHidden: !pipeline.speakerLabelsOn)
+                                selfVoices: selfVoices,
+                                // s34 自6: 家の PC が 3 場面の見本をそろえ（record_needed が false）、端末に足せていれば録る札は出さない
+                                selfVoiceHidden: !pipeline.speakerLabelsOn || S34AVoiceBook.shared.selfCardDone)
         refreshedAt = now
         version += 1
         Tally.add("s29n.pile.refresh")
