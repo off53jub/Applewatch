@@ -136,7 +136,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.ui != 'false' }}
     runs-on: macos-26
-    timeout-minutes: 80
+    # 2026-11-27: 仕事タブ（S30WTour）と AI の理解の段（S32ATour）を足して 76〜78 分 → 80 分で切られた。120 分に（分けて並べるのは次の機会）
+    timeout-minutes: 120
     permissions:
       contents: write
     steps:

@@ -564,6 +564,8 @@ enum ReviewRules {
         // 2 つの声が同じ人か・聞き取りの答え合わせ（2026-11-23。s23。家の PC #104 の新しい kind）
         case "voice_pair": "同じ人の声？"
         case "gold_noisy": "聞き取りの答え合わせ"
+        // s32 知16 本人に聞く仕事の 3 つ（2026-11-27。S32ARules.swift）
+        case "work_self": S32AReview.label
         default: kind
         }
     }
