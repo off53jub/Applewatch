@@ -143,7 +143,10 @@ enum S22Book {
     }
 
     static func firstYesNo(excluding: Set<String> = []) -> ReviewItem? {
-        S20Book.shared.openItems().first { S22Rules.isYesNo(answer: $0.answer, choices: $0.choices) && !excluding.contains($0.id) }
+        // s32: 仕事の持ち場の問い（work_self）は時計・通知・ウィジェットに出さない（守1。S32ARules.swift）
+        S20Book.shared.openItems().first {
+            S22Rules.isYesNo(answer: $0.answer, choices: $0.choices) && !excluding.contains($0.id) && S32AReview.offPhoneOK($0)
+        }
     }
 
     /// ほかの所（時計・通知・ウィジェット）で答えた。一覧に無い問い（写しが古い）も、答えは母艦へ送る

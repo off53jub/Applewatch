@@ -535,15 +535,14 @@ struct S27WItemRow: View {
                     .buttonStyle(.borderless)
                     .accessibilityLabel(done ? "済みを戻す" : "済みにする")
                 }
-                Text(book.t(item.text))
-                    .font(LL.TypeScale.body)
-                    .foregroundStyle(done || item.isMaybe ? LL.dim : LL.text)
-                    .strikethrough(done)
+                // s32: glossary の言葉は押せる・「違う」を押したものは見え方を変える（S32AViews.swift）
+                S32AItemText(item: item, font: LL.TypeScale.body, color: done || item.isMaybe ? LL.dim : LL.text, strike: done)
             }
             if !meta.isEmpty {
                 Text(meta).font(LL.TypeScale.note).foregroundStyle(LL.dim)
             }
             S31AVoiceMark(item: item)  // s31 声でも話していた候補（S31AViews.swift）
+            S32AFixMark(item: item)  // s32 「違う」を伝えた印・戻す
             if !chips.isEmpty {
                 S27WChips(chips: chips)
             }
@@ -553,6 +552,7 @@ struct S27WItemRow: View {
                 Link(destination: url) { Label("元を開く", systemImage: "arrow.up.right.square") }
             }
             Button("文をコピー", systemImage: "doc.on.doc") { UIPasteboard.general.string = item.text }
+            S32AFixMenu(item: item)  // s32 1 押しの「違う」（K32-3）
         }
     }
 }

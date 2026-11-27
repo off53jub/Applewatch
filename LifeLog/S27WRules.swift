@@ -523,6 +523,9 @@ struct S27WBoard: Decodable, Equatable, Sendable {
     var monthlyOther: String?
     /// s30（2026-11-27・K30-1）: 状況の報告（母艦が作る・省ける）。無いとき（前の形）は仕事タブが規則で並べる（S30WRules.swift）
     var report: S30WReport?
+    /// s32（2026-11-27・K32-2）: AI の理解（glossary・org・systems・numbering・decisions・threads・quiz・scorecard・guide）。
+    /// どれも省ける。壊れていても K2 は読める（S32ARules.swift）
+    var know: S32AKnow?
 
     enum CodingKeys: String, CodingKey {
         case available, version, counts, today, diff, projects, people, side, report
@@ -545,6 +548,7 @@ struct S27WBoard: Decodable, Equatable, Sendable {
         side = c.s27w(.side)
         monthlyOther = c.s27w(.monthlyOther)
         report = c.s27w(.report)
+        know = S32AKnow.read(decoder)
     }
 
     func project(_ id: String) -> S27WProject? { projects.first { $0.id == id } }
