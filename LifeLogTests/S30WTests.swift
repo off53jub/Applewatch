@@ -29,7 +29,7 @@ final class S30WTests: XCTestCase {
        {"id":"wp-0000000d","name":"よその見本","kind":"other","items":[{"id":"d1","kind":"homework","text":"よその見本","ball":"me"}]},
        {"id":"wc-misc","name":"まだ案件に分けていないもの","kind":"mine",
         "items":[{"id":"m1","kind":"open","text":"見本のカードを借りる","ball":"me","age_days":1},
-                 {"id":"m2","kind":"open","text":"どれでもない見本","ball":"me","age_days":1}]},
+                 {"id":"m2","kind":"open","text":"どれでもない見本","age_days":1}]},
        {"id":"wc-side","name":"副業の見本","kind":"side","items":[{"id":"s1","kind":"homework","text":"副業の見本"}]}]}
     """
 

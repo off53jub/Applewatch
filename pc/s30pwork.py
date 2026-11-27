@@ -162,7 +162,13 @@ def _parse_time(value) -> datetime.datetime | None:
 
 
 def read_run(base: Path) -> dict:
-    data, _ = s27pwork._load(base, STATE, 256 * 1024)
+    # 小さいファイルで、走っている間に書き換わる。更新時刻と大きさの覚え（s27pwork._load）を通すと、
+    # 同じ大きさで同じ時刻の刻みの中に書き直されたとき前の中身が返る（2026-11-27 CI で見つけた）ので、毎回読む
+    try:
+        raw = (Path(base) / STATE).read_bytes()
+        data = json.loads(raw.decode("utf-8")) if len(raw) <= 256 * 1024 else {}
+    except (OSError, ValueError, UnicodeDecodeError):
+        data = {}
     data = data if isinstance(data, dict) else {}
     started, finished = data.get("started_at"), data.get("finished_at")
     ok = data.get("ok")
