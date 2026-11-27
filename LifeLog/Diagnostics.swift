@@ -353,6 +353,8 @@ extension Pipeline {
             add("効き目（直近7日）", "まだ数えていません", "夜の聞き直しや、複数のモデルの見比べが動くと数えます")
         }
         for row in report { add("効き目（直近7日）", row.label, row.value, row.ok) }
+        // 声を分ける・当てる（s29 の当てる担当。影の数もここに出す。S29RVoice.swift の S29RReport）
+        for row in S29RReport.rows(Tally.sums(days: 7)) { add("声の分け・当て（直近7日）", row.label, row.value, row.ok) }
 
         // 仕事の成績表（日ごと。数だけ。2026-11-10。NightReport.swift の Tally.workCard）
         for row in Tally.workCard(Tally.days(7)) { add("仕事の成績表（日ごと）", row.label, row.value, row.ok) }

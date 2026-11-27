@@ -39,6 +39,7 @@ struct ContentView: View {
         // すべての日を読むので、1 日ごとに譲る（2026-11-16。途中で声が変わったら数え直し）
         .task(id: pipeline.people.flatMap(\.samples)) {
             if let count = await pipeline.voiceReviewCount() { reviewCount = count }
+            await S29NBook.shared.refresh(pipeline)  // 名前付けの山の数（s29。10 分に 1 回まで）
         }
         // 知らせ・ショートカット・ウィジェットから開く画面（2026-11-10。NoticeActions.swift）。タブの切り替えはシートにしない
         .sheet(item: Binding(get: { pipeline.noticeRoute }, set: { pipeline.noticeRoute = $0 })) { route in
@@ -1237,6 +1238,8 @@ private struct DetailedSettingsView: View {
                             ForEach(SpeakerLabeler.Strictness.allCases) { Text($0.label).tag($0) }
                         }
                         Toggle("食い違った声を自動で外す", isOn: $autoAside)
+                        // 名前付けの山のしぼり・もう聞かない人を戻す（2026-11-27。s29 の 声18・声21。S29NViews.swift）
+                        NavigationLink("名前付けの山・もう聞かない人") { S29NSettingsView() }
                     }
                 } header: {
                     Text("話者")

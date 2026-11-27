@@ -83,6 +83,10 @@ actor SpeakerLabeler {
         var updated: Date? = nil
         /// 記録に出さない人（声で見分けて、その人の行は書かずに「消した行」に回す）
         var hidden: Bool? = nil
+        /// 自動で覚えた声ごとの、覚えたときの場面・長さ・雑音（s29 の 声10・声11。名前のある人だけ。鍵は S29RVoiceInfo.key）
+        var s29VoiceInfo: [String: S29RVoiceInfo]? = nil
+        /// 「知らない人・もう聞かない」（2026-11-27。s29 の 声21。S29N の名前付けの山に出さない。忘れない。nil は前の形）
+        var quiet: Bool? = nil
 
         var isSelf: Bool { id == SpeakerLabeler.selfID }
         var displayName: String { isSelf ? SpeakerLabeler.selfName : name ?? "人物\(id)" }
@@ -137,6 +141,9 @@ actor SpeakerLabeler {
     private static let maxAutoVoices = 20
 
     private var diarizer: OfflineDiarizerManager?
+    /// s29 の 声8: 通りすがりらしい声の箱（メモリだけ）と、声12: 前の区切りの交互の相手
+    private var s29rBox = S29RPasserbyBox()
+    private var s29rChain: S29RChain.State?
     private var loading: Task<Loaded, Error>?
     /// 覚えている人。聞き分けのモデルの準備とは別に、最初に触ったときにファイルから読む。
     /// （読む前に書くと、覚えている人を空で上書きしてしまうので、必ずこれを通す）
@@ -193,7 +200,8 @@ actor SpeakerLabeler {
     /// selfLevel は、その機器で覚えた自分の声の大きさ（dB）。手首や胸元のマイクには自分の声がいちばん大きく入るので、
     /// 自分の声くらい大きい声は「自分」と決めやすく、ずっと小さい声は「自分」にしにくくする。
     func label(_ url: URL, context: Context?, strictness: Strictness = .normal,
-               selfLevel: Float? = nil, expected: Set<String> = []) async throws -> [Segment] {
+               selfLevel: Float? = nil, expected: Set<String> = [],
+               hints: S29RHints = S29RHints()) async throws -> [Segment] {
         try await prepare()
         guard let diarizer else { return [] }
         // 区切りの中だけで声を分けてもらう（前の区切りの声とは、下で自分で照らし合わせる）
@@ -205,12 +213,15 @@ actor SpeakerLabeler {
             var embedding: [Float] = []
             var seconds: Double = 0
             var longest: (start: Double, end: Double) = (0, 0)
+            /// 話した区間（s29 の 声4。声の割合を測る）
+            var parts: [S29RSpan] = []
         }
         var clusters: [String: Cluster] = [:]
         for s in result.segments where !s.speakerId.isEmpty {
             let seconds = Double(s.durationSeconds)
             var c = clusters[s.speakerId] ?? Cluster()
             c.seconds += seconds
+            c.parts.append(S29RSpan(start: Double(s.startTimeSeconds), end: Double(s.endTimeSeconds)))
             if seconds > c.longest.end - c.longest.start {
                 c.longest = (Double(s.startTimeSeconds), Double(s.endTimeSeconds))
             }
@@ -222,6 +233,34 @@ actor SpeakerLabeler {
             clusters[key]?.embedding = Self.normalized(center)
         }
         clusters = clusters.filter { !$0.value.embedding.isEmpty }
+
+        // s29 の 声7: 場の人数が分かるときは、その人数より多く分けない（既定オフ。オフのときは数えるだけ。S29RVoice.swift）
+        var alias: [String: String] = [:]
+        if let headcount = hints.headcount {
+            var shape: [String: (center: [Float], seconds: Double)] = [:]
+            for (key, c) in clusters { shape[key] = (center: c.embedding, seconds: c.seconds) }
+            let plan = S29RHeadcount.plan(shape, limit: headcount)
+            if !plan.isEmpty {
+                Tally.add(S29RFlags.headcount ? "s29r.headcount.merged" : "s29r.headcount.would", plan.count)
+                if S29RFlags.headcount {
+                    alias = plan
+                    for (source, target) in plan.sorted(by: { $0.key < $1.key }) {
+                        guard let s = clusters[source], var t = clusters[target] else { continue }
+                        t.embedding = Self.normalized(S29RHeadcount.combine(t.embedding, t.seconds, s.embedding, s.seconds))
+                        t.seconds += s.seconds
+                        t.parts += s.parts
+                        if s.longest.end - s.longest.start > t.longest.end - t.longest.start { t.longest = s.longest }
+                        clusters[target] = t
+                    }
+                    for source in plan.keys { clusters[source] = nil }
+                }
+            }
+        }
+        let merged = alias
+        let sceneFirst = S29RFlags.sceneFirst
+        let strongOn = S29RFlags.strongBonus
+        let boxOn = S29RFlags.passerby
+        if boxOn { s29rBox.prune(now: .now) }
 
         // まとまりごとの声の大きさ（いちばん長く話したところで測る）
         var loudness: [String: Float] = [:]
@@ -242,9 +281,15 @@ actor SpeakerLabeler {
         // 近い組から順に決める。1つの区切りで、同じ人を2つのまとまりに当てるのは、どちらも十分近いときだけ。
         var pairs: [(cluster: String, person: String, distance: Float, second: Float, rank: Float)] = []
         for (key, c) in clusters {
-            let scored = store.people.map { ($0, distance(c.embedding, to: $0)) }.sorted { $0.1 < $1.1 }
+            let scene = sceneFirst ? hints.scene : nil
+            let scored = store.people.map { ($0, s29rDistance(c.embedding, to: $0, scene: scene)) }.sorted { $0.1 < $1.1 }
+            // s29 の 声8: 箱の声も、前なら人物Nとして比べ相手になっていた。名前のある人の当たりを変えないよう、比べ相手に入れる
+            // （箱の声がいちばん近ければ、前ならその人物Nに当たっていたので、ここでは誰にも当てない＝下で箱から人物Nにする）
+            let boxed = boxOn ? s29rBox.nearest(c.embedding, audio: url.lastPathComponent) : 1
+            if boxed <= accept, boxed < (scored.first?.1 ?? 1) { continue }
             for (i, (p, d)) in scored.enumerated() {
-                let second = scored.indices.contains(i == 0 ? 1 : 0) ? scored[i == 0 ? 1 : 0].1 : 1
+                let nextBest = scored.indices.contains(i == 0 ? 1 : 0) ? scored[i == 0 ? 1 : 0].1 : 1
+                let second = min(boxed, nextBest)
                 let inContext = context == nil || p.context == nil || p.context == context || p.isSelf
                 var limit = inContext && second - d >= 0.04 ? accept : strict
                 if p.isSelf, let selfLevel, let level = loudness[key] {
@@ -260,9 +305,12 @@ actor SpeakerLabeler {
                 var rank = p.isSelf && isLoud(key) ? d - Self.loudSelfBonus : d
                 // 直前に話していた人・予定の出席者は、ほかの人と迷うときに少しだけ先に選ぶ（受け入れる近さは変えない）
                 if expected.contains(p.id) { rank -= Self.expectedBonus }
+                // s29 の 声13: 声以外の手がかりがはっきりしている人だけ、もっと先に選ぶ（既定オフ。受け入れる近さは変えない）
+                if strongOn { rank -= S29RBonus.extra(p.id, expected: expected, strong: hints.strong, base: Self.expectedBonus) }
                 // 覚え足すかを決めるための、いちばん近い別の人。名前のある人（自分を含む）は、名前のある人どうしで比べる
                 // （自分の声から分かれた名前の無い人物Nが近いだけで、自分の声を覚え足せなくならないように）
-                let rival = scored.first { $0.0.id != p.id && (!p.isNamed || $0.0.isNamed) }?.1 ?? 1
+                let named = scored.first { $0.0.id != p.id && (!p.isNamed || $0.0.isNamed) }?.1 ?? 1
+                let rival = p.isNamed ? named : min(boxed, named)
                 if d <= limit { pairs.append((key, p.id, d, rival, rank)) }
             }
         }
@@ -289,6 +337,50 @@ actor SpeakerLabeler {
             }
         }
 
+        // s29 の 声13（影）: 強い加点にしたら当てる人が変わるまとまりを数える
+        if !hints.strong.isEmpty {
+            var bonusPairs: [S29RBonus.Pair] = []
+            for p in pairs { bonusPairs.append(S29RBonus.Pair(cluster: p.cluster, person: p.person, distance: p.distance, rank: p.rank)) }
+            s29rCountStrong(bonusPairs, expected: expected, strong: hints.strong, strict: strict, on: strongOn)
+        }
+
+        // s29 の 声12・声14: 2 人で交互に話していて片方がはっきり自分なら、相手は前の区切りの相手が続く（既定オフ。オフのときは数えるだけ）
+        var turns: [(speaker: String, start: Double, end: Double)] = []
+        for s in result.segments {
+            let key = merged[s.speakerId] ?? s.speakerId
+            if clusters[key] != nil { turns.append((speaker: key, start: Double(s.startTimeSeconds), end: Double(s.endTimeSeconds))) }
+        }
+        var partnerCluster: String?
+        if let pair = S29RChain.twoWay(turns), let me = person(Self.selfID) {
+            var mine: String?
+            if assigned[pair.0]?.person == Self.selfID { mine = pair.0 } else if assigned[pair.1]?.person == Self.selfID { mine = pair.1 }
+            let myVoices = me.voices.filter { $0.model == Self.model }
+            if let mine, S29RChain.selfSolid(pinned: myVoices.filter(\.pinned).count, voices: myVoices.count,
+                                              distance: assigned[mine]?.distance, strict: strict) {
+                let other = mine == pair.0 ? pair.1 : pair.0
+                partnerCluster = other
+                if let partner = S29RChain.carried(s29rChain, start: hints.start, watch: hints.watch),
+                   let c = clusters[other], let p = person(partner) {
+                    let current = assigned[other]?.person
+                    if current == partner {
+                        Tally.add("s29r.chain.agree")
+                    } else {
+                        let d = distance(c.embedding, to: p)
+                        let currentNamed = current.flatMap { person($0)?.isNamed } ?? false
+                        if S29RChain.shouldAssign(distance: d, accept: accept, currentNamed: currentNamed) {
+                            if S29RFlags.chain {
+                                // 流れで決めた声なので覚え足さない（second を同じ距離にしておく）
+                                assigned[other] = (partner, d, d)
+                                Tally.add("s29r.chain.applied")
+                            } else {
+                                Tally.add("s29r.chain.would")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 大勢の場（飲み会・大きな会議）では、何人もの声が1つのまとまりにされることがある（2026-11-12）。
         // オフライン方式は、区間の声の特徴をまとまりの平均の写しで返すので、混ざっていても見えない。
         // そこで、新しい人物Nにしそうなまとまりだけ、区間ごとに声の特徴を取り直して確かめる。
@@ -300,7 +392,7 @@ actor SpeakerLabeler {
         if voices >= Self.checkClusters {
             for (key, c) in clusters where assigned[key] == nil && c.seconds >= 3 {
                 let parts = Self.partsToCheck(result.segments.enumerated().compactMap { index, s in
-                    s.speakerId == key ? (index: index, start: Double(s.startTimeSeconds), end: Double(s.endTimeSeconds)) : nil
+                    (merged[s.speakerId] ?? s.speakerId) == key ? (index: index, start: Double(s.startTimeSeconds), end: Double(s.endTimeSeconds)) : nil
                 })
                 guard parts.count >= 2 else { continue }
                 if audio == nil { audio = try? AudioConverter().resampleAudioFile(url) }
@@ -337,7 +429,8 @@ actor SpeakerLabeler {
                 // （迷った声を覚え足すと、自分の声がほかの人の声として増えていく。井上さんの自動の声20個が自分の声だった）
                 if Self.mayLearn(distance: match.distance, second: match.second, limit: strictness.learn,
                                  seconds: c.seconds, isSelf: match.person == Self.selfID, loud: isLoud(key)) {
-                    addVoice(c.embedding, pinned: false, to: i)
+                    addVoice(c.embedding, pinned: false, to: i,
+                             s29Info: S29RVoiceInfo(scene: hints.scene, seconds: c.seconds, margin: hints.margin))
                     remember(sample, for: i)
                 }
                 labels[key] = match.person
@@ -349,23 +442,72 @@ actor SpeakerLabeler {
                 Tally.add("speakers.crowdShort")
                 continue
             } else if c.seconds >= 3 {
+                // s29 の 声4: 雑音まみれの短い声・声の割合の低いまとまりからは人物Nを作らない（既定オン。「だれか分からない」のまま）
+                let share = hints.speech.flatMap { S29RGate.voiceShare(c.parts, speech: $0) }
+                if !S29RGate.mayCreate(seconds: c.seconds, share: share, level: hints.level) {
+                    Tally.add(S29RFlags.gate ? "s29r.gate.cut" : "s29r.gate.would")
+                    if S29RFlags.gate {
+                        // 比べ相手としては箱に残す（前なら人物Nになり、ほかの声の比べ相手になっていた）
+                        if boxOn {
+                            s29rBox.add(S29RPasserbyBox.Entry(embedding: c.embedding, seconds: c.seconds, audio: file,
+                                                              start: c.longest.start, end: c.longest.end, heard: .now))
+                        }
+                        continue
+                    }
+                }
+                var newVoices = [Voice(embedding: c.embedding, pinned: false, added: .now, model: Self.model)]
+                var newSeconds = c.seconds
+                var newSamples = [sample]
+                // s29 の 声8: 通りすがりらしい短い声は箱へ。別の区切りでまた聞こえたら、そのとき人物Nにする（既定オン）
+                if boxOn {
+                    if let j = s29rBox.match(c.embedding, audio: file, accept: accept) {
+                        let entry = s29rBox.take(j)
+                        newVoices.insert(Voice(embedding: entry.embedding, pinned: false, added: entry.heard, model: Self.model), at: 0)
+                        newSeconds += entry.seconds
+                        newSamples.insert(Sample(audio: entry.audio, start: entry.start, end: entry.end), at: 0)
+                        Tally.add("s29r.box.promoted")
+                    } else if S29RPasserbyBox.shouldBox(seconds: c.seconds) {
+                        s29rBox.add(S29RPasserbyBox.Entry(embedding: c.embedding, seconds: c.seconds, audio: file,
+                                                          start: c.longest.start, end: c.longest.end, heard: .now))
+                        Tally.add("s29r.box.in")
+                        continue
+                    }
+                } else if S29RPasserbyBox.shouldBox(seconds: c.seconds) {
+                    Tally.add("s29r.box.would")
+                }
                 // 知らない声。新しい人として覚え、その場の人とする
                 let id = allocateID()
-                store.people.append(Person(id: id, name: nil, context: context,
-                                           voices: [Voice(embedding: c.embedding, pinned: false, added: .now,
-                                                          model: Self.model)],
-                                           seconds: c.seconds, samples: [sample]))
+                store.people.append(Person(id: id, name: nil, context: context, voices: newVoices,
+                                           seconds: newSeconds, samples: newSamples))
                 labels[key] = id
             }
         }
         // 名前を付けていない声で、2週間聞いていないものは忘れる（通りすがりの人など）
         let old = Date.now.addingTimeInterval(-14 * 24 * 3600)
         // （記録に出さない人は、また聞こえたときに見分けられるよう忘れない）
-        forget { !$0.isNamed && $0.pinnedCount == 0 && $0.lastHeard < old && $0.hidden != true }
+        // （「もう聞かない」の人も、忘れるとまた新しい人物Nとして聞かれるので忘れない。s29 の 声21）
+        forget { !$0.isNamed && $0.pinnedCount == 0 && $0.lastHeard < old && $0.hidden != true && $0.quiet != true }
         save()
 
+        // s29 の 声12: この区切りの交互の相手を次の区切りへ渡す（区切りの時刻が分かるときだけ）
+        if let start = hints.start {
+            var last = 0.0
+            for t in turns { last = max(last, t.end) }
+            if let other = partnerCluster, let id = labels[other], id != Self.selfID {
+                s29rChain = S29RChain.State(partner: id, end: start.addingTimeInterval(last), watch: hints.watch)
+            } else {
+                s29rChain = nil
+            }
+        }
+        // s29 の 声10（影）: 場面が同じ見本と先に比べたら、いちばん近い人が変わるかを数える
+        if !sceneFirst, let scene = hints.scene {
+            var centers: [[Float]] = []
+            for c in clusters.values { centers.append(c.embedding) }
+            s29rCountScene(centers, scene: scene, accept: accept)
+        }
+
         return result.segments.enumerated().compactMap { index, s in
-            guard let id = partLabels[index] ?? labels[s.speakerId], let p = person(id) else { return nil }
+            guard let id = partLabels[index] ?? labels[merged[s.speakerId] ?? s.speakerId], let p = person(id) else { return nil }
             return Segment(start: TimeInterval(s.startTimeSeconds), end: TimeInterval(s.endTimeSeconds),
                            personID: id, name: p.displayName)
         }
@@ -805,6 +947,14 @@ actor SpeakerLabeler {
         save()
     }
 
+    /// 「知らない人・もう聞かない」を切り替える（s29 の 声21。本人が押したときだけ）
+    func setQuiet(_ id: String, _ quiet: Bool) {
+        guard let i = index(of: id), !store.people[i].isSelf else { return }
+        store.people[i].quiet = quiet ? true : nil
+        store.people[i].updated = .now
+        save()
+    }
+
     func setContext(_ id: String, to context: Context?) {
         guard let i = index(of: id) else { return }
         store.people[i].context = context
@@ -892,9 +1042,9 @@ actor SpeakerLabeler {
     /// apart は、同じ区切りの中で別の声とされた2人（番号の小さい順の組）。別の人とみなしてまとめない。
     func consolidation(among ids: Set<String>, apart: Set<[String]>,
                        strictness: Strictness) -> [(source: String, target: String)] {
-        // 記録に出さない人は、ほかの声とまとめない
+        // 記録に出さない人・「もう聞かない」にした人（s29 の 声21）は、ほかの声とまとめない
         let members = store.people.filter { p in
-            ids.contains(p.id) && p.hidden != true && p.voices.contains { $0.model == Self.model }
+            ids.contains(p.id) && p.hidden != true && p.quiet != true && p.voices.contains { $0.model == Self.model }
         }
         var result: [(source: String, target: String)] = []
         var gone = Set<String>()
@@ -1044,6 +1194,8 @@ actor SpeakerLabeler {
         let samples: [Sample]
         let updated: Date?
         var hidden: Bool? = nil
+        /// s29 の 声21（前の形には無い）
+        var quiet: Bool? = nil
     }
 
     struct SyncPeople: Codable, Sendable {
@@ -1070,7 +1222,7 @@ actor SpeakerLabeler {
                        // 細かく変わり続けないように、分と日にそろえる
                        seconds: (p.seconds / 60).rounded(.down) * 60,
                        lastHeard: Date(timeIntervalSince1970: (p.lastHeard.timeIntervalSince1970 / 86400).rounded(.down) * 86400),
-                       samples: p.samples, updated: p.updated, hidden: p.hidden)
+                       samples: p.samples, updated: p.updated, hidden: p.hidden, quiet: p.quiet)
         }
         return SyncPeople(people: people, removed: removed)
     }
@@ -1095,6 +1247,7 @@ actor SpeakerLabeler {
                     p.name = rp.name
                     p.context = rp.context
                     p.hidden = rp.hidden
+                    p.quiet = rp.quiet
                     p.updated = rp.updated
                 }
                 let known = Set(p.voices.map(\.embedding))
@@ -1107,7 +1260,7 @@ actor SpeakerLabeler {
                 }
                 p.samples = Array(p.samples.suffix(3))
                 if !added.isEmpty || p.name != before.name || p.context != before.context || p.hidden != before.hidden
-                    || p.seconds != before.seconds || p.lastHeard != before.lastHeard || p.samples != before.samples {
+                    || p.quiet != before.quiet || p.seconds != before.seconds || p.lastHeard != before.lastHeard || p.samples != before.samples {
                     store.people[i] = p
                     if !added.isEmpty { trimVoices(i) }
                     changed = true
@@ -1116,7 +1269,7 @@ actor SpeakerLabeler {
                 if let gone = removed[rp.id], gone >= remoteTouched { continue }
                 store.people.append(Person(id: rp.id, name: rp.name, context: rp.context, voices: voices,
                                            seconds: rp.seconds, lastHeard: rp.lastHeard, samples: rp.samples,
-                                           updated: rp.updated, hidden: rp.hidden))
+                                           updated: rp.updated, hidden: rp.hidden, quiet: rp.quiet))
                 removed[rp.id] = nil
                 changed = true
             }
@@ -1150,7 +1303,8 @@ actor SpeakerLabeler {
             guard let new = map[store.people[i].id] else { continue }
             let p = store.people[i]
             store.people[i] = Person(id: new, name: p.name, context: p.context, voices: p.voices, seconds: p.seconds,
-                                     lastHeard: p.lastHeard, samples: p.samples, updated: p.updated, hidden: p.hidden)
+                                     lastHeard: p.lastHeard, samples: p.samples, updated: p.updated, hidden: p.hidden,
+                                     quiet: p.quiet)
         }
         save()
         return map
@@ -1161,10 +1315,16 @@ actor SpeakerLabeler {
     private func person(_ id: String) -> Person? { store.people.first { $0.id == id } }
     private func index(of id: String) -> Int? { store.people.firstIndex { $0.id == id } }
 
-    private func addVoice(_ embedding: [Float], pinned: Bool, to i: Int) {
+    private func addVoice(_ embedding: [Float], pinned: Bool, to i: Int, s29Info: S29RVoiceInfo? = nil) {
         guard !embedding.isEmpty, embedding.contains(where: { $0 != 0 }) else { return }
-        store.people[i].voices.append(Voice(embedding: Self.normalized(embedding), pinned: pinned, added: .now,
-                                            model: Self.model))
+        let voice = Voice(embedding: Self.normalized(embedding), pinned: pinned, added: .now, model: Self.model)
+        store.people[i].voices.append(voice)
+        // s29 の 声10・声11: 名前のある人の自動の声には、覚えたときの様子を残す（消す順・場面別の比べに使う）
+        if let s29Info, !pinned, store.people[i].isNamed {
+            var info = store.people[i].s29VoiceInfo ?? [:]
+            info[S29RVoiceInfo.key(voice.added)] = s29Info
+            store.people[i].s29VoiceInfo = info
+        }
         // 以前のモデルの声は比べられないので消す
         store.people[i].voices.removeAll { $0.model != Self.model }
         trimVoices(i)
@@ -1180,13 +1340,72 @@ actor SpeakerLabeler {
         var voices = store.people[i].voices
         let auto = voices.filter { !$0.pinned }
         if auto.count > Self.maxAutoVoices, let cutoff = auto.dropLast(Self.maxAutoVoices).last?.added {
-            voices.removeAll { !$0.pinned && $0.added <= cutoff }
+            // s29 の 声11: 短い・雑音の多いものから消す（既定オフ。オフのときは、良い順なら残ったはずの数を数える）
+            let info = store.people[i].s29VoiceInfo ?? [:]
+            var items: [S29RTrimItem] = []
+            for v in auto {
+                let key = S29RVoiceInfo.key(v.added)
+                items.append(S29RTrimItem(key: key, added: v.added, info: info[key]))
+            }
+            let keep = S29RTrim.keepByQuality(items, max: Self.maxAutoVoices, now: .now)
+            if S29RFlags.qualityTrim {
+                voices.removeAll { !$0.pinned && !keep.contains(S29RVoiceInfo.key($0.added)) }
+            } else {
+                let differ = auto.filter { $0.added <= cutoff && keep.contains(S29RVoiceInfo.key($0.added)) }.count
+                if differ > 0 { Tally.add("s29r.trim.differ", differ) }
+                voices.removeAll { !$0.pinned && $0.added <= cutoff }
+            }
         }
         let pinned = voices.filter(\.pinned)
         if pinned.count > 50 {
             voices.removeAll { $0.pinned && $0.added <= pinned[pinned.count - 51].added }
         }
         store.people[i].voices = voices
+        if let info = store.people[i].s29VoiceInfo {
+            store.people[i].s29VoiceInfo = S29RVoiceInfo.pruned(info, keys: Set(voices.map { S29RVoiceInfo.key($0.added) }))
+        }
+    }
+
+    // MARK: - s29 の当てる担当（S29RVoice.swift の決まりを、覚えている声に当てる）
+
+    /// 声10: 場面の札があり、その人に場面が同じ見本が足りていれば、それと先に比べる。無ければ今の比べ方
+    private func s29rDistance(_ embedding: [Float], to person: Person, scene: String?) -> Float {
+        guard let scene, let info = person.s29VoiceInfo, !info.isEmpty else { return distance(embedding, to: person) }
+        var bank: [(embedding: [Float], scene: String?)] = []
+        for v in person.voices where v.model == Self.model && v.embedding.count == embedding.count {
+            bank.append((embedding: v.embedding, scene: info[S29RVoiceInfo.key(v.added)]?.scene))
+        }
+        return S29RScene.distance(embedding, voices: bank, scene: scene)
+    }
+
+    /// 声10（影）: 今の比べ方と場面別の比べ方で、いちばん近い人（受け入れる近さ以内）が同じかを数える
+    private func s29rCountScene(_ centers: [[Float]], scene: String, accept: Float) {
+        guard store.people.contains(where: { ($0.s29VoiceInfo?.count ?? 0) >= S29RScene.minSame }) else { return }
+        for center in centers {
+            var plain: (id: String, d: Float)?
+            var byScene: (id: String, d: Float)?
+            for p in store.people {
+                let d0 = distance(center, to: p)
+                if d0 <= accept, d0 < (plain?.d ?? .infinity) { plain = (p.id, d0) }
+                let d1 = s29rDistance(center, to: p, scene: scene)
+                if d1 <= accept, d1 < (byScene?.d ?? .infinity) { byScene = (p.id, d1) }
+            }
+            Tally.add(plain?.id == byScene?.id ? "s29r.scene.same" : "s29r.scene.differ")
+        }
+    }
+
+    /// 声13: 強い加点のありなしで、当てる人が変わるまとまりの数（オンなら changed、オフなら would）
+    private func s29rCountStrong(_ pairs: [S29RBonus.Pair], expected: Set<String>, strong: Set<String>,
+                                 strict: Float, on: Bool) {
+        var other: [S29RBonus.Pair] = []
+        for p in pairs {
+            var q = p
+            let extra = S29RBonus.extra(p.person, expected: expected, strong: strong, base: Self.expectedBonus)
+            q.rank = on ? p.rank + extra : p.rank - extra
+            other.append(q)
+        }
+        let n = S29RBonus.differences(S29RBonus.greedy(pairs, strict: strict), S29RBonus.greedy(other, strict: strict))
+        if n > 0 { Tally.add(on ? "s29r.strong.changed" : "s29r.strong.would", n) }
     }
 
     private func remember(_ sample: Sample, for i: Int) {
@@ -1232,8 +1451,9 @@ actor SpeakerLabeler {
     private var lastSavedBytes = 0
 
     private static func shape(_ s: Store) -> String {
-        let kept = s.people.filter { $0.id == selfID || $0.name != nil || $0.hidden == true || $0.pinnedCount > 0 }
-        return "\(s.removed?.count ?? 0)|" + kept.map { "\($0.id):\($0.name ?? ""):\($0.hidden == true ? 1 : 0):\($0.pinnedCount)" }
+        // 「もう聞かない」（s29 の 声21）も、すぐ書く
+        let kept = s.people.filter { $0.id == selfID || $0.name != nil || $0.hidden == true || $0.quiet == true || $0.pinnedCount > 0 }
+        return "\(s.removed?.count ?? 0)|" + kept.map { "\($0.id):\($0.name ?? ""):\($0.hidden == true ? 1 : 0):\($0.quiet == true ? 1 : 0):\($0.pinnedCount)" }
             .joined(separator: ",")
     }
 

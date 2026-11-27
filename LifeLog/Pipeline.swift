@@ -626,6 +626,7 @@ final class Pipeline {
 
     /// 名前を付ける・付け替える。これまでの記録とドキュメントの名前も直す。
     func renamePerson(_ id: String, to name: String) async {
+        S29NHooks.rename(id, to: name, people: people)  // 答えを家の PC の「答えた組」へ（s29 の 声22。S29NBook.swift）
         let old = await speakers.name(of: id)
         await speakers.rename(id, to: name)
         await refreshLines(of: id, previousName: old)
@@ -642,6 +643,7 @@ final class Pipeline {
         let old = await speakers.name(of: source)
         let snapshot = await speakers.snapshot(source)
         let times = conversations.lineTimes { $0.speakerID == source }
+        S29NHooks.merge(source, into: target, people: people, automatic: automatic)  // s29 の 声22
         await speakers.merge(source, into: target)
         await relabel(to: target, renaming: old) { $0.speakerID == source }
         if let snapshot, source != target {
@@ -865,6 +867,12 @@ final class Pipeline {
         people = await speakers.people()
     }
 
+    /// 「知らない人・もう聞かない」を切り替える（s29 の 声21。名前付けの山に出さない。S29NBook.swift）
+    func setQuiet(_ id: String, _ quiet: Bool) async {
+        await speakers.setQuiet(id, quiet)
+        people = await speakers.people()
+    }
+
     /// その人のこれまでの行を、アプリの記録とドキュメントから消す（「消した行」に30日残り、戻せる）。消した行の数を返す。
     func removeLines(of id: String) async -> Int {
         var count = 0
@@ -944,6 +952,7 @@ final class Pipeline {
     /// 声のひとこまを、その人から外す。target を渡すと、その声を target の声として覚え直す。結果の一文を返す。
     func dropSample(_ sample: SpeakerLabeler.Sample, from id: String, moveTo target: String?) async -> String {
         let url = await archive.playableURL(for: sample.audio)
+        S29NHooks.drop(sample, from: id, to: target, people: people)  // s29 の 声22
         if target == SpeakerLabeler.selfID { await speakers.ensureSelf() }
         do {
             let removed = try await speakers.dropSample(sample, from: id, url: url, moveTo: target)
@@ -1386,6 +1395,7 @@ final class Pipeline {
     func fixSpeaker(of line: ConversationLog.Line, next: ConversationLog.Line?, to id: String,
                     scope: SpeakerFix) async {
         if id == SpeakerLabeler.selfID { await speakers.ensureSelf() }
+        S29NHooks.move(line: line, next: next, to: id, everywhere: scope == .everywhere, people: people)  // s29 の 声22
         // 声を覚える。音声が手元にもドライブにも無ければ、名前だけ直す
         if let audio = line.audio, let url = await archive.playableURL(for: audio) {
             let start = line.offset ?? 0
@@ -3187,6 +3197,8 @@ final class Pipeline {
         let noise = await Task.detached(priority: .utility) { NoiseMeter.measure(url, voice: voice) }.value
         let noisy = noise?.isNoisy == true
         if let noise { noiseLog.add(url.lastPathComponent, at: start, watch: fromWatch, reading: noise) }
+        // 話し手を当てる手がかり（s29。騒がしさ・声の区間・場の人数・はっきりした相手。S29RPipeline.swift）
+        let s29r = s29rHints(at: start, duration: duration, fromWatch: fromWatch, noise: noise, speech: voice)
         // こもり・音割れ・こすれ（時計に知らせ、こすれた区間の行は重みを下げる）
         var soundCheck: AudioCheck.Result?
         if !Power.isSaving { soundCheck = await Task.detached(priority: .utility) { AudioCheck.measure(url) }.value }
@@ -3284,7 +3296,7 @@ final class Pipeline {
                    let segments = try? await SpanClock.time("speakers.label", {
                        try await speakers.label(url, context: places.context(at: start), strictness: speakerStrictness,
                                                 selfLevel: officeFilter.selfLevel(watch: fromWatch),
-                                                expected: expectedSpeakers(at: start, fromWatch: fromWatch))
+                                                expected: expectedSpeakers(at: start, fromWatch: fromWatch), hints: s29r)
                    }) {
                     labeledSegments = segments
                     let before = lines.count
@@ -3511,7 +3523,7 @@ final class Pipeline {
         var names = await speakerNames(for: offsets, in: url, context: places.context(at: start),
                                        selfLevel: officeFilter.selfLevel(watch: fromWatch),
                                        expected: expectedSpeakers(at: start, fromWatch: fromWatch),
-                                       segments: labeledSegments, ends: knownEnds)
+                                       segments: labeledSegments, ends: knownEnds, hints: s29r)
         // 左右に分けて録れるマイクで「左＝自分」がオンだったときは、その行の声がどちらのチャンネルで大きいかを手がかりに足す
         // （2026-11-07。MicInput.swift の ChannelHint。聞き分けの結果は変えずに、行ごとに直すだけ）
         if speakerLabelsOn, !fromWatch, let track = ChannelStore.load(url.lastPathComponent), track.selfChannel != nil {
@@ -3800,7 +3812,9 @@ final class Pipeline {
             let ends: [TimeInterval?] = targets.map { $0.end }
             let names = await speakerNames(for: offsets, in: url, context: places.context(at: start),
                                            selfLevel: officeFilter.selfLevel(watch: true),
-                                           expected: expectedSpeakers(at: start, fromWatch: true), ends: ends)
+                                           expected: expectedSpeakers(at: start, fromWatch: true), ends: ends,
+                                           hints: s29rHints(at: start, duration: Self.duration(of: url), fromWatch: true,
+                                                            noise: nil, speech: nil, chain: false))
             let hiddenIDs = Set(people.filter { $0.hidden == true }.map(\.id))
             var byPerson: [String: Set<Date>] = [:]
             for i in names.indices where i < targets.count {
@@ -3940,13 +3954,13 @@ final class Pipeline {
     private func speakerNames(for offsets: [TimeInterval], in url: URL,
                               context: SpeakerLabeler.Context?, selfLevel: Float?,
                               expected: Set<String> = [], segments known: [SpeakerLabeler.Segment]? = nil,
-                              ends: [TimeInterval?] = []) async -> [SpeakerLabeler.Segment?] {
+                              ends: [TimeInterval?] = [], hints: S29RHints = S29RHints()) async -> [SpeakerLabeler.Segment?] {
         let none = [SpeakerLabeler.Segment?](repeating: nil, count: offsets.count)
         guard speakerLabelsOn else { return none }
         var found = known
         if found == nil {
             found = try? await speakers.label(url, context: context, strictness: speakerStrictness,
-                                              selfLevel: selfLevel, expected: expected)
+                                              selfLevel: selfLevel, expected: expected, hints: hints)
         }
         guard let segments = found, !segments.isEmpty else { return none }
         let chunkEnd = Self.duration(of: url)
@@ -3970,9 +3984,12 @@ final class Pipeline {
         names += calendar.events(from: start.addingTimeInterval(-900), to: start.addingTimeInterval(900)).flatMap(\.attendees)
         // 会議モードの会議の参加者
         names += MeetingMode.session(at: start)?.attendees ?? []
-        guard !names.isEmpty else { return [] }
+        // 「今から A さんと」で押した人（s29 の 声23。名前付け担当が s29.withNow に書く。S29RWithNow）
+        let withNow = S29RWithNow.ids(from: start, to: start.addingTimeInterval(300))
+        guard !names.isEmpty || !withNow.isEmpty else { return [] }
         return Set(people.filter { p in
-            p.isNamed && !p.isSelf && p.hidden != true && names.contains { Self.sameName($0, p.displayName) }
+            p.isNamed && !p.isSelf && p.hidden != true
+                && (withNow.contains(p.id) || names.contains { Self.sameName($0, p.displayName) })
         }.map(\.id))
     }
 
