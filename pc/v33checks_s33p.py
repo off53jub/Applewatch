@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-if not any(mark in os.environ.get("LOCALAPPDATA", "") for mark in ("v25s", "v26s", "v27s", "v30s", "v31s", "v32s", "v33s")):
+if not any(mark in os.environ.get("LOCALAPPDATA", "") for mark in ("v25s", "v26s", "v27s", "v30s", "v31s", "v32s", "v33s", "v34s")):
     os.environ["LOCALAPPDATA"] = str(Path(tempfile.mkdtemp(prefix="v33s-local-")))
 
 import s33pwork  # noqa: E402
@@ -267,6 +267,10 @@ def run_all() -> int:
 
             traceback.print_exc()
             failed += say(False, f"{check.__name__} が途中で落ちました: {error!r}")
+    # s34（2026-11-27。担当 p）の確かめも続けて（CI の手順を増やさないため）
+    import v34checks_s34p
+
+    failed += v34checks_s34p.run_all()
     return failed
 
 
