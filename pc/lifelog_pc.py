@@ -209,6 +209,7 @@ import s24pc  # s24（2026-11-24）: 急3・急7・当1・減3・減5・当2・�
 import s25pc  # s25（2026-11-24。担当 P）: K1〜K4・K6・K7・連16・早1〜4・大3・大4・大9・活1（中身は s25pc.py ほか s25p*.py）
 import s26pc  # s26（2026-11-25。担当 P）: K4〜K8・聞1〜7・聞11・聞15・集3・結1・結4（中身は s26pc.py ほか s26p*.py）
 import s27pwork  # s27（2026-11-25。担当 P）: 仕事の画面の口 K5（/work・/work/confirm・/work/ask・/work-board）と K4（中身は s27pwork.py）
+import s30pwork  # s30（2026-11-27。担当 p）: POST /work/digest・GET /work/run（共有したらすぐ作り直す。中身は s30pwork.py）
 import s29pc  # s29（2026-11-27。担当 P）: 声を分ける・当てる（声2・3・5・6・7・9・12・13・17・19・22・25・26。中身は s29p*.py）
 
 VERSION = 10
@@ -2306,6 +2307,8 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(s26pc.features())
     # s27: work・workconfirm・workask・workboard（仕事の画面の口。K5。s27pwork.py）
     found.extend(s27pwork.FEATURES)
+    # s30: workpush（POST /work/digest・GET /work/run。母艦のフォルダがあって止めていないとき。s30pwork.py）
+    found.extend(s30pwork.features(mothership.home(load_config())))
     # s29: s29groups・s29answers・s29gates・s29canonical（声を分ける・当てる。s29pc.py）
     found.extend(s29pc.features())
     # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
@@ -3131,6 +3134,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.authorized():
                 s29pc.http_get(self, path, url.query)
             return
+        if path in s30pwork.GETS:  # s30 K30-2: GET /work/run（s30pwork.py）
+            if self.authorized():
+                s30pwork.http_get(self, path, mothership.home(load_config()))
+            return
         if path in s27pwork.GETS:  # s27 K5: GET /work・/work/confirm・/work/ask・/work-board（s27pwork.py）
             if self.authorized():
                 s27pwork.http_get(self, path, url.query, mothership.home(load_config()))
@@ -3253,6 +3260,10 @@ class Handler(BaseHTTPRequestHandler):
         if url.path in s25pc.POSTS:  # s25 K3: POST /line/share（LINE の「トーク履歴を送信」の .txt。HOME/line-share）
             if self.authorized():
                 s25pc.http_post(self, url.path)
+            return
+        if url.path in s30pwork.POSTS:  # s30 K30-2: POST /work/digest（仕事のまとめを母艦の inbox に置いて作り直しを起こす）
+            if self.authorized():
+                s30pwork.http_post(self, url.path, load_config(), mothership.home(load_config()), log)
             return
         if url.path in s26pc.POSTS:  # s26 結4: POST /face-name（顔のまとまりに名前。この PC の中からだけ）
             if self.authorized():
