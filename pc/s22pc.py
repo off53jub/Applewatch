@@ -476,7 +476,13 @@ def prior_bonus(labels: dict, days: list[str]):
         target = name_of.get(ref) or ""
         return bonus if target and any(target in likely.get(d, set()) for d in entry.get("days") or []) else 0.0
 
-    return score
+    # s32 知9: 会議の出席者（母艦 state/s32_meeting_people_for_pc.json）。候補の近さだけ。ファイルが無ければ今までどおり
+    try:
+        import s32pwork
+
+        return s32pwork.combine(score, s32pwork.meeting_score(base, labels))
+    except Exception:  # noqa: BLE001
+        return score
 
 
 # MARK: - 確27 答えを広げる
