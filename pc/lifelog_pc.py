@@ -211,6 +211,7 @@ import s26pc  # s26（2026-11-25。担当 P）: K4〜K8・聞1〜7・聞11・聞
 import s27pwork  # s27（2026-11-25。担当 P）: 仕事の画面の口 K5（/work・/work/confirm・/work/ask・/work-board）と K4（中身は s27pwork.py）
 import s31plinks  # s31（2026-11-27。担当 p）: GET /links（文字と声の結び。s31plinks.py）
 import s30pwork  # s30（2026-11-27。担当 p）: POST /work/digest・GET /work/run（共有したらすぐ作り直す。中身は s30pwork.py）
+import s32pwork  # s32（2026-11-27。担当 p）: 知7・知8・知9（仕事の言葉のヒント・番号の候補・会議の出席者。s32pwork.py・s32pnumbers.py）
 import s29pc  # s29（2026-11-27。担当 P）: 声を分ける・当てる（声2・3・5・6・7・9・12・13・17・19・22・25・26。中身は s29p*.py）
 
 VERSION = 10
@@ -2428,11 +2429,13 @@ def place_hints_for(name: str, params: dict) -> tuple[list[str], int]:
         people += worded
     except Exception:  # noqa: BLE001
         pass
-    if not hintpolicy.place_hints_on(config):
-        return hints, people
-    extra = [params["place"]] if isinstance(params.get("place"), str) else None
-    got, placed = hintpolicy.augment(hints, hintpolicy.epoch_of(name), mothership.home(config), HOME, config, extra)
-    return got, placed + people
+    if hintpolicy.place_hints_on(config):
+        extra = [params["place"]] if isinstance(params.get("place"), str) else None
+        hints, placed = hintpolicy.augment(hints, hintpolicy.epoch_of(name), mothership.home(config), HOME, config, extra)
+        people += placed
+    # s32 知7: 職場の時間（"work": true の仕事・会議の時間）は、仕事の言葉を先頭に（s32pwork.py。止める: s32p.hints）
+    hints, worked = s32pwork.add_hints(hints, hintpolicy.epoch_of(name), mothership.home(config), params.get("work"))
+    return hints, people + worked
 
 
 def find_voice(audio: np.ndarray, threads: int = 1) -> list[tuple[float, float]]:
@@ -2484,6 +2487,13 @@ def run_job(path: Path, params: dict, name: str, draft=None) -> tuple[dict, dict
     judged = judge_job(lines, list(params.get("hints") or []), params.get("work"), name)
     if judged and judged["asked"]:
         reply["judge"] = {k: judged[k] for k in ("split", "asked", "changed")}  # 数だけ
+    # s32 知8: 職場の時間の行に、読み上げた番号の候補（"numbers"。文は変えない。s32pwork.py・s32pnumbers.py）
+    try:
+        found = s32pwork.add_numbers(lines, mothership.home(load_config()), hintpolicy.epoch_of(name), params.get("work"))
+        if found:
+            log(f"  読み上げた番号の候補: {found} 行")
+    except Exception:  # noqa: BLE001
+        pass
     # 2026-11-13（精7・仮）: モデルが全部そろって同じことを書いた行を、あなた向けのモデルの材料に足す（既定は使わない）
     auto_samples(audio, lines, name)
     return reply, numbers
