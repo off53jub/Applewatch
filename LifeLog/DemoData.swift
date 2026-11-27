@@ -93,7 +93,11 @@ enum DemoData {
         // 長い文の見本（s23 の 試3）
         var t4 = TaskBook.Item(what: DemoData.longTaskText, said: a, source: .manual, state: .open, work: true)
         t4.due = midnight.addingTimeInterval(86400 + 9 * 3600)
-        if let data = try? encoder.encode([t1, t2, t3, t4]) {
+        // 仕事以外の見本（2026-11-27。s30 からタスクタブは仕事以外だけ。仕事の 4 つは仕事タブに出る）
+        var t5 = TaskBook.Item(what: "見本の本を返す", said: a, source: .manual, state: .open, work: false)
+        t5.due = midnight.addingTimeInterval(86400 + 19 * 3600)
+        let t6 = TaskBook.Item(what: "見本の写真を整理する", said: a, source: .manual, state: .open, work: false)
+        if let data = try? encoder.encode([t1, t2, t3, t4, t5, t6]) {
             try? data.write(to: base.appendingPathComponent("tasks.json"), options: .atomic)
         }
         installHomeFeeds(base: base, now: now, day: f.string(from: now),

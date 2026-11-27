@@ -2,7 +2,8 @@
 import Foundation
 
 /// 画面の自動確認（CI）用の s20 の見本（2026-11-21）。名前・お店・言葉はすべて作り物。
-/// 家の PC から届いたことにする写し（確かめ待ちの列・検品表・実機の確かめ・休日の札・面談の 1 枚）と、知らせの履歴。
+/// 家の PC から届いたことにする写し（確かめ待ちの列・検品表・実機の確かめ・休日の札）と、知らせの履歴。
+/// 面談の 1 枚の見本は 2026-11-27（s30）に画面ごと外した。
 extension DemoData {
     static func installS20(base: URL, now: Date) {
         let f = DateFormatter()
@@ -45,13 +46,8 @@ extension DemoData {
         let tags: String = """
         {"_meta":{"version":1},"\(today)":[{"tag":"ラーメン","confidence":0.7},{"tag":"ドライブ","confidence":0.6},{"tag":"写真多め","confidence":0.5}]}
         """
-        let sheet: String = """
-        <html><head><meta charset="utf-8"><style>body{font-family:-apple-system;padding:24px;color:#0E1726}h1{font-size:20px}</style></head>
-        <body><h1>四半期の成果（見本）</h1><ul><li>見本の受入テストを期限どおりに終えた</li><li>見本の手順書を 3 本作った</li></ul></body></html>
-        """
         let files: [(String, String)] = [("app-feed-reviewq.json", review), ("app-feed-featcheck.json", features),
-                                         ("app-feed-devchecks.json", checks), ("app-feed-holidaytags.json", tags),
-                                         ("interview-sheet.html", sheet)]
+                                         ("app-feed-devchecks.json", checks), ("app-feed-holidaytags.json", tags)]
         for (name, text) in files {
             try? text.data(using: .utf8)?.write(to: base.appendingPathComponent(name), options: .atomic)
         }

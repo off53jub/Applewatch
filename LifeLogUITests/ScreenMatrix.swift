@@ -13,23 +13,24 @@ final class ScreenMatrix: XCTestCase {
         var row: String? = nil
     }
 
-    /// 主な 20 画面（下のタブ 5・記録の切り替え 4・歯車の中 2・よく開く行 9）
+    /// 主な 20 画面（下のタブ 4・記録の切り替え 5・歯車の中 2・よく開く行 9）。
+    /// 2026-11-27（s30）: 下のタブは 今日・タスク・仕事・直す・記録。ふり返りは「記録」の上の切り替えの「ふり返り」。面談の 1 枚は外した
     private static let specs: [Spec] = [
         Spec(name: "今日", tab: "今日"),
         Spec(name: "タスク", tab: "タスク"),
+        Spec(name: "仕事", tab: "仕事"),
         Spec(name: "直す", tab: "直す"),
         Spec(name: "記録 日ごと", tab: "記録", segment: "日ごと"),
         Spec(name: "記録 人", tab: "記録", segment: "人"),
         Spec(name: "記録 場所", tab: "記録", segment: "場所"),
         Spec(name: "記録 お金", tab: "記録", segment: "お金"),
-        Spec(name: "ふり返り", tab: "ふり返り"),
+        Spec(name: "ふり返り", tab: "記録", segment: "ふり返り"),
         Spec(name: "歯車 点検", tab: "今日", settings: true, segment: "点検"),
         Spec(name: "歯車 設定", tab: "今日", settings: true, segment: "設定"),
         Spec(name: "確かめる（○×）", tab: "直す", row: "確かめる（○×）"),
-        Spec(name: "検品表", tab: "ふり返り", row: "検品表（通信簿）"),
-        Spec(name: "今月の物語", tab: "ふり返り", row: "今月の物語"),
-        Spec(name: "休日のページ", tab: "ふり返り", row: "休日のページ"),
-        Spec(name: "面談の 1 枚", tab: "ふり返り", row: "面談の 1 枚"),
+        Spec(name: "検品表", tab: "記録", segment: "ふり返り", row: "検品表（通信簿）"),
+        Spec(name: "今月の物語", tab: "記録", segment: "ふり返り", row: "今月の物語"),
+        Spec(name: "休日のページ", tab: "記録", segment: "ふり返り", row: "休日のページ"),
         Spec(name: "1 日の帯", tab: "記録", segment: "日ごと", row: "1 日の帯で選ぶ"),
         Spec(name: "見た目", tab: "今日", settings: true, segment: "設定", row: "見た目（暗い"),
         Spec(name: "言葉の一覧", tab: "今日", settings: true, segment: "設定", row: "言葉の一覧"),

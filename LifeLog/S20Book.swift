@@ -7,7 +7,7 @@ import UserNotifications
 /// - 確かめ待ちの列（GET /review-queue・"reviewq"）← 母艦の state/review_queue_for_app.json（次3・体11〜15）
 /// - 検品表（GET /feature-check・"featcheck"）← state/audit/feature_check_for_app.json（次1・体26）
 /// - 実機の確かめ（GET /device-checks・"devchecks"）← state/device_checks.json（次16・体8）
-/// - 面談の 1 枚（GET /interview-sheet・"interview"）← 次20 の印刷できる html（体25）
+/// - （面談の 1 枚 GET /interview-sheet・"interview" は 2026-11-27 の s30 で取り寄せをやめた。画面ごと外した。docs/s30-t.md）
 /// - 休日の札（GET /holiday-tags・"holidaytags"）← state/holiday/tags.json（体4・体23。無くても動く）
 /// 送る（MothershipOutbox にためて、家の PC につながったときに送る）:
 /// - 確かめ待ちの答え（POST /feedback の kind "review" → inbox/app_feedback.jsonl）
@@ -23,7 +23,6 @@ final class S20Book {
     private(set) var deviceChecks: DeviceChecksFeed?
     /// 札（日付 → 札の言葉）
     private(set) var holidayTags: [String: [String]] = [:]
-    private(set) var interviewFile: URL?
     /// 答えた id（端末の中だけ。14 日で流れるので、古いものは捨てる）
     private(set) var answered: [String: String] = [:]
     /// 「あとで」にした id → その日
@@ -61,8 +60,9 @@ final class S20Book {
         if let data = try? Data(contentsOf: Self.url("featcheck")) { features = try? decoder.decode(FeatureCheckFeed.self, from: data) }
         if let data = try? Data(contentsOf: Self.url("devchecks")) { deviceChecks = try? decoder.decode(DeviceChecksFeed.self, from: data) }
         if let data = try? Data(contentsOf: Self.url("holidaytags")) { holidayTags = Self.parseTags(data) }
+        // 前に取り寄せた面談の 1 枚は、もう開く所が無いので消す（2026-11-27。s30）
         let sheet = URL.applicationSupportDirectory.appendingPathComponent("interview-sheet.html")
-        if FileManager.default.fileExists(atPath: sheet.path) { interviewFile = sheet }
+        if FileManager.default.fileExists(atPath: sheet.path) { try? FileManager.default.removeItem(at: sheet) }
         let isoDecoder = JSONDecoder()
         isoDecoder.dateDecodingStrategy = .secondsSince1970
         if let data = try? Data(contentsOf: Self.noticesFile),
@@ -187,10 +187,12 @@ final class S20Book {
 
     // MARK: 家の PC から読む
 
+    /// 取り寄せる写しの features の名前（"interview"＝面談の 1 枚は 2026-11-27 の s30 で外した）
+    nonisolated static let feedNames = ["reviewq", "featcheck", "devchecks", "holidaytags"]
+
     func refresh(_ pc: HomePC, force: Bool = false) async {
         guard !fetching else { return }
-        let names = ["reviewq", "featcheck", "devchecks", "interview", "holidaytags"]
-        guard names.contains(where: { pc.features.contains($0) }) else { return }
+        guard Self.feedNames.contains(where: { pc.features.contains($0) }) else { return }
         if !force, let fetchedAt, Date.now.timeIntervalSince(fetchedAt) < Self.every { return }
         fetching = true
         defer { fetching = false }
@@ -217,12 +219,6 @@ final class S20Book {
                 holidayTags = tags
                 try? body.write(to: Self.url("holidaytags"), options: .atomic)
             }
-        }
-        if pc.features.contains("interview"), let body = try? await pc.appFeed("interview-sheet", feature: "interview"),
-           !body.isEmpty {
-            let file = URL.applicationSupportDirectory.appendingPathComponent("interview-sheet.html")
-            try? body.write(to: file, options: .atomic)
-            interviewFile = file
         }
     }
 

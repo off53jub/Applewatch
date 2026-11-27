@@ -1,11 +1,11 @@
 import Charts
 import SwiftUI
 import UIKit
-import WebKit
 
 // ふり返り（s20 の 体3・体23〜26・次1・次20。2026-11-21）
 
-/// 「ふり返り」のいちばん上: 数を小さなグラフで（体3）と、物語・雑誌のページ・面談の 1 枚・検品表の入口
+/// 「ふり返り」のいちばん上: 数を小さなグラフで（体3）と、物語・雑誌のページ・検品表の入口。
+/// 面談の 1 枚（A4）は 2026-11-27（s30）に外した（本人「一回も見ていない」。画面と取り寄せごと。docs/s30-t.md）
 struct S20LookBackSection: View {
     @Environment(Pipeline.self) private var pipeline
     @State private var recorded: [MiniPoint] = []
@@ -39,7 +39,6 @@ struct S20LookBackSection: View {
             }
             NavigationLink { StoryView(month: true) } label: { Label("今月の物語", systemImage: "text.book.closed") }
             NavigationLink { StoryView(month: false) } label: { Label("今年の物語", systemImage: "books.vertical") }
-            NavigationLink { InterviewSheetView() } label: { Label("面談の 1 枚（A4）", systemImage: "doc.richtext") }
             NavigationLink { FeatureReportView() } label: { Label("検品表（通信簿）", systemImage: "checklist.checked") }
         } header: {
             LLHeader(title: "ふり返りの本", symbol: "book")
@@ -244,104 +243,6 @@ struct StoryView: View {
         pages = StoryRules.pages(conversations: conversations, people: people.count, places: places.count, ramen: ramen,
                                  holidays: holidays, recordedHours: Int(hours))
         loading = false
-    }
-}
-
-// MARK: - 体25 面談の 1 枚（次20 の html を A4 で印刷・共有）
-
-struct InterviewSheetView: View {
-    @Environment(Pipeline.self) private var pipeline
-
-    var body: some View {
-        let file = S20Book.shared.interviewFile
-        Group {
-            if let file {
-                HTMLFileView(url: file)
-                    .clipShape(RoundedRectangle(cornerRadius: LL.Radius.small))
-                    .padding(LL.Space.m)
-                    .llShadow()
-                    .llScreen()
-                    .toolbar {
-                        ToolbarItem(placement: .primaryAction) {
-                            ShareLink(item: file) { Label("共有", systemImage: "square.and.arrow.up") }
-                        }
-                        ToolbarItem(placement: .primaryAction) {
-                            Button("印刷", systemImage: "printer") { Self.printA4(file) }
-                        }
-                    }
-            } else {
-                LLList {
-                    Section {
-                        LLEmpty(title: "面談の 1 枚はまだ届いていません", symbol: "doc.richtext",
-                                detail: "母艦が実績帳から四半期の成果を A4 1 枚にすると、家の PC を通してここに届きます。")
-                    }
-                }
-            }
-        }
-        .navigationTitle("面談の 1 枚")
-        .navigationBarTitleDisplayMode(.inline)
-        .countsOpen("interviewSheet")
-        .task { await S20Book.shared.refresh(pipeline.homePC) }
-    }
-
-    /// A4 で印刷する（共有シートの「プリント」と同じ）
-    static func printA4(_ url: URL) {
-        guard let html = try? String(contentsOf: url, encoding: .utf8) else { return }
-        let info = UIPrintInfo(dictionary: nil)
-        info.outputType = .general
-        info.jobName = "面談の1枚"
-        let controller = UIPrintInteractionController.shared
-        controller.printInfo = info
-        controller.printFormatter = UIMarkupTextPrintFormatter(markupText: html)
-        controller.present(animated: true)
-    }
-}
-
-struct HTMLFileView: UIViewRepresentable {
-    let url: URL
-    @Environment(\.colorScheme) private var scheme
-
-    /// 暗い画面では、紙を夜の青の面（#121A2B）・文字を明るい色（#E6EDF7）にして読む（2026-11-22。s22。
-    /// 前は暗い画面でも白い紙で、まわりから浮いて真っ白に見えた）。印刷と共有は元の白い紙のまま
-    static let darkStyle = "<style>html,body{background:#121A2B !important;color:#E6EDF7 !important}"
-        + "*{color:inherit !important;background-color:transparent !important;border-color:#22304A !important}"
-        + "a{color:#5BC8F5 !important}</style>"
-
-    static func html(_ text: String, dark: Bool) -> String {
-        guard dark else { return text }
-        if let head = text.range(of: "</head>", options: .caseInsensitive) {
-            return text.replacingCharacters(in: head.lowerBound..<head.lowerBound, with: darkStyle)
-        }
-        return darkStyle + text
-    }
-
-    final class Coordinator {
-        var dark: Bool?
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIView(context: Context) -> WKWebView {
-        let view = WKWebView()
-        view.isOpaque = true
-        load(view, context: context)
-        return view
-    }
-
-    func updateUIView(_ view: WKWebView, context: Context) {
-        if context.coordinator.dark != (scheme == .dark) { load(view, context: context) }
-    }
-
-    /// 文として読み込む（ファイルの道で読むと、シミュレーターで白いままのことがあった。2026-11-21）
-    private func load(_ view: WKWebView, context: Context) {
-        let dark = scheme == .dark
-        context.coordinator.dark = dark
-        let paper: UIColor = dark ? UIColor(llHex: 0x121A2B) : .white
-        view.backgroundColor = paper
-        view.scrollView.backgroundColor = paper
-        if let text = try? String(contentsOf: url, encoding: .utf8) {
-            view.loadHTMLString(Self.html(text, dark: dark), baseURL: nil)
-        }
     }
 }
 

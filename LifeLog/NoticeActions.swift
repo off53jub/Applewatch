@@ -154,9 +154,10 @@ enum NoticeStats {
     }
 }
 
-/// 下のタブ（2026-11-12。前は 今日・タスク・ライブ・記録・人と場所）
+/// 下のタブ（2026-11-12。前は 今日・タスク・ライブ・記録・人と場所）。
+/// 2026-11-27（s30。S30TTabs.swift）から 今日・タスク・仕事・直す・記録 の 5 つ。lookBack（前のふり返り）は残すが、選ばれたら記録の「ふり返り」へ
 enum AppTab: String, Hashable, CaseIterable {
-    case today, tasks, fix, records, lookBack
+    case today, tasks, work, fix, records, lookBack
 }
 
 /// 知らせ・ウィジェットから開く画面のうち、シートで開くもの（2026-11-12）
@@ -240,7 +241,7 @@ enum NoticeRoute: Identifiable, Equatable {
         case "tasks": return .tab(.tasks)
         case "fix", "review": return .tab(.fix)
         case "records": return .tab(.records)
-        case "lookback": return .tab(.lookBack)
+        case "lookback": return .tab(.lookBack)  // 前のふり返り → 記録の「ふり返り」（2026-11-27。s30。openRoute で）
         case "good": return .screen(.goodThings)
         default: return .tab(.today)
         }
@@ -304,14 +305,13 @@ extension Pipeline {
         if changed { tasksChanged() }
     }
 
-    /// 知らせ・ウィジェットから画面を開く（タブはタブを切り替え、ほかはシートで開く）
+    /// 知らせ・ウィジェットから画面を開く（タブはタブを切り替え、ほかはシートで開く）。
+    /// 2026-11-27（s30）: 前のふり返りは記録の「ふり返り」へ、仕事の画面と仕事のまとめの取り込みは仕事タブに切り替えてから（S30TTabs.open）
     func openRoute(_ route: NoticeRoute) {
-        if case .tab(let t) = route {
-            noticeRoute = nil
-            tab = t
-        } else {
-            noticeRoute = route
-        }
+        let open = S30TTabs.open(route, current: tab)
+        if let page = open.recordsPage { UserDefaults.standard.set(page.rawValue, forKey: S30TTabs.recordsPageKey) }
+        if let t = open.tab { tab = t }
+        noticeRoute = open.sheet
     }
 
     /// 同じ知らせを、少したってから出し直す

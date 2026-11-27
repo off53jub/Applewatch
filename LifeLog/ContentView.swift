@@ -2,8 +2,9 @@ import Combine
 import SwiftUI
 
 /// 画面の下の5つのタブ（2026-11-12 に組み替え）。「何をしに開いたか」でタブを分ける。
-/// 今日（録る・今を見る）｜タスク（やること）｜直す（記録を正しくする答え）｜記録（探す・読む。日ごと・人・場所・お金）｜ふり返り（自分をふり返る）。
-/// 設定と点検は、どのタブでも右上の歯車から開く。前は 今日・タスク・ライブ・記録・人と場所 で、ライブは「今日」のボタンにした。
+/// 2026-11-27（s30。S30TTabs.swift）から: 今日（録る・今を見る）｜タスク（仕事以外のやること）｜仕事（案件の状況・仕事のタスク・仕事のまとめ。S30WTab）｜
+/// 直す（記録を正しくする答え）｜記録（探す・読む。日ごと・人・場所・お金と、前のふり返りタブの中身の「ふり返り」）。
+/// 設定と点検は、どのタブでも右上の歯車から開く。前は 今日・タスク・直す・記録・ふり返り（その前は 今日・タスク・ライブ・記録・人と場所）。
 struct ContentView: View {
     @Environment(Pipeline.self) private var pipeline
     @AppStorage("taskBadgeLateOnly") private var badgeLateOnly = false
@@ -24,17 +25,23 @@ struct ContentView: View {
     }
 
     var body: some View {
-        @Bindable var pipeline = pipeline
         let fixCount = pipeline.fixBadge(reviewCount: reviewCount)  // 今日やる分だけ（FixViews.swift。2026-11-13）
-        TabView(selection: $pipeline.tab) {
-            Tab("今日", systemImage: "waveform", value: AppTab.today) { TodayView() }
-            Tab("タスク", systemImage: "checklist", value: AppTab.tasks) { TasksTab() }
-                // 確かめ待ちは「今日の候補」（3 件まで・仮）だけを数える（2026-11-24。s24 の 減4）
+        // 下のタブは 今日・タスク・仕事・直す・記録（2026-11-27。s30。S30TTabs.swift）。前のふり返り（lookBack）が選ばれても記録を見せる
+        TabView(selection: Binding(get: { S30TTabs.shown(pipeline.tab) }, set: { pipeline.tab = $0 })) {
+            Tab(value: AppTab.today) { TodayView() } label: { S30TTabLabel(tab: .today) }
+            Tab(value: AppTab.tasks) { TasksTab() } label: { S30TTabLabel(tab: .tasks) }
+                // 確かめ待ちは「今日の候補」（3 件まで・仮）だけを数える（2026-11-24。s24 の 減4）。
+                // 仕事のタスクも今までどおり数える（仕事タブには数字を付けないので、外すと見落とす。2026-11-27。s30。docs/s30-t.md）
                 .badge((badgeLateOnly ? 0 : pipeline.tasks.todayCandidates().count) + lateTasks)
-            Tab("直す", systemImage: "tray.full", value: AppTab.fix) { FixTab() }
+            Tab(value: AppTab.work) { S30WTab() } label: { S30TTabLabel(tab: .work) }  // 仕事タブの中身は S30W 担当（S30WViews.swift）
+            Tab(value: AppTab.fix) { FixTab() } label: { S30TTabLabel(tab: .fix) }
                 .badge(fixCount)
-            Tab("記録", systemImage: "books.vertical", value: AppTab.records) { RecordsView() }
-            Tab("ふり返り", systemImage: "sparkles", value: AppTab.lookBack) { LookBackTab() }
+            // 記録の上の切り替えに「ふり返り」を入れた（前のふり返りタブの中身。2026-11-27。s30）
+            Tab(value: AppTab.records) { RecordsView() } label: { S30TTabLabel(tab: .records) }
+        }
+        // 前のふり返り（lookBack）を直に選んだものも、記録の「ふり返り」へ（知らせ・リンクは openRoute で同じにしている）
+        .onChange(of: pipeline.tab) {
+            if pipeline.tab == .lookBack { pipeline.openRoute(.tab(.lookBack)) }
         }
         // すべての日を読むので、1 日ごとに譲る（2026-11-16。途中で声が変わったら数え直し）
         .task(id: pipeline.people.flatMap(\.samples)) {
@@ -66,7 +73,8 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            if let text = DigestInbox.take() { pipeline.noticeRoute = .digestImport(text) }
+            // 取り込む画面は仕事タブの上に開く（2026-11-27。s30。S30TTabs.open）
+            if let text = DigestInbox.take() { pipeline.openRoute(.digestImport(text)) }
             // アップデートのあとの案内 1 枚・初めての入口（2026-11-21。s20 の 体32・体35。画面の自動確認では出さない）
             guard !ProcessInfo.processInfo.arguments.contains("-screenshotDemo"),
                   ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
@@ -505,10 +513,10 @@ private struct TodayHelpView: View {
             LLList {
                 Section("下のタブ") {
                     Text("今日: いちばん上に今日の三つと提案。録る・印・会議・ライブ字幕は画面の下の1行です。今日の会話といまの状態は「今日の記録」を開くと出ます。困ったことがあるときだけ「気をつけること」が出ます。")
-                    Text("タスク: やること。上の「仕事のまとめ」から職場の Claude の答えを取り込めます。")
+                    Text("タスク: 仕事以外のやること・約束。タブの数字は仕事の分も入れた数です。")
+                    Text("仕事: 案件の状況・仕事のタスク。職場の Claude の答え（仕事のまとめ）もここから取り込みます。")
                     Text("直す: AI からの質問・名前を付ける声・聞き間違いなど、答えると記録が正しくなるもの。タブの数字がたまっている数です。")
-                    Text("記録: 言葉や名前で探す・日ごとに読む。上の切り替えで、人・場所・お金も見られます。")
-                    Text("ふり返り: いいこと帳・話し方・週のまとめ・タスクの数。")
+                    Text("記録: 言葉や名前で探す・日ごとに読む。上の切り替えで、人・場所・お金と、ふり返り（数のグラフ・物語・いいこと帳・話し方など）も見られます。")
                     Text("設定と点検は、どのタブでも右上の歯車から開きます。")
                 }
                 Section("印と会議モード") {
@@ -623,15 +631,14 @@ private struct LiveView: View {
 
 // MARK: - 記録
 
-/// 探す・読む。上の切り替えで 日ごと｜人｜場所｜お金（2026-11-12。前の「人と場所」タブと、行ったお店の奥の支払いをここにまとめた）
+/// 探す・読む。上の切り替えで 日ごと｜人｜場所｜お金（2026-11-12。前の「人と場所」タブと、行ったお店の奥の支払いをここにまとめた）｜
+/// ふり返り（2026-11-27。s30 で前のふり返りタブを統合。切り替えは 1 段のまま右に足し、検索は今どおり「日ごと」の上）
 private struct RecordsView: View {
-    enum Page: String, CaseIterable, Identifiable {
-        case days = "日ごと", people = "人", places = "場所", money = "お金"
-        var id: String { rawValue }
-    }
+    /// 日ごと｜人｜場所｜お金｜ふり返り（2026-11-27。s30 で前のふり返りタブの中身を右に足した。S30TTabs.swift）
+    typealias Page = S30TTabs.RecordsPage
 
-    /// 最後に見ていた切り替えを覚える
-    @AppStorage("recordsPage") private var page = Page.days
+    /// 最後に見ていた切り替えを覚える（知らせ・リンクで前のふり返りを開いたときは「ふり返り」が入る）
+    @AppStorage(S30TTabs.recordsPageKey) private var page = Page.days
 
     var body: some View {
         NavigationStack {
@@ -641,6 +648,7 @@ private struct RecordsView: View {
                 case .people: PeoplePage()
                 case .places: PlacesPage()
                 case .money: MoneyView()
+                case .lookBack: LookBackPage()  // 数の小さなグラフ・物語・休日のページ・検品表・月の 1 枚など（LookBackViews.swift）
                 }
             }
             .safeAreaInset(edge: .top, spacing: 0) {
