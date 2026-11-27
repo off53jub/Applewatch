@@ -211,6 +211,7 @@ import s26pc  # s26（2026-11-25。担当 P）: K4〜K8・聞1〜7・聞11・聞
 import s27pwork  # s27（2026-11-25。担当 P）: 仕事の画面の口 K5（/work・/work/confirm・/work/ask・/work-board）と K4（中身は s27pwork.py）
 import s31plinks  # s31（2026-11-27。担当 p）: GET /links（文字と声の結び。s31plinks.py）
 import s30pwork  # s30（2026-11-27。担当 p）: POST /work/digest・GET /work/run（共有したらすぐ作り直す。中身は s30pwork.py）
+import s33pwork  # s33（2026-11-27。担当 p）: GET /s33・/s33/ports と POST /feedback の ramen_mark・feature_seen・device_ok（s33pwork.py）
 import s32pwork  # s32（2026-11-27。担当 p）: 知7・知8・知9（仕事の言葉のヒント・番号の候補・会議の出席者。s32pwork.py・s32pnumbers.py）
 import s29pc  # s29（2026-11-27。担当 P）: 声を分ける・当てる（声2・3・5・6・7・9・12・13・17・19・22・25・26。中身は s29p*.py）
 
@@ -2313,6 +2314,7 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(s30pwork.features(mothership.home(load_config())))
     # s31: links（GET /links。母艦に結びのファイルがあって止めていないとき。s31plinks.py）
     found.extend(s31plinks.features(mothership.home(load_config())))
+    found.extend(s33pwork.features(mothership.home(load_config())))  # s33: "s33"（GET /s33）
     # s29: s29groups・s29answers・s29gates・s29canonical（声を分ける・当てる。s29pc.py）
     found.extend(s29pc.features())
     # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
@@ -3146,6 +3148,10 @@ class Handler(BaseHTTPRequestHandler):
         if path in s29pc.GETS:  # s29 声26・声5: GET /s29/gates・/s29/canonical（s29pc.py）
             if self.authorized():
                 s29pc.http_get(self, path, url.query)
+            return
+        if path in s33pwork.GETS:  # s33 K33-1: GET /s33・/s33/ports（s33pwork.py）
+            if self.authorized():
+                s33pwork.http_get(self, path, url.query, mothership.home(load_config()))
             return
         if path in s31plinks.GETS:  # s31 K31-2: GET /links（s31plinks.py）
             if self.authorized():
