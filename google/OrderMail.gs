@@ -58,7 +58,20 @@ var ORDER_RULES = [
     cancel: /払戻|キャンセル|取消/ },
   { shop: 'スマートEX', senders: ['smart-ex.jp'], kind: 'reservation', subject: /予約|購入/, cancel: /払戻|キャンセル|取消/ },
   { shop: 'JAL', senders: ['jal.com', 'jal.co.jp'], kind: 'reservation', subject: /予約|購入|搭乗/, cancel: /払戻|キャンセル|取消/ },
-  { shop: 'ANA', senders: ['ana.co.jp'], kind: 'reservation', subject: /予約|購入|搭乗/, cancel: /払戻|キャンセル|取消/ }
+  { shop: 'ANA', senders: ['ana.co.jp'], kind: 'reservation', subject: /予約|購入|搭乗/, cancel: /払戻|キャンセル|取消/ },
+  // 2026-11-27 足した（本人の受信箱の 120 日の送り主と件名から。中身は読んでいない）
+  // カーシェア: 予約は「予約登録完了・予約確認」、取消は「予約取消完了」、使った後の「返却証」は料金の行があれば注文として
+  { shop: 'タイムズカー', senders: ['share.timescar.jp'], kind: 'reservation', subject: /予約登録完了|予約確認|予約変更/,
+    cancel: /予約取消|取消完了/ },
+  { shop: 'タイムズカー', senders: ['share.timescar.jp'], kind: 'order', subject: /返却証/ },
+  // 美容室（ホットペッパービューティー）は上のホットペッパーの決まり（hotpepper.jp・件名に「予約」）で読める
+  // チケット
+  { shop: 'チケットぴあ', senders: ['pia.co.jp'], kind: 'reservation', subject: /発券|購入|当選|申込/, cancel: /払戻|キャンセル|取消/ },
+  { shop: 'TOHOシネマズ', senders: ['tohotheater.jp', 'toho-one.com'], kind: 'reservation', subject: /購入|予約|チケット/,
+    cancel: /払戻|キャンセル|取消/ },
+  // アプリ・サブスクの領収書（件名の形がはっきりしたものだけ）
+  { shop: 'Apple', senders: ['email.apple.com'], kind: 'order', subject: /領収書|ご購入|Your receipt/ },
+  { shop: 'Google Play', senders: ['google.com'], kind: 'order', subject: /Google Play.*(ご注文|領収書|レシート)|Your Google Play Order/ }
 ];
 
 /** 金額の行（項目名のあとの「¥1,234」「1,234円」） */
