@@ -173,6 +173,7 @@ def check_kick() -> int:
     def ago(minutes: int) -> str:
         return (now - datetime.timedelta(minutes=minutes)).isoformat()
 
+    s30pwork._last_kick[0] = -1e9   # 前の確かめ（本物の時刻で起こした HTTP の確かめなど）の印を消す
     write(base / s30pwork.STATE, {"state": "running", "started_at": ago(3), "finished_at": None, "ok": None})
     failed += say(s30pwork.kick(base, cfg, now, 1000.0) == "already" and not spawns.calls, "二重起こし: running で 3 分前なら already")
     write(base / s30pwork.STATE, {"state": "running", "started_at": ago(11), "finished_at": None, "ok": None})

@@ -208,7 +208,8 @@ def kick(base: Path, config: dict, now: datetime.datetime | None = None, mono: f
     now = now or datetime.datetime.now().astimezone()
     stamp = time.monotonic() if mono is None else mono
     with _lock:
-        if stamp - _last_kick[0] < KICK_GUARD_SECONDS or _running_now(base, now):
+        # 時計が戻ったように見える（stamp が前より小さい）ときは、抑えない（試しで本物の時刻と作りものの時刻が混ざったとき・2026-11-27 CI）
+        if 0 <= stamp - _last_kick[0] < KICK_GUARD_SECONDS or _running_now(base, now):
             return "already"
         try:
             (SPAWN or _spawn)(script, python, base)
