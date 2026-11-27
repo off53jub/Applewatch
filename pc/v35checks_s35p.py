@@ -161,7 +161,7 @@ def check_validate() -> int:
         "day の形が違う": photo(ident, 0, 1, day="2026/11/28"),
         "day が無い日": photo(ident, 0, 1, day="2026-02-30"),
         "count が 0": photo(ident, 0, 0),
-        "count が 13": photo(ident, 0, 13),
+        "count が 31": photo(ident, 0, 31),  # s36 細1 で 12 から 30 に
         "count が文字": dict(photo(ident, 0, 1), count="1"),
         "count が true": dict(photo(ident, 0, 1), count=True),
         "index がマイナス": photo(ident, -1, 2),
@@ -206,7 +206,7 @@ def check_switch() -> int:
                   "止める切り替え（s30p の push false）: 書かず off")
     failed += say(s35pwork.features(off) == [], "止める切り替え: features に workphoto を出さない")
     on = mother("features")
-    failed += say(s35pwork.features(on) == ["workphoto"], "母艦があれば features に workphoto")
+    failed += say(s35pwork.features(on) == ["workphoto", "workphoto30"], "母艦があれば features に workphoto（s36 から workphoto30 も）")
     failed += say(s35pwork.features(TMP / "nowhere") == [] and s35pwork.features(None) == [], "母艦が無ければ features に出さない")
     st, reply = post(None, photo(str(uuid.uuid4()), 0, 1))
     failed += say(st == 200 and reply["ok"] is False and reply["run"] == "off", "母艦が見つからなければ ok false・off")
@@ -298,6 +298,10 @@ def run_all() -> int:
 
             traceback.print_exc()
             failed += say(False, f"{check.__name__} が途中で落ちました: {error!r}")
+    # s36（2026-11-28。担当 p）の確かめも続けて（CI の手順を増やさないため）
+    import v36checks_s36p
+
+    failed += v36checks_s36p.run_all()
     return failed
 
 
