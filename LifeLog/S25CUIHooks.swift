@@ -5,7 +5,8 @@ import UserNotifications
 /// s25 の 堅6（2026-11-24）: 実機の確かめを、CI のシミュレーターの UI テスト（LifeLogUITests/S25CFlows.swift）に寄せるための口。
 /// シミュレーターの Debug で、起動の引数に -screenshotDemo があるときだけ動く（配る IPA・実機には、このファイルごと入らない）。
 /// 中身は全部作り物（DemoData と同じ「見本」）。人の名前・会話・頼まれごとは入れない。
-/// - `-s25cMoreCandidates`: 見本のタスクの候補を 3 つ足す（強い候補が 4 つ＝「今日の候補」は 3 件、残り 1 件は畳む、を確かめる）
+/// - `-s25cMoreCandidates`: 見本のタスクの候補（仕事以外）を 4 つ足す（強い候補が 5 つ＝「今日の候補」は 3 件、残りは畳む、を確かめる）。
+///   2026-11-27（s30）からタスクタブは仕事以外だけなので、足すのも仕事以外にし、いちばん古い 1 つを足して畳まれる分を作る
 /// - `-s25cTap <名前>`: 起動して少したってから、知らせを押したときと同じ道（S23TapRules.tap → S23Notices.perform）で画面を開く。
 ///   名前は下の `scenarios`（s23 の 知1 の表 S23NoticeCatalog のうち、押すと質問・様子の画面が開くもの）
 enum S25CUIHooks {
@@ -46,9 +47,10 @@ enum S25CUIHooks {
         guard let data = try? Data(contentsOf: file),
               var items = try? JSONDecoder().decode([TaskBook.Item].self, from: data) else { return }
         let said = Date.now.addingTimeInterval(-3600)
-        for (n, what) in ["見本の議事録を回す", "見本の請求書を確かめる", "見本の席を予約する"].enumerated() {
+        // いちばん古い「見本の傘を返す」が今日の候補の外（「ほかの候補」）に畳まれる（S25CFlows が数えるのは残りの 3 つ）
+        for (n, what) in ["見本の傘を返す", "見本の荷物を受け取る", "見本の請求書を確かめる", "見本の席を予約する"].enumerated() {
             var item = TaskBook.Item(what: what, said: said.addingTimeInterval(Double(n) * 60), source: .conversation,
-                                     state: .candidate, work: true)
+                                     state: .candidate, work: false)
             item.agreed = true
             item.quote = "見本"
             items.append(item)

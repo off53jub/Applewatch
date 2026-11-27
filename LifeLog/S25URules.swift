@@ -83,7 +83,7 @@ enum S25USimple {
         Item(id: "backup", title: "登録の控え・記録の掃除・今年の分を書き出す", role: .check, before: "点検", after: .other, rows: 4),
     ]
 
-    /// ふり返り（タブ）。s24 の「入口は 5 つまで」の分はそのまま（S24Entry）
+    /// ふり返り（2026-11-27 の s30 から「記録」の上の切り替え。前はタブ）。s24 の「入口は 5 つまで」の分はそのまま（S24Entry）
     static let lookBack: [Item] = [
         Item(id: "numbers", title: "数で見る・ふり返りの本（s20）", role: .look, before: "ふり返り・いちばん上", after: .main, rows: 6),
         Item(id: "weekly", title: "今週のふり返り・見立て・使われ方", role: .look, before: "ふり返り", after: .main, rows: 3),

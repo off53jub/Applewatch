@@ -172,7 +172,7 @@ final class TaskBook {
         nonisolated var isWork: Bool { work ?? true }
     }
 
-    /// タスクタブの「仕事｜仕事以外｜全部」（2026-11-07）
+    /// 仕事｜仕事以外｜全部（2026-11-07。前はタスクタブの切り替え。2026-11-27 の s30 からタスクタブは仕事以外だけ＝ S30TTabs.taskScope）
     enum Scope: String, CaseIterable, Identifiable {
         case work, life, all
 
@@ -1435,29 +1435,32 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
 
 // MARK: - 画面
 
-/// タスクタブ。下のタブから開く（自分の NavigationStack を持つ）。タスクの画面はここだけにした（2026-11-12。ほかの画面からはこのタブに移る）
+/// タスクタブ。下のタブから開く（自分の NavigationStack を持つ）。タスクの画面はここだけにした（2026-11-12。ほかの画面からはこのタブに移る）。
+/// 2026-11-27（s30）から仕事以外だけ（S30TTabs.taskScope）。仕事のタスクは帳はそのままで、仕事タブ（S30WTab）に出す
 struct TasksTab: View {
     var body: some View {
         NavigationStack {
-            TaskBookView()
+            TaskBookView(scope: S30TTabs.taskScope)
                 .settingsGear()
         }
     }
 }
 
-/// やることの画面。上で「やる」「待ち」「人」「済み」を切り替え、左上で「仕事｜仕事以外｜全部」を選ぶ（2026-11-12。前は切り替えが2段）。右上の＋で書き足す・写真から読み取る。
+/// やることの画面。上で「やる」「待ち」「人」「済み」を切り替える。右上の＋で書き足す・写真から読み取る。
 /// 頼まれごと・自分でやること・人に頼んだこと・約束を、1か所で追いかける。
+/// 2026-11-27（s30）: 見る方（仕事｜仕事以外｜全部）は開く側が決める（タスクタブは仕事以外）。左上の「仕事｜仕事以外｜全部」の切り替えと、
+/// ＋の「仕事のまとめを取り込む」・「やる」のいちばん上の「仕事のまとめ」は外した（仕事タブへ。前は 2026-11-07〜）
 struct TaskBookView: View {
     enum Page: String, CaseIterable, Identifiable {
         case todo = "やる", waiting = "待ち", people = "人", done = "済み"
         var id: String { rawValue }
     }
 
+    /// 見る方（タスクタブは仕事以外。ほかの画面から仕事だけ・全部で開いてもよい）
+    var scope: TaskBook.Scope = S30TTabs.taskScope
     @Environment(Pipeline.self) private var pipeline
     @State private var player = ClipPlayer()
     @State private var page = Page.todo
-    /// 仕事｜仕事以外｜全部（最後に選んだものを覚える。2026-11-07）
-    @AppStorage("taskScope") private var scope = TaskBook.Scope.all
     @State private var editing: TaskBook.Item?
     @State private var photoItem: PhotosPickerItem?
     @State private var choosingPhoto = false
@@ -1465,8 +1468,6 @@ struct TaskBookView: View {
     @State private var reading = false
     @State private var note: String?
     @State private var showSettings = false
-    /// 仕事のまとめを取り込む画面（2026-11-08）
-    @State private var importingDigest = false
     /// 「違う」の理由を選んでいるもの（2026-11-10）
     @State private var rejecting: TaskBook.Item?
     /// 「全部違う」にするもの（2026-11-10）
@@ -1522,21 +1523,13 @@ struct TaskBookView: View {
             case .done: donePage(lists)
             }
         }
-        .navigationTitle(scope == .all ? "タスク" : "タスク（\(scope.label)）")
+        .navigationTitle(scope == S30TTabs.taskScope ? "タスク" : "タスク（\(scope.label)）")
         .countsOpen("taskBook")
         .s26uHelp("taskBook")
         .toolbar {
-            // 仕事｜仕事以外｜全部 と、知らせの設定（2026-11-12。前は上の2段めの切り替えと、ベルのボタン）
+            // 知らせの設定（2026-11-12。2026-11-27 の s30 で「仕事｜仕事以外｜全部」の切り替えを外し、ベルのボタンだけに）
             ToolbarItem(placement: .topBarLeading) {
-                Menu {
-                    Picker("仕事か", selection: $scope) {
-                        ForEach(TaskBook.Scope.allCases) { s in Text(scopeTitle(s, book)).tag(s) }
-                    }
-                    Divider()
-                    Button("知らせの設定", systemImage: "bell") { showSettings = true }
-                } label: {
-                    Label(scope.label, systemImage: scope == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
-                }
+                Button("知らせの設定", systemImage: "bell") { showSettings = true }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -1550,8 +1543,7 @@ struct TaskBookView: View {
                     Button("写真を撮って読み取る", systemImage: "camera") { takingPhoto = true }
                         .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
                     Button("写真から読み取る", systemImage: "photo") { choosingPhoto = true }
-                    // 職場の Claude の「この日に何があったか」の答え（2026-11-08）
-                    Button("仕事のまとめを取り込む", systemImage: "doc.text") { importingDigest = true }
+                    // 「仕事のまとめを取り込む」は仕事タブへ移した（2026-11-27。s30）
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -1607,11 +1599,6 @@ struct TaskBookView: View {
         .sheet(item: $replyDraft) { draft in
             NavigationStack { TaskReplySheet(draft: draft) }
                 .presentationDetents([.medium])
-        }
-        .sheet(isPresented: $importingDigest) {
-            NavigationStack {
-                WorkDigestImportView { note = $0 }
-            }
         }
         .sheet(isPresented: $showSettings) {
             NavigationStack {
@@ -1675,12 +1662,6 @@ struct TaskBookView: View {
         }
     }
 
-    /// 「仕事 5」「仕事以外 2」「全部 7」（まだのもの・確かめ待ちの数）
-    private func scopeTitle(_ s: TaskBook.Scope, _ book: TaskBook) -> String {
-        let n = book.lists(s).count + homeExtra(s).count
-        return n > 0 ? "\(s.label) \(n)" : s.label
-    }
-
     /// 手で足すもの・写真から拾うものを、仕事に入れるか（開いている方。「全部」のときは、今が仕事の時間なら仕事）
     private func newIsWork() -> Bool {
         switch scope {
@@ -1735,20 +1716,7 @@ struct TaskBookView: View {
 
     @ViewBuilder
     private func todoShelf(_ book: TaskBook.Lists) -> some View {
-        // 職場の Claude の答えを取り込んだ「仕事のまとめ」（2026-11-08。仕事以外だけを見ているときは出さない。2026-11-12 から「やる」のいちばん上）
-        if scope != .life {
-            Section {
-                NavigationLink {
-                    WorkDigestListView()
-                } label: {
-                    LabeledContent {
-                        Text(pipeline.workDigests.entries.isEmpty ? "写真・貼り付けから" : "\(pipeline.workDigests.entries.count) 件")
-                    } label: {
-                        Label("仕事のまとめ", systemImage: "doc.text")
-                    }
-                }
-            }
-        }
+        // 「仕事のまとめ」（2026-11-08〜）は仕事タブへ移した（2026-11-27。s30）
         // 今日の三つ（期限を過ぎた・今日までのもの、家の PC が選んだもの。朝の「昨日と今日」と同じ選び方。2026-11-09）。
         // 押すと「解き方」（手順・だいたいの時間・送る文の下書き。2026-11-10）
         let three = pipeline.todayThree()
@@ -1841,7 +1809,8 @@ struct TaskBookView: View {
         } footer: {
             let home = pipeline.mothership.export == nil ? ""
                 : "\n家の PC が会話・LINE・メモから拾ったものも、同じ一覧に入っています（押すとくわしく。左へ払うと「済み」「違う」）。"
-            Text("○で済み。右へ払うと「明日に」「来週に」、左へ払うと「済み」「待ち」。急ぎ（!）は同じ並びの中で上に出ます。" + home)
+            let work = scope == .life ? "\n仕事のタスクは下の「仕事」タブにあります（今日の三つには仕事の分も出ます）。" : ""
+            Text("○で済み。右へ払うと「明日に」「来週に」、左へ払うと「済み」「待ち」。急ぎ（!）は同じ並びの中で上に出ます。" + home + work)
         }
     }
 
@@ -1923,7 +1892,7 @@ struct TaskBookView: View {
     /// 確かめ待ちの 1 行と「入れる」「直して入れる」「違う」
     @ViewBuilder
     private func candidateRow(_ item: TaskBook.Item) -> some View {
-        TaskRow(item: item, player: player) { editing = item }
+        TaskRow(item: item, player: player, lifeMark: scope != .life) { editing = item }
         HStack(spacing: 20) {
             Button("入れる", systemImage: "plus.circle") { change(item.id, .open) }
             Button("直して入れる", systemImage: "pencil") {
@@ -1955,7 +1924,7 @@ struct TaskBookView: View {
                 Image(systemName: "circle").font(.title3)
             }
             .buttonStyle(.borderless)
-            TaskRow(item: item, player: player) { editing = item }
+            TaskRow(item: item, player: player, lifeMark: scope != .life) { editing = item }
         }
         .swipeActions(edge: .trailing) {
             Button("済み") { change(item.id, .done) }.tint(LL.good)
@@ -2015,6 +1984,8 @@ struct TaskRow: View {
     @Environment(Pipeline.self) private var pipeline
     let item: TaskBook.Item
     let player: ClipPlayer
+    /// 「仕事以外」の印を出すか（仕事以外だけの一覧＝タスクタブでは出さない。2026-11-27。s30）
+    var lifeMark = true
     var onEdit: () -> Void
 
     private static let said: DateFormatter = {
@@ -2046,7 +2017,7 @@ struct TaskRow: View {
                 if let n = item.postponed, n > 0 {
                     Text("延期\(n)回").foregroundStyle(n >= 3 ? LL.danger : LL.dim)
                 }
-                if !item.isWork {
+                if lifeMark && !item.isWork {
                     Label("仕事以外", systemImage: "house").labelStyle(.titleAndIcon).foregroundStyle(LL.good)
                 }
             }
