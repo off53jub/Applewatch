@@ -585,8 +585,10 @@ struct S26UWaitingView: View {
 
     var body: some View {
         let order = S26UFeeds.waitingOrder(S26UBook.shared.waiting)
+        let known = Set(S26UBook.shared.waiting.map(\.id))
+        let extra = S33ABook.shared.extraWaiting(known: known)
         LLList {
-            if order.open.isEmpty {
+            if order.open.isEmpty && extra.isEmpty {
                 Section {
                     LLEmpty(title: "いまは操作待ちはありません", symbol: "checkmark.circle",
                             detail: "機械ではできず、本人の操作が要るもの（許可・入れ直し・登録など）が、ここに 1 件ずつ届きます。")
@@ -622,6 +624,8 @@ struct S26UWaitingView: View {
                     }
                 }
             }
+            // 家の PC の /s33 の操作待ち（2026-11-27。s33 の K33-1。S33AViews.swift）
+            S33AWaitingRows(known: known)
             if !order.done.isEmpty {
                 Section {
                     ForEach(order.done) { item in
@@ -705,9 +709,11 @@ struct S26UMachineView: View {
 struct S26USettingsTopSection: View {
     var body: some View {
         let book = S26UBook.shared
-        if !book.waiting.isEmpty || !book.machine.isEmpty {
+        // s33 の操作待ちだけのときも出す（2026-11-27。K33-1）
+        let anyWaiting = !book.waiting.isEmpty || book.waitingOpen > 0
+        if anyWaiting || !book.machine.isEmpty {
             Section {
-                if !book.waiting.isEmpty {
+                if anyWaiting {
                     NavigationLink {
                         S26UWaitingView()
                     } label: {

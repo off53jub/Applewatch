@@ -1,11 +1,14 @@
 """TestFlight の「テストする内容」（What to Test）に入れる文を作る（2026-11-23。s23 の 届6）。
 
-    python whatsnew.py <GitHub API の JSON> <書き出す文> <compare|recent>
+    python whatsnew.py <GitHub API の JSON> <書き出す文> <compare|recent> [PR の一覧の JSON]
 
 JSON は、`gh api repos/R/compare/前...今` の答え（commits の列を持つ）か、`gh api repos/R/commits?sha=今` の答え（列そのもの）。
 各コミットの題を「・題」の一覧にする。マージのコミット（Merge pull request ...）は、本文の 1 行目（PR の題）を使う。
 長さは Apple の上限（4000 文字）より少し短い 3800 文字まで。超えたら最後に「…ほか N 件」を付ける。
 秘密は出さない（コミットの題と本文の 1 行目だけ。リポジトリは公開）。
+
+（2026-11-27。s33 の 強7）4 つ目に `gh pr list --json number,title,mergedAt` の答え（前の版のあとに main に入った PR）があれば、
+頭に「この版で見る 3 つ」を付ける。PR の題から 3 つまで（新しく入った順。CI・文書・家の PC だけらしい題は後回し）。
 """
 import json
 import sys
@@ -37,7 +40,40 @@ def titles(commits: list) -> list[str]:
     return out
 
 
-def build(commits: list, mode: str) -> str:
+PICKS = 3
+# CI・文書・家の PC だけらしい題（実機で見るものが少ない）は後回しにする（仮）
+LATER = ("ci", "ci:", "docs", "docs:", "pc:", "pc ", "家の pc", "文書")
+
+
+def picks(prs: list, limit: int = PICKS) -> list[str]:
+    """PR の一覧から「この版で見る」題を limit 個まで（新しく入った順・同じ題は 1 つ・後回しの題は足りないときだけ）"""
+    rows = [p for p in prs if isinstance(p, dict) and str(p.get("title") or "").strip()]
+    rows.sort(key=lambda p: str(p.get("mergedAt") or ""), reverse=True)
+    first: list[str] = []
+    later: list[str] = []
+    seen: set[str] = set()
+    for p in rows:
+        t = str(p["title"]).strip()[:MAX_TITLE]
+        if t in seen:
+            continue
+        seen.add(t)
+        (later if t.lower().startswith(LATER) else first).append(t)
+    return (first + later)[:limit]
+
+
+def picks_block(prs: list) -> str:
+    ps = picks(prs)
+    if not ps:
+        return ""
+    return "この版で見る 3 つ\n" + "\n".join(f"{i + 1}. {t}" for i, t in enumerate(ps))
+
+
+def build(commits: list, mode: str, prs=None) -> str:
+    head_block = picks_block(prs or [])
+    if head_block:
+        rest = build(commits, mode)
+        text = head_block + "\n\n" + rest
+        return text if len(text) <= LIMIT else text[:LIMIT]
     ts = titles(commits)
     head = "この版で変わったこと（" + ("前の版からのコミットの題" if mode == "compare" else "直近のコミットの題") + "）"
     if not ts:
@@ -63,7 +99,14 @@ def main() -> None:
     except (OSError, ValueError):
         data = []
     commits = data.get("commits", []) if isinstance(data, dict) else data
-    text = build(commits, mode)
+    prs: list = []
+    if len(sys.argv) > 4:
+        try:
+            loaded = json.load(open(sys.argv[4], encoding="utf-8"))
+            prs = loaded if isinstance(loaded, list) else []
+        except (OSError, ValueError):
+            prs = []
+    text = build(commits, mode, prs)
     with open(dst, "w", encoding="utf-8") as f:
         f.write(text)
     print(text)

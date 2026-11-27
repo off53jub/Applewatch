@@ -80,7 +80,8 @@ final class S20Book {
         let kept = S24AskRules.reviewItems(visible, samePersonAsk: S24AskSettings.isOn(S24AskSettings.samePersonAskKey),
                                            today: ReviewRules.dayKey(now))
         // 発言も声も無い「この声は誰？」は後ろへ（消さない。2026-11-25。s26 の S26V）
-        return S26VVoice.order(kept)
+        // 問いの山のふた（4 種類合わせて 30 件・仮。あふれた分は寝かせる。2026-11-27。s33 の 強6。S33ARules.swift）
+        return S33ACap.take(.review, S26VVoice.order(kept))
     }
 
     /// 確かめ待ちの数（「今日」・時計の文字盤に出す）

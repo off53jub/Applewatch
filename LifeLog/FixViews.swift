@@ -111,6 +111,7 @@ struct FixView: View {
             // 確かめ待ちを 1 つの列で ○×（2026-11-21。s20 の 次3・体11〜15。S20ReviewViews.swift）
             // 今日の 3 問（仮）と「今週は聞かないで」（2026-11-24。s24 の 減1・減4・減10。S24Views.swift）
             S24TodayQuestionsSection(hasAny: total > 0)
+            S33ASleptRow()  // 問いの山のふた「寝かせた N 件」（2026-11-27。s33 の 強6。あるときだけ。S33AViews.swift）
             if pileOn { S26UPileEntrySection() } else { ReviewDeckEntrySection() }
             if namingPileOn && pipeline.speakerLabelsOn { S29NPileEntrySection() }
             if total == 0 {

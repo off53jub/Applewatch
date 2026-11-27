@@ -176,6 +176,8 @@ struct SettingsGear: ViewModifier {
             .sheet(isPresented: $show) {
                 SettingsView { show = false }
             }
+            // どこ？から別のタブ・画面へ行くときは閉じる（2026-11-27。s33 の 強15。S33AViews.swift）
+            .onReceive(NotificationCenter.default.publisher(for: .s33aLeave)) { _ in show = false }
     }
 }
 
@@ -241,9 +243,11 @@ private struct TodayView: View {
                 // 朝は予定の前と朝のまとめ・1 年前の今日、夜は夜の10秒と今日の問いを上に出す。休日は休日の顔（S20TodayViews.swift）。
                 // 2026-11-24（s24 の 形1）: 上は 3 枚（録れているか・今日の三つ・今日の 1 問）と、あるときだけの「気をつけること」。
                 // ほかは「ほかのカード」に畳む（設定の「今日は上の 3 枚だけ」を切ると前の並び。並びは S24Today.layout）
-                let layout = S24Today.layout(fold: todayFold, part: part)
+                // 2026-11-27（s33 の 強16）: 本人の並び → よく使う 3 つを上・30 日使われないカードは「ほか」へ・畳んだカードは出さない（S33ARules.swift）
+                let layout = S33ABook.shared.layout(S24Today.layout(fold: todayFold, part: part))
                 ForEach(layout.top) { card($0, talks: talks) }
                 S27WTodaySection()  // 「仕事: 宿題 N・会議 N」の 1 行（2026-11-25。s27 の 場2。S27WViews.swift）
+                S33ATodaySection()  // 止まっているもの 1 行（2026-11-27。s33 の K33-1。あるときだけ。S33AViews.swift）
                 // よく触る設定 3 つ（2026-11-24。s24 の 形2。S24Views.swift）
                 // 2026-11-25（s26 の 軽3・軽5・軽11）: よく変える 3 つ（組・場面も）・すきまの 1 件・本人の操作待ち（S26UViews.swift）
                 S26UTodaySection(fold: todayFold)
@@ -252,6 +256,7 @@ private struct TodayView: View {
                              : "予定の前・約束・答え合わせ・返事・下書き")
                 if moreOpen {
                     ForEach(layout.more) { card($0, talks: talks) }
+                    S33ARamenSection()  // ラーメンの 1 押し（2026-11-27。s33 の 強22。家の PC が s33 を持つときだけ。S33AViews.swift）
                 }
                 recordGroup(today: today, talks: talks)
             }
@@ -260,6 +265,8 @@ private struct TodayView: View {
             .s26uHelp("today")  // 「?」の 2 行と色の意味（2026-11-25。s26 の 軽1）
             .onAppear { S22Launch.todayShown() }  // 開いてから今日の画面まで（2026-11-22。s22 の 楽21）
             .safeAreaInset(edge: .bottom, spacing: 0) { recordBar() }
+            // どこ？（画面と機能を探す。2026-11-27。s33 の 強15。S33AViews.swift）
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { S33AWhereButton() } }
             // 「使い方」は下の帯へ（2026-11-22。s22 の 見21。片手で届く所）。歯車はどのタブでも右上のまま
             .settingsGear()
             .sheet(isPresented: $showHelp) { TodayHelpView { showHelp = false } }
@@ -267,9 +274,15 @@ private struct TodayView: View {
         }
     }
 
-    /// 「今日」のカード 1 枚（中身が無いカードは何も出さない。並びは S24Today.layout。2026-11-24。s24 の 形1）
-    @ViewBuilder
+    /// 「今日」のカード 1 枚。押した数を数える（今日の並びに使う。2026-11-27。s33 の 強16。S33ABook.cardTapped）
     private func card(_ kind: S24Today.Card, talks: [ConversationLog.Conversation]) -> some View {
+        cardBody(kind, talks: talks)
+            .simultaneousGesture(TapGesture().onEnded { S33ABook.cardTapped(kind) })
+    }
+
+    /// 「今日」のカード 1 枚の中身（中身が無いカードは何も出さない。並びは S24Today.layout。2026-11-24。s24 の 形1）
+    @ViewBuilder
+    private func cardBody(_ kind: S24Today.Card, talks: [ConversationLog.Conversation]) -> some View {
         switch kind {
         case .hero: TodayHeroSection(talks: talks)
         case .holiday: HolidayFaceSection()
@@ -896,6 +909,7 @@ private struct SettingsView: View {
     var body: some View {
         NavigationStack {
             LLList {
+                S33ASettingsTopSection()  // どこ？（画面と機能を探す。2026-11-27。s33 の 強15。S33AViews.swift）
                 Section {
                     Picker("見る", selection: $part) {
                         ForEach(Part.allCases) { Text($0.rawValue).tag($0) }
@@ -1069,7 +1083,7 @@ extension SettingsView {
 }
 
 /// くわしい設定（ふだん触らないもの。2026-11-13 に「設定」から分けた。記録の「人」「場所」の切り替えも、ここが入口）
-private struct DetailedSettingsView: View {
+struct DetailedSettingsView: View {
     @Environment(Pipeline.self) private var pipeline
     @AppStorage("morningCheck") private var morningCheck = true
     @AppStorage(Storage.japanTimeKey) private var japanTime = false
@@ -1081,6 +1095,7 @@ private struct DetailedSettingsView: View {
 
     var body: some View {
         LLList {
+            S33ADeepLinkSection()  // 使われ方・畳む候補・問いのふた・家の PC の棚（2026-11-27。s33。S33AViews.swift）
             sections(pipeline.settings)
             S26USwitchesSection()  // s26 の見せ方の切り替え（2026-11-25。S26UViews.swift）
         }
@@ -1143,6 +1158,9 @@ private struct DetailedSettingsView: View {
                 } footer: {
                     HelpNote("同じ Google アカウントでログインした iPhone と iPad で、記録・話した相手（名前と登録した声）・言葉の登録・場所を、ドライブの「LifeLog/同期」フォルダを通して合わせます。アプリを開いたときと、文字起こしのあと（3分おきまで）に合わせます。\n「ここでは録音を休む」と、自動で覚えた声は端末ごとのままです。1日のまとめ・人物ノート・週のまとめ・AI 向けの索引は、iPhone が両方の分をまとめて書きます。\n初めて合わせる前に、今の記録と登録をアプリの中に一度だけ控えておきます。")
                 }
+
+                // 時計の版（iPhone と時計の版を並べる。違えば 1 行と手順。知らせはしない。2026-11-27。s33 の 強27。S33AViews.swift）
+                S33AWatchSection()
 
                 Section {
                     Toggle("待機モード", isOn: Binding(

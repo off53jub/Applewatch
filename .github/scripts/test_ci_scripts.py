@@ -39,6 +39,26 @@ class WhatsNewTests(unittest.TestCase):
         self.assertIn("前の版から", whatsnew.build([commit("A")], "compare"))
         self.assertIn("直近", whatsnew.build([commit("A")], "recent"))
 
+    # s33 の 強7（2026-11-27）: 頭に「この版で見る 3 つ」（その日 main に入った PR の題から 3 つまで）
+    def test_picks_newest_three_and_ci_later(self):
+        prs = [
+            {"number": 1, "title": "CI: 夜に 1 回", "mergedAt": "2026-11-27T13:00:00Z"},
+            {"number": 2, "title": "見本の画面を足す", "mergedAt": "2026-11-27T10:00:00Z"},
+            {"number": 3, "title": "見本の直し", "mergedAt": "2026-11-27T12:00:00Z"},
+            {"number": 4, "title": "見本の直し", "mergedAt": "2026-11-27T11:00:00Z"},
+            {"number": 5, "title": "", "mergedAt": "2026-11-27T14:00:00Z"},
+            "壊れた行",
+        ]
+        self.assertEqual(whatsnew.picks(prs), ["見本の直し", "見本の画面を足す", "CI: 夜に 1 回"])
+
+    def test_picks_block_at_head(self):
+        text = whatsnew.build([commit("A")], "compare", [{"title": "見本の画面", "mergedAt": "2026-11-27T10:00:00Z"}])
+        self.assertTrue(text.startswith("この版で見る 3 つ\n1. 見本の画面"))
+        self.assertIn("前の版から", text)
+        self.assertLessEqual(len(text), whatsnew.LIMIT)
+        # PR が無ければ前のまま
+        self.assertEqual(whatsnew.build([commit("A")], "compare", []), whatsnew.build([commit("A")], "compare"))
+
 
 class NoticeHintsTests(unittest.TestCase):
     def test_counts(self):

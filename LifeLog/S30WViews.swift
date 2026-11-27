@@ -84,6 +84,7 @@ struct S30WHomeView: View {
                 S30WLowerSections(screen: screen, today: today)
             }
             S30WLastSection(screen: screen)
+            S33AWorkSection()  // s33 会議での自分の話し方・出す前のチェック（AI の理解の近く。あるときだけ。S33AViews.swift）
             S32AKnowSection()  // s32 AI の理解（いちばん下・畳む。S32AViews.swift）
         }
         .modifier(S27WGate())
