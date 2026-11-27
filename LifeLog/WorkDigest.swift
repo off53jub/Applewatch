@@ -38,10 +38,23 @@ final class WorkDigest {
         /// 【出どころ】（2026-11-10。どのチーム・チャネル・チャットの話か、そこにいた人。1行に1つ。
         /// 前の版で保存したものには無いので nil）。見せるだけで、人の帳には何も足さない
         var sources: [String]? = nil
+        /// s32（2026-11-27・K32-1）: 新しい見出し。前の版で保存したもの・前の形の答えには無いので nil（S32ARules.swift）。
+        /// 【会議】【メール】は毎日の頼み方、【チケット】【ケース】は週の台帳、【言葉】【体制】【仕組み】【番号の決まり】【自分の役割】は
+        /// 土台（1 回だけ）、【答え】は AI からの質問への答え。行はそのまま残す（中を分けて読むのは母艦）
+        var meetings: [String]? = nil
+        var mail: [String]? = nil
+        var tickets: [String]? = nil
+        var cases: [String]? = nil
+        var terms: [String]? = nil
+        var org: [String]? = nil
+        var systems: [String]? = nil
+        var numbering: [String]? = nil
+        var myrole: [String]? = nil
+        var answers: [String]? = nil
 
         var isEmpty: Bool {
             decided.isEmpty && homework.isEmpty && others.isEmpty && topics.isEmpty && checks.isEmpty
-                && (words ?? []).isEmpty && (sources ?? []).isEmpty
+                && (words ?? []).isEmpty && (sources ?? []).isEmpty && S32ADigest.extraEmpty(self)
         }
 
         /// 画面とドライブに並べる順（中身のある見出しだけ）
@@ -51,7 +64,16 @@ final class WorkDigest {
                 ("決まったこと", decided), ("自分の宿題", homework), ("ほかの人の動き", others),
                 ("気になる話題", topics), ("あとで確かめること", checks), ("よく出た言葉", words ?? []),
             ]
-            return all.filter { !$0.items.isEmpty }
+            // s32 の見出し（会議は出どころのすぐ後・ほかは前の見出しの後ろ。S32ARules.swift）
+            var out: [(title: String, items: [String])] = all
+            let extra: [(title: String, items: [String])] = S32ADigest.extraLists(self)
+            if let meeting = extra.first, meeting.title == S32ADigest.meetingTitle {
+                out.insert(meeting, at: 1)
+                out += extra.dropFirst()
+            } else {
+                out += extra
+            }
+            return out.filter { !$0.items.isEmpty }
         }
     }
 
@@ -138,6 +160,8 @@ final class WorkDigest {
 enum WorkDigestParser {
     enum Part: String, CaseIterable {
         case date, decided, homework, others, topics, checks, words, sources
+        // s32（K32-1）
+        case meetings, mail, tickets, cases, terms, org, systems, numbering, myrole, answers
     }
 
     /// 見出しの言い方（長いものを先に）
@@ -152,7 +176,7 @@ enum WorkDigestParser {
         (.checks, ["あとで確かめること", "後で確かめること", "あとで確認すること", "後で確認すること", "あとで確かめる"]),
         // 「言葉」「用語」だけの短い言い方は入れない（ふつうの文の行を見出しと読み違えるので）
         (.words, ["よく出た言葉", "よく出たことば", "よく出てきた言葉", "よく出る言葉", "よくでた言葉", "頻出語"]),
-    ]
+    ] + S32ADigest.names
 
     /// 見出しの前のかっこ（【 が [ や（ に読まれることもある）
     static let openers: Set<Character> = ["【", "[", "［", "〔", "「", "『", "(", "（", "<", "＜", "《", "〈", "■", "◆", "▼", "#", "＃"]
@@ -317,8 +341,9 @@ enum WorkDigestParser {
             for alias in entry.aliases where s.hasPrefix(alias) {
                 var rest = s.dropFirst(alias.count)
                 let closed = rest.first.map { closers.contains($0) } ?? false
-                // かっこで始まるか、かっこ・区切りで閉じるか、見出しだけの行（ふつうの文の行と見分ける）
-                guard opened || closed || rest.isEmpty else { continue }
+                // かっこで始まるか、かっこ・区切りで閉じるか、見出しだけの行（ふつうの文の行と見分ける）。
+                // s32 のよくある言葉の見出し（会議・答えなど）は、区切りで閉じるだけでは見出しにしない（S32ADigest.strict）
+                guard opened || rest.isEmpty || (closed && !S32ADigest.strict.contains(alias)) else { continue }
                 while let c = rest.first, closers.contains(c) { rest = rest.dropFirst() }
                 return (entry.part, String(rest))
             }
@@ -380,6 +405,9 @@ enum WorkDigestParser {
                 }
                 if !all.isEmpty { result.sections.sources = all }
             case .date: break
+            default:
+                // s32 の見出し（同じ行は 1 つだけ。S32ARules.swift）
+                S32ADigest.add(kept, part: part, to: &result.sections)
             }
             items = []
         }
@@ -652,7 +680,8 @@ extension Pipeline {
         var out: [TaskBook.Item] = []
         for raw in homework {
             // 行の終わりの出どころの番号（［1］）は、タスクの文に入れない（2026-11-10）
-            let line: String = WorkDigestParser.sourceTags(raw).text
+            // s32: 終わりの（HH:MM 名前）も外す（S32ARules.swift）
+            let line: String = S32ADigest.split(raw).text
             let h = WorkDigestParser.homework(line)
             guard !h.what.isEmpty else { continue }
             let due: Date? = h.dueText.flatMap { WorkDigestParser.dueDate($0, digestDay: day) }
@@ -755,16 +784,17 @@ extension Pipeline {
 
     /// まとめを、見出しつきの行にする。決まった形でないまとめは、取り込んだ文を1行ずつ（見出しは空。【日付】の行は入れない）
     /// 行の終わりの出どころの番号（［1］）は外し、【出どころ】の短い名前を source に入れる（2026-11-10。番号が無ければ空）
-    static func workDigestLines(_ entry: WorkDigest.Entry) -> [(heading: String, text: String, source: String)] {
-        var out: [(heading: String, text: String, source: String)] = []
+    /// s32: 項目の終わりの（HH:MM 名前）も外し、stamp に「10:30・名前」（無ければ空。S32ARules.swift）
+    static func workDigestLines(_ entry: WorkDigest.Entry) -> [(heading: String, text: String, source: String, stamp: String)] {
+        var out: [(heading: String, text: String, source: String, stamp: String)] = []
         if let sections = entry.sections, !sections.isEmpty {
             let names: [Int: String] = WorkDigestParser.sourceMap(sections.sources ?? [])
             for list in sections.lists {
                 let isSources: Bool = list.title == "出どころ"
                 for item in list.items {
-                    let split = WorkDigestParser.sourceTags(item)
+                    let split: S32ADigestItem = S32ADigest.split(item)
                     let source: String = isSources ? "" : split.tags.compactMap { names[$0] }.joined(separator: "・")
-                    out.append((list.title, isSources ? item : split.text, source))
+                    out.append((list.title, isSources ? item : split.text, source, isSources ? "" : split.stamp))
                 }
             }
             return out
@@ -772,7 +802,7 @@ extension Pipeline {
         for raw in entry.text.components(separatedBy: .newlines) {
             let line: String = WorkDigestParser.tidy(raw)
             guard !line.isEmpty, WorkDigestParser.header(line)?.part != .date else { continue }
-            out.append(("", line, ""))
+            out.append(("", line, "", ""))
         }
         return out
     }
@@ -804,7 +834,7 @@ extension Pipeline {
         var seen: Set<String> = []
         for entry in entries {
             for (n, line) in workDigestLines(entry).enumerated() {
-                let hay: String = line.heading + " " + line.text + " " + line.source
+                let hay: String = line.heading + " " + line.text + " " + line.source + " " + line.stamp
                 guard terms.allSatisfy({ hay.localizedCaseInsensitiveContains($0) }) else { continue }
                 guard seen.insert(entry.day + "|" + WorkDigestParser.compact(line.text)).inserted else { continue }
                 out.append(DigestHit(entryID: entry.id, index: n, day: entry.day, heading: line.heading, text: line.text,

@@ -84,6 +84,7 @@ struct S30WHomeView: View {
                 S30WLowerSections(screen: screen, today: today)
             }
             S30WLastSection(screen: screen)
+            S32AKnowSection()  // s32 AI の理解（いちばん下・畳む。S32AViews.swift）
         }
         .modifier(S27WGate())
         .navigationTitle("仕事")
@@ -492,10 +493,8 @@ private struct S30WStepRow: View {
                 .background(step.state.color, in: Circle())
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: LL.Space.xs) {
-                Text(book.t(step.item.text))
-                    .font(LL.TypeScale.body)
-                    .foregroundStyle(done ? LL.dim : LL.text)
-                    .strikethrough(done)
+                // s32: glossary の言葉は押せる・「違う」を押したものは見え方を変える（S32AViews.swift）
+                S32AItemText(item: step.item, font: LL.TypeScale.body, color: done ? LL.dim : LL.text, strike: done)
                 S30WTags(main: step.why, mainColor: step.state.color, rest: step.pillar.map { [book.t($0)] } ?? [])
                 S30WMeta(item: step.item)
             }
@@ -709,7 +708,7 @@ private struct S30WWaitingSection: View {
                 HStack(alignment: .top, spacing: LL.Space.s) {
                     S27WPip(state: step.state, size: 10).padding(.top, 6)
                     VStack(alignment: .leading, spacing: LL.Space.xs) {
-                        Text(book.t(step.item.text)).font(LL.TypeScale.detail).foregroundStyle(LL.text)
+                        S32AItemText(item: step.item)
                         S30WTags(main: step.why, mainColor: step.state.color, rest: step.pillar.map { [book.t($0)] } ?? [])
                         S30WMeta(item: step.item)
                     }
@@ -905,7 +904,7 @@ private struct S30WItemLine: View {
         HStack(alignment: .top, spacing: LL.Space.s) {
             S27WPip(state: state, old: S27WMap.isOld(item), size: 10).padding(.top, 5)
             VStack(alignment: .leading, spacing: LL.Space.xs) {
-                Text(book.t(item.text)).font(LL.TypeScale.detail).foregroundStyle(item.isMaybe ? LL.dim : LL.text)
+                S32AItemText(item: item, color: item.isMaybe ? LL.dim : LL.text)
                 S30WTags(main: S30WRules.pillarLabel(state), mainColor: state.color, rest: S30WRules.itemTags(item))
                 S30WMeta(item: item)
             }
@@ -922,7 +921,7 @@ private struct S30WDecidedLine: View {
         HStack(alignment: .firstTextBaseline, spacing: LL.Space.s) {
             Text(AppFeeds.monthDay(item.day ?? "")).font(LL.TypeScale.rowNumber).foregroundStyle(LL.good)
                 .frame(minWidth: 44, alignment: .leading)
-            Text(book.t(item.text)).font(LL.TypeScale.detail).foregroundStyle(item.isMaybe ? LL.dim : LL.text)
+            S32AItemText(item: item, color: item.isMaybe ? LL.dim : LL.text)
         }
         .s30wItemMenu(item)
     }
@@ -1110,6 +1109,7 @@ private struct S30WMeta: View {
             Text(meta).font(LL.TypeScale.note).foregroundStyle(LL.dim)
         }
         S31AVoiceMark(item: item)  // s31 声でも話していた候補（S31AViews.swift）
+        S32AFixMark(item: item)  // s32 「違う」を伝えた印・戻す（S32AViews.swift）
     }
 }
 
@@ -1121,6 +1121,7 @@ private extension View {
                 Link(destination: url) { Label("元を開く", systemImage: "arrow.up.right.square") }
             }
             Button("文をコピー", systemImage: "doc.on.doc") { UIPasteboard.general.string = item.text }
+            S32AFixMenu(item: item)  // s32 1 押しの「違う」（K32-3。S32AViews.swift）
         }
     }
 }

@@ -25,6 +25,7 @@ struct WorkDigestListView: View {
                     UIPasteboard.general.string = WorkDigestPrompt.full(day: TaskBook.dayFormat.string(from: .now))
                     note = "頼み方をコピーしました。職場の Claude に貼ってください。"
                 }
+                S32APromptButtons { note = $0 }  // s32: 週の台帳・土台・AI からの質問の頼み方（S32AViews.swift）
             } footer: {
                 Text("職場の Claude に「この日に何があったか」を聞いた答えを、スクリーンショット・写真か、文字の貼り付けで取り込みます。文字の読み取りは iPhone の中だけで行い、取り込みには AI（言語モデル）を使いません。「自分の宿題」は、タスクの「やる」（仕事）に入ります。取り込んだまとめは「記録」の検索で探せて、「記録に質問する」の材料にもなります（質問のときだけ言語モデルに渡します。職場の会話と同じ設定に従います）。")
             }
@@ -121,7 +122,7 @@ struct WorkDigestRow: View {
         if let s = entry.sections {
             // 決まったことが無い日は、ほかの見出しの1つめ（見出しの行や出どころを、題にしない）
             let items: [String] = s.decided + s.homework + s.others + s.topics + s.checks
-            if let first = items.first { return WorkDigestParser.sourceTags(first).text }
+            if let first = items.first { return S32ADigest.split(first).text }
         }
         let lines = entry.text.components(separatedBy: .newlines)
         let body = lines.first { line in
@@ -167,6 +168,10 @@ struct WorkDigestDetailView: View {
                                 if !item.element.source.isEmpty {
                                     Text("出どころ: " + item.element.source).font(.caption).foregroundStyle(LL.dim)
                                 }
+                                // s32: 項目の終わりの（HH:MM 名前）は文から外して、ここに（S32ARules.swift）
+                                if !item.element.stamp.isEmpty {
+                                    Text(item.element.stamp).font(.caption).foregroundStyle(LL.dim)
+                                }
                             }
                         }
                     }
@@ -210,7 +215,7 @@ struct WorkDigestImportView: View {
     var body: some View {
         let parsed = WorkDigestParser.parse(text)
         // 箇条書きの前に書かれた前置きの文は、タスクにしない
-        let homework: [String] = parsed.homeworkTasks.map { WorkDigestParser.sourceTags($0).text }
+        let homework: [String] = parsed.homeworkTasks.map { S32ADigest.split($0).text }
         let sources: [String] = parsed.sections.sources ?? []
         let hasText: Bool = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         // 何日分かをまとめて貼ったとき（【日付】が2つ以上）は、日ごとに分けて入れる（2026-11-10）
@@ -415,36 +420,43 @@ struct WorkDigestImportView: View {
 /// 職場の Claude に貼る頼み方。docs/work-digest.md の「そのまま貼れる頼み方」と同じ中身（直すときは両方）。
 /// 職場の Claude に渡す文なので、アプリの中の言語モデルには使わない
 enum WorkDigestPrompt {
-    /// いつもの頼み方（日付を入れて）
+    /// いつもの頼み方（日付を入れて）。s32（2026-11-27・K32-1）で【会議】【メール】と、項目の終わりの（HH:MM 名前）を足した
+    /// （前の見出しと順はそのまま）。週の台帳・土台・AI からの質問の頼み方は S32APrompt（S32ARules.swift）
     static func full(day: String) -> String {
         """
-        \(day) の Teams のやり取りを読んで、下の形だけで答えてください。
+        \(day) の Teams のやり取りと、Outlook の予定・メールを読んで、下の形だけで答えてください。
 
         きまり
         ・見出しは下の【 】をそのまま使う。順番も変えない。
         ・表・太字・絵文字・前置き・あとがきは使わない。箇条書きは「・」で、1行に1つ。
         ・聞き返さない。分からないことは書かない。何も無い見出しは「・なし」と書く。
         ・【出どころ】には、読んだ場所（チーム＞チャネル、またはチャット）とスレッドの題を、1行に1つ書く。行の頭に［1］［2］と番号を付ける。そこにいた人も書く（多いときは、発言した人だけでよい）。
-        ・ほかの見出しの項目は、行の終わりに、どの出どころの話かを［1］のように番号で書く。
-        ・【自分の宿題】は、頼んだ人と期限を（誰から／いつまで）で書き、その後ろに番号を書く。
+        ・【会議】には、その日の会議（Outlook の予定）を、1行に1つ「HH:MM〜HH:MM 会議名（出席：名前、名前）」で書き、その後ろに番号を書く。
+        ・ほかの見出しの項目は、行の終わりに、言った時刻と言った人を（HH:MM 名前）で書く（分かる範囲だけでよい）。その後ろに、どの出どころの話かを［1］のように番号で書く。
+        ・【自分の宿題】は、頼んだ人と期限を（誰から／いつまで）で書き、その後ろに（HH:MM 名前）と番号を書く。
         ・【よく出た言葉】は、言葉だけを1行に1つ（説明と番号は書かない）。
+        ・【メール】には、Outlook の自分宛てと自分が出したメールを、1行に1つ「HH:MM 送り主→宛先「件名」: 要点」で書く。
 
         【日付】\(day)
         【出どころ】
         ・［1］チーム名＞チャネル名「スレッドの題」（いた人：名前、名前）
         ・［2］チャット「グループの名前」（いた人：名前、名前）
+        【会議】
+        ・HH:MM〜HH:MM 会議名（出席：名前、名前）［1］
         【決まったこと】
-        ・…［1］
+        ・…（HH:MM 名前）［1］
         【自分の宿題】
-        ・…（誰から／いつまで）［1］
+        ・…（誰から／いつまで）（HH:MM 名前）［1］
         【ほかの人の動き】
-        ・名前: …［2］
+        ・名前: …（HH:MM 名前）［2］
         【気になる話題】
-        ・…［1］
+        ・…（HH:MM 名前）［1］
         【あとで確かめること】
-        ・…［2］
+        ・…（HH:MM 名前）［2］
         【よく出た言葉】
         ・…
+        【メール】
+        ・HH:MM 送り主→宛先「件名」: 要点
         """
     }
 
