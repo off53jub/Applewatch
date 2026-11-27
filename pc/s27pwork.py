@@ -97,10 +97,13 @@ def _cached(path: Path, limit: int, parse):
     if stamp[1] > limit:
         return None, "too_big"
     key = str(path)
-    with _lock:
-        hit = _cache.get(key)
-        if hit is not None and hit[0] == stamp:
-            return hit[1], hit[2]
+    # 2026-11-27: 設定（s27_work_config.json）は毎回読む。更新時刻の刻みが粗い所（CI の機械）で、同じ大きさに
+    # 書き直すと前の中身が返っていた（s30p の切り替え）。数百バイトなので覚えなくてよい
+    if path.name != CONFIG.name:
+        with _lock:
+            hit = _cache.get(key)
+            if hit is not None and hit[0] == stamp:
+                return hit[1], hit[2]
     try:
         raw = path.read_bytes()
     except OSError as error:
