@@ -244,7 +244,8 @@ final class S27WBook {
         return sent
     }
 
-    var openConfirm: [S27WConfirmItem] { S27WRules.unanswered(confirm, answered: answered) }
+    /// 問いの山のふた（2026-11-27。s33 の 強6。S33ARules.swift）
+    var openConfirm: [S27WConfirmItem] { S33ACap.take(.work, S27WRules.unanswered(confirm, answered: answered)) }
 
     /// 宿題を済みにする・戻す
     func setDone(_ item: S27WItem, done: Bool, now: Date = .now) {

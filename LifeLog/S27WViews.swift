@@ -907,6 +907,7 @@ private struct S27WPersonBody: View {
             LLHeader(title: "自分とのあいだのボール", symbol: "arrow.left.arrow.right")
         }
         S27WPersonRecentSection(person: person)
+        S33ASmallTalkSection(personID: person.id)  // 話のネタ（2026-11-27。s33 の 強17・K33-1。S33AViews.swift）
         if !person.theirHomework.isEmpty {
             Section {
                 ForEach(person.theirHomework) { item in S27WItemRow(item: item) }

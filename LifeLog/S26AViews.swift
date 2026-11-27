@@ -78,6 +78,7 @@ struct S26ASettingsView: View {
                 .disabled(weightText.isEmpty)
             }
             if let note { Text(note).font(.caption).foregroundStyle(LL.dim) }
+            if weight == nil { S33AScaleHint() }  // 体重計の案内（体重が無いときだけ。2026-11-27。s33 の 強11）
         } header: {
             Text("体重（集1）")
         } footer: {

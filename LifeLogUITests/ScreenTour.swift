@@ -554,4 +554,53 @@ final class ScreenTour: XCTestCase {
         }
         XCTAssertGreaterThan(shot, 10, "s20 の写真が少なすぎる")
     }
+
+    /// s33（2026-11-27。S33AViews.swift）: どこ？（目次と検索）・ふり返りの「暮らし」・設定の奥（畳む候補・問いのふた・家の PC の棚）を撮る。
+    /// 撮影の段が 120 分の上限に近いので 1 本・起動 3 回だけ。押すのは開く行と探す欄だけ（ラーメンの印・畳む・戻すは押さない）
+    func testTourS33A() {
+        var app = launch()
+        openTab(app, "今日")
+        let whereButton = app.navigationBars.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "どこ")).firstMatch
+        if whereButton.waitForExistence(timeout: 8) {
+            whereButton.tap()
+            sleep(2)
+            if alive(app, after: "どこ？") {
+                snap(app, "s33 どこ？ 目次")
+                let field = app.searchFields.firstMatch
+                if field.waitForExistence(timeout: 5) {
+                    field.tap()
+                    field.typeText("体重")
+                    sleep(1)
+                    snap(app, "s33 どこ？ 体重で探す")
+                }
+            }
+        } else {
+            snap(app, "s33 どこ？ - 見つからない")
+        }
+        app.terminate()
+
+        app = launch()
+        openTab(app, "記録")
+        openSegment(app, "ふり返り")
+        if tapFinding(app, "暮らし", place: "s33 ふり返り") { snap(app, "s33 暮らし") }
+        app.terminate()
+
+        app = launch()
+        openTab(app, "今日")
+        if openSettings(app) {
+            openSegment(app, "設定")
+            if tapFinding(app, "くわしい設定", place: "s33 設定"),
+               tapFinding(app, "使われ方・畳む候補", place: "s33 くわしい設定") {
+                snap(app, "s33 使われ方と畳む")
+                app.swipeUp()
+                sleep(1)
+                snap(app, "s33 使われ方と畳む 2")
+                app.swipeUp()
+                sleep(1)
+                snap(app, "s33 家の PC の棚")
+            }
+        }
+        app.terminate()
+        XCTAssertGreaterThan(shot, 2, "s33 の写真が少なすぎる")
+    }
 }

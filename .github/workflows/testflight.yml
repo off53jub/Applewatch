@@ -1,11 +1,15 @@
 name: TestFlight
 
-# main に push するか、Actions 画面から手動で実行するとビルドする。
+# 2026-11-27（s33 の 強7）から、main に入るたびではなく、毎晩 1 回（日本時間 23 時・仮）に「前の版から main が変わっていたら」だけ作る。
+#   前の版 = 直前のアプリのリリース（タグが v で始まるもの。家の PC の pc-v… は見ない）の target_commitish。同じなら組み立てない（Mac を使わない）。
+#   Actions 画面から手で動かす（workflow_dispatch）と、変わっていなくても作る。PR では今までどおり組み立てを確かめる。
+#   前は main に push するたびに作っていて、1 日に 6 回ほど TestFlight に届いていた（446 → 462）。
 # 毎回、署名なしの IPA を成果物（Artifacts）に残す。Windows の Sideloadly などで、無料の Apple ID で署名して入れられる。
 # Apple Developer Program の Secrets が揃っているときだけ、TestFlight にも上げる。
 on:
-  push:
-    branches: [main]
+  schedule:
+    # 毎晩 23:00（日本時間。UTC 14:00）。仮
+    - cron: '0 14 * * *'
   pull_request:
   workflow_dispatch:
 
@@ -22,6 +26,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       app: ${{ steps.f.outputs.app }}
+      due: ${{ steps.due.outputs.due }}
     steps:
       - id: f
         env:
@@ -50,9 +55,29 @@ jobs:
           echo "判定 ok=$ok app=$app ui=${ui:-}"
           echo "app=$app" >> "$GITHUB_OUTPUT"
 
+      # s33 の 強7: 夜の 1 回は、前の版（直前のアプリのリリース）から main が変わっていたときだけ作る。
+      # 調べられないときは作る側に倒す。手で動かしたとき・PR はいつも作る
+      - id: due
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          due=true
+          if [ "$EVENT" = "schedule" ]; then
+            prev=$(gh api "repos/$REPO/releases?per_page=30" --jq '[.[] | select(.prerelease == false and .draft == false and (.tag_name | startswith("v")))][0].target_commitish // empty' || true)
+            echo "前の版のコミット: ${prev:-（見つからない）} / いまの main: $SHA"
+            if [ -n "$prev" ] && [ "$prev" = "$SHA" ]; then
+              due=false
+              echo "::notice::TESTFLIGHT_RESULT: skipped reason=unchanged（前の版から main が変わっていないので、今夜は作りません）"
+            fi
+          fi
+          echo "due=$due" >> "$GITHUB_OUTPUT"
+
   build:
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.app != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.app != 'false' && needs.changes.outputs.due != 'false' }}
     runs-on: macos-26
     # Apple の受け付け結果を最大 35 分待つ分も含める
     timeout-minutes: 80
@@ -265,10 +290,10 @@ jobs:
             ${{ runner.temp }}/ipa/LifeLog-unsigned-no-widgets.ipa
           retention-days: 30
 
-      # main に入るたびに、版の名前（v日付-ビルド番号）を付けて GitHub の「リリース」に IPA を残す。
-      # 成果物は30日で消えるが、リリースは残るので、新しい版で困ったら前の版を入れ直せる（2026-11-06）
+      # main の版を作るたびに（2026-11-27 から夜の 1 回と手で動かしたとき）、版の名前（v日付-ビルド番号）を付けて GitHub の「リリース」に IPA を残す。
+      # 成果物は30日で消えるが、リリースは残るので、新しい版で困ったら前の版を入れ直せる（2026-11-06）。夜の 1 回の「前の版」もこのリリースで見る
       - name: リリースに残す
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -324,6 +349,8 @@ jobs:
       # main のときだけ、内部テストのグループにビルドを渡す（PR のビルドは本人に届かない。2026-11-07）
       # （2026-11-23。s23 の 届6）TestFlight の「テストする内容」に入れる文を作る: 前の版（直前の GitHub のリリース）からのコミットの題の一覧。
       #  作れなくても配達は止めない（continue-on-error）。前のリリースが見つからないときは、直近 10 コミット
+      # （2026-11-27。s33 の 強7）頭に「この版で見る 3 つ」: 前の版のあと（無ければこの 24 時間）に main に入った PR の題から 3 つまで。
+      #  前の版はアプリのリリース（タグが v で始まるもの）だけで探す（家の PC の pc-v… を前の版と取り違えない）
       - name: この版で変わったことの文を作る
         if: env.HAS_ASC == 'true' && env.ASC_UNUSABLE != 'true'
         continue-on-error: true
@@ -332,7 +359,10 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
-          prev=$(gh api "repos/$REPO/releases?per_page=20" --jq "[.[] | select(.prerelease == false and .draft == false and .target_commitish != \"$SHA\")][0].target_commitish // empty" || true)
+          rel=$(gh api "repos/$REPO/releases?per_page=30" --jq "[.[] | select(.prerelease == false and .draft == false and (.tag_name | startswith(\"v\")) and .target_commitish != \"$SHA\")][0] | [.target_commitish, .created_at] | @tsv" || true)
+          prev=$(printf '%s' "$rel" | cut -f1)
+          since=$(printf '%s' "$rel" | cut -f2)
+          [ -n "$since" ] || since=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
           mode=recent
           : > "$RUNNER_TEMP/commits.json"
           if [ -n "$prev" ] && gh api "repos/$REPO/compare/$prev...$SHA" > "$RUNNER_TEMP/commits.json"; then
@@ -341,7 +371,9 @@ jobs:
           else
             gh api "repos/$REPO/commits?sha=$SHA&per_page=10" > "$RUNNER_TEMP/commits.json" || true
           fi
-          python3 .github/scripts/whatsnew.py "$RUNNER_TEMP/commits.json" "$RUNNER_TEMP/whatsnew.txt" "$mode"
+          # 前の版のあとに main に入った PR（題だけ。読めなければ空で、「この版で見る 3 つ」は付けない）
+          gh pr list --repo "$REPO" --base main --state merged --search "merged:>=$since" --limit 50             --json number,title,mergedAt > "$RUNNER_TEMP/prs.json" || echo "[]" > "$RUNNER_TEMP/prs.json"
+          python3 .github/scripts/whatsnew.py "$RUNNER_TEMP/commits.json" "$RUNNER_TEMP/whatsnew.txt" "$mode" "$RUNNER_TEMP/prs.json"
           echo "ASC_WHATS_NEW_FILE=$RUNNER_TEMP/whatsnew.txt" >> "$GITHUB_ENV"
 
       - name: Apple の受け付け結果を待つ
@@ -371,7 +403,7 @@ jobs:
       #  `gh api repos/R/check-runs/<job id>/annotations` から「TESTFLIGHT_RESULT:」で探せる:
       #    TESTFLIGHT_RESULT: delivered build=N group=yes|no|failed   … Apple が受け付けた（group=yes は内部テストのグループにも渡した。main のときだけ）
       #    TESTFLIGHT_RESULT: not-delivered build=N reason=...         … reason は no-secrets・key-unreadable・signing-failed・rejected・unconfirmed・build-failed
-      #  main への push（と main の手動実行）で、Secrets があるのに届かなかったときは、この手順で失敗にする（PR・Secrets の無いフォークでは失敗にしない）
+      #  main の夜の 1 回・main への push（と main の手動実行）で、Secrets があるのに届かなかったときは、この手順で失敗にする（PR・Secrets の無いフォークでは失敗にしない）
       - name: TestFlight に届いたかをまとめる
         if: always() && !cancelled()
         env:
@@ -407,7 +439,7 @@ jobs:
           { echo "### TestFlight"; echo; echo "$msg"; echo; echo "\`$line\`"; } >> "$GITHUB_STEP_SUMMARY"
           # 届かなかったのに実行が「成功」で終わるのを防ぐ（2026-11-23。版 382 で起きた）。ビルドそのものの失敗は前の手順がもう赤にしている。unconfirmed（35 分待っても結果が出ない。届いているかもしれない）は警告だけ
           on_main=false
-          if [ "$REF" = "refs/heads/main" ] && { [ "$EVENT" = "push" ] || [ "$EVENT" = "workflow_dispatch" ]; }; then on_main=true; fi
+          if [ "$REF" = "refs/heads/main" ] && { [ "$EVENT" = "push" ] || [ "$EVENT" = "workflow_dispatch" ] || [ "$EVENT" = "schedule" ]; }; then on_main=true; fi
           if [ -n "$reason" ] && [ "$on_main" = "true" ] && [ "$HAS_ASC" = "true" ] && [ "$reason" != "build-failed" ] && [ "$reason" != "unconfirmed" ]; then
             echo "::error::main への実行なのに、TestFlight に届きませんでした（理由: $reason）"
             exit 1

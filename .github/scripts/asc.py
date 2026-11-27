@@ -209,7 +209,7 @@ def wait_upload(number: str) -> None:
                 print("Apple が受け付けました")
                 write_result("delivered group=no")
                 on_main = os.environ.get("GITHUB_REF") == "refs/heads/main" \
-                    and os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch")
+                    and os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch", "schedule")  # schedule＝夜の 1 回（s33 の 強7）
                 build = find_build(app, number)
                 if build is None:
                     print("::warning::ビルドが見つからないので、テスターに渡せませんでした")
