@@ -251,10 +251,13 @@ final class S32ATests: XCTestCase {
         XCTAssertFalse(quiz.contains("q11｜"), "10 個まで")
         XCTAssertTrue(quiz.contains("【答え】"))
         XCTAssertEqual(WorkDigestParser.parse(quiz, today: today).sections.answers?.count, 1)
-        // 母艦が頼み方まで書いていれば、それを使う（【答え】の無いものは使わない）
+        // 母艦が頼み方まで書いていれば、それを使う（K2 の quiz.prompt）
         let written = "見本の頼み方\n【答え】\n・q1a2b3｜答え"
         XCTAssertEqual(S32APrompt.quiz(day: "2026-11-27", quiz: S32AQuiz(questions: many, prompt: written)), written)
-        XCTAssertNotEqual(S32APrompt.quiz(day: "2026-11-27", quiz: S32AQuiz(questions: many, prompt: "形の違う文")), "形の違う文")
+        XCTAssertNil(S32APrompt.quiz(day: "2026-11-27", quiz: S32AQuiz(questions: [], prompt: written)), "質問が無ければ押せない")
+        // 職場の Claude の答え「q印｜答え」は【答え】に入る
+        let answered = WorkDigestParser.parse("【日付】2026-11-27\n【答え】\n・q1a2b3｜見本の答え", today: today).sections
+        XCTAssertEqual(answered.answers, ["q1a2b3｜見本の答え"])
     }
 
     // MARK: - K32-3 work_fix の送る形
@@ -321,7 +324,7 @@ final class S32ATests: XCTestCase {
          "threads":[{"id":"t1","title":"見本の糸","keys":["打鍵"],"days":["2026-11-20","2026-11-25"],"items":["a1","a2"],"state":"続いている"},
                     {"title":"数で来た糸","days":4,"items":7}],
          "quiz":{"week":"2026-11-23","questions":[{"id":"q1","q":"見本の質問","why":"分からない","about":"glossary"}]},
-         "scorecard":{"week":"2026-11-23","rows":[{"label":"言葉","now":3,"prev":1,"unit":"語"},{"label":"相手","now":"34/196","prev":"27/196"}]},
+         "scorecard":{"week":"2026-11-23","rows":[{"key":"terms","label":"言葉","detail":"3/32","now":3,"prev":null,"unit":"語"},{"label":"相手","now":"34/196","prev":"27/196"}]},
          "guide":{"written_at":"2026-11-27T03:10:00+09:00","by":"subscription","stale":false}
         """))
         let know = try XCTUnwrap(b.know)
@@ -341,6 +344,10 @@ final class S32ATests: XCTestCase {
         XCTAssertEqual(know.threads[1].itemCount, 7)
         XCTAssertEqual(know.quiz?.questions.first?.id, "q1")
         XCTAssertEqual(know.scorecard?.rows.first?.now, 3)
+        XCTAssertNil(know.scorecard?.rows.first?.prev, "prev は null のことがある")
+        XCTAssertEqual(know.scorecard?.rows.first?.key, "terms")
+        XCTAssertEqual(know.scorecard?.rows.first?.detail, "3/32")
+        XCTAssertNil(know.scorecard.flatMap { S32ARules.diffText($0.rows[0]) }, "前の週が無ければ差は出さない")
         XCTAssertEqual(know.scorecard?.rows.last?.nowText, "34/196")
         XCTAssertEqual(know.guide?.by, "subscription")
         // K2 のほかの欄はそのまま
@@ -456,11 +463,24 @@ final class S32ATests: XCTestCase {
         XCTAssertEqual(S32ARules.diffText(text), "前の週は 27/196")
     }
 
+    /// 知16 本人に聞く 3 つは今の確かめ待ちの列（work_self）。時計・通知・ウィジェットには出さない
+    func testWorkSelfStaysOnReviewScreen() {
+        let ask = ReviewItem(id: "s32s-0001", kind: "work_self", question: "見本の今週の優先は？", answer: "pick", choices: ["見本 A", "見本 B"])
+        XCTAssertFalse(S32AReview.offPhoneOK(ask))
+        XCTAssertTrue(S32AReview.offPhoneOK(ReviewItem(id: "r-1", kind: "ramen", question: "見本", answer: "yesno")))
+        XCTAssertEqual(ReviewRules.kindLabel("work_self"), S32AReview.label)
+        XCTAssertEqual(S22Rules.answerStyle(answer: "pick", choices: ask.choices), "pick")
+        XCTAssertEqual(S22Rules.answerStyle(answer: "text", choices: nil), "text")
+        XCTAssertEqual(S22Rules.answerStyle(answer: "yesno", choices: nil), "yesno")
+        // 答えは今の kind "review" の道のまま
+        XCTAssertNotNil(ReviewRules.answerBody(id: ask.id, answer: "見本 A", at: today))
+    }
+
     func testGuideLine() {
         let tokyo = TimeZone(identifier: "Asia/Tokyo")!
         let guide = S32AGuide(writtenAt: "2026-11-26T18:10:00Z", by: "subscription", stale: false)
         XCTAssertEqual(S32ARules.guideLine(guide, timeZone: tokyo), "11/27 3:10 に書いた・定額の枠で作り直し")
-        XCTAssertEqual(S32ARules.guideLine(S32AGuide(by: "rules")), "規則の版（定額の枠が使えなかった）")
+        XCTAssertEqual(S32ARules.guideLine(S32AGuide(by: "rules")), "規則の版")
         XCTAssertEqual(S32ARules.stampText("2026-11-27"), "11/27")
         XCTAssertEqual(S32ARules.glossaryLine([S32ATerm(term: "a", firm: true), S32ATerm(term: "b")]), "2 語（仮 1）")
     }

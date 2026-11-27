@@ -675,6 +675,9 @@ struct S32AScoreView: View {
                             Spacer(minLength: LL.Space.s)
                             Text(S32ARules.valueText(row.element)).font(LL.TypeScale.rowNumber).foregroundStyle(LL.text)
                         }
+                        if let detail = row.element.detail {
+                            Text(book.t(detail)).font(LL.TypeScale.note).foregroundStyle(LL.dim)
+                        }
                         if let diff = S32ARules.diffText(row.element) {
                             Text(diff).font(LL.TypeScale.note).foregroundStyle(LL.dim)
                         }

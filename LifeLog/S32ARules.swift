@@ -187,8 +187,8 @@ enum S32APrompt {
     static func quiz(day: String, quiz: S32AQuiz?) -> String? {
         let questions: [S32AQuestion] = Array((quiz?.questions ?? []).prefix(quizLimit))
         guard !questions.isEmpty else { return nil }
-        // 母艦が頼み方まで書いていれば、それをそのまま（答えの形を母艦の読み方とそろえるため）
-        if let written = quiz?.prompt, written.contains("【答え】") { return written }
+        // 母艦が頼み方まで書いていれば、それをそのまま（答えの形＝【答え】の「q印｜答え」を母艦の読み方とそろえるため）
+        if let written = quiz?.prompt { return written }
         var lines: [String] = []
         for q in questions {
             lines.append("・" + q.id + "｜" + q.q)
@@ -571,7 +571,11 @@ struct S32AQuiz: Decodable, Equatable, Sendable {
 }
 
 struct S32AScoreRow: Decodable, Equatable, Sendable {
+    /// 母艦の物差しの名前（省ける。見せない）
+    var key: String?
     var label: String
+    /// 数の中身の説明（「1/56」など。省ける）
+    var detail: String?
     var now: Double?
     var prev: Double?
     /// 数でない言い方で来たとき（「1/56」など）
@@ -579,10 +583,12 @@ struct S32AScoreRow: Decodable, Equatable, Sendable {
     var prevText: String?
     var unit: String?
 
-    enum CodingKeys: String, CodingKey { case label, now, prev, unit }
+    enum CodingKeys: String, CodingKey { case key, label, detail, now, prev, unit }
 
-    init(label: String, now: Double? = nil, prev: Double? = nil, unit: String? = nil) {
+    init(key: String? = nil, label: String, detail: String? = nil, now: Double? = nil, prev: Double? = nil, unit: String? = nil) {
+        self.key = key
         self.label = label
+        self.detail = detail
         self.now = now
         self.prev = prev
         self.unit = unit
@@ -591,6 +597,8 @@ struct S32AScoreRow: Decodable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         label = try S32ALenient.required(c, .label)
+        key = S32ALenient.text(c, .key)
+        detail = S32ALenient.text(c, .detail)
         now = S32ALenient.number(c, .now)
         prev = S32ALenient.number(c, .prev)
         nowText = now == nil ? S32ALenient.text(c, .now) : nil
@@ -683,6 +691,17 @@ struct S32AKnow: Decodable, Equatable, Sendable {
         glossary.isEmpty && org.isEmpty && (systems?.isEmpty ?? true) && numbering.isEmpty && decisions.isEmpty
             && threads.isEmpty && (quiz?.questions ?? []).isEmpty && (scorecard?.rows ?? []).isEmpty && guide == nil
     }
+}
+
+// MARK: - 知16 本人に聞く 3 つ（今の確かめ待ちの列に、種類 work_self で来る）
+
+enum S32AReview {
+    /// 確かめ待ちの列の種類（id は s32s-…・答えは text / pick / yesno。答えは今の kind "review" の道のまま）
+    static let kind = "work_self"
+    static let label = "仕事の持ち場（あなたしか知らないこと）"
+
+    /// 時計・通知・ウィジェットに出してよいか（仕事の中身なので出さない。守1。確かめ待ちの画面でだけ答える）
+    static func offPhoneOK(_ item: ReviewItem) -> Bool { item.kind != kind }
 }
 
 // MARK: - K32-3 1 押しの「違う」
@@ -991,7 +1010,7 @@ enum S32ARules {
     static func byLabel(_ by: String?) -> String {
         switch by {
         case "subscription": "定額の枠で作り直し"
-        case "rules": "規則の版（定額の枠が使えなかった）"
+        case "rules": "規則の版"
         default: "作り方は不明"
         }
     }
