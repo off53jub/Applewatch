@@ -109,7 +109,10 @@ final class S26UBook {
     }
 
     /// まだの操作待ちの数（済んだものは機械が done にする）
-    var waitingOpen: Int { waiting.filter { !$0.isDone }.count }
+    /// 2026-11-27（s33 の K33-1）から、家の PC の /s33 の操作待ち（同じ id は 1 つ）も数える（S33AViews.swift）
+    var waitingOpen: Int {
+        waiting.filter { !$0.isDone }.count + S33ABook.shared.extraWaiting(known: Set(waiting.map(\.id))).count
+    }
 
     /// いまの時刻に当たるすきまの 1 件
     func gapNow(now: Date = .now) -> S26UGapTask? { S26UFeeds.currentGap(gaps, now: now) }

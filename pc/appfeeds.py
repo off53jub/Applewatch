@@ -645,6 +645,10 @@ def parse_feedback(data: bytes) -> dict:
         import s27pwork
 
         return s27pwork.parse_feedback(body)
+    if kind in ("ramen_mark", "feature_seen", "device_ok"):  # s33 K33-2（s33pwork.py）
+        import s33pwork
+
+        return s33pwork.parse_feedback(body)
     if not isinstance(kind, str) or kind not in FEEDBACK:
         raise ValueError("kind は " + "・".join(FEEDBACK) + " のどれかです")
     if body.get("value") not in FEEDBACK[kind]:
@@ -751,7 +755,11 @@ def _http_inbox(handler, base: Path, data: bytes, log, parse, rel: Path, label: 
         handler.send_json(400, {"error": str(error)})
         return
     if add_at:
-        row["at"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+        arrived = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+        if row.get("kind") == "ramen_mark":  # s33: 食べた時刻（at）は本人のもの。届いた時刻は received_at
+            row["received_at"] = arrived
+        else:
+            row["at"] = arrived
     try:
         append_inbox(base, rel, row)
     except OSError as error:
@@ -793,7 +801,7 @@ def http_post_feedback(handler, base: Path, data: bytes, log) -> None:
                 extra = None
             handler = _Quiet(handler)
     _http_inbox(handler, base, data, log, parse_feedback, FEEDBACK_FILE, "使われ方の記録", True,
-                lambda r: r["kind"] if r["kind"] in ("shake", "review") or r["kind"].startswith("work_")  # 仕事の中身は書かない
+                lambda r: r["kind"] if r["kind"] in ("shake", "review", "ramen_mark", "feature_seen", "device_ok") or r["kind"].startswith("work_")  # 仕事の中身は書かない
                 else f"{r['kind']} {r.get('value', '答え')}")
 
 

@@ -134,6 +134,8 @@ struct LifeLogApp: App {
         S26ABook.install(pipeline, live: !Self.testing && !Self.demo)
         // s27 の A（2026-11-25。S27WBook.swift）: 仕事の写し（GET /work・/work/confirm）を読む・ウィジェットへ数だけ
         S27WBook.install(pipeline, live: !Self.testing && !Self.demo)
+        // s33 の S33A（2026-11-27。S33ABook.swift）: GET /s33 を読む・ラーメンの印・使われた数と実機で動いた印を 1 日 1 回
+        S33ABook.install(pipeline, live: !Self.testing && !Self.demo)
         if !Self.testing && !Self.demo {
             Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
                 Task { @MainActor in pipeline.updateHold() }

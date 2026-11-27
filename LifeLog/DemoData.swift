@@ -116,6 +116,7 @@ enum DemoData {
         installS30W(base: base, now: now)  // s30 の仕事タブの写し（DemoDataS30W.swift）
         installS31A(base: base, now: now, talkStart: a)  // s31 の文字と声の結び（DemoDataS31A.swift。S30W の写しのあと）
         installS32A(base: base, now: now)  // s32 の AI の理解（DemoDataS32A.swift。S30W の写しのあと）
+        installS33A(base: base, now: now)  // s33 の K33-1 の見本（DemoDataS33A.swift）
         // 効き目の数の見本
         Tally.add("fix.proposed", 6)
         Tally.add("fix.kept", 4)

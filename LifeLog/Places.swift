@@ -196,6 +196,12 @@ final class PlaceLog: NSObject, CLLocationManagerDelegate {
         return (s.latitude, s.longitude, s.accuracy)
     }
 
+    /// その時刻の近く（maxAge 秒より離れていない）の位置。無ければ nil（2026-11-27。s33 の 強22 ラーメンの 1 押し。S33ABook.swift）
+    func recentPoint(at time: Date, maxAge: TimeInterval) -> (latitude: Double, longitude: Double)? {
+        guard isOn, let s = sample(at: time), abs(s.time.timeIntervalSince(time)) <= maxAge else { return nil }
+        return (s.latitude, s.longitude)
+    }
+
     /// 登録した場所のうち、その位置にあるもの（2026-11-16）
     func registeredPlace(near location: CLLocation, accuracy: Double) -> Place? {
         registered(near: location, accuracy: accuracy)

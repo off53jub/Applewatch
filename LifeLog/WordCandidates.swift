@@ -231,7 +231,9 @@ extension Pipeline {
     /// いま出す候補（fromDigest: 仕事のまとめから。そうでなければ母艦の辞書から）
     func openWordCandidates(fromDigest: Bool) -> [WordCandidate] {
         let all: [WordCandidate] = fromDigest ? WordCandidateBook.fromDigests(workDigests.entries) : wordCandidates.items
-        return WordCandidateBook.open(all, known: registeredWordSet, dismissed: wordCandidates.dismissed)
+        let open = WordCandidateBook.open(all, known: registeredWordSet, dismissed: wordCandidates.dismissed)
+        // 家の PC の辞書からの候補は、問いの山のふたの中（言葉は 20 語まで・仮。2026-11-27。s33 の 強6。S33ARules.swift）
+        return fromDigest ? open : S33ACap.take(.word, open)
     }
 }
 

@@ -750,7 +750,8 @@ final class HomeFeedsBook {
             S24AskRules.alive(expires: $0.expires, today: today)
                 && KnowMeBook.shared.shouldAsk("speaker_doubts", $0.day + "|" + $0.conversation_start + "|" + $0.line_time)
         }
-        return S24AskRules.byImpact(list) { $0.impact }
+        // 問いの山のふた（2026-11-27。s33 の 強6。S33ARules.swift）
+        return S33ACap.take(.doubt, S24AskRules.byImpact(list) { $0.impact })
     }
 
     /// 「違う」・直し済み。もう出さない

@@ -378,7 +378,9 @@ struct CountsOpen: ViewModifier {
             Tally.add("screen." + name)
             // 振って「いまの画面が変」を送るときの画面の名前（2026-11-22。s21 の 使10）
             ScreenTracker.current = name
+            S33ADevice.opened(name)  // 実機で動いた印（2026-11-27。s33 の 強8。S33ABook.swift）
         }
+        .onDisappear { S33ADevice.closed(name) }
     }
 }
 
