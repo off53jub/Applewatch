@@ -41,15 +41,20 @@ struct S27WItem: Decodable, Equatable, Identifiable, Sendable {
     var certainty: String?
     var src: String?
     var link: String?
+    /// s30（2026-11-27・K30-1）: 機械が閉じた印。"done"＝後の話で済んだと分かった・"old"＝7 日（仮）話に出ない。
+    /// state は変えない（アプリが見せ方だけ変える。仕事タブの柱の中の「済んだかも」「古い」の箱。S30WRules.swift）
+    var auto: String?
+    var autoWhy: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, text, who, day, time, due, ball, state, certainty, src, link
-        case projectID = "project_id", dueGuess = "due_guess", ageDays = "age_days"
+        case id, kind, text, who, day, time, due, ball, state, certainty, src, link, auto
+        case projectID = "project_id", dueGuess = "due_guess", ageDays = "age_days", autoWhy = "auto_why"
     }
 
     init(id: String, kind: String? = nil, text: String, projectID: String? = nil, who: String? = nil, day: String? = nil,
          time: String? = nil, due: String? = nil, dueGuess: Bool? = nil, ball: String? = nil, ageDays: Int? = nil,
-         state: String? = nil, certainty: String? = nil, src: String? = nil, link: String? = nil) {
+         state: String? = nil, certainty: String? = nil, src: String? = nil, link: String? = nil,
+         auto: String? = nil, autoWhy: String? = nil) {
         self.id = id
         self.kind = kind
         self.text = text
@@ -65,6 +70,8 @@ struct S27WItem: Decodable, Equatable, Identifiable, Sendable {
         self.certainty = certainty
         self.src = src
         self.link = link
+        self.auto = auto
+        self.autoWhy = autoWhy
     }
 
     init(from decoder: Decoder) throws {
@@ -84,6 +91,8 @@ struct S27WItem: Decodable, Equatable, Identifiable, Sendable {
         certainty = c.s27w(.certainty)
         src = c.s27w(.src)
         link = c.s27w(.link)
+        auto = c.s27w(.auto)
+        autoWhy = c.s27w(.autoWhy)
     }
 
     /// 根拠の無い文（守4。「たぶん」を付ける）
@@ -508,9 +517,11 @@ struct S27WBoard: Decodable, Equatable, Sendable {
     var people: [S27WPerson] = []
     var side: S27WSide?
     var monthlyOther: String?
+    /// s30（2026-11-27・K30-1）: 状況の報告（母艦が作る・省ける）。無いとき（前の形）は仕事タブが規則で並べる（S30WRules.swift）
+    var report: S30WReport?
 
     enum CodingKeys: String, CodingKey {
-        case available, version, counts, today, diff, projects, people, side
+        case available, version, counts, today, diff, projects, people, side, report
         case generatedAt = "generated_at", asOf = "as_of", monthlyOther = "monthly_other"
     }
 
@@ -529,6 +540,7 @@ struct S27WBoard: Decodable, Equatable, Sendable {
         people = c.s27wList(.people)
         side = c.s27w(.side)
         monthlyOther = c.s27w(.monthlyOther)
+        report = c.s27w(.report)
     }
 
     func project(_ id: String) -> S27WProject? { projects.first { $0.id == id } }

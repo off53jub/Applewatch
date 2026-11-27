@@ -405,6 +405,7 @@ struct WorkDigestImportView: View {
             let day = TaskBook.dayFormat.string(from: date)
             onSaved(pipeline.importWorkDigest(day: day, text: text, source: source))
         }
+        S30WBook.shared.saved(pipeline.workDigests.entries)  // s30: いま入れた分を家の PC へ送り、すぐ作り直す（S30WBook.swift）
         dismiss()
     }
 }

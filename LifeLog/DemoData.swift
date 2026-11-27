@@ -109,6 +109,7 @@ enum DemoData {
         installPages(base: base, now: now, day: f.string(from: now), yesterday: f.string(from: now.addingTimeInterval(-86400)),
                      tomorrow: f.string(from: now.addingTimeInterval(86400)))
         installS20(base: base, now: now)  // s20 の確かめ待ち・検品表・知らせの履歴など（DemoDataS20.swift）
+        installS30W(base: base, now: now)  // s30 の仕事タブの写し（DemoDataS30W.swift）
         // 効き目の数の見本
         Tally.add("fix.proposed", 6)
         Tally.add("fix.kept", 4)
