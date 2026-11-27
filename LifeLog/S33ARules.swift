@@ -1259,10 +1259,11 @@ enum S33AWhere {
 
     /// 探す形にそろえる（小文字・カタカナはひらがな・空白と中点を外す）
     static func normalize(_ s: String) -> String {
-        var t = s.lowercased()
-        t = t.applyingTransform(.hiraganaToKatakana, reverse: true) ?? t
-        let drop: Set<Character> = [" ", "　", "・", "（", "）", "(", ")", "、", "。", "-", "ー"]
-        return String(t.filter { !drop.contains($0) })
+        // のばす音（ー）は、かなに直す前に落とす。先に直すと Mac では「ラー」が「らあ」になり、
+        // 「らーめん」で探しても「ラーメン」に当たらない（2026-11-27 の CI で出た）
+        let drop: Set<Character> = [" ", "　", "・", "（", "）", "(", ")", "、", "。", "-", "ー", "ｰ"]
+        let t = String(s.lowercased().filter { !drop.contains($0) })
+        return t.applyingTransform(.hiraganaToKatakana, reverse: true) ?? t
     }
 
     /// 探す。語を空白で分け、どの語も名前か言い換えのどれかに入っているもの。
