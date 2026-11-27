@@ -45,16 +45,18 @@ struct S27WItem: Decodable, Equatable, Identifiable, Sendable {
     /// state は変えない（アプリが見せ方だけ変える。仕事タブの柱の中の「済んだかも」「古い」の箱。S30WRules.swift）
     var auto: String?
     var autoWhy: String?
+    /// s31（2026-11-27・K31-1）: 声でも話していた候補（2 件まで。無い・読めないときは nil。S31ARules.swift）
+    var voice: [S31AVoiceRef]?
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, text, who, day, time, due, ball, state, certainty, src, link, auto
+        case id, kind, text, who, day, time, due, ball, state, certainty, src, link, auto, voice
         case projectID = "project_id", dueGuess = "due_guess", ageDays = "age_days", autoWhy = "auto_why"
     }
 
     init(id: String, kind: String? = nil, text: String, projectID: String? = nil, who: String? = nil, day: String? = nil,
          time: String? = nil, due: String? = nil, dueGuess: Bool? = nil, ball: String? = nil, ageDays: Int? = nil,
          state: String? = nil, certainty: String? = nil, src: String? = nil, link: String? = nil,
-         auto: String? = nil, autoWhy: String? = nil) {
+         auto: String? = nil, autoWhy: String? = nil, voice: [S31AVoiceRef]? = nil) {
         self.id = id
         self.kind = kind
         self.text = text
@@ -72,6 +74,7 @@ struct S27WItem: Decodable, Equatable, Identifiable, Sendable {
         self.link = link
         self.auto = auto
         self.autoWhy = autoWhy
+        self.voice = voice
     }
 
     init(from decoder: Decoder) throws {
@@ -93,6 +96,7 @@ struct S27WItem: Decodable, Equatable, Identifiable, Sendable {
         link = c.s27w(.link)
         auto = c.s27w(.auto)
         autoWhy = c.s27w(.autoWhy)
+        voice = S31ARules.voices(c, .voice)
     }
 
     /// 根拠の無い文（守4。「たぶん」を付ける）

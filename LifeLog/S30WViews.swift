@@ -1109,6 +1109,7 @@ private struct S30WMeta: View {
         if !meta.isEmpty {
             Text(meta).font(LL.TypeScale.note).foregroundStyle(LL.dim)
         }
+        S31AVoiceMark(item: item)  // s31 声でも話していた候補（S31AViews.swift）
     }
 }
 

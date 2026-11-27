@@ -961,6 +961,8 @@ struct PersonPageView: View {
                 }
             }
             PersonLinksSection(page: page)
+            // チャット・LINE と声（2026-11-27。s31。S31AViews.swift）
+            S31APersonSection(name: page.name, personID: page.id)
             // この人とどうなりたいか（2026-11-19。s18。KnowMeViews.swift）
             PersonGoalSection(name: page.name, pe: page.id)
             Section("やりとり") {
@@ -981,6 +983,7 @@ struct PersonPageView: View {
         }
         .navigationTitle(page.name)
         .countsOpen("personPage")
+        .modifier(S31ALoad(person: page.name))  // s31 /links?person=
     }
 }
 
