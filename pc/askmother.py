@@ -26,6 +26,19 @@ Claude に頼めなければ、claude.py と同じ番号（402・403・429・502
   （意味の索引が使えないときは、探し方の言葉を含む節だけ）。ファイルを丸ごと渡すことはしない。
 - 答えの sources の 1 件に、省略できる "path"（母艦の中の場所）が付くことがある。searched に "semantic"（意味で見つけて
   渡した数）と "topics" が付く。
+
+2026-11-28（s36。担当 p。取り決め K36-4。名前と形を変えない）:
+- 体に省ける "scope": "all"|"work"（省けば all＝今のまま。ほかの値は 400）。features に "askwork"（"askmother" と同じ決まり）。
+- work のときは、母艦の仕事の材料を先に引いて、言葉で探した行より前に Claude へ渡す: 仕事の台帳（state/s25l_work_ledger.json）・
+  K2（state/work_for_app.json の 案件の項目・今日の一覧・決まったこと）・項目の時刻と人（state/s32_work_items.json）・
+  テストケースと不具合（state/s36_for_app.json の cases・bugs）。質問の言葉・探し方の言葉・「待ち」「決まった」などの
+  言い方で選ぶ（規則・0 円。WORK_K 件まで）。
+- 答えの sources の形は今のまま。仕事の材料から来た 1 件には、省ける "who"（だれ。分かるときだけ）・"via"
+  （"summary"＝仕事のまとめ・"voice"＝声の記録から・"table"＝表の写真から・"other"）・"ref"（W-<数>）が付く。
+  searched に省ける "scope" と "work"（渡した仕事の材料の数）が付く。
+- Claude の purpose は "askmother.s36-work.plan"・"askmother.s36-work.answer"（"askmother" の前方一致の上限の中）。
+  そのうえで、この中でも 1 日 WORK_DAILY_MAX 回（仮）まで。超えたら 409 {"error", "purpose_off": "daily_cap"}。
+- 職場の中身はこの PC と端末の中だけ（と、もとからの Claude）。記録（log.txt）には数だけ。
 """
 
 from __future__ import annotations
@@ -38,6 +51,7 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -46,6 +60,7 @@ import claude
 import mothersearch
 import motherquery  # 2026-11-16（強化案 129）: 場所・年表・約束・ページを絞って引く
 import mothership
+import s27pwork  # s36 K36-4: 母艦の state を読む決まり（大きさの上限・壊れたら読まない・同じ更新時刻なら読み直さない）
 
 POSTS = ("/ask-mothership",)
 FEATURE = "askmother"
@@ -70,6 +85,8 @@ LABELS = {"limitless": "録音（Limitless）", "plaud": "PLAUD", "plaud-whisper
           "line": "LINE", "claude": "Claude との会話", "digest": "1日のまとめ", "calendar": "予定", "health": "体調",
           "photos": "写真", "location": "場所", "work-digest": "仕事のまとめ", "money": "お金",
           "lookup": "母艦の一覧（場所・年表・約束・ページ）",
+          "work-ledger": "仕事の台帳", "work-k2": "仕事の画面", "work-items": "仕事のまとめの項目",
+          "work-cases": "テストケースの表", "work-bugs": "不具合の一覧",
           **{k: v for k, v in mothersearch.LABELS.items() if k not in ("line", "plaud", "digest")}}
 # 2026-11-15（強化案 42・48）: 意味で探す
 SEMANTIC_K = 12                 # 会話・まとめから意味で取る数
@@ -89,6 +106,38 @@ SEMANTIC: Callable | None = None
 PLAN_PURPOSE = "askmother.plan"
 ANSWER_PURPOSE = "askmother.answer"
 NOT_FOUND = "母艦の記録（LINE・写真・予定・お金など）には、合うものが見つかりませんでした。"
+
+# 2026-11-28（s36 K36-4）: 仕事の質問
+SCOPES = ("all", "work")
+WORK_FEATURE = "askwork"
+WORK_PLAN_PURPOSE = "askmother.s36-work.plan"
+WORK_ANSWER_PURPOSE = "askmother.s36-work.answer"
+WORK_DAILY_MAX = 20             # 仮: 仕事の質問は 1 日 20 回まで（"askmother" の上限の中で、さらに）
+WORK_K = 30                     # 渡す仕事の材料の数
+WORK_LEDGER = Path("state") / "s25l_work_ledger.json"
+WORK_K2 = Path("state") / "work_for_app.json"
+WORK_ITEMS = Path("state") / "s32_work_items.json"
+WORK_S36 = Path("state") / "s36_for_app.json"
+WORK_READ_MAX = 8 * 1024 * 1024
+WORK_SOURCES = {"work-ledger": "仕事の台帳", "work-k2": "仕事の画面", "work-items": "仕事のまとめの項目",
+                "work-cases": "テストケースの表", "work-bugs": "不具合の一覧"}
+VIA = {"summary": "まとめ", "voice": "声", "table": "表の写真", "other": "ほか"}
+WORK_KIND_LABEL = {"homework": "宿題", "decided": "決まったこと", "open": "開いている話", "issue": "課題"}
+WORK_EXTRA_KEYS = ("who", "who_guess", "via", "ref")
+WORK_INTENTS = (
+    (("待ち", "待って", "ボール", "誰が", "だれが"), "waiting"),
+    (("決ま", "決定", "決め", "合意"), "decided"),
+    (("宿題", "やること", "頼まれ", "タスク", "対応"), "homework"),
+    (("不具合", "バグ", "障害", "起票", "チケット"), "bugs"),
+    (("テスト", "ケース", "残り", "見込み", "進み", "進捗", "エビデンス", "終わる"), "cases"),
+)
+HIRAGANA = re.compile(r"[\u3041-\u309f]+")
+WORK_ANSWER_RULES = (
+    "- source が work- で始まるものは、仕事の材料です（work-ledger＝仕事の台帳・work-k2＝仕事の画面・work-items＝仕事のまとめの項目・"
+    "work-cases＝テストケースの表・work-bugs＝不具合の一覧）。who はだれ（分かるときだけ。who_guess は推定）、"
+    "via は出どころ（summary＝仕事のまとめ・voice＝声の記録から・table＝表の写真から）、ref は台帳の番号です。\n"
+    "- 仕事の材料を使ったときは、答えの文に、いつ（日）・だれ・まとめか声か を添えます。who が無ければ、だれかは書きません。\n"
+)
 
 DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -185,7 +234,7 @@ def available(config: dict) -> bool:
 
 
 def features(config: dict) -> list[str]:
-    return [FEATURE] if available(config) else []
+    return [FEATURE, WORK_FEATURE] if available(config) else []
 
 
 # MARK: - 探し方
@@ -455,6 +504,9 @@ def gather(groups: list[list[dict]], ranked: Iterable[int] = ()) -> list[dict]:
                        "text": text, "context": context}
             if hit.get("path"):
                 snippet["path"] = str(hit["path"])[:200]
+            for extra in WORK_EXTRA_KEYS:  # s36 K36-4: 仕事の材料の だれ・出どころ・番号（ほかの系統には無い）
+                if hit.get(extra):
+                    snippet[extra] = str(hit[extra])[:80]
             picked.append(snippet)
             if len(picked) >= SNIPPETS:
                 break
@@ -552,6 +604,193 @@ def dedupe(groups: list[list[dict]], semantic_groups: list[list[dict]]) -> list[
     return out
 
 
+# MARK: - 仕事の材料（2026-11-28。s36 K36-4）
+
+
+def _wnorm(text) -> str:
+    """比べるための形（全角半角・大文字小文字をそろえ、空白と区切りの記号を落とす。カタカナはそのまま）"""
+    if not isinstance(text, str):
+        return ""
+    text = unicodedata.normalize("NFKC", text).casefold()
+    return re.sub(r"[\s・･/\\\-‐‑–—_()\[\]{}「」『』【】〔〕、。,.:;!?#'\"＃？！]+", "", text)
+
+
+def _grams(text: str) -> set[str]:
+    """2 字の組（ひらがなだけの組は落とす。「した」「こと」で当たらないように）"""
+    return {text[i:i + 2] for i in range(len(text) - 1) if not HIRAGANA.fullmatch(text[i:i + 2])}
+
+
+def via_of(source) -> str:
+    """仕事の台帳・K2 の出どころの文 → summary（仕事のまとめ）・voice（声）・other"""
+    text = str(source or "")
+    if text.startswith("仕事のまとめ") or text.startswith("work-digest"):
+        return "summary"
+    if text.startswith("lifelog-pc") or text.startswith("PLAUD") or "議事録" in text or text.startswith("声"):
+        return "voice"   # 頼まれごと帳（議事録から）は PLAUD の議事録から＝声とみなす（仮）
+    return "other"
+
+
+def _time_of(source) -> str:
+    found = re.search(r"\d{4}-\d{2}-\d{2} (\d{2}:\d{2})", str(source or ""))
+    return found.group(1) if found else ""
+
+
+def _wtext(value, n: int = SNIPPET_MAX) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:n]
+
+
+def _list(value) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _work_rows(base: Path) -> list[dict]:
+    """母艦の仕事の材料を、抜き出しの形の候補にする（読めないファイルは飛ばす）。tags は選ぶための印"""
+    rows: list[dict] = []
+    s32, _ = s27pwork._load(base, WORK_ITEMS, WORK_READ_MAX)
+    s32_days = (s32 or {}).get("days") if isinstance((s32 or {}).get("days"), dict) else {}
+    at_who: dict[tuple[str, str], tuple[str, str]] = {}
+    for day, items in s32_days.items():
+        for item in _list(items):
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                at_who[(str(day), _wnorm(item["text"]))] = (str(item.get("at") or ""), str(item.get("who") or ""))
+
+    def add(source: str, day, moment, text, who=None, via="other", ref=None, kind=None, tags=(), who_guess=None,
+            case=None) -> None:
+        body = _wtext(text)
+        if not body:
+            return
+        day = str(day or "")
+        extra = at_who.get((day, _wnorm(text if isinstance(text, str) else "")))
+        if extra:
+            moment = moment or extra[0]
+            who = who or extra[1] or None
+        label = WORK_KIND_LABEL.get(str(kind or ""), "")
+        head = "".join(f"[{x}] " for x in (label, _wtext(case, 40)) if x)
+        rows.append({"day": day if valid_day(day) else "", "time": str(moment or "")[:5], "source": source,
+                     "text": head + body, "context": [], "who": _wtext(who, 40) or None,
+                     "who_guess": _wtext(who_guess, 40) or None, "via": via, "ref": _wtext(ref, 20) or None,
+                     "kind": str(kind or ""), "tags": {t for t in tags if t}, "key": _wnorm(body)[:60]})
+
+    ledger, _ = s27pwork._load(base, WORK_LEDGER, WORK_READ_MAX)
+    for item in _list((ledger or {}).get("items")):
+        if not isinstance(item, dict) or item.get("merged_into"):
+            continue
+        text = item.get("text")
+        if item.get("closed") and isinstance(text, str):
+            text = f"{text}（閉じた）"
+        add("work-ledger", item.get("day"), _time_of(item.get("source")), text, item.get("who"), via_of(item.get("source")),
+            item.get("ref"), item.get("kind"), (item.get("kind"),), case=item.get("case"))
+    k2, _ = s27pwork._load(base, WORK_K2, WORK_READ_MAX)
+    k2 = k2 or {}
+    names = {p.get("id"): p.get("name") for p in _list(k2.get("projects")) if isinstance(p, dict)}
+
+    def add_item(item, tags=()) -> None:
+        if isinstance(item, dict):
+            add("work-k2", item.get("day"), item.get("time"), item.get("text"), item.get("who"), via_of(item.get("src")),
+                item.get("ref"), item.get("kind"), (item.get("kind"),) + tuple(tags), item.get("who_guess"),
+                names.get(item.get("project_id")))
+
+    today = k2.get("today") if isinstance(k2.get("today"), dict) else {}
+    for part in ("waiting_on_me", "waiting_on_others", "stuck_by_me", "homework"):
+        for item in _list(today.get(part)):
+            add_item(item, ("waiting",) if part.startswith("waiting") or part == "stuck_by_me" else ())
+    for p in _list(k2.get("projects")):
+        if isinstance(p, dict):
+            for part in ("items", "timeline"):
+                for item in _list(p.get(part)):
+                    add_item(item)
+    for item in _list(k2.get("decisions")):
+        if isinstance(item, dict):
+            add("work-k2", item.get("day"), "", item.get("text"), item.get("who"), "other", None, "decided", ("decided",))
+    for day, items in s32_days.items():
+        for item in _list(items):
+            if isinstance(item, dict):
+                add("work-items", day, item.get("at"), item.get("text"), item.get("who"), "summary")
+    s36, _ = s27pwork._load(base, WORK_S36, WORK_READ_MAX)
+
+    def number(value) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+    cases = (s36 or {}).get("cases")
+    if isinstance(cases, dict):
+        as_of = cases.get("as_of")
+        parts = [f"{label} {cases.get(key)}" for key, label in (("total", "全"), ("done", "済"), ("ng", "不可"),
+                                                               ("waiting", "待ち"), ("left", "残り"))
+                 if number(cases.get(key))]
+        if number(cases.get("per_day")):
+            parts.append(f"1 日 {cases['per_day']}")
+        if isinstance(cases.get("eta"), str):
+            parts.append(f"終わる見込み {cases['eta']}（仮）")
+        if parts:
+            note = _wtext(cases.get("eta_note"), 120)
+            add("work-cases", as_of, "", "テストケースの進み: " + "・".join(parts) + (f"。{note}" if note else ""),
+                via="table", tags=("cases",))
+        for area in _list(cases.get("by_area")):
+            if isinstance(area, dict) and area.get("area"):
+                add("work-cases", as_of, "", f"テストケースの範囲 {_wtext(area['area'], 60)}: 済 {area.get('done')} / 全 {area.get('total')}",
+                    via="table", tags=("cases",))
+        for miss in _list(cases.get("evidence_missing")):
+            if isinstance(miss, dict) and _wtext(miss.get("text")):
+                add("work-cases", as_of, "", f"エビデンスの抜け: {_wtext(miss.get('text'))}", via="table",
+                    ref=miss.get("ref"), tags=("cases",))
+    bugs = (s36 or {}).get("bugs")
+    if isinstance(bugs, dict):
+        if number(bugs.get("open")) or number(bugs.get("closed")):
+            add("work-bugs", bugs.get("as_of"), "", f"不具合の数: 開いている {bugs.get('open')}・閉じた {bugs.get('closed')}",
+                via="table", tags=("bugs",))
+        for item in _list(bugs.get("items")):
+            if isinstance(item, dict) and _wtext(item.get("text")):
+                state = _wtext(item.get("state"), 20)
+                add("work-bugs", item.get("day") or bugs.get("as_of"), "",
+                    f"不具合 {_wtext(item.get('text'))}" + (f"（{state}）" if state else ""), item.get("who"), "table",
+                    item.get("ref"), tags=("bugs",))
+    return rows
+
+
+def work_hits(base: Path, question: str, words: Iterable[str] = (), frm: str | None = None, to: str | None = None,
+              k: int = WORK_K) -> list[dict]:
+    """質問に合う仕事の材料（点の高い順・同じ点は新しい日から。同じ文は 1 つ）。規則だけ・0 円"""
+    rows = _work_rows(base)
+    q = _wnorm(question)
+    grams = _grams(q)
+    terms = [w for w in dict.fromkeys(_wnorm(w) for w in words) if len(w) >= 2]
+    intents = {name for marks, name in WORK_INTENTS if any(m in question for m in marks)}
+    scored: list[tuple[int, str, str, dict]] = []
+    for row in rows:
+        if (frm or to) and row["day"] and not ((frm or "") <= row["day"] <= (to or "9999")):
+            continue
+        body = _wnorm(row["text"] + " " + (row["who"] or "") + " " + (row["who_guess"] or ""))
+        score = 3 * sum(1 for w in terms if w in body) + len(grams & _grams(body))
+        if row["ref"] and _wnorm(row["ref"]) in q:
+            score += 6
+        for name, bonus in (("waiting", 3), ("decided", 3), ("homework", 3), ("bugs", 4), ("cases", 4)):
+            if name in intents and name in row["tags"]:
+                score += bonus
+        if score <= 0:
+            continue
+        scored.append((score, row["day"], row["time"], row))
+    scored.sort(key=lambda r: (r[0], r[1], r[2]), reverse=True)
+    out: list[dict] = []
+    seen: set[str] = set()
+    for _, _, _, row in scored:
+        key = row["key"] or row["text"]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({x: row[x] for x in ("day", "time", "source", "text", "context", "who", "who_guess", "via", "ref")})
+        if len(out) >= k:
+            break
+    return out
+
+
+def work_cap_reached(day: str | None = None) -> bool:
+    """仕事の質問の 1 日の上限（仮）に届いたか（答えの頼みの数で数える）"""
+    try:
+        return claude.LEDGER.day_calls(day or claude.today(), WORK_ANSWER_PURPOSE) >= WORK_DAILY_MAX
+    except Exception:  # noqa: BLE001 — 数えられなければ止めない（月の上限・"askmother" の上限は claude.py が見る）
+        return False
+
+
 # MARK: - 質問に答える
 
 
@@ -564,17 +803,22 @@ class AskError(Exception):
 
 def ask(question: str, config: dict, log: Callable[[str], None] | None = None,
         today: datetime.date | None = None, clock: Callable[[], float] = time.monotonic,
-        store=None) -> dict:
+        store=None, scope: str = "all") -> dict:
     started = clock()
+    work = scope == "work"  # s36 K36-4
 
     def left() -> float:
         return DEADLINE - (clock() - started)
 
     if not script_path(config).is_file():
         raise AskError(503, "母艦の検索の道具（Search-Lifelog.py）が見つかりません")
+    if work and work_cap_reached():
+        raise claude.ClaudeError(claude.PURPOSE_OFF, f"仕事の質問は 1 日 {WORK_DAILY_MAX} 回までです（仮）",
+                                 purpose_off="daily_cap")
     day = today or datetime.date.today()
     got = claude.call(PLAN_SYSTEM, json.dumps({"question": question, "today": day.isoformat()}, ensure_ascii=False),
-                      json=True, max_tokens=800, tier="light", purpose=PLAN_PURPOSE, work=True, schema=PLAN_SCHEMA,
+                      json=True, max_tokens=800, tier="light", purpose=WORK_PLAN_PURPOSE if work else PLAN_PURPOSE,
+                      work=True, schema=PLAN_SCHEMA,
                       timeout=min(PLAN_TIMEOUT, max(1.0, left())), log=log)
     plan = parse_plan(got.get("data"), day)
     topics = parse_topics(got.get("data"))
@@ -620,6 +864,15 @@ def ask(question: str, config: dict, log: Callable[[str], None] | None = None,
     # 並べ方: 人・欲しい物・決めごと（あれば）→ 言葉で探した行 → 意味で探したまとまり → お金（代わる代わる取る）
     ordered = [topical] + groups[:len(plan["queries"])] + [meaning] + groups[len(plan["queries"]):]
     ranked = {0, len(plan["queries"]) + 1}
+    if work:
+        # s36 K36-4: 仕事の材料を先に引いて、いちばん前の組に（点の高い順のまま）
+        words = [w for q in plan["queries"] for w in q["words"]]
+        try:
+            worked = work_hits(mothership.home(config), question, words, sem_from, sem_to)
+        except Exception:  # noqa: BLE001 — 仕事の材料が読めなくても、今の探し方で答える
+            worked = []
+        ordered = [worked] + ordered
+        ranked = {0} | {r + 1 for r in ranked}
     snippets = gather(ordered, ranked=ranked)
     by_source: dict[str, int] = {}
     for s in snippets:
@@ -628,13 +881,18 @@ def ask(question: str, config: dict, log: Callable[[str], None] | None = None,
     semantic_used = sum(1 for s in snippets if (s["day"], s["text"][:80]) in semantic_keys)
     searched = {"queries": len(plan["queries"]) + (1 if plan["money"] else 0), "snippets": len(snippets),
                 "by_source": by_source, "semantic": semantic_used, "topics": topics, "lookups": len(lookups)}
+    if work:
+        searched["scope"] = "work"
+        searched["work"] = sum(1 for s in snippets if s["source"] in WORK_SOURCES)
     if not snippets:
         return {"available": True, "found": False, "answer": NOT_FOUND, "sources": [], "searched": searched,
                 "seconds": round(clock() - started, 1)}
     if left() < 3:
         raise AskError(504, "時間がかかりすぎました。言葉や期間をしぼって、もう一度聞いてください")
     prompt = json.dumps({"question": question, "today": day.isoformat(), "snippets": snippets}, ensure_ascii=False)
-    got = claude.call(ANSWER_SYSTEM, prompt, json=True, max_tokens=1500, tier="standard", purpose=ANSWER_PURPOSE,
+    system = ANSWER_SYSTEM.replace("- 答えは 600 文字まで。", WORK_ANSWER_RULES + "- 答えは 600 文字まで。") if work else ANSWER_SYSTEM
+    got = claude.call(system, prompt, json=True, max_tokens=1500, tier="standard",
+                      purpose=WORK_ANSWER_PURPOSE if work else ANSWER_PURPOSE,
                       work=True, schema=ANSWER_SCHEMA, timeout=max(3.0, left()), log=log)
     data = got.get("data") if isinstance(got.get("data"), dict) else {}
     answer = str(data.get("answer") or "").strip()[:1200]
@@ -643,7 +901,8 @@ def ask(question: str, config: dict, log: Callable[[str], None] | None = None,
     chosen = [snippets[n - 1] for n in dict.fromkeys(used)] if used else (snippets[:8] if found else [])
     sources = [{"n": s["n"], "day": s["day"], "time": s["time"], "source": s["source"],
                 "label": LABELS.get(s["source"], s["source"]), "text": s["text"][:160],
-                **({"path": s["path"]} if s.get("path") else {})} for s in chosen]
+                **({"path": s["path"]} if s.get("path") else {}),
+                **{k: s[k] for k in ("who", "via", "ref") if s.get(k)}} for s in chosen]  # s36 K36-4: 足すだけ
     # 2026-11-16（強化案 130）: 会話の出どころには、元の音声の所（PC に残っていれば）を付ける
     if store is not None:
         for entry in sources:
@@ -675,6 +934,20 @@ def parse_request(data: bytes) -> str:
     return question.strip()
 
 
+def parse_scope(data: bytes) -> str:
+    """s36 K36-4: 体の "scope"（省けば all）。ほかの値は ValueError"""
+    try:
+        body = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError("中身が JSON ではありません") from None
+    scope = body.get("scope") if isinstance(body, dict) else None
+    if scope is None:
+        return "all"
+    if scope not in SCOPES:
+        raise ValueError("scope は all か work です")
+    return scope
+
+
 def http_post(handler, config: dict, log: Callable[[str], None], store=None) -> None:
     """POST /ask-mothership（合言葉は lifelog_pc.py が確かめてから呼ぶ）"""
     try:
@@ -688,11 +961,12 @@ def http_post(handler, config: dict, log: Callable[[str], None], store=None) -> 
     data = handler.rfile.read(length)
     try:
         question = parse_request(data)
+        scope = parse_scope(data)
     except ValueError as error:
         handler.send_json(400, {"error": str(error)})
         return
     try:
-        reply = ask(question, config, log, store=store)
+        reply = ask(question, config, log, store=store, scope=scope)
     except claude.ClaudeError as error:
         log(f"{handler.client_address[0]} から /ask-mothership: Claude に頼めませんでした（{error.status}）")
         handler.send_json(error.status, {k: (claude.scrub(v) if isinstance(v, str) else v) for k, v in error.body.items()})
@@ -705,6 +979,8 @@ def http_post(handler, config: dict, log: Callable[[str], None], store=None) -> 
         log(f"/ask-mothership で答えを作れませんでした: {type(error).__name__}")
         handler.send_json(500, {"error": "母艦から答えを作れませんでした"})
         return
-    log(f"{handler.client_address[0]} から /ask-mothership: 探し方 {reply['searched']['queries']}・"
+    log(f"{handler.client_address[0]} から /ask-mothership{'（仕事）' if scope == 'work' else ''}: "
+        f"探し方 {reply['searched']['queries']}・"
+        f"{'仕事の材料 ' + str(reply['searched'].get('work', 0)) + ' 件・' if scope == 'work' else ''}"
         f"抜き出し {reply['searched']['snippets']} 件（意味で {reply['searched'].get('semantic', 0)}）・{'答えた' if reply['found'] else '見つからない'}・{reply['seconds']} 秒")
     handler.send_json(200, reply)

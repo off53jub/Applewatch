@@ -6,7 +6,7 @@ iPhone の中の文字の読み取り（Vision）は、画面の折り返しで�
 - POST /work/photo（オーナーの Bearer）。1 枚ずつ。
   体: {"id": まとめの id（POST /work/digest と同じ）, "day": "YYYY-MM-DD", "index": 0 から, "count": 枚数, "jpeg_b64": "..."}
   返事: {"ok": true, "have": そろった枚数, "count": n, "run": "started"|"already"|"off"|"waiting"}
-  検め: id は UUID・day は本当にある日・count は 1〜12・index は 0 以上 count 未満・jpeg_b64 は base64 で、
+  検め: id は UUID・day は本当にある日・count は 1〜30（s36 で 12 から）・index は 0 以上 count 未満・jpeg_b64 は base64 で、
   デコードしたあと 3MB まで・中身は JPEG の頭（FF D8）で始まる。どれかに外れたら 400。
   置き場: 母艦の inbox/work_photo/<id>/<index>.jpg と inbox/work_photo/<id>/meta.json
   （{"id","day","count","received":[index…],"at"}）。どちらも一時ファイルに書いてから入れ替える（s30pwork と同じ）。
@@ -18,6 +18,14 @@ iPhone の中の文字の読み取り（Vision）は、画面の折り返しで�
   そのときは書かず {"ok": false, "have": 0, "count": 0, "run": "off"}。
 - features "workphoto"（母艦の置き場があって止めていないとき。s30pwork.features と同じ決まり）
 - 記録（log）に中身（写真・文字）は書かない。書くのは id の頭 8 字と枚数だけ。
+
+s36（2026-11-28。担当 p）: 取り決め K36-2（名前と形を変えない）
+- 体に省ける "kind": "digest"|"cases"|"bugs"（省けば digest。ほかの値は 400）。cases はテストケースの表、bugs は不具合の一覧の写真
+  （仕事のまとめの文とは別。アプリは cases/bugs のとき POST /work/digest は送らず、id は新しい UUID）。
+- count は 1〜30（細1。前は 12）。meta.json に "kind" を残す（{"id","day","kind","count","received","at"}）。
+- cases/bugs でも、そろったら同じ起こし方（s30pwork.kick → Run-WorkNow.py --kick）。読むのは母艦の担当（s35-Read-WorkPhotos.py）。
+- 同じ id で kind が前と違うときも、新しい組として数え直す（前の meta に kind が無ければ digest とみなす）。
+- features に "workphoto30"（"workphoto" と同じ決まり。アプリは無ければ前の動き＝12 枚・kind なし）。
 """
 
 from __future__ import annotations
@@ -37,8 +45,10 @@ META = "meta.json"
 
 POSTS = ("/work/photo",)
 FEATURE = "workphoto"
+FEATURE30 = "workphoto30"              # s36 K36-2: count 30 と kind を受ける
 
-COUNT_MAX = 12                         # 1 回のまとめの写真の枚数
+COUNT_MAX = 30                         # 1 回のまとめの写真の枚数（s36 細1。前は 12）
+KINDS = ("digest", "cases", "bugs")    # s36 K36-2（省けば digest）
 PHOTO_MAX_BYTES = 3 * 1024 * 1024      # 1 枚（デコードしたあと）
 # 体の全部（3MB を base64 にした 4MB と、まわりの JSON の余裕）
 BODY_MAX = PHOTO_MAX_BYTES * 4 // 3 + 64 * 1024
@@ -48,8 +58,8 @@ _lock = threading.Lock()
 
 
 def features(base: Path | None) -> list[str]:
-    """母艦の置き場があって止めていないときだけ workphoto（s30pwork の workpush と同じ決まり）"""
-    return [FEATURE] if s30pwork._open(base) else []
+    """母艦の置き場があって止めていないときだけ workphoto・workphoto30（s30pwork の workpush と同じ決まり）"""
+    return [FEATURE, FEATURE30] if s30pwork._open(base) else []
 
 
 # MARK: - 体を検める
@@ -61,7 +71,7 @@ def _int(value) -> int | None:
 
 
 def check_photo(body) -> tuple[dict | None, str | None]:
-    """(残す形, 断る理由)。残す形は {"id", "day", "index", "count", "jpeg": bytes}"""
+    """(残す形, 断る理由)。残す形は {"id", "day", "kind", "index", "count", "jpeg": bytes}"""
     if not isinstance(body, dict):
         return None, "形が違います"
     ident = body.get("id")
@@ -70,6 +80,11 @@ def check_photo(body) -> tuple[dict | None, str | None]:
     day = body.get("day")
     if not s30pwork._valid_day(day):
         return None, "day は YYYY-MM-DD です"
+    kind = body.get("kind", "digest")
+    if kind is None:
+        kind = "digest"
+    if not isinstance(kind, str) or kind not in KINDS:
+        return None, "kind は digest・cases・bugs のどれかです"
     count, index = _int(body.get("count")), _int(body.get("index"))
     if count is None or not 1 <= count <= COUNT_MAX:
         return None, f"count は 1〜{COUNT_MAX} です"
@@ -88,7 +103,7 @@ def check_photo(body) -> tuple[dict | None, str | None]:
         return None, f"写真は 1 枚 {PHOTO_MAX_BYTES // (1024 * 1024)}MB までです"
     if not jpeg.startswith(JPEG_HEAD):
         return None, "JPEG ではありません"
-    return {"id": ident.lower(), "day": day, "index": index, "count": count, "jpeg": jpeg}, None
+    return {"id": ident.lower(), "day": day, "kind": kind, "index": index, "count": count, "jpeg": jpeg}, None
 
 
 # MARK: - 母艦の inbox に置く
@@ -126,10 +141,11 @@ def write_photo(base: Path, photo: dict, now: datetime.datetime | None = None) -
         folder.mkdir(parents=True, exist_ok=True)
         old = _read_meta(folder)
         received: list[int] = []
-        if old.get("count") == photo["count"] and old.get("day") == photo["day"]:
+        old_kind = old.get("kind") if old.get("kind") in KINDS else "digest"
+        if old.get("count") == photo["count"] and old.get("day") == photo["day"] and old_kind == photo["kind"]:
             received = sorted({n for n in (old.get("received") or []) if _int(n) is not None and 0 <= n < photo["count"]})
         else:
-            # 新しい組: count 以上の番号の写真は消す（数え直す）
+            # 新しい組（count・day・kind のどれかが違う）: count 以上の番号の写真は消す（数え直す）
             for stale in folder.glob("*.jpg"):
                 try:
                     if int(stale.stem) >= photo["count"]:
@@ -139,7 +155,8 @@ def write_photo(base: Path, photo: dict, now: datetime.datetime | None = None) -
         _replace(folder / f"{photo['index']}.jpg", photo["jpeg"])
         received = sorted(set(received) | {photo["index"]})
         stamp = (now or datetime.datetime.now().astimezone()).isoformat(timespec="seconds")
-        meta = {"id": photo["id"], "day": photo["day"], "count": photo["count"], "received": received, "at": stamp}
+        meta = {"id": photo["id"], "day": photo["day"], "kind": photo["kind"], "count": photo["count"],
+                "received": received, "at": stamp}
         _replace(folder / META, json.dumps(meta, ensure_ascii=False).encode("utf-8"))
     return meta
 
@@ -187,5 +204,5 @@ def http_post(handler, path: str, config: dict, base: Path | None, log=None) -> 
         return
     have, count = len(meta["received"]), meta["count"]
     run = s30pwork.kick(base, config) if have >= count else "waiting"
-    say(f"POST /work/photo: {photo['index'] + 1}/{count} 枚目・そろった {have} 枚・起こし {run}（id {photo['id'][:8]}…）")
+    say(f"POST /work/photo: {photo['kind']} {photo['index'] + 1}/{count} 枚目・そろった {have} 枚・起こし {run}（id {photo['id'][:8]}…）")
     handler.send_json(200, {"ok": True, "have": have, "count": count, "run": run})
