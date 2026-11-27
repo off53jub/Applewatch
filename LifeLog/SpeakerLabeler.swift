@@ -83,6 +83,8 @@ actor SpeakerLabeler {
         var updated: Date? = nil
         /// 記録に出さない人（声で見分けて、その人の行は書かずに「消した行」に回す）
         var hidden: Bool? = nil
+        /// 「知らない人・もう聞かない」（2026-11-27。s29 の 声21。S29N の名前付けの山に出さない。忘れない。nil は前の形）
+        var quiet: Bool? = nil
 
         var isSelf: Bool { id == SpeakerLabeler.selfID }
         var displayName: String { isSelf ? SpeakerLabeler.selfName : name ?? "人物\(id)" }
@@ -361,7 +363,8 @@ actor SpeakerLabeler {
         // 名前を付けていない声で、2週間聞いていないものは忘れる（通りすがりの人など）
         let old = Date.now.addingTimeInterval(-14 * 24 * 3600)
         // （記録に出さない人は、また聞こえたときに見分けられるよう忘れない）
-        forget { !$0.isNamed && $0.pinnedCount == 0 && $0.lastHeard < old && $0.hidden != true }
+        // （「もう聞かない」の人も、忘れるとまた新しい人物Nとして聞かれるので忘れない。s29 の 声21）
+        forget { !$0.isNamed && $0.pinnedCount == 0 && $0.lastHeard < old && $0.hidden != true && $0.quiet != true }
         save()
 
         return result.segments.enumerated().compactMap { index, s in
@@ -805,6 +808,14 @@ actor SpeakerLabeler {
         save()
     }
 
+    /// 「知らない人・もう聞かない」を切り替える（s29 の 声21。本人が押したときだけ）
+    func setQuiet(_ id: String, _ quiet: Bool) {
+        guard let i = index(of: id), !store.people[i].isSelf else { return }
+        store.people[i].quiet = quiet ? true : nil
+        store.people[i].updated = .now
+        save()
+    }
+
     func setContext(_ id: String, to context: Context?) {
         guard let i = index(of: id) else { return }
         store.people[i].context = context
@@ -1044,6 +1055,8 @@ actor SpeakerLabeler {
         let samples: [Sample]
         let updated: Date?
         var hidden: Bool? = nil
+        /// s29 の 声21（前の形には無い）
+        var quiet: Bool? = nil
     }
 
     struct SyncPeople: Codable, Sendable {
@@ -1070,7 +1083,7 @@ actor SpeakerLabeler {
                        // 細かく変わり続けないように、分と日にそろえる
                        seconds: (p.seconds / 60).rounded(.down) * 60,
                        lastHeard: Date(timeIntervalSince1970: (p.lastHeard.timeIntervalSince1970 / 86400).rounded(.down) * 86400),
-                       samples: p.samples, updated: p.updated, hidden: p.hidden)
+                       samples: p.samples, updated: p.updated, hidden: p.hidden, quiet: p.quiet)
         }
         return SyncPeople(people: people, removed: removed)
     }
@@ -1095,6 +1108,7 @@ actor SpeakerLabeler {
                     p.name = rp.name
                     p.context = rp.context
                     p.hidden = rp.hidden
+                    p.quiet = rp.quiet
                     p.updated = rp.updated
                 }
                 let known = Set(p.voices.map(\.embedding))
@@ -1107,7 +1121,7 @@ actor SpeakerLabeler {
                 }
                 p.samples = Array(p.samples.suffix(3))
                 if !added.isEmpty || p.name != before.name || p.context != before.context || p.hidden != before.hidden
-                    || p.seconds != before.seconds || p.lastHeard != before.lastHeard || p.samples != before.samples {
+                    || p.quiet != before.quiet || p.seconds != before.seconds || p.lastHeard != before.lastHeard || p.samples != before.samples {
                     store.people[i] = p
                     if !added.isEmpty { trimVoices(i) }
                     changed = true
@@ -1116,7 +1130,7 @@ actor SpeakerLabeler {
                 if let gone = removed[rp.id], gone >= remoteTouched { continue }
                 store.people.append(Person(id: rp.id, name: rp.name, context: rp.context, voices: voices,
                                            seconds: rp.seconds, lastHeard: rp.lastHeard, samples: rp.samples,
-                                           updated: rp.updated, hidden: rp.hidden))
+                                           updated: rp.updated, hidden: rp.hidden, quiet: rp.quiet))
                 removed[rp.id] = nil
                 changed = true
             }
@@ -1150,7 +1164,8 @@ actor SpeakerLabeler {
             guard let new = map[store.people[i].id] else { continue }
             let p = store.people[i]
             store.people[i] = Person(id: new, name: p.name, context: p.context, voices: p.voices, seconds: p.seconds,
-                                     lastHeard: p.lastHeard, samples: p.samples, updated: p.updated, hidden: p.hidden)
+                                     lastHeard: p.lastHeard, samples: p.samples, updated: p.updated, hidden: p.hidden,
+                                     quiet: p.quiet)
         }
         save()
         return map
@@ -1232,8 +1247,9 @@ actor SpeakerLabeler {
     private var lastSavedBytes = 0
 
     private static func shape(_ s: Store) -> String {
-        let kept = s.people.filter { $0.id == selfID || $0.name != nil || $0.hidden == true || $0.pinnedCount > 0 }
-        return "\(s.removed?.count ?? 0)|" + kept.map { "\($0.id):\($0.name ?? ""):\($0.hidden == true ? 1 : 0):\($0.pinnedCount)" }
+        // 「もう聞かない」（s29 の 声21）も、すぐ書く
+        let kept = s.people.filter { $0.id == selfID || $0.name != nil || $0.hidden == true || $0.quiet == true || $0.pinnedCount > 0 }
+        return "\(s.removed?.count ?? 0)|" + kept.map { "\($0.id):\($0.name ?? ""):\($0.hidden == true ? 1 : 0):\($0.quiet == true ? 1 : 0):\($0.pinnedCount)" }
             .joined(separator: ",")
     }
 

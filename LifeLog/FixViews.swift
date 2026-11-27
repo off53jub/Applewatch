@@ -11,9 +11,12 @@ extension Pipeline {
         let week = AnswerKey.weekKey(.now)
         let samples = answerKey.samples(of: week)
         let answers = samples.isEmpty ? AnswerKey.perWeek : samples.filter { !$0.isAnswered }.count
+        // 名前付けの入口を 1 つの山に（2026-11-27。s29 の 声24。S29NViews.swift）。山がオンなら、声の見直しと名前の無い声は山の数で数える
+        let s29 = S29NSettings.isOn(S29NSettings.pileKey)
         return [
             ("AI からの質問", asks.open.count),
             ("名前を付ける候補の声", newVoices.open.count),
+            ("名前付けの山", s29 ? S29NBook.shared.badgeCount : 0),
             ("職場の自分の声", selfCandidateCount),
             ("話し手の疑い", speakerDoubtCount),
             // 2026-11-15（強化案 56）: 日をまたぐ組と「◯◯さんかも」も同じ段で数える
@@ -25,8 +28,8 @@ extension Pipeline {
             ("自分を知る", knowMeCount),
             // 確かめ待ちの列（2026-11-21。s20 の 次3。S20Book.swift）
             ("確かめ待ち", S20Book.shared.waitingCount),
-            ("見直したい声", reviewCount),
-            ("名前を付けてほしい声", namelessVoiceCount),
+            ("見直したい声", s29 ? 0 : reviewCount),
+            ("名前を付けてほしい声", s29 ? 0 : namelessVoiceCount),
             ("割れやすい言葉", splitWordCandidates().count),
             ("聞き間違いかも", misheardCount),
             ("今週の答え合わせ", answers),
@@ -64,7 +67,8 @@ extension Pipeline {
         guard speakerLabelsOn else { return 0 }
         // 下のタブの数字を描くたびに呼ばれるので、記録は読まない（2026-11-16。VoiceClues.swift の skipVoicesForView）
         let skip = skipVoicesForView()
-        return people.filter { !$0.isNamed && !$0.isSelf && $0.hidden != true && $0.seconds >= 30 && !skip.contains($0.id) }.count
+        return people.filter { !$0.isNamed && !$0.isSelf && $0.hidden != true && $0.quiet != true && $0.seconds >= 30
+            && !skip.contains($0.id) }.count
     }
 }
 
@@ -83,6 +87,8 @@ struct FixView: View {
     @State private var reviewCount = 0
     /// 答えるものを 1 つの山に（2026-11-25。s26 の 軽4。初めはオン。S26UViews.swift）
     @AppStorage(S26UPile.key) private var pileOn = true
+    /// 名前付けの山（2026-11-27。s29 の 声24。初めはオン。S29NViews.swift）
+    @AppStorage(S29NSettings.pileKey) private var namingPileOn = true
     /// 1日にやる数の目安（画面の案内とタブの数字）
     static let dailyCap = 5
 
@@ -106,6 +112,7 @@ struct FixView: View {
             // 今日の 3 問（仮）と「今週は聞かないで」（2026-11-24。s24 の 減1・減4・減10。S24Views.swift）
             S24TodayQuestionsSection(hasAny: total > 0)
             if pileOn { S26UPileEntrySection() } else { ReviewDeckEntrySection() }
+            if namingPileOn && pipeline.speakerLabelsOn { S29NPileEntrySection() }
             if total == 0 {
                 Section {
                     ContentUnavailableView("今は直すものはありません", systemImage: "checkmark.circle",
@@ -154,7 +161,8 @@ struct FixView: View {
             CheckClaimSection()
             // 自分を知る（2026-11-19。s18。KnowMeViews.swift）
             KnowMeFixSection()
-            if reviewCount > 0 || unnamedToday > 0 {
+            // 名前付けの山がオンなら、前の入口は山の「もっと見る」へ（s29 の 声24）
+            if !namingPileOn && (reviewCount > 0 || unnamedToday > 0) {
                 Section("見直したい声") {
                     if reviewCount > 0 { NavigationLink("声を聞いて直す") { VoiceReviewView() } }
                     // 1 画面で ○×（2026-11-22。s21 の 使8）
@@ -162,7 +170,7 @@ struct FixView: View {
                     if unnamedToday > 0 { NavigationLink("今日の人物Nを整理") { UnnamedVoicesView(day: day) } }
                 }
             }
-            if count("名前を付けてほしい声") > 0 {
+            if !namingPileOn && count("名前を付けてほしい声") > 0 {
                 Section("名前を付けてほしい声") {
                     NavigationLink("話した相手を開く") { PeopleView() }
                 }
@@ -245,6 +253,7 @@ struct FixView: View {
             await NightReviewBook.shared.refresh(pipeline)
             await SettleBook.shared.refresh(pipeline.homePC)
             await KnowMeBook.shared.refresh(pipeline.homePC)
+            await S29NBook.shared.refresh(pipeline)  // 名前付けの山（s29。7 日を 1 日ずつ譲って数える）
         }
         .refreshable {
             await SamePersonBook.shared.refresh(pipeline.homePC, force: true)

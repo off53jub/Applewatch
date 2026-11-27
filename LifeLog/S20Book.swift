@@ -100,6 +100,8 @@ final class S20Book {
         Tally.add("s20.review.answered")
         // 1 日 3 問（仮）の上限に入れる（知らせで聞いた同じ問いは 2 回数えない。2026-11-24。s24 の 減1）
         S24Gate.noteAnswered(key: "q:" + item.id, now: now)
+        // 「この人物N はだれ」の答えを端末の人の名前付け・まとめに届ける（s29。S29NBook.swift。前は母艦へ送るだけだった）
+        S29NReviewApply.apply(item, value, now: now)
         if let shown = cardShownAt { noteAnswerSeconds(now.timeIntervalSince(shown)) }
         cardShownAt = now
     }
