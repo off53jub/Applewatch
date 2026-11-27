@@ -51,6 +51,7 @@ struct DayView: View {
         }
         // 母艦の1日の年表（家の PC から。開くたびに読み直す。つながらないときは写し。OneTimeline.swift）
         .task(id: day) { await pipeline.oneTimeline.refresh(day: day, pc: pipeline.homePC) }
+        .modifier(S31ALoad(day: day))  // s31 この日の文字と声（/links?day=。S31AViews.swift）
         .navigationTitle(day)
         .countsOpen("dayView")  // 開いた回数（2026-11-13。施策 17）
         .toolbar {
@@ -93,6 +94,7 @@ struct ActivitiesView: View {
             if withTimeline { TimelineNoteSection(day: day) }
             // PLAUD で埋めた所（アプリの記録が無い時間。読むだけ。2026-11-13。HomeFeeds.swift）
             PlaudFillSection(day: day)
+            S31ADaySection(day: day)  // s31 この日の文字と声（畳んである）
             if building {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -264,6 +266,7 @@ struct ConversationsView: View {
             if withTimeline && range == nil { TimelineNoteSection(day: day) }
             // PLAUD で埋めた所（1日を見るときだけ。読むだけで、会話には入れない。2026-11-13。HomeFeeds.swift）
             if range == nil { PlaudFillSection(day: day) }
+            if range == nil { S31ADaySection(day: day) }  // s31 この日の文字と声（畳んである）
             // 間が短く、場所と相手が同じ会話は1つのまとまりで見せる（新しい順。年表の行は、そのまとまりのあとの分を上に）
             ForEach(Array(groups.enumerated()).reversed(), id: \.offset) { g, group in
                 TimelineRowsSection(rows: g + 1 < slots.count ? Array(slots[g + 1].reversed()) : [])

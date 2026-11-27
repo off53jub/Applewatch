@@ -1936,6 +1936,7 @@ final class Pipeline {
         // 運動の種類を足した版（2026-11-19。s18 の 48）: 前に許可した人に、足した種類だけを 1 回聞く（開いているときだけ）
         await health.askNewReadsIfNeeded()
         var done = Set(UserDefaults.standard.stringArray(forKey: HealthExport.doneKey) ?? [])
+        if HealthExport.redoOnce(&done) { UserDefaults.standard.set(done.sorted(), forKey: HealthExport.doneKey) }
         let due = HealthExport.dueDays(now: now, done: done)
         guard !due.isEmpty else { return }
         var days: [HealthExport.Day] = []
@@ -1946,6 +1947,8 @@ final class Pipeline {
         // どの日も空なら、ヘルスケアの読む許可が無いのかもしれない。書いた印は付けずに、次の機会にまた見る
         guard days.contains(where: { !$0.isEmpty }) else { return }
         for day in days {
+            // ロック中でヘルスケアを読めず、せき・いびきだけの直近の日は、書かずに印も付けない（次に開いたとき書く）
+            if !day.isEmpty && !HealthExport.ready(day, now: now) { break }
             if !day.isEmpty {
                 guard let data = HealthExport.json(day) else { continue }
                 do {
