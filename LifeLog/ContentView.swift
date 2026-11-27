@@ -300,6 +300,7 @@ private struct TodayView: View {
         case .prep:
             PrepCardSection()
             S27WPrepSection()  // 次の会議の案件の 1 枚（2026-11-25。s27 の 場8。S27WViews.swift）
+            S34APrepSection()  // 会議の前の 1 枚（2026-11-27。s34 の 円4。S34AViews.swift。あるときだけ）
         // 朝の「昨日と今日」（2026-11-09。MorningBrief.swift）
         case .morningBrief: MorningBriefSection()
         case .oneYearAgo: OneYearAgoSection()
@@ -940,6 +941,7 @@ private struct SettingsView: View {
     /// 点検（毎日見るもの・調子が悪いとき）
     @ViewBuilder
     private func checkPage() -> some View {
+        S34ACheckSection()  // 自動で直した数の 1 枚（2026-11-27。s34。S34AViews.swift。あるときだけ）
         if simple {
             // 引き算の版: 自己点検・聞き取りの成績・報告の棚と「ほかの点検」だけ（ほかは S25UMoreCheckView。消していない）
             S25UCheckMainSection()
@@ -987,6 +989,7 @@ private struct SettingsView: View {
             S20SettingsSection(showRest: false)
             S22SettingsEntrySection()
             S27WSettingsSection()  // 仕事の画面（伏せる・社内のお知らせ。2026-11-25。s27 の 守2・他3）
+            S34APhotoSettingsSection()  // 写真から仕事のまとめを拾う（初めはオフ。2026-11-27。s34 の 円1。S34AViews.swift）
             Section {
                 Toggle("開くときに Face ID", isOn: $appLock)
                 Toggle("Claude を使う", isOn: $useClaude)
@@ -1076,6 +1079,8 @@ extension SettingsView {
         }
         // 休日の知らせ・時計の外出モード・映画館で休む（2026-11-21。s19。Holiday.swift）
         HolidaySettingsSection()
+        // 写真から仕事のまとめを拾う（初めはオフ。2026-11-27。s34 の 円1。S34AViews.swift）
+        S34APhotoSettingsSection()
         // 引き算の版に戻すスイッチ（2026-11-24。s25 の 大1）
         S25USimpleSection(simple: $simple)
         detailedLink()

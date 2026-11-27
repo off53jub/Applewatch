@@ -74,12 +74,16 @@ struct S30WHomeView: View {
         let screen: S30WScreen? = screenNow(today)
         LLList {
             S30WBandSection(note: note) { note = nil }
+            S34ATestsSection()  // s34 円5 テストの進みの 1 行（いちばん上・あるときだけ。S34AViews.swift）
+            S34APromptSection()  // s34 円2 職場の Claude に貼る 1 つの文（あるときだけ）
             if let screen {
                 S30WUpperSections(screen: screen, today: today)
             } else {
                 S30WNoBoardSection()
             }
             S30WTasksSection(sheets: sheets)
+            S34ANudgesSection()  // s34 円3 止まっている話の次の一手と下書き（あるときだけ）
+            S34APrepSection()  // s34 円4 会議の前の 1 枚（あるときだけ）
             if let screen {
                 S30WLowerSections(screen: screen, today: today)
             }
@@ -108,6 +112,8 @@ struct S30WHomeView: View {
         }
         .onAppear {
             book.opened()
+            S34ABook.shared.opened()  // s34: GET /s34 を読み直す・写真から仕事のまとめを見る（S34ABook.swift）
+            S34APhotoScan.shared.opened()
             Tally.add("s30w.open")
         }
         .onChange(of: book.fetchedAt) {

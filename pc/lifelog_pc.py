@@ -212,6 +212,7 @@ import s27pwork  # s27（2026-11-25。担当 P）: 仕事の画面の口 K5（/w
 import s31plinks  # s31（2026-11-27。担当 p）: GET /links（文字と声の結び。s31plinks.py）
 import s30pwork  # s30（2026-11-27。担当 p）: POST /work/digest・GET /work/run（共有したらすぐ作り直す。中身は s30pwork.py）
 import s33pwork  # s33（2026-11-27。担当 p）: GET /s33・/s33/ports と POST /feedback の ramen_mark・feature_seen・device_ok（s33pwork.py）
+import s34pwork  # s34（2026-11-27。担当 p）: GET /s34・s34p_status.json・自6〜自9（声の見本を確かな場面から・影を機械の物差しで本番に・仮の数。s34pwork.py・s34pvoice.py・s34pswitch.py）
 import s32pwork  # s32（2026-11-27。担当 p）: 知7・知8・知9（仕事の言葉のヒント・番号の候補・会議の出席者。s32pwork.py・s32pnumbers.py）
 import s29pc  # s29（2026-11-27。担当 P）: 声を分ける・当てる（声2・3・5・6・7・9・12・13・17・19・22・25・26。中身は s29p*.py）
 
@@ -2315,6 +2316,7 @@ def features(engines: list | None = None) -> list[str]:
     # s31: links（GET /links。母艦に結びのファイルがあって止めていないとき。s31plinks.py）
     found.extend(s31plinks.features(mothership.home(load_config())))
     found.extend(s33pwork.features(mothership.home(load_config())))  # s33: "s33"（GET /s33）
+    found.extend(s34pwork.features(mothership.home(load_config())))  # s34: "s34"（GET /s34）
     # s29: s29groups・s29answers・s29gates・s29canonical（声を分ける・当てる。s29pc.py）
     found.extend(s29pc.features())
     # 版 10: 時計の外の道（GET /watch-route）。別の受け口が動いているときだけ
@@ -2722,6 +2724,10 @@ def start_v6(threads: int) -> None:
         s29pc.start(sys.modules[__name__])
     except Exception as error:  # noqa: BLE001
         log(f"s29 の見回りを始められませんでした: {type(error).__name__}")
+    try:  # s34（2026-11-27）: 声の見本を確かな場面から・影を機械の物差しで本番に・仮の数を毎週（s34pwork.py）
+        s34pwork.start(sys.modules[__name__])
+    except Exception as error:  # noqa: BLE001
+        log(f"s34 の見回りを始められませんでした: {type(error).__name__}")
     # 2026-11-13（施策 9・10・11）: 夜の流れ（品質の記録・同じ人かも・夜の読み直し。quality.py）
     quality.start(HOME, App.records, App.jobs, lambda: mothership.home(load_config()),
                   lambda p, r: extra_model("speaker", 1).embed(load_audio(p.read_bytes()), r), log)
@@ -3148,6 +3154,10 @@ class Handler(BaseHTTPRequestHandler):
         if path in s29pc.GETS:  # s29 声26・声5: GET /s29/gates・/s29/canonical（s29pc.py）
             if self.authorized():
                 s29pc.http_get(self, path, url.query)
+            return
+        if path in s34pwork.GETS:  # s34 K34-1: GET /s34（s34pwork.py）
+            if self.authorized():
+                s34pwork.http_get(self, path, url.query, mothership.home(load_config()))
             return
         if path in s33pwork.GETS:  # s33 K33-1: GET /s33・/s33/ports（s33pwork.py）
             if self.authorized():
