@@ -1,9 +1,9 @@
-"""2026-11-28（K-TC）: トータルコーデのアプリとの窓口（tcstyle.py）を確かめる。
+"""2026-11-28（K-TC・K-TC2）: トータルコーデのアプリとの窓口（tcstyle.py・tcphoto.py）を確かめる。
 
     python pc/vtcchecks_style.py          （v36checks_s36p.py の最後にも呼ばれる。CI の手順を増やさずに動かすため）
 
 本物の HOME・母艦・iPhone は使わない（一時フォルダに作りものの母艦）。写真は作りものの数バイト（JPEG の頭だけ）。
-母艦の Make-TryOn.py は実際には起こさず、tcstyle.SPAWN を差し替えて呼ばれ方だけ確かめる。
+母艦の Make-TryOn.py・Build-Wardrobe.py は実際には起こさず、tcstyle.SPAWN・tcphoto.RUN を差し替えて呼ばれ方だけ確かめる。
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ if not any(mark in os.environ.get("LOCALAPPDATA", "")
            for mark in ("v25s", "v26s", "v27s", "v30s", "v31s", "v32s", "v33s", "v34s", "v35s", "v36s", "vtcs")):
     os.environ["LOCALAPPDATA"] = str(Path(tempfile.mkdtemp(prefix="vtcs-local-")))
 
+import tcphoto  # noqa: E402
 import tcstyle  # noqa: E402
 from v6checks import say  # noqa: E402
 
@@ -331,6 +332,159 @@ def check_wardrobe() -> int:
     return failed
 
 
+class Runs:
+    def __init__(self, ok: bool = True) -> None:
+        self.calls: list = []
+        self.ok = ok
+
+    def __call__(self, script, python, base) -> bool:
+        self.calls.append((Path(script), Path(base)))
+        return self.ok
+
+
+ITEMS = ["to-9d07a06a", "bo-0b7881cd", "sh-11111111"]
+
+
+def closet(name: str, pmap: dict | None = None, script: bool = True) -> Path:
+    base = mother(name, script=False)
+    (base / tcstyle.WARDROBE).parent.mkdir(parents=True, exist_ok=True)
+    items = [{"id": i, "name": f"品 {i}", "photo": None} for i in ITEMS]
+    (base / tcstyle.WARDROBE).write_text(json.dumps({"version": 1, "items": items}, ensure_ascii=False), encoding="utf-8")
+    if script:
+        (base / "scripts").mkdir(exist_ok=True)
+        (base / tcphoto.SCRIPT).write_text("# 見本\n", encoding="utf-8")
+    if pmap is not None:
+        (base / tcphoto.PMAP).write_text(json.dumps(pmap, ensure_ascii=False), encoding="utf-8")
+    return base
+
+
+def photo_post(base: Path | None, path: str, body: bytes, content_type: str | None = CT, logs: list | None = None,
+               length: int | None = None) -> tuple:
+    f = Fake(body, content_type, length)
+    tcphoto.http_post(f, path, CFG, base, (logs.append if logs is not None else None))
+    return f.sent[0], f.sent[1], f
+
+
+def photo_get(base: Path | None, path: str) -> Fake:
+    f = Fake()
+    tcphoto.http_get(f, path, base)
+    return f
+
+
+def judge_body(value) -> bytes:
+    return json.dumps({"ok": value}).encode("utf-8")
+
+
+def pmap_of(base: Path) -> dict:
+    return json.loads((base / tcphoto.PMAP).read_text(encoding="utf-8"))
+
+
+SHOP = {"src": "shop", "sure": "maybe", "page": "https://shop.example/p/1", "url": "https://shop.example/i/1.jpg",
+        "match": 0.8, "rejected": ["https://old.example/x.jpg"]}
+JSON_CT = "application/json"
+
+
+def check_photo() -> int:
+    failed = 0
+    base = closet("photo", {"to-9d07a06a": dict(SHOP), "bo-0b7881cd": dict(SHOP)})
+    runs = Runs()
+    tcphoto.RUN = runs
+    logs: list = []
+    failed += say(photo_get(base, "/style/photo/to-9d07a06a").sent[0] == 404, "GET /style/photo: 写真ファイルが無ければ 404")
+    st, reply, _ = photo_post(base, "/style/photo/to-9d07a06a", form([("photo", jpeg(3), "a.jpg")]), logs=logs)
+    failed += say(st == 200 and reply == {"ok": True}, f"POST /style/photo: ok true {reply}")
+    failed += say(tcphoto.photo_path(base, "to-9d07a06a").read_bytes() == jpeg(3), "POST /style/photo: photos/<id>.jpg に中身のまま")
+    row = pmap_of(base)["to-9d07a06a"]
+    failed += say(row == {"src": "own", "sure": "yes", "rejected": ["https://old.example/x.jpg"]},
+                  f"POST /style/photo: 台帳は own・yes（removed・page・url・match は外し rejected は残す） {row}")
+    failed += say(pmap_of(base)["bo-0b7881cd"] == SHOP, "POST /style/photo: ほかの服の台帳は変えない")
+    failed += say(runs.calls == [(base / tcphoto.SCRIPT, base)], "POST /style/photo: Build-Wardrobe.py を母艦で 1 回")
+    failed += say(not list((base / tcphoto.PHOTOS).glob(".*")) and not list((base / tcphoto.PMAP).parent.glob(".*.tmp")),
+                  "POST /style/photo: 一時ファイルが残らない")
+    f = photo_get(base, "/style/photo/to-9d07a06a")
+    failed += say(f.sent[0] == 200 and f.wfile.getvalue() == jpeg(3) and f.raw_headers.get("Content-Type") == "image/jpeg",
+                  "GET /style/photo: JPEG を返す")
+    failed += say(bool(logs) and not any("品 " in line for line in logs), "記録に品名を書かない")
+    # judge true（お店の写真を「合っている」）
+    tcphoto.photo_path(base, "bo-0b7881cd").write_bytes(jpeg(4))
+    st, reply, _ = photo_post(base, "/style/photo/bo-0b7881cd/judge", judge_body(True), JSON_CT)
+    row = pmap_of(base)["bo-0b7881cd"]
+    failed += say(st == 200 and reply == {"ok": True} and row == dict(SHOP, sure="yes") and len(runs.calls) == 2,
+                  f"judge true: sure を yes（ほかは変えない）・作り直し {row}")
+    # judge false（「違う」）
+    st, reply, _ = photo_post(base, "/style/photo/bo-0b7881cd/judge", judge_body(False), JSON_CT)
+    row = pmap_of(base)["bo-0b7881cd"]
+    failed += say(st == 200 and not tcphoto.photo_path(base, "bo-0b7881cd").exists() and row.get("removed") is True
+                  and row.get("rejected") == ["https://old.example/x.jpg", "https://shop.example/i/1.jpg"] and len(runs.calls) == 3,
+                  f"judge false: 写真を消し removed・url を rejected に足す {row}")
+    failed += say(photo_get(base, "/style/photo/bo-0b7881cd").sent[0] == 404, "GET /style/photo: 消したあとは 404")
+    st, reply, _ = photo_post(base, "/style/photo/bo-0b7881cd/judge", judge_body(False), JSON_CT)
+    failed += say(st == 404, "judge: 写真が無ければ 404")
+    tcphoto.photo_path(base, "bo-0b7881cd").write_bytes(jpeg(5))  # removed のまま残ったファイル
+    failed += say(photo_get(base, "/style/photo/bo-0b7881cd").sent[0] == 404, "GET /style/photo: 台帳で removed なら、ファイルがあっても 404")
+    st, reply, _ = photo_post(base, "/style/photo/bo-0b7881cd/judge", judge_body(True), JSON_CT)
+    failed += say(st == 404, "judge: 台帳で removed なら 404")
+    st, reply, _ = photo_post(base, "/style/photo/bo-0b7881cd", form([("photo", jpeg(6), "b.jpg")]))
+    row = pmap_of(base)["bo-0b7881cd"]
+    failed += say(st == 200 and row == {"src": "own", "sure": "yes", "rejected": ["https://old.example/x.jpg", "https://shop.example/i/1.jpg"]},
+                  f"POST /style/photo: removed を外して本人の写真に {row}")
+    # 台帳が無い・Build-Wardrobe が無い
+    fresh = closet("photo-fresh", None, script=False)
+    runs2 = Runs()
+    tcphoto.RUN = runs2
+    st, reply, _ = photo_post(fresh, "/style/photo/sh-11111111", form([("photo", jpeg(7), "c.jpg")]))
+    failed += say(st == 200 and pmap_of(fresh) == {"sh-11111111": {"src": "own", "sure": "yes"}} and not runs2.calls,
+                  "POST /style/photo: 台帳が無ければ作る・Build-Wardrobe.py が無くても ok（15 分ごとの回で直る）")
+    broken = closet("photo-broken", None)
+    (broken / tcphoto.PMAP).write_text("{broken", encoding="utf-8")
+    st, reply, _ = photo_post(broken, "/style/photo/sh-11111111", form([("photo", jpeg(7), "c.jpg")]))
+    failed += say(st == 500 and (broken / tcphoto.PMAP).read_text(encoding="utf-8") == "{broken"
+                  and not tcphoto.photo_path(broken, "sh-11111111").exists(), "壊れた台帳は上書きせず 500（写真も置かない）")
+    tcphoto.RUN = runs
+    return failed
+
+
+def check_photo_validate() -> int:
+    failed = 0
+    base = closet("photo-validate", {})
+    runs = Runs()
+    tcphoto.RUN = runs
+    big = b"\xff\xd8" + b"a" * (tcphoto.PHOTO_MAX_BYTES - 1)
+    cases = {
+        "写真が 0 枚": form([("kind", "x", None)]),
+        "写真が 2 枚": form([("photo", jpeg(), "a.jpg"), ("photo", jpeg(), "b.jpg")]),
+        "JPEG でない": form([("photo", b"\x89PNG\r\n\x1a\n" + b"x" * 20, "a.png")]),
+        "15MB を超える": form([("photo", big, "a.jpg")]),
+        "途中で切れた": form([("photo", jpeg(), "a.jpg")])[:-20],
+    }
+    for label, body in cases.items():
+        st, reply, _ = photo_post(base, "/style/photo/to-9d07a06a", body)
+        failed += say(st == 400 and "error" in reply, f"POST /style/photo 検め: {label} は 400")
+    st, reply, f = photo_post(base, "/style/photo/to-9d07a06a", form([("photo", jpeg(), "a.jpg")]), content_type="image/jpeg")
+    failed += say(st == 400 and f.discarded, "POST /style/photo 検め: multipart でなければ 400")
+    st, reply, f = photo_post(base, "/style/photo/to-9d07a06a", b"x", length=tcphoto.BODY_MAX + 1)
+    failed += say(st == 413 and f.discarded, "POST /style/photo 検め: 大きすぎれば 413")
+    for value in ("yes", 1, None):
+        st, reply, _ = photo_post(base, "/style/photo/to-9d07a06a/judge", judge_body(value), JSON_CT)
+        failed += say(st == 400, f"judge 検め: ok が {value!r} なら 400")
+    st, reply, _ = photo_post(base, "/style/photo/to-9d07a06a/judge", b"{broken", JSON_CT)
+    failed += say(st == 400, "judge 検め: 壊れた JSON は 400")
+    st, reply, f = photo_post(base, "/style/photo/to-9d07a06a/judge", b"x", JSON_CT, length=tcphoto.JUDGE_MAX + 1)
+    failed += say(st == 413 and f.discarded, "judge 検め: 大きすぎれば 413")
+    for path in ("/style/photo/zz-00000000", "/style/photo/..", "/style/photo/", "/style/photo/to-9d07a06a/other",
+                 "/style/photo/a b", "/style/photo/zz-00000000/judge"):
+        st, reply, f = photo_post(base, path, form([("photo", jpeg(), "a.jpg")]))
+        failed += say(st == 404 and f.discarded, f"POST {path}: 帳簿に無い・形の違う道は 404（読まずに断る）")
+        failed += say(photo_get(base, path).sent[0] == 404, f"GET {path}: 404")
+    failed += say(photo_get(base, "/style/photo/to-9d07a06a/judge").sent[0] == 404, "GET .../judge: 404")
+    failed += say(not (base / tcphoto.PHOTOS).exists() and pmap_of(base) == {} and not runs.calls, "検め: 断ったときは何も書かず・起こさない")
+    st, reply, f = photo_post(None, "/style/photo/to-9d07a06a", form([("photo", jpeg(), "a.jpg")]))
+    failed += say(st == 503 and f.discarded, "POST: 母艦が無ければ 503")
+    failed += say(tcphoto.features(base) == ["style-photo"] and tcphoto.features(mother("photo-nowardrobe")) == []
+                  and tcphoto.features(None) == [], "features: 帳簿があれば style-photo")
+    return failed
+
+
 def check_http() -> int:
     """本物の受け口（lifelog_pc.Handler）に HTTP でつなぐ: 鍵が無い・違うと 401、合っていれば受ける"""
     failed = 0
@@ -394,7 +548,31 @@ def check_http() -> int:
         failed += say(st == 404, "GET /style/wardrobe: 無ければ 404")
         st, raw, _ = call("GET", "/hello")
         features = json.loads(raw.decode("utf-8")).get("features") or []
-        failed += say(st == 200 and "style" in features, "features に style")
+        failed += say(st == 200 and "style" in features and "style-photo" not in features,
+                      "features に style（帳簿が無いので style-photo は無し）")
+        # K-TC2: 服の写真
+        runs = Runs()
+        tcphoto.RUN = runs
+        (base / tcstyle.WARDROBE).parent.mkdir(parents=True, exist_ok=True)
+        (base / tcstyle.WARDROBE).write_text(json.dumps({"items": [{"id": "to-9d07a06a"}]}), encoding="utf-8")
+        (base / tcphoto.SCRIPT).write_text("# 見本\n", encoding="utf-8")
+        for key in (None, "wrong"):
+            for method, path, body, ct in (("GET", "/style/photo/to-9d07a06a", None, CT),
+                                           ("POST", "/style/photo/to-9d07a06a", form([("photo", jpeg(1), "a.jpg")]), CT),
+                                           ("POST", "/style/photo/to-9d07a06a/judge", judge_body(True), "application/json")):
+                st, _, _ = call(method, path, body, key, ct)
+                failed += say(st == 401, f"{method} {path}: 鍵が{'無い' if key is None else '違う'}と 401")
+        failed += say(not (base / tcphoto.PHOTOS).exists() and not runs.calls, "401 のときは書かず・起こさない")
+        st, raw, _ = call("POST", "/style/photo/to-9d07a06a", form([("photo", jpeg(1), "a.jpg")]))
+        failed += say(st == 200 and json.loads(raw.decode("utf-8")) == {"ok": True} and len(runs.calls) == 1,
+                      "POST /style/photo: 鍵が合えば受ける（Build-Wardrobe.py を 1 回）")
+        st, raw, kind = call("GET", "/style/photo/to-9d07a06a")
+        failed += say(st == 200 and raw == jpeg(1) and kind == "image/jpeg", "GET /style/photo: JPEG")
+        st, raw, _ = call("POST", "/style/photo/to-9d07a06a/judge", judge_body(False), content_type="application/json")
+        failed += say(st == 200 and not tcphoto.photo_path(base, "to-9d07a06a").exists(), "POST /style/photo/<id>/judge: 違う → 消す")
+        st, raw, _ = call("GET", "/hello")
+        features = json.loads(raw.decode("utf-8")).get("features") or []
+        failed += say("style-photo" in features, "features に style-photo（帳簿があるとき）")
     finally:
         if server is not None:
             server.shutdown()
@@ -408,6 +586,14 @@ def check_http() -> int:
 def check_hub() -> int:
     failed = 0
     hub = (Path(__file__).resolve().parent / "lifelog_pc.py").read_text(encoding="utf-8")
+    failed += say("import tcphoto" in hub and "tcphoto.features(mothership.home(load_config()))" in hub
+                  and "tcphoto.handles_get(path)" in hub and "tcphoto.handles_post(url.path)" in hub,
+                  "lifelog_pc.py: K-TC2 を features・GET・POST につないである")
+    for marker in ("tcphoto.handles_get(path)", "tcphoto.handles_post(url.path)"):
+        failed += say("self.authorized()" in hub[hub.index(marker):][:200], f"lifelog_pc.py: {marker} はオーナーの鍵の後ろ")
+    failed += say(not any(tcphoto.handles_get(p) for p in ("/style/wardrobe", "/style/tryon/x"))
+                  and not tcstyle.handles_get("/style/photo/x") and not tcphoto.handles_post("/style/tryon"),
+                  "K-TC と K-TC2 の道がぶつからない")
     failed += say("import tcstyle" in hub and "tcstyle.features(mothership.home(load_config()))" in hub
                   and "tcstyle.handles_get(path)" in hub and "url.path in tcstyle.POSTS" in hub, "lifelog_pc.py: features・GET・POST につないである")
     for marker in ("tcstyle.handles_get(path)", "url.path in tcstyle.POSTS"):
@@ -424,7 +610,7 @@ def check_hub() -> int:
     return failed
 
 
-CHECKS = [check_post, check_validate, check_status, check_sweep, check_wardrobe, check_http, check_hub]
+CHECKS = [check_post, check_validate, check_status, check_sweep, check_wardrobe, check_photo, check_photo_validate, check_http, check_hub]
 
 
 def run_all() -> int:
@@ -438,6 +624,7 @@ def run_all() -> int:
             traceback.print_exc()
             failed += say(False, f"{check.__name__} が途中で落ちました: {error!r}")
     tcstyle.SPAWN = None
+    tcphoto.RUN = None
     return failed
 
 
