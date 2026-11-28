@@ -106,7 +106,7 @@ def selftest() -> int:
     allow: set[str] = set()
     t = "\n".join([
         "let a = 1",
-        "-----BEGIN PRIVATE KEY-----",
+        "-----BEGIN " + "PRIVATE KEY-----",   # 見張り自身に引っかからないよう分けて書く
         "key = 'sk-ant-api03-" + "x" * 30 + "'",
         "mail: someone@example.com と noreply@anthropic.com",
         "mail: taro.real@gmail" + ".com",
