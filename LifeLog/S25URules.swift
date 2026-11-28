@@ -231,8 +231,8 @@ enum S25UWatchLag {
     /// 時計が古いと分かった組（"時計-iPhone"）と、初めて見た時刻
     static let pairKey = "s25u.watchLag.pair"
     static let sinceKey = "s25u.watchLag.since"
-    /// これだけ続いたら「今日」の「気をつけること」に出す（仮）
-    static let after: TimeInterval = 24 * 3600
+    /// これだけ続いたら「今日」の「気をつけること」に出す（仮）。24 時間だったのを 1 時間に（2026-11-28。s38 の 手11。入れ替えの途中で出さないため少しだけ待つ）
+    static let after: TimeInterval = 3600
 
     /// 覚えておく組（時計が古いときだけ。同じでも新しくても nil＝忘れる）
     static func pair(phone: Int, watch: String?) -> String? {
@@ -255,7 +255,8 @@ enum S25UWatchLag {
 
     /// 「気をつけること」の 1 行
     static func line(phone: Int, watch: String, hours: Int) -> String {
-        "時計の LifeLog が古い版のまま \(hours) 時間です（時計 \(watch)・iPhone \(phone)）。押すと入れ直しの手順です"
+        let span = hours >= 24 ? "（\(hours) 時間たっています）" : ""
+        return "時計の LifeLog が iPhone より古い版です\(span)（時計 \(watch)・iPhone \(phone)）。押すと新しくする手順です"
     }
 }
 

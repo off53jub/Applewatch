@@ -167,8 +167,10 @@ enum NoticeGate {
     }
 
     /// 通知センターに残っている知らせを数える（アプリを開いたとき・裏で起きたとき）
-    static func scanDelivered() async {
+    static func scanDelivered(appOpened: Bool = false) async {
         let list: [UNNotification] = await UNUserNotificationCenter.current().deliveredNotifications()
+        // アプリを開いたとき 15 分以内に届いていた知らせは「見に来た」と別に数える（押した数とは別の欄。s38 の 活2）
+        if appOpened { S38AOpened.noteAppOpen(delivered: list) }
         for n in list {
             let urgent: Bool = S24Urgent.isUrgent(n.request.content.userInfo)
             noteShown(identifier: n.request.identifier, category: n.request.content.categoryIdentifier, date: n.date,

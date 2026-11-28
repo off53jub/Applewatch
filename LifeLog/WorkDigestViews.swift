@@ -211,6 +211,8 @@ struct WorkDigestImportView: View {
     @State private var dateFromText = false
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var takingPhoto = false
+    /// s38 手7: 画面を下へ送りながら撮った動画 1 本（写真の代わり）。選んだらコマを選んで、写真と同じ流れで読む
+    @State private var videoItem: PhotosPickerItem?
     @State private var reading: String?
     @State private var usedPhoto = false
     @State private var problem: String?
@@ -220,6 +222,8 @@ struct WorkDigestImportView: View {
     @State private var kind: S36APhotoKind = .digest
     /// s36 細1: 上限を超えて送らない枚数（画面の中で知らせる）
     @State private var droppedPhotos = 0
+    /// s38 手7: 動画から選んだコマの一文（画面の中だけ）
+    @State private var videoNote: String?
 
     /// s36: いまの家の PC の features（hello の前は覚えている分）
     private var features: Set<String> { S36ABook.shared.features(pipeline.homePC.features) }
@@ -256,6 +260,11 @@ struct WorkDigestImportView: View {
                 PhotosPicker(selection: $photoItems, maxSelectionCount: max(20, photoCap + 10), selectionBehavior: .ordered, matching: .images) {
                     Label("写真・スクショを選ぶ（何枚でも）", systemImage: "photo.on.rectangle")
                 }
+                // s38 手7: 画面を下へ送りながら撮った動画 1 本から、コマを選んで読む（写真の代わり）
+                PhotosPicker(selection: $videoItem, matching: .videos) {
+                    Label("画面を下へ送りながら撮った動画 1 本で選ぶ", systemImage: "video")
+                }
+                .accessibilityIdentifier("s38a.video.pick")
                 // コピーしたスクショを、そのまま読み取る（2026-11-10）
                 Button("コピーした画像を読み取る", systemImage: "doc.on.clipboard") { pasteImages() }
                 Button("写真を撮る", systemImage: "camera") { takingPhoto = true }
@@ -270,6 +279,9 @@ struct WorkDigestImportView: View {
                 if let problem {
                     Text(problem).foregroundStyle(LL.danger)
                 }
+                if let videoNote {
+                    Text(videoNote).font(.footnote).foregroundStyle(LL.dim).accessibilityIdentifier("s38a.video.note")
+                }
                 if !kind.isDigest {
                     Text("送る写真 \(photoJPEGs.count) 枚（\(photoCap) 枚まで）").font(.footnote).foregroundStyle(LL.dim)
                 }
@@ -281,7 +293,7 @@ struct WorkDigestImportView: View {
             } header: {
                 Text("読み取る")
             } footer: {
-                Text("何枚かに分けたスクショは、選んだ順につなげます。足すたびに、下の文の後ろに続けます。文字の読み取りは iPhone の中で行います。家の PC が写真を受けられるときは、「入れる」のあと写真も縮めて送り、家の PC で読み直します。")
+                Text("何枚かに分けたスクショは、選んだ順につなげます。足すたびに、下の文の後ろに続けます。文字の読み取りは iPhone の中で行います。家の PC が写真を受けられるときは、「入れる」のあと写真も縮めて送り、家の PC で読み直します。動画は、0.5 秒ごと（仮）にコマを取り、前とほとんど同じコマは飛ばして、\(photoCap) 枚までを写真と同じ形で使います（動画そのものは残しません）。")
             }
             Section {
                 DatePicker("日付", selection: $date, displayedComponents: .date)
@@ -363,10 +375,15 @@ struct WorkDigestImportView: View {
             guard !picked.isEmpty else { return }
             Task { await load(picked) }
         }
+        .onChange(of: videoItem) {
+            guard let picked = videoItem else { return }
+            Task { await loadVideo(picked) }
+        }
         // 種類を変えたら、読んだ写真は持ち越さない（まとめの文は残す）
         .onChange(of: kind) {
             photoJPEGs = []
             droppedPhotos = 0
+            videoNote = nil
             problem = nil
         }
         .fullScreenCover(isPresented: $takingPhoto) {
@@ -415,8 +432,38 @@ struct WorkDigestImportView: View {
         await readImages(images)
     }
 
+    /// s38 手7: 動画 1 本からコマを選び、写真と同じ流れで読む
+    private func loadVideo(_ picked: PhotosPickerItem) async {
+        reading = "動画を読み込んでいます…"
+        problem = nil
+        let movie: S38AMovie? = try? await picked.loadTransferable(type: S38AMovie.self)
+        videoItem = nil
+        guard let movie else {
+            reading = nil
+            problem = "動画を読み込めませんでした。"
+            return
+        }
+        reading = "動画からコマを選んでいます…"
+        let room: Int = max(1, photoCap - photoJPEGs.count)
+        let frames: S38AFrames.Picked = await S38AFrames.pick(url: movie.url, cap: room)
+        Tally.add("s38a.video.picked")
+        Tally.add("s38a.video.frames", frames.jpegs.count)
+        guard !frames.jpegs.isEmpty else {
+            reading = nil
+            problem = S38AVideo.summaryLine(frames: 0, skipped: 0)
+            return
+        }
+        await readImages(count: frames.jpegs.count) { UIImage(data: frames.jpegs[$0]) }
+        videoNote = S38AVideo.summaryLine(frames: frames.jpegs.count, skipped: frames.skipped)
+    }
+
     private func readImages(_ images: [UIImage]) async {
-        guard !images.isEmpty else {
+        await readImages(count: images.count) { images[$0] }
+    }
+
+    /// 1 枚ずつ取り出して読む（動画のコマは、一度に全部は広げない）
+    private func readImages(count: Int, image at: (Int) -> UIImage?) async {
+        guard count > 0 else {
             reading = nil
             problem = "写真を読み込めませんでした。"
             return
@@ -426,14 +473,15 @@ struct WorkDigestImportView: View {
         let cap: Int = photoCap
         // s36（K36-2）: 表・一覧の写真は文字を読まない（写真だけ送る。家の PC が表の行を写す）
         let readText: Bool = kind.isDigest
-        for (n, image) in images.enumerated() {
+        for n in 0..<count {
+            guard let image = at(n) else { continue }
             if readText {
-                reading = images.count > 1 ? "文字を読み取っています…（\(n + 1)/\(images.count)）" : "文字を読み取っています…"
+                reading = count > 1 ? "文字を読み取っています…（\(n + 1)/\(count)）" : "文字を読み取っています…"
                 // 頼まれごと帳の写真と同じ読み取り（iPhone の中・日本語と英語）
                 let read = await Pipeline.recognizeText(image)
                 if !read.isEmpty { texts.append(read) }
             } else {
-                reading = "写真を縮めています…（\(n + 1)/\(images.count)）"
+                reading = "写真を縮めています…（\(n + 1)/\(count)）"
             }
             // s35: 写真そのものも縮めて持っておく（家の PC で Claude が書き起こす。12 枚まで・s36 細1: "workphoto30" なら 30 枚）
             if photoJPEGs.count >= cap {

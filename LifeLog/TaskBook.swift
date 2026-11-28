@@ -1352,6 +1352,8 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
             let copy = content.mutableCopy() as? UNMutableNotificationContent
             NoticeGate.noteShown(identifier: identifier, category: content.categoryIdentifier, date: response.notification.date,
                                  kind: S24Urgent.kind)
+            // 急ぎを押した数も、体験の数字（uxNotifOpened の元の S20Book）に数える（前は数えていなかった。2026-11-28。s38 の 活2）
+            if S24Opened.isOpen(action: response.actionIdentifier) { Task { @MainActor in S20Book.shared.noteOpened(id: identifier) } }
             Task { @MainActor in
                 // 名前は APNs の番号なので、数える種類は urgent にそろえる
                 S23Notices.perform(.status(S24Urgent.kind), identifier: S24Urgent.kind, content: copy ?? UNMutableNotificationContent())
