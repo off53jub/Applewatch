@@ -1965,6 +1965,24 @@ final class ConversationLog {
         return (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 
+    /// s39（2026-11-29）: 相手の会話から、手元のほかの会話にもう同じ発言がある行を除く（S39Overlap。しきい値は仮）。
+    /// 手元の行を残す（相手の端末でも、その端末の行が残る）。家の PC は iPhone の行・確からしさの高い行を残してまとめる
+    nonisolated static func withoutOverlap(_ remote: Conversation, against local: [Conversation]) -> Conversation {
+        let from = remote.start.addingTimeInterval(-S39Overlap.window)
+        let to = remote.end.addingTimeInterval(S39Overlap.window)
+        let near = local.filter { $0.start != remote.start && $0.start <= to && $0.end >= from }
+        guard !near.isEmpty, !remote.lines.isEmpty else { return remote }
+        let dups = S39Overlap.duplicates(remote: overlapItems(remote), local: near.flatMap { overlapItems($0) })
+        guard !dups.isEmpty else { return remote }
+        var out = remote
+        out.lines = remote.lines.enumerated().filter { !dups.contains($0.offset) }.map(\.element)
+        return out
+    }
+
+    nonisolated static func overlapItems(_ c: Conversation) -> [S39Overlap.Item] {
+        c.lines.map { S39Overlap.Item(time: $0.time, text: $0.text) }
+    }
+
     /// ほかの端末に渡す、その日の閉じた会話と、消した会話と、1日のまとめ。
     func syncPayload(_ day: String) -> SyncDay {
         let log = load(day)
@@ -1990,7 +2008,13 @@ final class ConversationLog {
                 let lc = log.conversations[i]
                 guard lc.closed else { continue }
                 let lr = lc.rev ?? 0, rr = rc.rev ?? 0
-                let taken = SyncFill.filledConversation(rc, keeping: lc, senderBuild: remote.build)
+                let filled = SyncFill.filledConversation(rc, keeping: lc, senderBuild: remote.build)
+                // s39: 手元のほかの会話にもう同じ発言がある行は取らない（2 台が同じ部屋で同時に録ったとき）
+                let others = log.conversations.enumerated().filter { $0.offset != i }.map(\.element)
+                let taken = Self.withoutOverlap(filled, against: others)
+                if taken.lines.isEmpty && !filled.lines.isEmpty { continue }
+                // 重なりを除いて短くなった写し（この端末の会話が相手の端末で削られて戻ってきたもの）は、同じ番号なら取らない
+                if rr == lr, S39Overlap.isTrimmedCopy(Self.overlapItems(taken), of: Self.overlapItems(lc)) { continue }
                 if rr > lr {
                     log.conversations[i] = taken
                     changed = true
@@ -2002,7 +2026,10 @@ final class ConversationLog {
                     }
                 }
             } else if (rc.rev ?? 0) > (tombs[rc.start] ?? -1) {
-                log.conversations.append(rc)
+                // s39: 手元にもう同じ発言がある行は除いて取り込む（全部が重なっていれば取り込まない）
+                let taken = Self.withoutOverlap(rc, against: log.conversations)
+                if taken.lines.isEmpty && !rc.lines.isEmpty { continue }
+                log.conversations.append(taken)
                 changed = true
             }
         }

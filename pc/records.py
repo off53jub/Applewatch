@@ -33,6 +33,7 @@ from typing import Callable
 from urllib.parse import parse_qs, unquote
 
 import jobqueue
+import s39overlap
 
 RECORD_LIMIT = 8 * 1024 * 1024    # POST /records/<日> の大きさの上限（8MB）
 ACK_LIMIT = 1_000_000             # POST /edits/ack の大きさの上限
@@ -671,6 +672,90 @@ class RecordStore:
             self._save_index()
         return {"conversations": len(parsed["conversations"]), "lines": parsed["lines"], "changed": changed}
 
+    # MARK: 2 台の記録（s39。s39overlap.py）
+
+    @property
+    def devices_folder(self) -> Path:
+        return self.folder / "devices"
+
+    def device_path(self, device: str, day: str) -> Path:
+        return self.devices_folder / device / f"{day}.json"
+
+    def device_paths(self, day: str) -> list[Path]:
+        """その日の、端末ごとに置いた記録（無ければ空）"""
+        if not valid_day(day) or not self.devices_folder.is_dir():
+            return []
+        return sorted(p for p in self.devices_folder.glob(f"*/{day}.json")
+                      if p.is_file() and s39overlap.valid_device(p.parent.name))
+
+    def receive(self, day: str, data: bytes) -> dict:
+        """POST /records/<日> の受け口。端末の印（"device"）があれば端末ごとに置いて合わせ、
+        印が無くても、その日にもう端末ごとの記録があれば古い送り（legacy）として合わせる。
+        どちらでもなければ今までどおり put"""
+        if not valid_day(day):
+            raise ValueError("日の名前は YYYY-MM-DD（例 2026-11-07）です")
+        try:
+            body = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ValueError("中身が JSON ではありません") from error
+        device = body.get("device") if isinstance(body, dict) else None
+        if device is not None and not s39overlap.valid_device(device):
+            raise ValueError("device は英小文字と数字（32 文字まで）です")
+        cfg = s39overlap.settings(self.config())
+        if not cfg["on"] or (device is None and not self.device_paths(day)):
+            return dict(self.put(day, data), devices=None)
+        kind = s39overlap.kind_of(body.get("deviceKind")) if device is not None else "phone"
+        return self.put_from(day, data, device or s39overlap.LEGACY, kind, cfg)
+
+    def put_from(self, day: str, data: bytes, device: str, kind: str, cfg: dict | None = None) -> dict:
+        """端末ごとの記録を置き、その日の全部の端末の分を合わせて <日>.json に置く"""
+        cfg = cfg or s39overlap.settings(self.config())
+        body = json.loads(data.decode("utf-8"))
+        parse_record(body)   # おかしければ ValueError（置く前に）
+        with self.lock:
+            first = not self.device_paths(day)
+            path = self.device_path(device, day)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            legacy = self.device_path(s39overlap.LEGACY, day)
+            if first and device != s39overlap.LEGACY and self.path(day).is_file():
+                # 初めて端末ごとに置く日: 今まで置いていた分（印の無い iPhone の送り）を、古い送りとして控える
+                legacy.parent.mkdir(parents=True, exist_ok=True)
+                legacy.write_bytes(self.path(day).read_bytes())
+            if kind == "phone" and device != s39overlap.LEGACY and legacy.is_file():
+                # 新しい iPhone が送ってきたら、同じ iPhone の古い送りは合わせない（消さずに名前を変えて残す）
+                os.replace(legacy, legacy.with_name(f"{day}.replaced.json"))
+            meta = {"kind": kind}
+            part = path.with_name(path.name + ".part")
+            part.write_bytes(data)
+            os.replace(part, path)
+            (path.parent / "device.json").write_text(json.dumps(meta), encoding="utf-8")
+            sources = []
+            for p in self.device_paths(day):
+                try:
+                    raw = json.loads(p.read_bytes().decode("utf-8"))
+                except (OSError, UnicodeDecodeError, ValueError):
+                    self.log(f"記録 {day} の端末 {p.parent.name} の分を読めませんでした（合わせません）")
+                    continue
+                try:
+                    info = json.loads((p.parent / "device.json").read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    info = {}
+                sources.append({"device": p.parent.name, "kind": info.get("kind") if isinstance(info, dict) else None,
+                                "body": raw})
+            if len(sources) <= 1:
+                merged_data, stats = data, {"sources": len(sources), "merged": 0, "replaced": 0,
+                                            "added_lines": 0, "added_conversations": 0}
+            else:
+                merged, stats = s39overlap.merge(sources, cfg)
+                merged_data = json.dumps(merged, ensure_ascii=False).encode("utf-8")
+            result = self.put(day, merged_data)
+        # 数だけ（文・名前は書かない）
+        if stats["sources"] > 1:
+            self.log(f"記録 {day}: 端末 {stats['sources']} 台分を合わせました（重なりでまとめた行 {stats['merged']}・"
+                     f"iPad の行を残した {stats['replaced']}・足した行 {stats['added_lines']}・"
+                     f"足した会話 {stats['added_conversations']}）")
+        return dict(result, devices=stats)
+
     # MARK: 読む
 
     def day(self, day: str) -> dict | None:
@@ -1158,7 +1243,7 @@ def http_post(handler, store: RecordStore | None, path: str, log: Callable[[str]
         return
     started = time.time()
     try:
-        result = store.put(day, data)
+        result = store.receive(day, data)
     except ValueError as error:
         handler.send_json(400, {"error": str(error)})
         return

@@ -2300,6 +2300,8 @@ def features(engines: list | None = None) -> list[str]:
     # 版 7（records）: POST /records/<日>（記録を受ける）・GET /edits と POST /edits/ack（PC で直した分を返す）
     if App.records is not None:
         found += ["records", "edits"]
+        # s39（2026-11-29）: 端末の印つきの記録を端末ごとに置き、2 台の重なりをまとめる（iPad はこれがあるときだけ送る）
+        found.append("twodevices")
     # 版 7（ops）: diag（POST /diag）・push（見えない通知を送れるとき）・autotrain（自動の学び直しができるとき）
     found.extend(ops.features())
     found.extend(quality.features())  # "sameperson"・"nightreview"（2026-11-13。quality.py）
