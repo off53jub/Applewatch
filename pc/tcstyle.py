@@ -65,7 +65,7 @@ JPEG_HEAD = b"\xff\xd8"
 ID = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]{0,63}")
 TRYON_GET = re.compile(r"/style/tryon/([^/]+)(?:/image/([0-9]{1,3}))?")
 SPACES = re.compile(r"[\s\x00-\x1f\x7f]+")
-SAY = {"queued": "順番を待っています", "running": "絵を作っています（1 枚 約 2 分）"}
+SAY = {"queued": "順番を待っています", "running": "絵を作っています（数分かかります）"}
 
 _lock = threading.Lock()
 _last_kick = [float("-inf")]
