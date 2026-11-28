@@ -10,8 +10,6 @@ struct ContentView: View {
     @AppStorage("taskBadgeLateOnly") private var badgeLateOnly = false
     /// 声の見直しの数（記録をひととおり見るので、声のひとこまが変わったときだけ数え直す）
     @State private var reviewCount = 0
-    /// iPad の「読むだけ」で録音ボタンを押した時刻（ボタンの下に 15 秒だけ知らせる。2026-11-29）
-    @State private var readerTapAt: Date?
     /// 初めての入口・アップデートのあとの案内（2026-11-21。s20）
     @State private var firstRun: FirstRun?
     /// 振った（「いまの画面が変」。2026-11-22。s21 の 使10）
@@ -240,6 +238,8 @@ private struct TodayView: View {
     /// 文字がとても大きいときは、下の帯を縦に積む（2026-11-22。s22。文字最大で横にはみ出していた）
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var showLive = false
+    /// iPad の「読むだけ」で録音ボタンを押した時刻（ボタンの下に 15 秒だけ知らせる。2026-11-29）
+    @State private var readerTapAt: Date?
     @State private var showHelp = false
     /// 「今日の記録」を開いているか（いつもは畳む）
     @AppStorage("todayRecordOpen") private var recordOpen = false
