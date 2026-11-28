@@ -286,14 +286,24 @@ struct S36AFeed: Decodable, Equatable, Sendable {
     var ledger: S36ALedger?
     var stop: S36AStop?
     var nav: S36ANav?
+    /// s38（K38-1・どれも省ける）: 人物N の仮の名前・通りすがりの人物N・声のメモ・後ろの段が最後に終わった時刻（S38ARules.swift）
+    var names: [S38AName]?
+    var passerby: [String]?
+    var voiceMemos: [S38AVoiceMemo]?
+    var laterDoneAt: String?
 
     enum CodingKeys: String, CodingKey {
-        case version, prompt, cases, bugs, ledger, stop, nav
-        case generatedAt = "generated_at"
+        case version, prompt, cases, bugs, ledger, stop, nav, names, passerby
+        case generatedAt = "generated_at", voiceMemos = "voice_memos", laterDoneAt = "later_done_at"
     }
 
     init(version: Int? = 1, generatedAt: String? = nil, prompt: S36APrompt? = nil, cases: S36ACases? = nil, bugs: S36ABugs? = nil,
-         ledger: S36ALedger? = nil, stop: S36AStop? = nil, nav: S36ANav? = nil) {
+         ledger: S36ALedger? = nil, stop: S36AStop? = nil, nav: S36ANav? = nil, names: [S38AName]? = nil, passerby: [String]? = nil,
+         voiceMemos: [S38AVoiceMemo]? = nil, laterDoneAt: String? = nil) {
+        self.names = names
+        self.passerby = passerby
+        self.voiceMemos = voiceMemos
+        self.laterDoneAt = laterDoneAt
         self.version = version
         self.generatedAt = generatedAt
         self.prompt = prompt
@@ -314,6 +324,12 @@ struct S36AFeed: Decodable, Equatable, Sendable {
         ledger = c.s27w(.ledger)
         stop = c.s27w(.stop)
         nav = c.s27w(.nav)
+        // s38: 鍵が無ければ nil（読めない行は飛ばす）
+        names = c.contains(.names) ? (c.s27wList(.names) as [S38AName]) : nil
+        passerby = c.contains(.passerby) ? S38ARules.passerbyIDs(c.s27wList(.passerby) as [S38ALooseID]) : nil
+        voiceMemos = c.contains(.voiceMemos) ? (c.s27wList(.voiceMemos) as [S38AVoiceMemo]) : nil
+        let later: String? = c.s27w(.laterDoneAt)
+        laterDoneAt = later.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
     }
 }
 

@@ -324,6 +324,8 @@ struct S25TVoiceAskRow: View {
                     } label: {
                         S24RoleLabel(text: "この声は誰？（\(max(1, person.minutes)) 分ほど話した、名前の無い声）", role: .ask).font(.callout)
                     }
+                    // s38（続1）: 仮の名前（薄く添える）
+                    S38APersonHint(id: id, isNamed: person.isNamed)
                     Button("今日はいい") {
                         S25TVoiceAskBook.skip(id)
                         version += 1

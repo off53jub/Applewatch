@@ -1533,6 +1533,8 @@ struct TaskBookView: View {
             case .people: peoplePage(lists)
             case .done: donePage(lists)
             }
+            // s38（続3）: 声のメモ（畳んだ箱・読むだけ。GET /s36 の voice_memos があるときだけ）
+            if page == .todo { S38AVoiceMemoSection() }
         }
         .navigationTitle(scope == S30TTabs.taskScope ? "タスク" : "タスク（\(scope.label)）")
         .countsOpen("taskBook")

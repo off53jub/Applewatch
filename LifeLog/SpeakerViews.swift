@@ -121,7 +121,18 @@ struct PeopleView: View {
     /// 名前を付けてほしい声の、はじめに出す数
     private static let waitingShown = 10
 
-    private var others: [SpeakerLabeler.Person] { pipeline.people.filter { !$0.isSelf && $0.hidden != true } }
+    /// s38（続2）: 通りすがりの名前の無い声（GET /s36 の passerby。畳んだ箱に入れる・消さない）
+    private var passerbyIDs: Set<String> {
+        let set = S38AFeed.passerby
+        guard !set.isEmpty else { return [] }
+        return Set(pipeline.people.filter { S38APasserby.boxed(id: $0.id, isNamed: $0.isNamed, isSelf: $0.isSelf, passerby: set) }.map(\.id))
+    }
+
+    /// 通りすがりの箱に入れた声は、ほかの名前の無い声の節には出さない
+    private var others: [SpeakerLabeler.Person] {
+        let boxed = passerbyIDs
+        return pipeline.people.filter { !$0.isSelf && $0.hidden != true && !boxed.contains($0.id) }
+    }
 
     /// 名前の無い声のうち、よく話した声（よく話した順。テレビ・動画らしい声は除く）
     private var waiting: [SpeakerLabeler.Person] {
@@ -224,6 +235,18 @@ struct PeopleView: View {
                     Text("名前の無い声のうち、行の8割以上が5人以上の声がある会話（飲み会・大きな会議など）のものです。何人もの声が1人分にまとめられた「混ざった声」のことが多いので、「名前を付けてほしい声」と「人物Nを整理」には出しません。知っている人がいれば、押して名前を付けてください。忘れても記録の行はそのままです。")
                 }
             }
+            // s38（続2）: 通りすがり（畳んだ箱。消していない・押せば名前を付けられる）
+            let passing = pipeline.people.filter { passerbyIDs.contains($0.id) && $0.hidden != true }.sorted { $0.seconds > $1.seconds }
+            if !passing.isEmpty {
+                Section {
+                    DisclosureGroup(S38APasserby.title(passing.count)) {
+                        ForEach(passing) { person in row(person) }
+                    }
+                    .accessibilityIdentifier("s38a.passerby")
+                } footer: {
+                    Text("家の PC が「その場でだけ聞いた声」とした、名前の無い声です。消していません。知っている人がいれば、押して名前を付けてください。")
+                }
+            }
             ForEach([SpeakerLabeler.Context.work, .other], id: \.self) { context in
                 let list = others.filter { $0.isNamed && $0.context == context }
                 if !list.isEmpty {
@@ -314,6 +337,8 @@ struct PeopleView: View {
                         LabeledContent(person.displayName) {
                             Text("\(person.minutes) 分・\(person.lastHeard.formatted(date: .abbreviated, time: .omitted))")
                         }
+                        // s38（続1）: 人物N の仮の名前（薄く添える。名前を付けた人には出さない）
+                        if !person.isSelf { S38APersonHint(id: person.id, isNamed: person.isNamed) }
                         // どこで話した声か（場所の分かる会話から、多い順に3つまで）
                         if let list = places.byPerson[person.id], !list.isEmpty {
                             Text(list.prefix(3).map(\.place).joined(separator: "・"))

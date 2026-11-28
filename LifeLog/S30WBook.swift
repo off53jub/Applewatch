@@ -129,6 +129,8 @@ final class S30WBook {
                 if Task.isCancelled { return }
                 band = .done(.now, ok: run.ok != false)
                 Tally.add(run.ok == false ? "s30w.run.ng" : "s30w.run.done")
+                // s38（続4）: 「済んだ」のあと、後ろの段（later_done_at）が追いつくまで 1 分ごとに取り直す（欄が無ければ今のまま）
+                S38ABook.shared.follow(sharedAt: postedAt)
                 return
             }
         }

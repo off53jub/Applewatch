@@ -193,6 +193,8 @@ final class S36ABook {
             self.tableNote = run == nil
                 ? label + "の写真を送れませんでした（今日のうちに 1 回だけ送り直します）。"
                 : label + "の写真 \(count) 枚を送りました。家の PC が読んで、数を作り直します。"
+            // s38（続4）: 送れたら、後ろの段（later_done_at）が追いつくまで 1 分ごとに取り直す（欄が無ければ今のまま）
+            if run != nil { S38ABook.shared.follow(sharedAt: now) }
         }
         return label + "の写真 \(count) 枚を家の PC へ送っています（まとめには入れません）。"
     }
