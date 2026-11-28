@@ -44,7 +44,8 @@ SELF_LABEL = "me"
 
 CLIP_MIN = 1.5          # 区間の長さ（秒）。短い区間は声の特徴がぶれる（sameperson.py と同じ）
 CLIP_MAX = 20.0
-KEEP_DAYS = 21          # 置き場所に残す日数
+KEEP_DAYS = 30          # 置き場所に残す日数（s39: 21→30。直した型で過去 30 日を測り直すので）
+REDO_DAYS = 30          # s39: 型が替わった日（前の型の特徴の日）があれば、夜の流れはここまでさかのぼって測り直す
 WINDOW = 7              # 束ねる日数（今日を入れて）
 MEAN_MIN = 20           # その日の平均を引くのに要る区間の数（少ない日は束ねに使わない）
 CENTER_CLIPS = 12       # 真ん中に使う区間の数
@@ -512,6 +513,30 @@ def run(home: Path, store, log: Callable[[str], None], today: datetime.date | No
     except Exception as error:  # noqa: BLE001 — 見比べが失敗しても名寄せは返す
         log(f"話し手の見比べを作れませんでした: {type(error).__name__}")
     return built
+
+
+def stale_days(home: Path, store, today: datetime.date | None = None, days: int = REDO_DAYS) -> list[str]:
+    """s39: 直近 days 日のうち、記録があるのに置き場所が今の型（MODEL）で測られていない日（新しい日から）"""
+    today = today or datetime.date.today()
+    out = []
+    for back in range(days):
+        day = (today - datetime.timedelta(days=back)).isoformat()
+        path = folder(home) / f"{day}.npz"
+        if not path.is_file():
+            continue  # まだ測っていない日は、いつもの流れ（WINDOW 日）に任せる
+        try:
+            with np.load(path, allow_pickle=False) as data:
+                same = str(data["model"]) == MODEL
+        except (OSError, KeyError, ValueError):
+            same = False
+        if not same and (store is None or store.day(day) is not None):
+            out.append(day)
+    return out
+
+
+def night_days(home: Path, store, today: datetime.date | None = None) -> int:
+    """夜の流れで測る日数。前の型の日が残っていれば REDO_DAYS、無ければ WINDOW"""
+    return REDO_DAYS if stale_days(home, store, today) else WINDOW
 
 
 def update_recent(home: Path, store, find_audio, embed, days: int, budget: float,
