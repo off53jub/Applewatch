@@ -140,6 +140,24 @@ struct PeopleView: View {
             .sorted { $0.seconds > $1.seconds }
     }
 
+    /// s38（続2）: 通りすがり（畳んだ箱。消していない・押せば名前を付けられる）
+    @ViewBuilder
+    private func passerbySection() -> some View {
+        let boxed: Set<String> = passerbyIDs
+        let passing: [SpeakerLabeler.Person] = pipeline.people.filter { boxed.contains($0.id) && $0.hidden != true }
+            .sorted { $0.seconds > $1.seconds }
+        if !passing.isEmpty {
+            Section {
+                DisclosureGroup(S38APasserby.title(passing.count)) {
+                    ForEach(passing) { person in row(person) }
+                }
+                .accessibilityIdentifier("s38a.passerby")
+            } footer: {
+                Text("家の PC が「その場でだけ聞いた声」とした、名前の無い声です。消していません。知っている人がいれば、押して名前を付けてください。")
+            }
+        }
+    }
+
     @ViewBuilder
     private func tailSections() -> some View {
             let hidden = pipeline.people.filter { $0.hidden == true }
@@ -235,18 +253,7 @@ struct PeopleView: View {
                     Text("名前の無い声のうち、行の8割以上が5人以上の声がある会話（飲み会・大きな会議など）のものです。何人もの声が1人分にまとめられた「混ざった声」のことが多いので、「名前を付けてほしい声」と「人物Nを整理」には出しません。知っている人がいれば、押して名前を付けてください。忘れても記録の行はそのままです。")
                 }
             }
-            // s38（続2）: 通りすがり（畳んだ箱。消していない・押せば名前を付けられる）
-            let passing = pipeline.people.filter { passerbyIDs.contains($0.id) && $0.hidden != true }.sorted { $0.seconds > $1.seconds }
-            if !passing.isEmpty {
-                Section {
-                    DisclosureGroup(S38APasserby.title(passing.count)) {
-                        ForEach(passing) { person in row(person) }
-                    }
-                    .accessibilityIdentifier("s38a.passerby")
-                } footer: {
-                    Text("家の PC が「その場でだけ聞いた声」とした、名前の無い声です。消していません。知っている人がいれば、押して名前を付けてください。")
-                }
-            }
+            passerbySection()  // s38（続2）。型の決まりが時間切れになるので別の関数に（2026-11-28）
             ForEach([SpeakerLabeler.Context.work, .other], id: \.self) { context in
                 let list = others.filter { $0.isNamed && $0.context == context }
                 if !list.isEmpty {
