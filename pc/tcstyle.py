@@ -8,6 +8,9 @@
 - GET /style/wardrobe → 母艦の private/style/wardrobe.json をそのまま（JSON として読めないとき・無いときは 404 {"error"}）
 - POST /style/tryon（multipart/form-data）: kind＝outfit|hair|makeup、ask＝任意（500 字まで・改行や制御文字は空白に）、
   photo を送った順に 1〜4 枚（JPEG・1 枚 15MB まで）。
+  K-TC3 で足したもの: use_me=1（1 枚目に母艦の private/style/me.jpg）・rec_image=<file>（private/style/recs/img/ の商品の画像・繰り返し可）・
+  wardrobe_id=<id>（private/style/photos/<id>.jpg の手持ち・繰り返し可）。並びは 自分 → 送った写真 → 商品 → 手持ち、合わせて 1〜4 枚。
+  母艦の写真も in/<id>/ に写してから頼む（済んだら in/<id>/ ごと消える。もとの写真は消えない）。
   → 写真を母艦の private/style/tryon/in/<id>/01.jpg… に、頼みを inbox/tryon/<id>.json（{"id","kind","photos":[絶対パス],"ask"}）に
     置き（どちらも一時ファイルに書いてから入れ替える）、Make-TryOn.py --queue を後ろで起こす（鍵があれば起こさない）。
   → 200 {"id","status":"queued"}。形が違えば 400・大きすぎれば 413・母艦か Make-TryOn.py が無ければ 503（どれも {"error"}）。
@@ -49,6 +52,9 @@ IN = TRYON / "in"
 LOCK = TRYON / ".lock"
 INBOX = Path("inbox") / "tryon"
 SCRIPT = Path("scripts") / "Make-TryOn.py"
+ME = Path("private") / "style" / "me.jpg"                 # K-TC3: 自分の写真（POST /style/me）
+REC_IMG = Path("private") / "style" / "recs" / "img"      # K-TC3: おすすめの商品の画像
+REC_FILE = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]{0,40}\.jpg")
 
 KINDS = ("outfit", "hair", "makeup")
 PHOTOS_MAX = 4
@@ -146,11 +152,24 @@ def parse_multipart(body: bytes, boundary: bytes) -> tuple[list[tuple[str, str |
     return parts, None
 
 
-def check_request(parts: list[tuple[str, str | None, bytes]]) -> tuple[dict | None, str | None]:
-    """(頼み, 断る理由)。頼みは {"kind", "ask", "photos": [bytes…]}"""
+def _text(content: bytes) -> str:
+    return content.decode("utf-8", "replace").strip()
+
+
+def check_request(parts: list[tuple[str, str | None, bytes]], base: Path | None = None) -> tuple[dict | None, str | None]:
+    """(頼み, 断る理由)。頼みは {"kind", "ask", "photos": [bytes…]}。
+    K-TC3: use_me=1（1 枚目に母艦の private/style/me.jpg）・rec_image=<file>（おすすめの商品の画像）・wardrobe_id=<id>（手持ちの写真）も
+    受け、並びは 自分 → 送った写真 → 商品 → 手持ち（合わせて 1〜4 枚）。母艦の写真は base から読む"""
     kind, ask, photos = None, "", []
+    use_me, recs, owned = False, [], []
     for name, _filename, content in parts:
-        if name == "kind":
+        if name == "use_me":
+            use_me = _text(content).lower() in ("1", "true", "yes", "on")
+        elif name == "rec_image":
+            recs.append(_text(content))
+        elif name == "wardrobe_id":
+            owned.append(_text(content))
+        elif name == "kind":
             kind = content.decode("utf-8", "replace").strip()
         elif name == "ask":
             try:
@@ -168,9 +187,50 @@ def check_request(parts: list[tuple[str, str | None, bytes]]) -> tuple[dict | No
             photos.append(content)
     if kind not in KINDS:
         return None, "kind は " + "・".join(KINDS) + " のどれかです"
+    if len(photos) + use_me + len(recs) + len(owned) > PHOTOS_MAX:
+        return None, f"写真は合わせて 1〜{PHOTOS_MAX} 枚です"
+    if use_me or recs or owned:
+        if base is None:
+            return None, "母艦が見つかりません"
+        import tcphoto  # tcphoto は tcstyle を読むので、ここで読む
+
+        front, back = [], []
+        if use_me:
+            data = _read_jpeg(Path(base) / ME)
+            if data is None:
+                return None, "自分の写真がまだありません（POST /style/me）"
+            front.append(data)
+        for file in recs:
+            data = _read_jpeg(Path(base) / REC_IMG / file) if REC_FILE.fullmatch(file) else None
+            if data is None:
+                return None, "そのおすすめの画像はありません"
+            back.append(data)
+        known = tcphoto.item_ids(base)
+        try:
+            pmap = tcphoto.read_map(base)
+        except OSError:
+            pmap = {}
+        for ident in owned:
+            row = pmap.get(ident) if isinstance(pmap.get(ident), dict) else {}
+            ok = tcphoto.ITEM_ID.fullmatch(ident) and ident in known and not row.get("removed")
+            data = _read_jpeg(tcphoto.photo_path(base, ident)) if ok else None
+            if data is None:
+                return None, "その手持ちの写真はありません"
+            back.append(data)
+        photos = front + photos + back
     if not 1 <= len(photos) <= PHOTOS_MAX:
-        return None, f"photo は 1〜{PHOTOS_MAX} 枚です"
+        return None, f"写真は合わせて 1〜{PHOTOS_MAX} 枚です"
     return {"kind": kind, "ask": ask, "photos": photos}, None
+
+
+def _read_jpeg(path: Path) -> bytes | None:
+    try:
+        if path.stat().st_size > PHOTO_MAX_BYTES:
+            return None
+        data = path.read_bytes()
+    except OSError:
+        return None
+    return data if data.startswith(JPEG_HEAD) else None
 
 
 # MARK: - 母艦に置く・起こす
@@ -403,7 +463,7 @@ def http_post(handler, path: str, config: dict, base: Path | None, log=None) -> 
     parts, problem = parse_multipart(body, boundary)
     req = None
     if parts is not None:
-        req, problem = check_request(parts)
+        req, problem = check_request(parts, base)
     if req is None:
         say("POST /style/tryon: 形が違うので断りました")
         handler.send_json(400, {"error": problem})

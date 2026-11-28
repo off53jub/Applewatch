@@ -213,6 +213,7 @@ import s31plinks  # s31（2026-11-27。担当 p）: GET /links（文字と声の
 import s30pwork  # s30（2026-11-27。担当 p）: POST /work/digest・GET /work/run（共有したらすぐ作り直す。中身は s30pwork.py）
 import s33pwork  # s33（2026-11-27。担当 p）: GET /s33・/s33/ports と POST /feedback の ramen_mark・feature_seen・device_ok（s33pwork.py）
 import s35pwork  # s35（2026-11-28。担当 p）: POST /work/photo（仕事のまとめの写真そのものを母艦の inbox へ。K35。s35pwork.py）
+import tcrecs  # K-TC3（2026-11-28）: 服のおすすめ GET /style/recs・/image・POST /style/recs/refresh・/judge・自分の写真 /style/me（tcrecs.py）
 import tcphoto  # K-TC2（2026-11-28）: クローゼットの服の写真 GET・POST /style/photo/<id>・/judge（tcphoto.py）
 import tcstyle  # K-TC（2026-11-28）: トータルコーデのアプリとの窓口 GET /style/wardrobe・POST /style/tryon・GET /style/tryon/<id>（tcstyle.py）
 import s36pwork  # s36（2026-11-28。担当 p）: GET /s36・POST /s36/stop（K36-1・K36-3。K36-2 は s35pwork.py・K36-4 は askmother.py）
@@ -2323,6 +2324,7 @@ def features(engines: list | None = None) -> list[str]:
     found.extend(s34pwork.features(mothership.home(load_config())))  # s34: "s34"（GET /s34）
     found.extend(s35pwork.features(mothership.home(load_config())))  # s35: "workphoto"・s36: "workphoto30"（POST /work/photo）
     found.extend(s36pwork.features(mothership.home(load_config())))  # s36: "s36"（GET /s36）・"s36stop"（POST /s36/stop）
+    found.extend(tcrecs.features(mothership.home(load_config())))  # K-TC3: "style-recs"（おすすめ。tcrecs.py）
     found.extend(tcphoto.features(mothership.home(load_config())))  # K-TC2: "style-photo"（服の写真。tcphoto.py）
     found.extend(tcstyle.features(mothership.home(load_config())))  # K-TC: "style"（トータルコーデの窓口。tcstyle.py）
     # s29: s29groups・s29answers・s29gates・s29canonical（声を分ける・当てる。s29pc.py）
@@ -3163,6 +3165,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.authorized():
                 s29pc.http_get(self, path, url.query)
             return
+        if tcrecs.handles_get(path):  # K-TC3: GET /style/recs・/style/recs/image/<file>・/style/me（tcrecs.py）
+            if self.authorized():
+                tcrecs.http_get(self, path, load_config(), mothership.home(load_config()), log)
+            return
         if tcphoto.handles_get(path):  # K-TC2: GET /style/photo/<id>（服の写真。tcphoto.py）
             if self.authorized():
                 tcphoto.http_get(self, path, mothership.home(load_config()))
@@ -3321,6 +3327,10 @@ class Handler(BaseHTTPRequestHandler):
         if url.path in s35pwork.POSTS:  # s35 K35: POST /work/photo（写真を 1 枚ずつ母艦の inbox に。そろったら作り直しを起こす）
             if self.authorized():
                 s35pwork.http_post(self, url.path, load_config(), mothership.home(load_config()), log)
+            return
+        if tcrecs.handles_post(url.path):  # K-TC3: POST /style/recs/refresh・/style/recs/judge・/style/me（tcrecs.py）
+            if self.authorized():
+                tcrecs.http_post(self, url.path, load_config(), mothership.home(load_config()), log)
             return
         if tcphoto.handles_post(url.path):  # K-TC2: POST /style/photo/<id>・/style/photo/<id>/judge（tcphoto.py）
             if self.authorized():
