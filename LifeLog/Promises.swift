@@ -262,6 +262,7 @@ final class PromiseInbox {
     init() {
         if let data = try? Data(contentsOf: Self.cacheURL), let feed = try? JSONDecoder().decode(PromisesFeed.self, from: data) {
             items = feed.items
+            S37AWorkNotice.remember(feed.items)  // 仕事の約束の知らせを見分けるため（s37 の K37-4）
         }
         answered = UserDefaults.standard.dictionary(forKey: Self.answeredKey) as? [String: String] ?? [:]
     }
@@ -290,6 +291,7 @@ final class PromiseInbox {
         if let data = try? await pc.appFeed("promises-now", feature: PromiseRules.feature),
            let feed = PromiseRules.decode(data) {
             items = feed.items
+            S37AWorkNotice.remember(feed.items)  // 仕事の約束の知らせを見分けるため（s37 の K37-4）
             if let encoded = try? JSONEncoder().encode(feed) { try? encoded.write(to: Self.cacheURL, options: .atomic) }
         }
         applyWanted(pipeline)

@@ -41,6 +41,7 @@ struct S24NoticeSettingsSection: View {
     @AppStorage(S24AskSettings.watchQuietKey) private var watchQuiet = true
     @AppStorage(S24AskSettings.marksKey) private var marks = true
     @AppStorage(S24AskSettings.candidateTodayKey) private var candidateToday = true
+    @AppStorage(S37AWorkNotice.key) private var workNotice = false
 
     var body: some View {
         let quiet = S24Quiet.active(until: quietUntil > 0 ? Date(timeIntervalSince1970: quietUntil) : nil, now: .now)
@@ -89,6 +90,15 @@ struct S24NoticeSettingsSection: View {
                         .font(.caption).foregroundStyle(LL.dim)
                 }
             }
+            // 精6（2026-11-28。s37 の K37-4。S37ARules.swift）
+            Toggle(isOn: $workNotice) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("仕事のタスク・約束も知らせる")
+                    Text("初めはオフ。職場の会話・仕事の台帳から見つけたタスクと約束は、知らせずに帳と一覧へ入れます（仕事のタスクは Teams のまとめが正）。")
+                        .font(.caption).foregroundStyle(LL.dim)
+                }
+            }
+            .accessibilityIdentifier("s37a.workNotice")
             Toggle(isOn: $samePersonAsk) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("「同じ人か」を聞く")
