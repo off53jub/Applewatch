@@ -855,13 +855,16 @@ extension Pipeline {
         // 相手か期限が分かるもの・★のものがあるときだけ知らせる。無いものは黙って確かめ待ちへ（2026-11-10）。
         // 「たぶん違う」は知らせない（2026-11-24。s24）
         let strong: [TaskBook.Item] = added.filter { !S24TaskRules.isWeak($0) }
-        guard Self.worthNotice(strong) else { return }
+        guard Self.worthNotice(S37AWorkNotice.notifiable(strong, workOn: S37AWorkNotice.isOn)) else { return }
         deliverFound(strong)
     }
 
     /// 見つけたものを知らせる。「夜の 1 通にまとめる」（初めはオン。s24 の 減6）なら、その場では出さず夜の 1 通にためる
     func deliverFound(_ added: [TaskBook.Item]) {
-        let strong: [TaskBook.Item] = added.filter { !S24TaskRules.isWeak($0) }
+        // 仕事のもの（職場の会話・仕事の台帳から）は知らせない。帳には入っている（2026-11-28。s37 の K37-4・精6。S37ARules.swift）
+        let weakless: [TaskBook.Item] = added.filter { !S24TaskRules.isWeak($0) }
+        let strong: [TaskBook.Item] = S37AWorkNotice.notifiable(weakless, workOn: S37AWorkNotice.isOn)
+        if strong.count < weakless.count { Tally.add("s37a.found.work.silenced", weakless.count - strong.count) }
         guard !strong.isEmpty else { return }
         if S24AskSettings.isOn(S24AskSettings.foundNightKey) {
             S24Book.holdFound(strong.map(\.id), all: tasks.items)
@@ -1311,6 +1314,14 @@ final class NoticePresenter: NSObject, UNUserNotificationCenterDelegate {
             Task { @MainActor in PromiseInbox.shared.poke() }
             guard S24AskSettings.isOn(S24AskSettings.promiseNoticeKey) else {
                 Tally.add("s24.promise.silenced")
+                completionHandler([])
+                return
+            }
+            // 仕事の約束だけの知らせは出さない（設定「仕事のタスク・約束も知らせる」がオフのとき。2026-11-28。s37 の K37-4・精6）
+            let known = S37AWorkNotice.snapshot()
+            if S37AWorkNotice.silencesPromise(ids: S37AWorkNotice.promiseIDs(request.content.userInfo), workIDs: known.work,
+                                              knownIDs: known.known, workOn: S37AWorkNotice.isOn) {
+                Tally.add("s37a.promise.work.silenced")
                 completionHandler([])
                 return
             }

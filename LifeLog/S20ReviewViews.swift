@@ -30,6 +30,11 @@ struct ReviewDeckView: View {
                 }
                 Text("右に払うと「はい」、左に払うと「いいえ」。答えないものは \(ReviewRules.lifeDays) 日で流れます。")
                     .font(.footnote).foregroundStyle(LL.dim)
+                // 母艦が 1 日の数を決めているとき（2026-11-28。s37 の K37-2）
+                if let cap = S37AReview.dailyMax(book.review) {
+                    Text("1 日 \(cap) 問まで（母艦の決まり・効きの大きい順）。残りは明日に回します。")
+                        .font(.footnote).foregroundStyle(LL.dim)
+                }
             } header: {
                 LLHeader(title: "確かめ待ち", symbol: "hand.raised")
             }

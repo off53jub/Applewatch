@@ -444,6 +444,23 @@ struct ReviewQueueFeed: Codable, Equatable {
     var items: [ReviewItem]? = nil
     /// 前に答えたものが何を直したか（体14。母艦が返すときだけ）
     var done: [ReviewDone]? = nil
+    /// 1 日に出す問いの数の上限（省ける。あれば並びは母艦の順のまま。2026-11-28。s37 の K37-2。S37ARules.swift）
+    var daily_max: Int? = nil
+}
+
+extension ReviewQueueFeed {
+    private enum Keys: String, CodingKey { case version, available, generated_at, items, done, daily_max }
+
+    /// 前と同じ読み方。daily_max だけは読めなければ無いのと同じ（列ごと読めなくならないように。s37 の K37-2）
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version)
+        available = try c.decodeIfPresent(Bool.self, forKey: .available)
+        generated_at = try c.decodeIfPresent(String.self, forKey: .generated_at)
+        items = try c.decodeIfPresent([ReviewItem].self, forKey: .items)
+        done = try c.decodeIfPresent([ReviewDone].self, forKey: .done)
+        daily_max = (try? c.decodeIfPresent(Int.self, forKey: .daily_max)) ?? nil
+    }
 }
 
 struct ReviewItem: Codable, Equatable, Identifiable {

@@ -111,7 +111,9 @@ final class S26UBook {
     /// まだの操作待ちの数（済んだものは機械が done にする）
     /// 2026-11-27（s33 の K33-1）から、家の PC の /s33 の操作待ち（同じ id は 1 つ）も数える（S33AViews.swift）
     var waitingOpen: Int {
-        waiting.filter { !$0.isDone }.count + S33ABook.shared.extraWaiting(known: Set(waiting.map(\.id))).count
+        // 「あとでいいもの」（group が later）は数に入れない（畳んだ箱には出す。2026-11-28。s37 の K37-1）
+        waiting.filter { !$0.isDone && !S37AWaiting.isLater($0.group) }.count
+            + S33ABook.shared.extraWaiting(known: Set(waiting.map(\.id))).count
     }
 
     /// いまの時刻に当たるすきまの 1 件

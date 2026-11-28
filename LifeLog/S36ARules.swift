@@ -222,16 +222,20 @@ struct S36AStopItem: Decodable, Equatable, Identifiable, Sendable {
     var why: String?
     var saves: String?
     var state: String?
+    /// おすすめ（止めても困らない見込み。母艦の s36n-Stop-Candidates.py が書く・省ける。2026-11-28。s37 の K37-3）
+    var recommend: Bool?
 
-    enum CodingKeys: String, CodingKey { case id, kind, title, why, saves, state }
+    enum CodingKeys: String, CodingKey { case id, kind, title, why, saves, state, recommend }
 
-    init(id: String, kind: String? = nil, title: String, why: String? = nil, saves: String? = nil, state: String? = nil) {
+    init(id: String, kind: String? = nil, title: String, why: String? = nil, saves: String? = nil, state: String? = nil,
+         recommend: Bool? = nil) {
         self.id = id
         self.kind = kind
         self.title = title
         self.why = why
         self.saves = saves
         self.state = state
+        self.recommend = recommend
     }
 
     init(from decoder: Decoder) throws {
@@ -242,6 +246,7 @@ struct S36AStopItem: Decodable, Equatable, Identifiable, Sendable {
         why = c.s27w(.why)
         saves = c.s27w(.saves)
         state = c.s27w(.state)
+        recommend = c.s27w(.recommend)
     }
 }
 

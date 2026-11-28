@@ -272,6 +272,8 @@ struct S36AStopView: View {
     @State private var confirming: S36AStopItem?
     @State private var busy: String?
     @State private var note: String?
+    /// 「おすすめどおり止める」の確かめに見せている一覧（2026-11-28。s37 の K37-3）
+    @State private var bulk: [S36AStopItem]?
 
     var body: some View {
         let list = s36.candidates
@@ -286,6 +288,20 @@ struct S36AStopView: View {
                             detail: "家の PC が「開かれない画面のための作り物」や Claude の頼みを見つけると、ここに出ます。")
                 }
             } else {
+                // おすすめ（recommend が true）があるときだけ出す。欄が無ければ出さない（2026-11-28。s37 の K37-3。S37ARules.swift）
+                if S37AStop.showsBulk(list) {
+                    let picks = S37AStop.recommended(list)
+                    Section {
+                        Button("おすすめどおり止める（\(picks.count) 件）", systemImage: "pause.circle.fill") {
+                            Tally.add("s37a.stop.bulk.open")
+                            bulk = picks
+                        }
+                        .disabled(!s36.stopOffered || busy != nil)
+                        .accessibilityIdentifier("s37a.stop.bulk")
+                    } footer: {
+                        Text("止めても困らない見込みのものを、家の PC がおすすめしています。押すと、止めるものの一覧を見せてから伝えます。")
+                    }
+                }
                 Section {
                     ForEach(list) { row($0) }
                 } header: {
@@ -314,6 +330,34 @@ struct S36AStopView: View {
             Button("やめる", role: .cancel) { confirming = nil }
         } message: { item in
             Text(whatStops(item))
+        }
+        .alert(bulk.map(S37AStop.confirmTitle) ?? "",
+               isPresented: Binding(get: { bulk != nil }, set: { if !$0 { bulk = nil } }), presenting: bulk) { items in
+            Button("\(items.count) 件を止める", role: .destructive) { sendBulk(items) }
+            Button("やめる", role: .cancel) { bulk = nil }
+        } message: { items in
+            Text(S37AStop.confirmMessage(items))
+        }
+    }
+
+    /// おすすめのものに、今の POST /s36/stop（choice stop）を 1 件ずつ送る。結果は画面の中の 1 行だけ（知らせにしない）
+    private func sendBulk(_ items: [S36AStopItem]) {
+        bulk = nil
+        guard !items.isEmpty else { return }
+        busy = "bulk"
+        Tally.add("s37a.stop.bulk.send")
+        Task {
+            var sent = 0
+            var failed = 0
+            for item in items {
+                note = "伝えています… \(sent + failed + 1)/\(items.count)"
+                if await s36.answer(item, choice: "stop") { sent += 1 } else { failed += 1 }
+            }
+            busy = nil
+            Tally.add("s37a.stop.bulk.sent", sent)
+            if failed > 0 { Tally.add("s37a.stop.bulk.failed", failed) }
+            note = S37AStop.resultNote(sent: sent, failed: failed)
+            if sent > 0 { LLHaptic.done.play() }
         }
     }
 
