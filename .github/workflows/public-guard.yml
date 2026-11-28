@@ -1,0 +1,33 @@
+name: Public guard
+
+# s38 土9（2026-11-28）: このリポジトリは公開。本名・鍵・メール・仕事や会話の中身が混ざらないかを、push と PR のたびに確かめる。
+# - 鍵らしい形とメールの宛先は、いつも見る（見本と決まった宛先は除く）
+# - 混ぜてはいけない言葉（本名・顧客名など）は、言葉そのものを公開できないので Secret の PUBLIC_GUARD_WORDS（1 行に 1 語）から読む。
+#   無ければその段だけ飛ばす（notice が出る）。見つけても言葉は出さない（場所と何番目の言葉かだけ）
+# - 前からあって問題の無い行は .github/public-guard-allow.txt に書く
+# ubuntu で 30 秒ほど（公開リポジトリなので Actions の分は数えられない）
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 見張りそのものを確かめる
+        run: python .github/scripts/public_guard.py --selftest
+      - name: 鍵・メール・混ぜてはいけない言葉を探す
+        env:
+          PUBLIC_GUARD_WORDS: ${{ secrets.PUBLIC_GUARD_WORDS }}
+        run: python .github/scripts/public_guard.py

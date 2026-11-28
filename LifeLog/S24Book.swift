@@ -168,6 +168,15 @@ enum S24Book {
         } else {
             Tally.add("notice.acted." + kind)
         }
+        // 押してアプリが起きたとき、数は 2 分あとにまとめて書く決まりのせいで、そのあと閉じられると失われていた。押した数はすぐ書く
+        // （2026-11-28。s38 の 活2。K38-4）
+        Tally.flush()
+    }
+
+    /// 押して開いた知らせの印（NoticeBundle.key）。アプリを開いたときに「見に来た」と二重に数えないため（S38AOpened）
+    static func tappedKeys() -> Set<String> {
+        let seen = UserDefaults.standard.stringArray(forKey: seenKey) ?? []
+        return Set(seen.filter { $0.hasSuffix("|o") }.map { String($0.dropLast(2)) })
     }
 
     /// 数えるときの種類（家の PC から届いた知らせは名前が APNs の番号なので、急ぎ・カテゴリ・remote にまとめる）

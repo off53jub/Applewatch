@@ -26,7 +26,10 @@ if not any(mark in os.environ.get("LOCALAPPDATA", "")
            for mark in ("v25s", "v26s", "v27s", "v30s", "v31s", "v32s", "v33s", "v34s", "v35s", "v36s", "vtcs")):
     os.environ["LOCALAPPDATA"] = str(Path(tempfile.mkdtemp(prefix="vtcs-local-")))
 
+import datetime  # noqa: E402
+
 import tcphoto  # noqa: E402
+import tcrecs  # noqa: E402
 import tcstyle  # noqa: E402
 from v6checks import say  # noqa: E402
 
@@ -573,6 +576,38 @@ def check_http() -> int:
         st, raw, _ = call("GET", "/hello")
         features = json.loads(raw.decode("utf-8")).get("features") or []
         failed += say("style-photo" in features, "features に style-photo（帳簿があるとき）")
+        # K-TC3: おすすめ・自分の写真
+        recs_spawns = recs_reset(RecSpawns())
+        (base / tcrecs.SCRIPT).write_text("# 見本\n", encoding="utf-8")
+        (base / tcrecs.RECS).write_text(json.dumps(RECS_SAMPLE, ensure_ascii=False), encoding="utf-8")
+        (base / tcrecs.REC_IMG).mkdir(parents=True, exist_ok=True)
+        (base / tcrecs.REC_IMG / "z123.jpg").write_bytes(jpeg(12))
+        for key in (None, "wrong"):
+            for method, path, body, ct in (("GET", "/style/recs", None, CT), ("GET", "/style/recs/image/z123.jpg", None, CT),
+                                           ("GET", "/style/me", None, CT),
+                                           ("POST", "/style/recs/refresh", jbody({"taste": "both"}), JSON_CT),
+                                           ("POST", "/style/recs/judge", jbody({"idea_id": "cool-20261128-1", "ok": True}), JSON_CT),
+                                           ("POST", "/style/me", form([("photo", jpeg(40), "me.jpg")]), CT)):
+                st, _, _ = call(method, path, body, key, ct)
+                failed += say(st == 401, f"{method} {path}: 鍵が{'無い' if key is None else '違う'}と 401")
+        failed += say(not recs_spawns.calls and not (base / tcrecs.ME).exists() and not (base / tcrecs.FEEDBACK).exists(),
+                      "401 のときは書かず・起こさない（K-TC3）")
+        st, raw, _ = call("GET", "/style/recs")
+        failed += say(st == 200 and json.loads(raw.decode("utf-8")).get("ideas") == RECS_SAMPLE["ideas"], "GET /style/recs: 鍵が合えば返す")
+        st, raw, kind = call("GET", "/style/recs/image/z123.jpg")
+        failed += say(st == 200 and raw == jpeg(12) and kind == "image/jpeg", "GET /style/recs/image: JPEG")
+        st, raw, _ = call("POST", "/style/recs/refresh", jbody({"taste": "cool"}), content_type=JSON_CT)
+        failed += say(st == 200 and json.loads(raw.decode("utf-8")) == {"status": "queued"} and len(recs_spawns.calls) == 1,
+                      "POST /style/recs/refresh: queued")
+        st, raw, _ = call("POST", "/style/recs/judge", jbody({"idea_id": "cool-20261128-1", "ok": False}), content_type=JSON_CT)
+        failed += say(st == 200 and (base / tcrecs.FEEDBACK).is_file(), "POST /style/recs/judge: 1 行")
+        st, raw, _ = call("POST", "/style/me", form([("photo", jpeg(40), "me.jpg")]))
+        st2, raw2, _ = call("GET", "/style/me")
+        failed += say(st == 200 and json.loads(raw2.decode("utf-8")) == {"exists": True}, "POST・GET /style/me")
+        st, raw, _ = call("POST", "/style/tryon", form([("kind", "outfit", None), ("use_me", "1", None), ("rec_image", "z123.jpg", None)]))
+        failed += say(st == 200 and json.loads(raw.decode("utf-8")).get("status") == "queued", "POST /style/tryon: use_me と rec_image")
+        st, raw, _ = call("GET", "/hello")
+        failed += say("style-recs" in (json.loads(raw.decode("utf-8")).get("features") or []), "features に style-recs")
     finally:
         if server is not None:
             server.shutdown()
@@ -594,6 +629,16 @@ def check_hub() -> int:
     failed += say(not any(tcphoto.handles_get(p) for p in ("/style/wardrobe", "/style/tryon/x"))
                   and not tcstyle.handles_get("/style/photo/x") and not tcphoto.handles_post("/style/tryon"),
                   "K-TC と K-TC2 の道がぶつからない")
+    failed += say("import tcrecs" in hub and "tcrecs.features(mothership.home(load_config()))" in hub
+                  and "tcrecs.handles_get(path)" in hub and "tcrecs.handles_post(url.path)" in hub,
+                  "lifelog_pc.py: K-TC3 を features・GET・POST につないである")
+    for marker in ("tcrecs.handles_get(path)", "tcrecs.handles_post(url.path)"):
+        failed += say("self.authorized()" in hub[hub.index(marker):][:200], f"lifelog_pc.py: {marker} はオーナーの鍵の後ろ")
+    gets = ("/style/wardrobe", "/style/tryon/x", "/style/photo/x")
+    failed += say(not any(tcrecs.handles_get(p) for p in gets) and not any(m.handles_get("/style/recs") or m.handles_get("/style/me")
+                                                                        for m in (tcstyle, tcphoto))
+                  and not tcrecs.handles_post("/style/tryon") and not tcphoto.handles_post("/style/recs/refresh"),
+                  "K-TC3 とほかの style の道がぶつからない")
     failed += say("import tcstyle" in hub and "tcstyle.features(mothership.home(load_config()))" in hub
                   and "tcstyle.handles_get(path)" in hub and "url.path in tcstyle.POSTS" in hub, "lifelog_pc.py: features・GET・POST につないである")
     for marker in ("tcstyle.handles_get(path)", "url.path in tcstyle.POSTS"):
@@ -610,7 +655,188 @@ def check_hub() -> int:
     return failed
 
 
-CHECKS = [check_post, check_validate, check_status, check_sweep, check_wardrobe, check_photo, check_photo_validate, check_http, check_hub]
+RECS_SAMPLE = {"generated_at": "2026-11-28T16:00:00+09:00", "state": "ready", "say": "かっこいい系 1 案・かわいい系 1 案（商品 1 点）",
+               "running_since": None, "ideas": [
+                   {"id": "cool-20261128-1", "taste": "cool", "title": "ネイビーのワイドスラックス", "why": "w", "pairs_with": [], "products": []},
+                   {"id": "cute-20261128-1", "taste": "cute", "title": "ラベンダーのとろみブラウス", "why": "w", "pairs_with": [],
+                    "products": [{"id": "z123", "name": "とろみブラウス", "shop": "S", "price": 3990, "page": "https://zozo.jp/x/goods/123/",
+                                  "image": "z123.jpg", "fit_note": "足りる"}]}]}
+
+
+class RecSpawns(Spawns):
+    pass
+
+
+def recs_home(name: str, recs: dict | None = RECS_SAMPLE, script: bool = True) -> Path:
+    base = closet(name, {})
+    if script:
+        (base / tcrecs.SCRIPT).write_text("# 見本\n", encoding="utf-8")
+    if recs is not None:
+        (base / tcrecs.RECS).write_text(json.dumps(recs, ensure_ascii=False), encoding="utf-8")
+    (base / tcrecs.REC_IMG).mkdir(parents=True, exist_ok=True)
+    (base / tcrecs.REC_IMG / "z123.jpg").write_bytes(jpeg(12))
+    return base
+
+
+def recs_reset(spawns) -> object:
+    tcrecs.SPAWN = spawns
+    tcrecs._last_kick[0] = float("-inf")
+    return spawns
+
+
+def recs_get(base: Path | None, path: str, logs: list | None = None) -> Fake:
+    f = Fake()
+    tcrecs.http_get(f, path, CFG, base, (logs.append if logs is not None else None))
+    return f
+
+
+def recs_post(base: Path | None, path: str, body: bytes, content_type: str | None = JSON_CT, length: int | None = None) -> tuple:
+    f = Fake(body, content_type, length)
+    tcrecs.http_post(f, path, CFG, base, None)
+    return f.sent[0], f.sent[1], f
+
+
+def jbody(value) -> bytes:
+    return json.dumps(value, ensure_ascii=False).encode("utf-8")
+
+
+def check_recs() -> int:
+    failed = 0
+    spawns = recs_reset(RecSpawns())
+    base = recs_home("recs")
+    f = recs_get(base, "/style/recs")
+    failed += say(f.sent == [200, RECS_SAMPLE], "GET /style/recs: recs.json をそのまま")
+    none = recs_home("recs-none", recs=None)
+    failed += say(recs_get(none, "/style/recs").sent == [200, {"state": "none"}], "GET /style/recs: 無ければ state none")
+    failed += say(recs_get(None, "/style/recs").sent == [200, {"state": "none"}], "GET /style/recs: 母艦が無くても state none")
+    f = recs_get(base, "/style/recs/image/z123.jpg")
+    failed += say(f.sent[0] == 200 and f.wfile.getvalue() == jpeg(12) and f.raw_headers.get("Content-Type") == "image/jpeg",
+                  "GET /style/recs/image: JPEG")
+    for path in ("/style/recs/image/none.jpg", "/style/recs/image/..", "/style/recs/image/../recs.json", "/style/recs/image/z123.png",
+                 "/style/recs/image/"):
+        failed += say(recs_get(base, path).sent[0] == 404, f"GET {path}: 404")
+    # refresh: 頼みを置いて起こす
+    st, reply, _ = recs_post(base, "/style/recs/refresh", jbody({"taste": "cute"}))
+    reqs = list((base / tcrecs.REQUESTS).glob("*.json"))
+    row = json.loads(reqs[0].read_text(encoding="utf-8")) if reqs else {}
+    failed += say(st == 200 and reply == {"status": "queued"} and len(reqs) == 1 and row.get("taste") == "cute" and "at" in row,
+                  f"POST /style/recs/refresh: inbox/style_recs に頼みを置いて queued {reply}")
+    failed += say(len(spawns.calls) == 1 and spawns.calls[0][0] == base / tcrecs.SCRIPT and spawns.calls[0][2] == base,
+                  "POST /style/recs/refresh: Build-StyleRecs.py を母艦で起こす")
+    st, reply, _ = recs_post(base, "/style/recs/refresh", jbody({}))
+    failed += say(st == 200 and len(spawns.calls) == 1, "POST /style/recs/refresh: 起こした直後は二重に起こさない（taste なしは both）")
+    # 動いている間は起こさない・止まった running は failed に見せる
+    tcrecs._last_kick[0] = float("-inf")
+    fresh = dict(RECS_SAMPLE, state="running", running_since=datetime.datetime.now().astimezone().isoformat(timespec="seconds"))
+    (base / tcrecs.RECS).write_text(json.dumps(fresh, ensure_ascii=False), encoding="utf-8")
+    st, reply, _ = recs_post(base, "/style/recs/refresh", jbody({"taste": "both"}))
+    failed += say(st == 200 and reply == {"status": "queued"} and len(spawns.calls) == 1, "POST /style/recs/refresh: 動いている間は起こさない（その回が拾う）")
+    failed += say(recs_get(base, "/style/recs").sent[1]["state"] == "running" and len(spawns.calls) == 1, "GET /style/recs: 動いている間は running")
+    old = dict(RECS_SAMPLE, state="running", running_since="2026-11-01T00:00:00+09:00")
+    (base / tcrecs.RECS).write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
+    f = recs_get(base, "/style/recs")
+    failed += say(f.sent[1]["state"] == "failed" and "止まりました" in f.sent[1]["say"] and len(spawns.calls) == 2,
+                  "GET /style/recs: 2 時間より古い running は failed に見せ、待ちの頼みがあれば起こし直す")
+    # judge
+    (base / tcrecs.RECS).write_text(json.dumps(RECS_SAMPLE, ensure_ascii=False), encoding="utf-8")
+    st, reply, _ = recs_post(base, "/style/recs/judge", jbody({"idea_id": "cute-20261128-1", "product_id": "z123", "ok": True}))
+    st2, reply2, _ = recs_post(base, "/style/recs/judge", jbody({"idea_id": "cool-20261128-1", "ok": False}))
+    rows = [json.loads(line) for line in (base / tcrecs.FEEDBACK).read_text(encoding="utf-8").splitlines()]
+    failed += say(st == 200 and reply == {"ok": True} and st2 == 200 and len(rows) == 2, "POST /style/recs/judge: 1 行ずつ足す")
+    failed += say(rows[0].get("ok") is True and rows[0].get("taste") == "cute" and rows[0].get("title") == "ラベンダーのとろみブラウス"
+                  and rows[0].get("product_name") == "とろみブラウス" and rows[0].get("product_id") == "z123" and "at" in rows[0],
+                  f"judge の行: taste・title・商品名つき {rows[0]}")
+    failed += say(rows[1].get("ok") is False and rows[1].get("product_id") is None and rows[1].get("product_name") is None,
+                  "judge の行: 案だけのとき product は null")
+    for label, body, want in (("知らない案", {"idea_id": "cute-x", "ok": True}, 404),
+                              ("知らない商品", {"idea_id": "cute-20261128-1", "product_id": "z999", "ok": True}, 404),
+                              ("ok が文字", {"idea_id": "cute-20261128-1", "ok": "yes"}, 400),
+                              ("idea_id が無い", {"ok": True}, 400),
+                              ("idea_id が変", {"idea_id": "../x", "ok": True}, 400)):
+        st, reply, _ = recs_post(base, "/style/recs/judge", jbody(body))
+        failed += say(st == want and "error" in reply, f"judge 検め: {label} は {want}")
+    failed += say(len((base / tcrecs.FEEDBACK).read_text(encoding="utf-8").splitlines()) == 2, "judge 検め: 断ったときは書かない")
+    # 自分の写真
+    failed += say(recs_get(base, "/style/me").sent == [200, {"exists": False}], "GET /style/me: 無ければ exists false")
+    st, reply, _ = recs_post(base, "/style/me", form([("photo", jpeg(20), "me.jpg")]), CT)
+    failed += say(st == 200 and reply == {"ok": True} and (base / tcrecs.ME).read_bytes() == jpeg(20), "POST /style/me: me.jpg に置く")
+    failed += say(recs_get(base, "/style/me").sent == [200, {"exists": True}], "GET /style/me: あれば exists true（写真は返さない）")
+    st, reply, _ = recs_post(base, "/style/me", form([("photo", jpeg(21), "me.jpg")]), CT)
+    failed += say(st == 200 and (base / tcrecs.ME).read_bytes() == jpeg(21) and not list((base / tcrecs.ME).parent.glob(".me.jpg*")),
+                  "POST /style/me: 置き換え（一時ファイルが残らない）")
+    return failed
+
+
+def check_recs_validate() -> int:
+    failed = 0
+    spawns = recs_reset(RecSpawns())
+    base = recs_home("recs-validate")
+    for label, body, ct, want in (("taste が違う", jbody({"taste": "sweet"}), JSON_CT, 400), ("壊れた JSON", b"{x", JSON_CT, 400),
+                                  ("並び", jbody(["cool"]), JSON_CT, 400), ("空", b"", JSON_CT, 400)):
+        st, reply, _ = recs_post(base, "/style/recs/refresh", body, ct)
+        failed += say(st == want and "error" in reply, f"refresh 検め: {label} は {want}")
+    st, reply, f = recs_post(base, "/style/recs/refresh", b"x", length=tcrecs.JSON_MAX + 1)
+    failed += say(st == 413 and f.discarded, "refresh 検め: 大きすぎれば 413")
+    failed += say(not (base / tcrecs.REQUESTS).exists() and not spawns.calls, "refresh 検め: 断ったときは置かず・起こさない")
+    noscript = recs_home("recs-noscript", script=False)
+    st, reply, f = recs_post(noscript, "/style/recs/refresh", jbody({"taste": "both"}))
+    failed += say(st == 503 and f.discarded, "refresh: Build-StyleRecs.py が無ければ 503")
+    st, reply, f = recs_post(None, "/style/recs/refresh", jbody({"taste": "both"}))
+    failed += say(st == 503, "refresh: 母艦が無ければ 503")
+    for label, body in (("写真が 0 枚", form([("kind", "x", None)])), ("写真が 2 枚", form([("photo", jpeg(), "a.jpg"), ("photo", jpeg(), "b.jpg")])),
+                        ("JPEG でない", form([("photo", b"\x89PNG\r\n\x1a\n" + b"x" * 20, "a.png")]))):
+        st, reply, _ = recs_post(base, "/style/me", body, CT)
+        failed += say(st == 400 and "error" in reply, f"POST /style/me 検め: {label} は 400")
+    st, reply, f = recs_post(base, "/style/me", b"x", CT, length=tcrecs.BODY_MAX + 1)
+    failed += say(st == 413 and f.discarded, "POST /style/me 検め: 大きすぎれば 413")
+    failed += say(not (base / tcrecs.ME).exists(), "POST /style/me 検め: 断ったときは置かない")
+    failed += say(tcrecs.features(base) == ["style-recs"] and tcrecs.features(noscript) == [] and tcrecs.features(None) == [],
+                  "features: Build-StyleRecs.py があれば style-recs")
+    return failed
+
+
+def check_tryon_refs() -> int:
+    """K-TC3: POST /style/tryon の use_me・rec_image・wardrobe_id（並びは 自分 → 送った写真 → 商品 → 手持ち）"""
+    failed = 0
+    reset(Spawns())
+    base = recs_home("tryon-refs")
+    (base / "scripts" / "Make-TryOn.py").write_text("# 見本\n", encoding="utf-8")
+    (base / tcrecs.ME).write_bytes(jpeg(30))
+    (base / tcphoto.PHOTOS).mkdir(parents=True, exist_ok=True)
+    tcphoto.photo_path(base, "to-9d07a06a").write_bytes(jpeg(31))
+    tcphoto.photo_path(base, "bo-0b7881cd").write_bytes(jpeg(32))
+    (base / tcphoto.PMAP).write_text(json.dumps({"bo-0b7881cd": {"removed": True}}), encoding="utf-8")
+    st, reply, _ = post(base, form([("kind", "outfit", None), ("use_me", "1", None), ("photo", jpeg(33), "x.jpg"),
+                                    ("rec_image", "z123.jpg", None), ("wardrobe_id", "to-9d07a06a", None)]))
+    row = json.loads((base / tcstyle.INBOX / f"{reply.get('id')}.json").read_text(encoding="utf-8")) if st == 200 else {}
+    got = [Path(p).read_bytes() for p in row.get("photos") or []]
+    failed += say(st == 200 and got == [jpeg(30), jpeg(33), jpeg(12), jpeg(31)],
+                  f"tryon: 自分 → 送った写真 → 商品 → 手持ち の順に in/<id>/ へ写す（{st} {reply}）")
+    failed += say((base / tcrecs.ME).is_file() and (base / tcrecs.REC_IMG / "z123.jpg").is_file()
+                  and tcphoto.photo_path(base, "to-9d07a06a").is_file(), "tryon: もとの写真は動かさない（写すだけ）")
+    st, reply, _ = post(base, form([("kind", "outfit", None), ("use_me", "true", None), ("rec_image", "z123.jpg", None)]))
+    failed += say(st == 200, "tryon: 送る写真なしで 自分＋商品 だけでも受ける")
+    bad = {
+        "合わせて 5 枚": form([("kind", "outfit", None), ("use_me", "1", None), ("rec_image", "z123.jpg", None)]
+                         + [("photo", jpeg(n), "p.jpg") for n in range(3)]),
+        "知らない商品の画像": form([("kind", "outfit", None), ("use_me", "1", None), ("rec_image", "z999.jpg", None)]),
+        "商品の画像の名前が変": form([("kind", "outfit", None), ("use_me", "1", None), ("rec_image", "../me.jpg", None)]),
+        "帳簿に無い手持ち": form([("kind", "outfit", None), ("use_me", "1", None), ("wardrobe_id", "zz-00000000", None)]),
+        "写真の無い手持ち": form([("kind", "outfit", None), ("use_me", "1", None), ("wardrobe_id", "sh-11111111", None)]),
+        "removed の手持ち": form([("kind", "outfit", None), ("use_me", "1", None), ("wardrobe_id", "bo-0b7881cd", None)]),
+        "use_me が 0 で何も無い": form([("kind", "outfit", None), ("use_me", "0", None)]),
+    }
+    for label, body in bad.items():
+        st, reply, _ = post(base, body)
+        failed += say(st == 400 and "error" in reply, f"tryon 検め: {label} は 400（{reply}）")
+    (base / tcrecs.ME).unlink()
+    st, reply, _ = post(base, form([("kind", "outfit", None), ("use_me", "1", None), ("photo", jpeg(), "a.jpg")]))
+    failed += say(st == 400 and "自分の写真" in reply.get("error", ""), "tryon 検め: me.jpg が無ければ 400")
+    return failed
+
+
+CHECKS = [check_post, check_validate, check_status, check_sweep, check_wardrobe, check_photo, check_photo_validate,
+          check_recs, check_recs_validate, check_tryon_refs, check_http, check_hub]
 
 
 def run_all() -> int:
@@ -625,6 +851,7 @@ def run_all() -> int:
             failed += say(False, f"{check.__name__} が途中で落ちました: {error!r}")
     tcstyle.SPAWN = None
     tcphoto.RUN = None
+    tcrecs.SPAWN = None
     return failed
 
 

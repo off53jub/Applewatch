@@ -264,6 +264,34 @@ def check_promise_push() -> int:
             failed += say(pushed == expected and len(pusher.sent) == expected
                           and len(watcher.state["items"]) == 1 and watcher.state["items"][0]["alerted"] is bool(expected),
                           f"減5: promise_push {'あり' if expected else '無し'}なら知らせを {'送る' if expected else '送らない（台帳は残る）'}")
+        # s38 K38-2（続5）: 仕事の約束（work が true）は promise_push_work が true のときだけ送る
+        for config, expected, sent_ids in (({"promise_push": True}, 1, ["p2"]),
+                                           ({"promise_push": True, "promise_push_work": True}, 1, ["p1", "p2"])):
+            pusher = FakePusher()
+            watcher = promises.Watcher(Path(folder), lambda: None, lambda: pusher, LOGS.append, lambda c=config: c)
+            watcher.state["settings"] = {"on": True, "claude": True, "hide_body": False}
+            now = watcher.clock()
+            watcher.state["items"] = [
+                {"id": "p1", "day": "2026-11-28", "kind": "asked", "who": "見本さん", "what": "見本の案件 A の資料を送る",
+                 "due": None, "quote": "資料", "created": now, "alerted": False, "work": True},
+                {"id": "p2", "day": "2026-11-28", "kind": "mine", "who": "", "what": "見本の店を予約する",
+                 "due": None, "quote": "予約", "created": now - 1, "alerted": False, "work": False}]
+            pushed = watcher._push_pending()
+            alerted = sorted(i["id"] for i in watcher.state["items"] if i["alerted"])
+            failed += say(pushed == expected and len(pusher.sent) == 1 and alerted == sent_ids
+                          and len(watcher.state["items"]) == 2,
+                          f"続5: 仕事の約束は {'promise_push_work が true なので送る' if len(sent_ids) == 2 else '送らない（台帳には残る）'}")
+        pusher = FakePusher()
+        config = {"promise_push": True}
+        watcher = promises.Watcher(Path(folder), lambda: None, lambda: pusher, LOGS.append, lambda c=config: c)
+        watcher.state["settings"] = {"on": True, "claude": True, "hide_body": False}
+        watcher.state["items"] = [{"id": "p3", "day": "2026-11-28", "kind": "asked", "who": "見本さん", "what": "見本の案件 A",
+                                   "due": None, "quote": "見本", "created": watcher.clock(), "alerted": False, "work": True}]
+        failed += say(watcher._push_pending() == 0 and not pusher.sent and watcher.state["items"][0]["alerted"] is False,
+                      "続5: 仕事の約束だけなら何も送らない")
+        failed += say(not s24rules.promise_push_work({}) and s24rules.promise_push_work({"promise_push_work": True})
+                      and not s24rules.promise_push_work({"promise_push_work": "true"}),
+                      "続5: promise_push_work は true のときだけ")
     return failed
 
 

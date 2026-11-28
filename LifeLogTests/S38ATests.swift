@@ -1,168 +1,144 @@
 import XCTest
 @testable import LifeLog
 
-/// s38（S38ARules.swift・S38ABook.swift・2026-11-28）: K38-1 の読む側。続1 仮の名前・続2 通りすがり・続3 声のメモ・
-/// 続4 後ろの段（later_done_at）を待つ。どの鍵も省ける（無ければ今のまま）。
-/// 公開のリポジトリなので、見本は「見本さん」「見本の案件 A」だけ。
-@MainActor
+/// s38 の A2（S38ARules.swift）: 手7 動画からコマを選ぶ・手11 時計の版が古い 1 行・活2 開いた数・活3 朝の 1 通
 final class S38ATests: XCTestCase {
-    private let shared = Date(timeIntervalSince1970: 1_795_000_000)
+    // MARK: 手7
 
-    private func feed(_ json: String) throws -> S36AFeed {
-        guard case .feed(let f) = S36ARules.reply(Data(json.utf8)) else {
-            XCTFail("読めない")
-            throw NSError(domain: "S38ATests", code: 1)
+    func testSampleTimesAreEvenAndBounded() {
+        let times = S38AVideo.sampleTimes(duration: 10, cap: 30)
+        XCTAssertEqual(times.first, 0)
+        XCTAssertEqual(times.count, 20)
+        XCTAssertEqual(times[1], 0.5)
+        // 長すぎる動画は前の 90 秒だけ・候補は cap の 4 倍まで
+        let long = S38AVideo.sampleTimes(duration: 600, cap: 30)
+        XCTAssertLessThanOrEqual(long.count, 120)
+        XCTAssertLessThan(long.last ?? 0, S38AVideo.maxSeconds)
+        XCTAssertTrue(S38AVideo.sampleTimes(duration: 0, cap: 30).isEmpty)
+        XCTAssertTrue(S38AVideo.sampleTimes(duration: .nan, cap: 30).isEmpty)
+        XCTAssertTrue(S38AVideo.sampleTimes(duration: 10, cap: 0).isEmpty)
+    }
+
+    func testSameFrameIsSkippedAndScrolledFrameIsKept() {
+        let n = S38AVideo.side * S38AVideo.side
+        let page = [UInt8](repeating: 255, count: n)
+        XCTAssertTrue(S38AVideo.keep(previous: nil, current: page))
+        XCTAssertFalse(S38AVideo.keep(previous: page, current: page))
+        // 1 マスだけ少し違うだけなら同じ扱い
+        var tiny = page
+        tiny[0] = 200
+        XCTAssertFalse(S38AVideo.keep(previous: page, current: tiny))
+        // 全体の 1 割のマスが大きく変われば別のコマ
+        var scrolled = page
+        for i in 0..<(n / 10) { scrolled[i] = 0 }
+        XCTAssertTrue(S38AVideo.keep(previous: page, current: scrolled))
+        XCTAssertEqual(S38AVideo.changedFraction([1], [1, 2]), 1)
+    }
+
+    func testThinKeepsOrderAndEnds() {
+        XCTAssertEqual(S38AVideo.thin([1, 2, 3], cap: 30), [1, 2, 3])
+        let thinned = S38AVideo.thin(Array(0..<100), cap: 30)
+        XCTAssertEqual(thinned.count, 30)
+        XCTAssertEqual(thinned.first, 0)
+        XCTAssertEqual(thinned.last, 99)
+        XCTAssertEqual(thinned, thinned.sorted())
+        XCTAssertEqual(S38AVideo.thin([5, 6, 7], cap: 1), [5])
+        XCTAssertTrue(S38AVideo.thin([5, 6, 7], cap: 0).isEmpty)
+    }
+
+    func testVideoFramesFitThePhotoJobCap() {
+        // 動画のコマは今の写真と同じ仕事（S35PhotoJob）に入れる: 30 枚まで・番号は順
+        let jpegs: [Data] = (0..<40).map { _ in Data([0xFF, 0xD8, 0xFF, 0xD9]) }
+        let job = S35PhotoJob(id: UUID().uuidString, day: "2026-11-28", photos: S38AVideo.thin(jpegs, cap: 30), cap: 30)
+        XCTAssertEqual(job.count, 30)
+        XCTAssertEqual(job.pieces.map(\.index), Array(0..<30))
+        XCTAssertTrue(S38AVideo.summaryLine(frames: 0, skipped: 0).contains("取れません"))
+        XCTAssertTrue(S38AVideo.summaryLine(frames: 12, skipped: 5).contains("5 コマは飛ばしました"))
+    }
+
+    // MARK: 手11
+
+    func testWatchLagShowsAfterAnHourAndStaysQuiet() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertEqual(S25UWatchLag.after, 3600)
+        XCTAssertTrue(S25UWatchLag.shouldShow(since: now.addingTimeInterval(-3700), now: now, watchSeen: true))
+        XCTAssertFalse(S25UWatchLag.shouldShow(since: now.addingTimeInterval(-1800), now: now, watchSeen: true))
+        XCTAssertFalse(S25UWatchLag.shouldShow(since: now.addingTimeInterval(-7200), now: now, watchSeen: false))
+        let line = S25UWatchLag.line(phone: 460, watch: "455", hours: 3)
+        XCTAssertTrue(line.contains("時計 455・iPhone 460"))
+        XCTAssertTrue(line.contains("手順"))
+    }
+
+    // MARK: 活2
+
+    func testAppOpenCountsOnlyRecentUntappedOnce() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let recent = now.addingTimeInterval(-300)
+        XCTAssertTrue(S38AOpened.countsAsAppOpen(delivered: recent, now: now, alreadyTapped: false))
+        XCTAssertFalse(S38AOpened.countsAsAppOpen(delivered: recent, now: now, alreadyTapped: true))
+        XCTAssertFalse(S38AOpened.countsAsAppOpen(delivered: now.addingTimeInterval(-3600), now: now, alreadyTapped: false))
+        XCTAssertFalse(S38AOpened.countsAsAppOpen(delivered: now.addingTimeInterval(60), now: now, alreadyTapped: false))
+        let rows: [(id: String, date: Date, kind: String)] = [("a", recent, "tasks"), ("b", recent, "brief"),
+                                                              ("old", now.addingTimeInterval(-9000), "tasks")]
+        let tapped: Set<String> = [NoticeBundle.key(identifier: "b", date: recent)]
+        let first = S38AOpened.fresh(delivered: rows, now: now, seen: [], tapped: tapped)
+        XCTAssertEqual(first.map { $0.kind }, ["tasks"])
+        // 数えた印を渡せば、アプリを開き直しても二重に数えない
+        let again = S38AOpened.fresh(delivered: rows, now: now, seen: first.map { $0.key }, tapped: tapped)
+        XCTAssertTrue(again.isEmpty)
+    }
+
+    func testTappedKeysReadOnlyOpenMarks() {
+        let defaults = UserDefaults.standard
+        let saved = defaults.stringArray(forKey: "s24.openedSeen")
+        defer { if let saved { defaults.set(saved, forKey: "s24.openedSeen") } else { defaults.removeObject(forKey: "s24.openedSeen") } }
+        defaults.set(["x|100|o", "y|200|a"], forKey: "s24.openedSeen")
+        XCTAssertEqual(S24Book.tappedKeys(), ["x|100"])
+    }
+
+    // MARK: 活3
+
+    func testUrgentStaysAndTheRestWaitsForMorning() {
+        func holds(_ id: String, category: String = "", info: [AnyHashable: Any] = [:], immediate: Bool = true, on: Bool = true) -> Bool {
+            S38AMorning.holds(identifier: id, category: category, userInfo: info, immediate: immediate, on: on)
         }
-        return f
-    }
-
-    // MARK: K38-1 読む
-
-    func testFeedReadsNewKeys() throws {
-        let f = try feed("""
-        {"version":1,"generated_at":"2026-11-28T18:00:00+09:00",
-         "names":[{"speaker_id":"5413","name":"見本さん","how":"presence","sources":["place","source"]},
-                  {"speaker_id":700,"name":" 見本 次郎 "},
-                  {"speaker_id":"人物88","name":"見本 三郎"},
-                  {"speaker_id":"","name":"空"},{"name":"番号なし"},{"speaker_id":"9","name":""},5],
-         "passerby":["5565","人物5600",5600,"700","abc",null],
-         "voice_memos":[{"id":"vm-1","text":"見本のメモ","day":"2026-11-28","project":"見本の案件 A"},
-                        {"id":2,"text":"見本の 2"},{"id":"vm-3","text":""},{"text":"id なし"}],
-         "later_done_at":"2026-11-28T18:30:00+09:00"}
-        """)
-        XCTAssertEqual(f.names?.map(\.speakerID), ["5413", "700", "88"], "番号は文字でも数でも・「人物」は外す。名前か番号の無い行は飛ばす")
-        XCTAssertEqual(f.names?[1].name, "見本 次郎", "前後の空白は外す")
-        XCTAssertEqual(f.names?.first?.sources, ["place", "source"])
-        XCTAssertEqual(f.passerby, ["5565", "5600", "700"], "番号だけ・重ねない・届いた順")
-        XCTAssertEqual(f.voiceMemos?.map(\.id), ["vm-1", "2"], "文か id の無いメモは飛ばす")
-        XCTAssertEqual(f.voiceMemos?.first?.project, "見本の案件 A")
-        XCTAssertEqual(f.laterDoneAt, "2026-11-28T18:30:00+09:00")
-    }
-
-    func testFeedWithoutNewKeysIsUnchanged() throws {
-        let f = try feed(#"{"version":1,"prompt":{"daily":"まとめ"}}"#)
-        XCTAssertNil(f.names)
-        XCTAssertNil(f.passerby)
-        XCTAssertNil(f.voiceMemos)
-        XCTAssertNil(f.laterDoneAt)
-        XCTAssertEqual(f.prompt?.daily, "まとめ", "前の鍵は今のまま読む")
-        let odd = try feed(#"{"names":"x","passerby":5,"voice_memos":{},"later_done_at":"  "}"#)
-        XCTAssertEqual(odd.names, [], "形の違う鍵は空として読む（全体は落とさない）")
-        XCTAssertEqual(odd.passerby, [])
-        XCTAssertEqual(odd.voiceMemos, [])
-        XCTAssertNil(odd.laterDoneAt, "空の時刻は無いのと同じ")
-    }
-
-    // MARK: 続1 仮の名前
-
-    func testNameHintOnlyForUnnamedVoices() {
-        let names = [S38AName(speakerID: "5413", name: "見本さん")]
-        XCTAssertEqual(S38ANames.hint(number: "5413", names: names, isNamed: false), "仮: 見本さん")
-        XCTAssertNil(S38ANames.hint(number: "5413", names: names, isNamed: true), "本人が名前を付けた人には出さない（本人の答えが勝つ）")
-        XCTAssertNil(S38ANames.hint(number: "1", names: names, isNamed: false), "仮の名前の無い番号には出さない")
-        XCTAssertNil(S38ANames.hint(number: "5413", names: nil, isNamed: false), "鍵が無ければ今のまま")
-        let long = [S38AName(speakerID: "1", name: String(repeating: "見", count: 30))]
-        XCTAssertEqual(S38ANames.hint(number: "1", names: long, isNamed: false)?.count, 3 + S38ANames.nameLimit + 1, "長い名前は切る")
-    }
-
-    func testLineHintKeepsTheShownName() {
-        let names = [S38AName(speakerID: "12", name: "見本さん")]
-        let unnamed: (String) -> Bool = { _ in false }
-        XCTAssertEqual(S38ANames.lineHint(speaker: "人物12", speakerID: "12", names: names, named: unnamed), "仮: 見本さん")
-        XCTAssertEqual(S38ANames.lineHint(speaker: "人物12", speakerID: nil, names: names, named: unnamed), "仮: 見本さん")
-        XCTAssertNil(S38ANames.lineHint(speaker: "見本 太郎", speakerID: "12", names: names, named: unnamed),
-                     "行に名前が出ているときは添えない（名前は変えない）")
-        XCTAssertNil(S38ANames.lineHint(speaker: "人物12", speakerID: "12", names: names, named: { $0 == "12" }),
-                     "その番号の人に名前が付いていれば添えない")
-        XCTAssertNil(S38ANames.lineHint(speaker: nil, speakerID: "12", names: names, named: unnamed))
-        XCTAssertEqual(S38ARules.number(" 人物7 "), "7")
-        XCTAssertNil(S38ARules.number("人物"))
-        XCTAssertNil(S38ARules.number("見本"))
-    }
-
-    // MARK: 続2 通りすがり
-
-    func testPasserbyBoxesOnlyUnnamedVoices() {
-        let set: Set<String> = ["5565", "700"]
-        XCTAssertTrue(S38APasserby.boxed(id: "5565", isNamed: false, isSelf: false, passerby: set))
-        XCTAssertFalse(S38APasserby.boxed(id: "700", isNamed: true, isSelf: false, passerby: set), "名前を付けた人は箱に入れない")
-        XCTAssertFalse(S38APasserby.boxed(id: "0", isNamed: false, isSelf: true, passerby: ["0"]), "自分は入れない")
-        XCTAssertFalse(S38APasserby.boxed(id: "1", isNamed: false, isSelf: false, passerby: set))
-        XCTAssertFalse(S38APasserby.boxed(id: "5565", isNamed: false, isSelf: false, passerby: []), "鍵が無ければ今のまま")
-        XCTAssertEqual(S38APasserby.title(3), "通りすがり（3 人）")
-    }
-
-    // MARK: 続3 声のメモ
-
-    func testVoiceMemosAreClippedAndCapped() {
-        var memos: [S38AVoiceMemo] = [S38AVoiceMemo(id: "a", text: String(repeating: "見", count: 80), day: "2026-11-28", project: "見本の案件 A"),
-                                      S38AVoiceMemo(id: "a", text: "重なり")]
-        for i in 0..<40 { memos.append(S38AVoiceMemo(id: "m\(i)", text: "見本 \(i)")) }
-        let shown = S38AMemos.shown(memos)
-        XCTAssertEqual(shown.count, S38AMemos.limit, "30 件まで")
-        XCTAssertEqual(shown.first?.text.count, S38AMemos.textLimit + 1, "60 字で切って「…」")
-        XCTAssertEqual(shown.filter { $0.id == "a" }.count, 1, "同じ id は 1 つ")
-        XCTAssertEqual(S38AMemos.caption(shown[0]), AppFeeds.monthDay("2026-11-28") + "・見本の案件 A")
-        XCTAssertNil(S38AMemos.caption(S38AVoiceMemo(id: "x", text: "見本", day: "きのう", project: " ")))
-        XCTAssertEqual(S38AMemos.title(2), "声のメモ（2 件）")
-        XCTAssertTrue(S38AMemos.shown(nil).isEmpty, "鍵が無ければ箱を出さない")
-    }
-
-    func testVoiceMemosNeverBecomeTasks() {
-        let book = S36ABook.shared
-        let before = book.feed
-        defer { book.use(before, fetchedAt: .now, offered: before != nil) }
-        book.use(S36AFeed(voiceMemos: [S38AVoiceMemo(id: "vm", text: "見本のメモ")]), offered: true)
-        XCTAssertEqual(S38AFeed.memos.map(\.id), ["vm"])
-        book.use(S36AFeed(voiceMemos: [S38AVoiceMemo(id: "vm", text: "見本のメモ")]), offered: false)
-        XCTAssertTrue(S38AFeed.memos.isEmpty, "家の PC が /s36 を配っていなければ出さない")
-    }
-
-    // MARK: 続4 後ろの段を待つ
-
-    func testLaterStepWaitsUntilNewerThanShare() {
-        let started = shared.addingTimeInterval(30)
-        let old = S36AFeed(laterDoneAt: "2026-01-01T00:00:00+09:00")
-        XCTAssertEqual(S38ALater.step(old, sharedAt: shared, startedAt: started, now: started.addingTimeInterval(60)), .wait)
-        let newer = S36AFeed(laterDoneAt: ISO8601DateFormatter().string(from: shared.addingTimeInterval(120)))
-        XCTAssertEqual(S38ALater.step(newer, sharedAt: shared, startedAt: started, now: started.addingTimeInterval(180)), .caughtUp)
-        let same = S36AFeed(laterDoneAt: ISO8601DateFormatter().string(from: shared))
-        XCTAssertEqual(S38ALater.step(same, sharedAt: shared, startedAt: started, now: started.addingTimeInterval(60)), .wait,
-                       "同じ時刻はまだ（より新しいときだけ）")
-        XCTAssertEqual(S38ALater.step(old, sharedAt: shared, startedAt: started, now: started.addingTimeInterval(S38ALater.limit)), .timeUp,
-                       "20 分でやめる")
-        XCTAssertEqual(S38ALater.step(S36AFeed(), sharedAt: shared, startedAt: started, now: started), .noField, "欄が無くなったらやめる")
-        XCTAssertEqual(S38ALater.step(S36AFeed(laterDoneAt: "読めない"), sharedAt: shared, startedAt: started, now: started), .wait)
-        XCTAssertEqual(S38ALater.every, 60)
-        XCTAssertEqual(S38ALater.limit, 1200)
-    }
-
-    func testLaterFollowsOnlyWhenTheFieldExists() {
-        XCTAssertFalse(S38ALater.follows(nil, offered: true))
-        XCTAssertFalse(S38ALater.follows(S36AFeed(), offered: true), "欄が無ければ今の動きのまま")
-        XCTAssertFalse(S38ALater.follows(S36AFeed(laterDoneAt: "2026-11-28T18:00:00+09:00"), offered: false))
-        XCTAssertTrue(S38ALater.follows(S36AFeed(laterDoneAt: "2026-11-28T18:00:00+09:00"), offered: true))
-        XCTAssertTrue(S38ALater.caughtUp("2026-11-28T18:00:01", sharedAt: S31ARules.date("2026-11-28T18:00:00") ?? .distantFuture),
-                      "時差の無い形はこの端末の時刻として読む")
-    }
-
-    func testFollowStartsOnlyWithTheField() {
-        let book = S36ABook.shared
-        let before = book.feed
-        let later = S38ABook.shared
-        defer {
-            later.stop()
-            book.use(before, fetchedAt: .now, offered: before != nil)
+        // 急ぎ: 時計が録音していない・電池・時計が黙っている・録音が止まった
+        for id in ["watch-not-recording", "watch-battery", "watch-silent", "phone-stopped", "stall"] {
+            XCTAssertFalse(holds(id), id)
         }
-        book.use(S36AFeed(), offered: true)
-        later.follow(sharedAt: shared)
-        XCTAssertNil(later.waitingSince, "欄が無ければ待たない")
-        book.use(S36AFeed(laterDoneAt: "2026-01-01T00:00:00+09:00"), offered: true)
-        later.follow(sharedAt: shared)
-        XCTAssertEqual(later.waitingSince, shared, "欄があれば共有の時刻で待ち始める")
-        later.follow(sharedAt: shared.addingTimeInterval(10))
-        XCTAssertEqual(later.waitingSince, shared.addingTimeInterval(10), "新しい共有で待ち直す")
-        later.stop()
-        XCTAssertNil(later.waitingSince)
+        // 期限・家の PC からの急ぎ・ボタンのある知らせ・今の便り自身
+        XCTAssertFalse(holds("tasks-due-1"))
+        XCTAssertFalse(holds("0F0E", info: ["lifelog": ["kind": "urgent", "key": "k"]]))
+        XCTAssertFalse(holds("taskFound", category: "taskFound"))
+        XCTAssertFalse(holds(NoticeDigestRules.morningID))
+        // それ以外はまとめる
+        XCTAssertTrue(holds("good-tonight"))
+        XCTAssertTrue(holds("night-mood"))
+        // オフ・時刻を決めた知らせはそのまま
+        XCTAssertFalse(holds("good-tonight", on: false))
+        XCTAssertFalse(holds("good-tonight", immediate: false))
+    }
+
+    func testMorningSlotIsOnlyTheMorning() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        func at(_ day: Int, _ hour: Int, _ minute: Int) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: 11, day: day, hour: hour, minute: minute))!
+        }
+        // 夕方に回したものも、次の日の朝 7:30
+        XCTAssertEqual(S38AMorning.nextSlot(after: at(28, 19, 30), calendar: calendar), at(29, 7, 30))
+        XCTAssertEqual(S38AMorning.nextSlot(after: at(28, 6, 0), calendar: calendar), at(28, 7, 30))
+        XCTAssertEqual(S38AMorning.previousSlot(before: at(28, 19, 30), calendar: calendar), at(28, 7, 30))
+        XCTAssertEqual(S38AMorning.previousSlot(before: at(28, 6, 0), calendar: calendar), at(27, 7, 30))
+    }
+
+    func testMorningOneIsOnByDefault() {
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: S38AMorning.key)
+        defer { if let saved { defaults.set(saved, forKey: S38AMorning.key) } else { defaults.removeObject(forKey: S38AMorning.key) } }
+        defaults.removeObject(forKey: S38AMorning.key)
+        XCTAssertTrue(S38AMorning.isOn)
+        defaults.set(false, forKey: S38AMorning.key)
+        XCTAssertFalse(S38AMorning.isOn)
     }
 }

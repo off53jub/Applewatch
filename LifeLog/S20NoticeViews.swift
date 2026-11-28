@@ -5,6 +5,8 @@ import SwiftUI
 /// 知らせの履歴。その場で「この種類はもう要らない」
 struct NoticeHistoryView: View {
     @AppStorage(SceneKey.noticeDigest.rawValue) private var digestOn = false
+    /// 急ぎ以外を朝の 1 通に（初めはオン。2026-11-28。s38 の 活3）
+    @AppStorage(S38AMorning.key) private var morningOne = true
 
     var body: some View {
         let book = S20Book.shared
@@ -22,6 +24,18 @@ struct NoticeHistoryView: View {
             // 溜めない（問いの上限・今週は聞かないで・夜の 1 通・約束・同じ人か・時計・題の印。2026-11-24。s24。S24Views.swift）
             S24NoticeSettingsSection()
             Section {
+                Toggle(isOn: $morningOne) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("急ぎでない知らせを朝の 1 通に")
+                        Text("朝 7:30（仮）の 1 通にまとめます。録音が止まった・時計が録音していない・電池・期限・急ぎ・ボタンのある知らせは、すぐ出します。オフにすると、前のとおり 1 通ずつ出します。")
+                            .font(.caption).foregroundStyle(LL.dim)
+                    }
+                }
+                .accessibilityIdentifier("s38a.morningOne")
+                if morningOne && !digestOn {
+                    let next = S38AMorning.nextSlot(after: .now)
+                    LabeledContent("次の朝の 1 通", value: next.formatted(date: .omitted, time: .shortened) + "（\(waiting.count) 件）")
+                }
                 Toggle(isOn: $digestOn) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("急ぎでない知らせを朝夕の便りに")

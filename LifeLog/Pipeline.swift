@@ -1651,7 +1651,7 @@ final class Pipeline {
         Task { await SettleBook.shared.refresh(homePC) }
         Task { await CheckupBook.shared.refresh(homePC) }  // 1日1分の答え合わせ・夜の繋がり探し（30分に1回まで。2026-11-16。強化案 136・137。Checkups.swift）
         Task { await PagesBook.shared.refresh(homePC) }  // 人・話題の糸・場所・決めごとのページ（30分に1回まで。2026-11-15。強化案 53〜55・61。PagesFeeds.swift）
-        Task { await NoticeGate.scanDelivered() }
+        Task { await NoticeGate.scanDelivered(appOpened: true) }
         Task { await checkPCSilence() }
         noteRecordingExperiment()
         MeetingLiveBook.shared.resumeIfNeeded(self)  // 会議モードの最中なら、会議の相棒と Live Activity を続ける（2026-11-15。MeetingLive.swift）

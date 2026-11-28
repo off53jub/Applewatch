@@ -498,12 +498,12 @@ final class LogicTests: XCTestCase {
     func testSetAsideRoundTrip() throws {
         let sample = SpeakerLabeler.Sample(audio: "a.m4a", start: 1, end: 4)
         let voice = SpeakerLabeler.Voice(embedding: [0.6, 0.8], pinned: false, added: Date(timeIntervalSince1970: 1_000), model: SpeakerLabeler.model)
-        let item = SpeakerLabeler.SetAside(person: "7", sample: sample, voices: [voice], at: Date(timeIntervalSince1970: 2_000), reason: "「まぐだ」の行")
+        let item = SpeakerLabeler.SetAside(person: "7", sample: sample, voices: [voice], at: Date(timeIntervalSince1970: 2_000), reason: "「見本の呼び名」の行")
         let back = try JSONDecoder().decode([SpeakerLabeler.SetAside].self, from: JSONEncoder().encode([item]))
         XCTAssertEqual(back.first?.id, item.id)
         XCTAssertEqual(back.first?.voices.first?.embedding, [0.6, 0.8])
         XCTAssertEqual(back.first?.voices.first?.pinned, false)
-        XCTAssertEqual(back.first?.reason, "「まぐだ」の行")
+        XCTAssertEqual(back.first?.reason, "「見本の呼び名」の行")
     }
 
     // MARK: - AI からの質問・わかったこと帳
@@ -519,14 +519,14 @@ final class LogicTests: XCTestCase {
     /// 答えは「いつ・どこ・質問 → 答え」の1行になり、質問の対象の言葉で引ける
     func testFactTextAndWords() {
         let time = Date(timeIntervalSince1970: 1_793_700_000)
-        let q = AskBook.Question(day: "2026-11-03", kind: .word, question: "「さまいまい」はだれのこと？", subject: "さまいまい",
-                                 quote: "理由はさまいまいが出るから", time: time, place: "大久保駅近く")
-        let text = AskBook.factText(q, answer: "まいさん（佐藤真衣）")
+        let q = AskBook.Question(day: "2026-11-03", kind: .word, question: "「みほみほ」はだれのこと？", subject: "みほみほ",
+                                 quote: "理由はみほみほが出るから", time: time, place: "大久保駅近く")
+        let text = AskBook.factText(q, answer: "見本さん（見本花子）")
         XCTAssertTrue(text.contains("大久保駅近く"))
-        XCTAssertTrue(text.hasSuffix("→ まいさん（佐藤真衣）"))
-        let words = AskBook.words(of: q, answer: "まいさん（佐藤真衣）")
-        XCTAssertEqual(words.first, "さまいまい")
-        XCTAssertTrue(words.contains("佐藤真衣"))
+        XCTAssertTrue(text.hasSuffix("→ 見本さん（見本花子）"))
+        let words = AskBook.words(of: q, answer: "見本さん（見本花子）")
+        XCTAssertEqual(words.first, "みほみほ")
+        XCTAssertTrue(words.contains("見本花子"))
     }
 
     /// AI に渡すのは、記録に手がかりの言葉が出てくるものだけ
@@ -657,11 +657,11 @@ final class LogicTests: XCTestCase {
         XCTAssertEqual(SpeakerLabeler.wearerClusters(owners: owners, levels: ["S1": -30, "S2": -45], selfLevel: -19), [])
     }
 
-    /// 自動で覚えた声が、その人の決めた声より、ほかの人の決めた声にずっと近いときだけ外す（控えで井上さん20個・うい6個）
+    /// 自動で覚えた声が、その人の決めた声より、ほかの人の決めた声にずっと近いときだけ外す（控えで見本さん A 20個・見本さん C 6個）
     func testBelongsElsewhere() {
         XCTAssertTrue(SpeakerLabeler.belongsElsewhere(own: 0.79, other: 0.26))
         XCTAssertTrue(SpeakerLabeler.belongsElsewhere(own: 0.92, other: 0.34))
-        // どちらからも遠い（松澤さんの自動の声: 本人 0.73 / 自分 0.54）
+        // どちらからも遠い（見本さん B の自動の声: 本人 0.73 / 自分 0.54）
         XCTAssertFalse(SpeakerLabeler.belongsElsewhere(own: 0.73, other: 0.54))
         // 差が小さい
         XCTAssertFalse(SpeakerLabeler.belongsElsewhere(own: 0.45, other: 0.30))

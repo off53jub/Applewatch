@@ -1,0 +1,8 @@
+# 公開リポジトリの見張り（.github/scripts/public_guard.py）が通してよい行。パス<TAB>行の sha1 の頭 12 字。
+# 足すのは「見本・作り物で、本物の鍵・宛先・名前ではない」と確かめた行だけ。行が変わると外れる（もう一度確かめる）。
+# testflight.yml: 鍵の形に整える echo / sed（中身は Secret から）。S22・S26A: 伏せる働きの試しの作り物の宛先。v11checks: 作り物の鍵
+.github/workflows/testflight.yml	0bb114e443e5
+.github/workflows/testflight.yml	41c7ec2e9342
+LifeLogTests/S22Tests.swift	5fa8e382ca2d
+LifeLogTests/S26ATests.swift	a78fd0a1d282
+pc/v11checks.py	1e9c69fc980a

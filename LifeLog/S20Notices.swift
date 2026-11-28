@@ -24,8 +24,11 @@ enum S20Notices {
             return false
         }
         let title = request.content.title
-        if digestOn, !urgent, NoticeBundle.isImmediate(request.trigger) {
-            hold(title: title, now: now)
+        // 急ぎ以外を朝の 1 通に（初めはオン。設定で戻せる。2026-11-28。s38 の 活3。S38ARules.swift）。朝夕の便りがオンならそちらが先
+        let morningOne: Bool = !digestOn && S38AMorning.holds(identifier: id, category: category, userInfo: request.content.userInfo,
+                                                              immediate: NoticeBundle.isImmediate(request.trigger), on: S38AMorning.isOn)
+        if (digestOn && !urgent && NoticeBundle.isImmediate(request.trigger)) || morningOne {
+            hold(title: title, now: now, morningOnly: morningOne)
             log(id: id, kind: kind, title: title, held: true, at: now)
             return false
         }
@@ -40,8 +43,10 @@ enum S20Notices {
 
     /// 便りにためて、次の便りの 1 通を頼み直す（同じ名前で置き換える）。
     /// 知らせ全体の 1 日の上限を超えた分もここに回す（2026-11-24。s24 の 減7。S24Book.swift）
-    static func hold(title: String, now: Date) {
-        let previous = NoticeDigestRules.previousSlot(before: now)
+    static func hold(title: String, now: Date, morningOnly given: Bool? = nil) {
+        // 朝の 1 通の設定がオンで朝夕の便りがオフなら、上限を超えた分も朝の 1 通へ（s38 の 活3）
+        let morningOnly: Bool = given ?? (!digestOn && S38AMorning.isOn)
+        let previous = morningOnly ? S38AMorning.previousSlot(before: now) : NoticeDigestRules.previousSlot(before: now)
         let titles: [String] = lock.withLock { () -> [String] in
             var rows = UserDefaults.standard.array(forKey: heldKey) as? [[String: Any]] ?? []
             rows = rows.filter { ($0["at"] as? Double ?? 0) > previous.timeIntervalSince1970 }
@@ -51,7 +56,7 @@ enum S20Notices {
             return rows.compactMap { $0["t"] as? String }
         }
         Tally.add("notice.digested")
-        let slot = NoticeDigestRules.nextSlot(after: now)
+        let slot = morningOnly ? S38AMorning.nextSlot(after: now) : NoticeDigestRules.nextSlot(after: now)
         let morning = NoticeDigestRules.isMorning(slot)
         let text = NoticeDigestRules.digest(titles: titles, morning: morning)
         let content = UNMutableNotificationContent()
@@ -67,7 +72,7 @@ enum S20Notices {
 
     /// 次の便りにたまっている題（画面に出す）
     static func waiting(now: Date = .now) -> [String] {
-        let previous = NoticeDigestRules.previousSlot(before: now)
+        let previous = !digestOn && S38AMorning.isOn ? S38AMorning.previousSlot(before: now) : NoticeDigestRules.previousSlot(before: now)
         let rows = UserDefaults.standard.array(forKey: heldKey) as? [[String: Any]] ?? []
         return rows.filter { ($0["at"] as? Double ?? 0) > previous.timeIntervalSince1970 }.compactMap { $0["t"] as? String }
     }

@@ -519,8 +519,15 @@ class Watcher:
         # 拾うこと・台帳・GET /promises-now は今までどおり（送らなかったものは alerted のまま false）
         import s24rules
 
-        if not s24rules.promise_push(self.config() or {}):
+        config = self.config() or {}
+        if not s24rules.promise_push(config):
             return 0
+        # s38 K38-2（続5）: 仕事の約束（work が true）は送らない（"promise_push_work": true で戻す）。
+        # 台帳と GET /promises-now には残る（alerted は false のまま）
+        if not s24rules.promise_push_work(config):
+            pending = [i for i in pending if i.get("work") is not True]
+            if not pending:
+                return 0
         pusher = self.pusher()
         if pusher is None or not pusher.ready():
             return 0
