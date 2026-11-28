@@ -238,6 +238,8 @@ private struct TodayView: View {
     /// 文字がとても大きいときは、下の帯を縦に積む（2026-11-22。s22。文字最大で横にはみ出していた）
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var showLive = false
+    /// iPad の「読むだけ」で録音ボタンを押した時刻（ボタンの下に 15 秒だけ知らせる。2026-11-29）
+    @State private var readerTapAt: Date?
     @State private var showHelp = false
     /// 「今日の記録」を開いているか（いつもは畳む）
     @AppStorage("todayRecordOpen") private var recordOpen = false
@@ -381,6 +383,15 @@ private struct TodayView: View {
         return Button {
             Task {
                 await pipeline.toggleRecording()
+                // iPad の「読むだけ」では録音が始まらない。知らせの文は畳んだ「今日の記録」の中にしか出ないので、ボタンの下にも出す
+                if !pipeline.isRecording && S22Device.isReader {
+                    let tap = Date.now
+                    readerTapAt = tap
+                    Task {
+                        try? await Task.sleep(for: .seconds(15))
+                        if readerTapAt == tap { readerTapAt = nil }
+                    }
+                }
                 // 振動の型（2026-11-21。s20 の 体21）
                 (pipeline.isRecording ? LLHaptic.started : LLHaptic.stopped).play()
             }
@@ -410,6 +421,9 @@ private struct TodayView: View {
 
     /// 下の1行の小さな文（会議中・印を付けた直後だけ）
     private func barNote() -> String? {
+        if let tap = readerTapAt, Date.now.timeIntervalSince(tap) < 15 {
+            return "iPad は読むだけです。録音は iPhone と時計で（くわしい設定で切れます）"
+        }
         if let meeting = pipeline.meeting {
             let title: String = meeting.title.map { "・" + $0 } ?? ""
             return "会議モード中（" + meeting.start.formatted(date: .omitted, time: .shortened) + " から" + title + "）"
