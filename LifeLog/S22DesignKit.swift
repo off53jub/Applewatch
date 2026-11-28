@@ -549,6 +549,8 @@ struct LineBubble<Trailing: View>: View {
     var original: String?
     var fromWatch = false
     var noisy = false
+    /// s38（続1）: 人物N の「仮: 名前」（薄く添える。名前は変えない）
+    var hint: String? = nil
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
@@ -565,6 +567,7 @@ struct LineBubble<Trailing: View>: View {
                         Text(speaker).font(.caption.weight(.bold)).foregroundStyle(color)
                         // 2 つの声のモデルで話し手が食い違った行
                         if doubt { Text("？").font(.caption.weight(.bold)).foregroundStyle(LL.warn) }
+                        if let hint { S38ANameHint(text: hint) }
                     }
                 }
                 bubble(color: color)
@@ -588,7 +591,7 @@ struct LineBubble<Trailing: View>: View {
 
     /// 読み上げの文（だれ・いつ・何と）
     private var spoken: String {
-        let who: String = isSelf ? "自分" : (speaker ?? "話し手不明")
+        let who: String = isSelf ? "自分" : (speaker ?? "話し手不明") + (hint.map { "（\($0)）" } ?? "")
         let note: String = uncertain ? "（聞き取りが不確か）" : ""
         return who + "、" + time + "、" + text + note
     }

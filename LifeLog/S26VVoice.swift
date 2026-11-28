@@ -198,6 +198,10 @@ struct S26VVoiceBlock: View {
         let clips = item.clips ?? []
         let playable = Array(local.prefix(S26VVoice.playLimit))
         VStack(alignment: .leading, spacing: LL.Space.s) {
+            // s38（続1）: 仮の名前（薄く添える。名前を付けた人には出さない）
+            if let number = S26VVoice.number(item) {
+                S38APersonHint(id: number, isNamed: pipeline.people.first { $0.id == number }?.isNamed ?? false)
+            }
             if !quotes.isEmpty {
                 Text("この人の発言").font(.caption.weight(.semibold)).foregroundStyle(LL.dim)
                 ForEach(Array(quotes.enumerated()), id: \.offset) { _, q in

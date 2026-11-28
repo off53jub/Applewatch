@@ -436,7 +436,9 @@ struct ConversationsView: View {
                                uncertain: line.isUncertain, marked: line.marked == true,
                                doubt: line.speakerDoubt.map { $0 != line.speakerID } ?? false,
                                original: line.original, fromWatch: line.audio?.hasSuffix("-w.m4a") == true,
-                               noisy: line.noisy == true) {
+                               noisy: line.noisy == true,
+                               hint: isSelf ? nil : S38ANames.lineHint(speaker: line.speaker, speakerID: line.speakerID, names: S38AFeed.names,
+                                                                       named: { id in pipeline.people.first { $0.id == id }?.isNamed ?? false })) {
             if player.loading == key {
                 ProgressView().controlSize(.mini)
             } else if audio != nil {
