@@ -19,6 +19,8 @@ extension WatchRecorder {
         state.reviewWaiting = board.info?.reviewWaiting
         // 文字盤の電池の部品（丸・角。2026-11-22。s22 の 見17）
         state.watchBattery = WatchGaugeRules.level(device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil)
+        // 外出中は、同じ中身なら出さない・録音の始め止め以外は 15 分（仮）に 1 回まで（呼ばれた回数も数える。2026-11-29。s39 の 13）
+        guard S39WatchPowerSide.takeWidget(state) else { return }
         WidgetPublisher.shared.publish(state, kind: WidgetState.watchKind)
     }
 }

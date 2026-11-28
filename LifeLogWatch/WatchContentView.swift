@@ -24,13 +24,18 @@ struct WatchContentView: View {
             if !Task.isCancelled { WatchPages.add(current) }
         }
         .onChange(of: scenePhase) { _, phase in
+            // 画面が出ているか（外出中・画面が消えているあいだだけ様子の知らせを間引く。2026-11-29。s39 の 5）
+            S39WatchPowerSide.setScreen(phase == .active)
             if phase == .active {
                 recorder.refreshStatus()
                 // 止めるボタンを押さずに止まっていた録音を始め直す（アラームのあとなど。2026-11-20）
                 Task { await recorder.resumeIfWanted() }
             }
         }
-        .onAppear { recorder.refreshStatus() }
+        .onAppear {
+            S39WatchPowerSide.setScreen(scenePhase == .active)
+            recorder.refreshStatus()
+        }
     }
 
     @ViewBuilder

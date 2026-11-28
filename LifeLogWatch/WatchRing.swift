@@ -13,10 +13,14 @@ struct WatchRing: View {
     let onToggle: () -> Void
     @AppStorage(WatchRingRules.key) private var numberRaw = WatchRingRules.Number.recorded.rawValue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 常時表示で暗いあいだは輪を動かさない（2026-11-29。s39 の 12）
+    @Environment(\.isLuminanceReduced) private var dimmed
     @State private var breathe = false
     @State private var hoursLeft: Double?
 
     private var number: WatchRingRules.Number { WatchRingRules.Number(rawValue: numberRaw) ?? .recorded }
+    /// 暗いので動かさないか（設定「静かなときの省電力」がオンのときだけ）
+    private var stillWhenDim: Bool { dimmed && S39WatchPower.isOn(S39WatchPower.quietKey) }
 
     var body: some View {
         let shown = WatchRingRules.display(number, recorded: recorded, hoursLeft: hoursLeft, unsent: unsent, waiting: waiting)
@@ -30,7 +34,7 @@ struct WatchRing: View {
                         .stroke(color, style: StrokeStyle(lineWidth: 8, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                         .animation(reduceMotion ? nil : LL.Motion.state, value: recorded)
-                    Circle().fill(color.opacity(recording && breathe ? 0.16 : 0.10)).padding(10)
+                    Circle().fill(color.opacity(recording && breathe && !stillWhenDim ? 0.16 : 0.10)).padding(10)
                     VStack(spacing: 0) {
                         Image(systemName: recording ? "stop.fill" : "record.circle")
                             .font(.footnote.weight(.bold))
@@ -56,7 +60,7 @@ struct WatchRing: View {
                                 + WatchRingRules.spoken(number, recorded: recorded, hoursLeft: hoursLeft, unsent: unsent, waiting: waiting))
             Button {
                 numberRaw = number.next.rawValue
-                LLHaptic.confirm.play()
+                S39WatchPowerSide.light(.confirm)
             } label: {
                 Label("数字を切り替え（\(number.next.label)）", systemImage: "arrow.triangle.2.circlepath")
                     .font(.caption2)
@@ -66,8 +70,18 @@ struct WatchRing: View {
         }
         .onAppear {
             hoursLeft = Self.hoursLeft()
-            guard !reduceMotion else { return }
+            guard !reduceMotion, !stillWhenDim else { return }
             withAnimation(LL.Motion.breathe) { breathe = true }
+        }
+        .onChange(of: dimmed) { _, _ in
+            // 暗くなったら動きを止め（くり返しの動きを、動きなしで切る）、明るくなったら戻す
+            if stillWhenDim {
+                var still = Transaction()
+                still.disablesAnimations = true
+                withTransaction(still) { breathe = false }
+            } else if !reduceMotion {
+                withAnimation(LL.Motion.breathe) { breathe = true }
+            }
         }
         .onChange(of: recorded) { hoursLeft = Self.hoursLeft() }
     }

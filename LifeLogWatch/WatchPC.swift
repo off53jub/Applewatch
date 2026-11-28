@@ -225,6 +225,8 @@ final class WatchPC: @unchecked Sendable {
             let now = Date.now.timeIntervalSince1970
             var keys = [Self.sentKey]
             if isPublic { keys.append(Self.publicSentKey) }
+            // 家の Wi-Fi（家の中の住所）で届いた時刻（30 分以内なら家にいる。2026-11-29。s39）
+            if !isPublic { UserDefaults.standard.set(now, forKey: S39WatchPowerSide.lanSentKey) }
             for key in keys {
                 var list = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
                 // 届いた区切りは 2 日覚える（1 日を過ぎた返事待ちを片付けるときに使う。2026-11-22。s21 の 速2）。
@@ -255,6 +257,13 @@ final class WatchPC: @unchecked Sendable {
                                         rescueOn: S24Watch.rescueOn,
                                         rescueUntil: defaults.double(forKey: S24Watch.rescueUntilKey),
                                         now: now.timeIntervalSince1970)
+        // 外出中は家の PC に直接送らない（iPhone に渡すだけ）。溜まり続けて時計が自分で送り直したあとの 30 分だけは試す（2026-11-29。s39 の 8）
+        let rescueWindow = S24Watch.rescueOn && defaults.double(forKey: S24Watch.rescueUntilKey) > now.timeIntervalSince1970
+        guard S39WatchPower.directAllowed(away: S39WatchPowerSide.away, on: S39WatchPowerSide.on, rescueWindow: rescueWindow) else {
+            S39WatchPowerSide.count("pc")
+            Self.remember(Self.skipKey, "外出中（iPhone に渡すだけ）")
+            return false
+        }
         guard let route = WatchDelivery.directRoute(
             direct: direct,
             publicURL: defaults.string(forKey: WatchDelivery.publicURLKey), hasPublicKey: publicKey != nil,

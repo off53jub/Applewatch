@@ -171,7 +171,7 @@ final class WatchBoard {
     func markDone(_ id: String) {
         doneAt[id] = .now
         sender.taskDone(id)
-        LLHaptic.done.play()
+        S39WatchPowerSide.light(.done)
         onChange?()
     }
 
@@ -201,7 +201,7 @@ final class WatchBoard {
         if !q.isEmpty { question = q }
         UserDefaults.standard.set(text, forKey: Self.answerKey)
         if !q.isEmpty { UserDefaults.standard.set(q, forKey: Self.questionKey) }
-        LLHaptic.confirm.play()
+        S39WatchPowerSide.light(.confirm)
     }
 }
 

@@ -21,9 +21,10 @@ final class WatchGuard: NSObject {
 
     private var enabled: Bool { UserDefaults.standard.bool(forKey: S21Watch.workoutGuardKey) }
 
-    /// 録音しているか・設定が変わったら呼ぶ（何度呼んでもよい）
-    func update(recording: Bool) {
-        let want = recording && enabled && HKHealthStore.isHealthDataAvailable()
+    /// 録音しているか・設定が変わったら呼ぶ（何度呼んでもよい）。外出中は切る（2026-11-29。s39 の 4）
+    func update(recording: Bool, away: Bool = false) {
+        let want = S39WatchPower.guardWanted(recording: recording, enabled: enabled, away: away, on: S39WatchPowerSide.on)
+            && HKHealthStore.isHealthDataAvailable()
         if want, session == nil, !starting {
             start()
         } else if !want, session != nil {

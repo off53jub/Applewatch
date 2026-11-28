@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UIKit
+import WatchConnectivity
 
 // 実機の様子を家の PC に送る（POST /diag。docs/v7-plan.md の 1。2026-11-07）。
 // 1時間に1回ほど・アプリを開いたとき・見えない通知で起きたときに、自己点検の行・落ちた記録・まだ送っていない
@@ -607,6 +608,10 @@ extension Pipeline {
         if let route = S21Book.routeToday() { detail["watchRouteExp"] = route.rawValue }
         // 1 時間ごとの実験の入れ替えのいまの組（"32k45" など。入れ替えの外は付けない。2026-11-22。s22 の 確24）
         if let combo = S22Watch.hourlyNow() { detail["recExpHourly"] = S22Watch.label(combo) }
+        // 時計の外出中の省電力（外出中か・マイクの束・変換しなかった数・省いた回数。2026-11-29。s39。どれも省ける）
+        if WCSession.isSupported() {
+            for (key, value) in S39WatchPower.phoneDetail(WCSession.default.receivedApplicationContext) { detail[key] = value }
+        }
         UserDefaults.standard.set(detail, forKey: PCDiag.watchDetailKey)
         S21Book.noteWatch(state)
     }

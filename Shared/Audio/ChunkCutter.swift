@@ -118,6 +118,8 @@ struct ChunkCutter {
         S24Watch.addSettings(to: &context)
         // その日の録り方の指図（区切りの長さ・音質。新しい時計だけが読む。2026-11-25。s26 の 軽6。S26UWatchPlan）
         S26UWatchPlan.addSettings(to: &context)
+        // 外出中の時計の省電力・休日は自動で外出モード・静かなときの省電力（2026-11-29。s39。初めはオン）
+        S39WatchPower.addSettings(to: &context)
     }
 
     /// 時計が iPhone から届いた設定を読む（区切りの長さと「電池が少ないときは5分に」。次の区切りから効く）
@@ -133,6 +135,7 @@ struct ChunkCutter {
         S23Rec.readSettings(context)
         S24Watch.readSettings(context)
         S26UWatchPlan.readSettings(context)
+        S39WatchPower.readSettings(context)
     }
 
     /// 静かな瞬間をこれだけ待つ

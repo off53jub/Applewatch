@@ -127,6 +127,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
     /// 最後に iPhone を起こした時刻（2026-11-06）
     private var lastWake = Date.distantPast
     private var resting: Date?
+    /// 最後に iPhone に知らせた「休み始めた時刻」（s39 の 5）
+    private var publishedResting: Date?
     /// 最後に iPhone への受け渡しが終わった時刻（列が動いているかを見る。2026-11-16）
     private var lastFinished: Date?
     /// 受け渡しが終わった知らせ（didFinish）より先に「受け取った」が届いた区切り。
@@ -247,6 +249,8 @@ final class WatchSender: NSObject, WCSessionDelegate {
         for (key, value) in S23WatchRec.extraState(now: now) { out[key] = value }
         // s24（2026-11-24。S24WatchRescue.swift）: 溜まり続けたので自分で送り直した回数（今日）と最後の時刻（急6）。どれも省ける
         for (key, value) in S24WatchRescue.extraState(now: now) { out[key] = value }
+        // s39（2026-11-29。S39WatchPowerSide.swift）: 外出中か・マイクの束の長さ・変換しなかった数・省いた回数。どれも省ける
+        for (key, value) in S39WatchPowerSide.extraState(quiet: S39WatchPowerSide.quiet?(), now: now) { out[key] = value }
         return out
     }
 
@@ -381,12 +385,27 @@ final class WatchSender: NSObject, WCSessionDelegate {
         UserDefaults.standard.set("\(Int(now.timeIntervalSince1970))|\(code)", forKey: HolidayRules.lastStallKey)
     }
 
-    /// 外出モードで区切りを溜めているか（設定がオン・iPhone が「家を出ている」・充電していない。休8）
+    /// 外出モードで区切りを溜めているか（設定がオン・iPhone が「家を出ている」・充電していない。休8）。
+    /// 休日は「休日は自動」がオンなら外出モードを入れていなくても溜める（s39 の 3）。
+    /// 外出中で電池が 20%（仮）を切ったときも、送らずに溜める（25% に戻るか充電で送る。s39 の 6）
     var awayHolding: Bool {
         let defaults = UserDefaults.standard
-        return HolidayRules.awayHold(mode: defaults.bool(forKey: HolidayRules.awayModeKey),
-                                     away: defaults.bool(forKey: HolidayRules.awayKey),
-                                     charging: currentBattery()?.charging ?? false)
+        let battery = currentBattery()
+        let charging = battery?.charging ?? false
+        let holiday = HolidayRules.isHolidayToday(defaults.string(forKey: HolidayRules.holidayDayKey), now: .now)
+        let away = S39WatchPower.holdAway(mode: defaults.bool(forKey: HolidayRules.awayModeKey),
+                                          holidayAuto: S39WatchPower.isOn(S39WatchPower.holidayAutoKey) && S39WatchPowerSide.on,
+                                          holiday: holiday, away: defaults.bool(forKey: HolidayRules.awayKey), charging: charging)
+        let wasLow = defaults.bool(forKey: S39WatchPowerSide.lowHoldKey)
+        let low = S39WatchPower.lowBatteryHold(on: S39WatchPowerSide.on, away: S39WatchPowerSide.away, level: battery?.level,
+                                               charging: charging, wasHolding: wasLow)
+        if low != wasLow { defaults.set(low, forKey: S39WatchPowerSide.lowHoldKey) }
+        return away || low
+    }
+
+    /// 外出中かを決め直す（s39。区切るたび・画面を出し直すたび）
+    func s39Refresh(now: Date = .now) {
+        S39WatchPowerSide.refresh(charging: currentBattery()?.charging ?? false, lastFinished: lock.withLock { lastFinished }, now: now)
     }
 
     /// 1 時間に 1 つ、電池の残りを見本に足す（外出モードの前後の減りを比べられるように。休8）
@@ -397,8 +416,10 @@ final class WatchSender: NSObject, WCSessionDelegate {
             let defaults = UserDefaults.standard
             let samples = defaults.array(forKey: Self.batterySamplesKey) as? [[Double]] ?? []
             guard HolidayRules.batterySampleDue(last: samples.last?.first, now: now) else { return }
-            defaults.set(HolidayRules.addingSample(samples, time: now, level: battery.level, holding: holding,
-                                                   charging: battery.charging),
+            // 5 つ目に「外出の省電力が効いていたら 1」（2026-11-29。s39。前の 4 つは変えない）
+            let added = HolidayRules.addingSample(samples, time: now, level: battery.level, holding: holding,
+                                                  charging: battery.charging)
+            defaults.set(S39WatchPower.markingLast(added, saving: S39WatchPowerSide.on && S39WatchPowerSide.away),
                          forKey: Self.batterySamplesKey)
         }
     }
@@ -415,8 +436,15 @@ final class WatchSender: NSObject, WCSessionDelegate {
         UserDefaults.standard.set(date.timeIntervalSince1970, forKey: Self.lastCutKey)
     }
 
-    private func publish() {
+    /// urgent でないとき（区切るたびの知らせ）は、外出中で画面が消えていれば 4 分（仮）に 1 回まで（s39 の 5）。
+    /// 録音の始め・止め・止まったとき（isRecording を変えたとき）はすぐ送る
+    private func publish(urgent: Bool = true) {
         guard WCSession.default.activationState == .activated else { return }
+        // 休みに入った・書き始めたも、すぐ送る（iPhone はそれを見て時計の区切りを待つかを決める）
+        let restingNow = restingSince
+        let restChanged = lock.withLock { restingNow != publishedResting }
+        guard S39WatchPowerSide.takeContext(urgent: urgent || restChanged) else { return }
+        lock.withLock { publishedResting = restingNow }
         var context: [String: Any] = ["recording": isRecording, "at": Date.now.timeIntervalSince1970,
                                       "lowPower": ProcessInfo.processInfo.isLowPowerModeEnabled]
         if let since = restingSince { context["resting"] = since.timeIntervalSince1970 }
@@ -431,20 +459,34 @@ final class WatchSender: NSObject, WCSessionDelegate {
 
     /// 区切るたびに呼ぶ。iPhone は、しばらく知らせが無いと「止まっているかも」と通知する。
     func heartbeat() {
+        // 外出中かを決め直す（2026-11-29。s39）
+        s39Refresh()
         sampleBattery()
         noteAlive()
         // 1 日を過ぎた返事待ちを片付ける（30 分に 1 回まで。2026-11-22。s21 の 速2）
         tidyKept()
-        publish()
+        publish(urgent: false)
+        // 外出中で iPhone に届かないあいだは、止まった受け渡しの取り消しと返事の無い区切りの送り直しを 30 分（仮）に 1 回まで（s39 の 9）
+        let retry = S39WatchPowerSide.takeRetry(reachable: WCSession.default.activationState == .activated && WCSession.default.isReachable)
         // 送れずに残っている区切りを送る（つながる前に区切った・低電力モードで溜めた・低電力モードを切った。2026-11-07）
-        unstickTransfers()
+        if retry { unstickTransfers() }
         flushIfDue()
-        resendUnacknowledged()
-        // 録音中・まだ届いていない区切りがあるときは、iPhone のアプリを起こしておく
+        if retry { resendUnacknowledged() }
+        // 録音中・まだ届いていない区切りがあるときは、iPhone のアプリを起こしておく（外出中は 10 分（仮）に 1 回まで。s39 の 10）
         let unsent = unsentCount()
-        if isRecording || unsent > 0 || !WCSession.default.outstandingFileTransfers.isEmpty { wakePhone() }
-        // まだ送っていない区切りが 1 時間（仮）増え続けたら、自分で送り直す（家の PC への外の道も試す。2026-11-24。s24 の 急6）
-        S24WatchRescue.check(self, unsent: unsent)
+        if isRecording || unsent > 0 || !WCSession.default.outstandingFileTransfers.isEmpty {
+            let gap = S39WatchPower.wakeGap(on: S39WatchPowerSide.on, away: S39WatchPowerSide.away)
+            if gap > S39WatchPower.wakeGapHome, !wakeDue(gap) { S39WatchPowerSide.count("wake") }
+            wakePhone(minGap: gap)
+        }
+        // まだ送っていない区切りが 1 時間（仮）増え続けたら、自分で送り直す（家の PC への外の道も試す。2026-11-24。s24 の 急6）。
+        // 外出モード・電池が少ないのでわざと溜めているあいだは、溜まって当たり前なので送り直さない（s39 の 3・6）
+        if !awayHolding { S24WatchRescue.check(self, unsent: unsent) }
+    }
+
+    /// minGap より前に起こしていないか（数えるためだけ）
+    private func wakeDue(_ minGap: TimeInterval) -> Bool {
+        lock.withLock { Date.now.timeIntervalSince(lastWake) >= minGap }
     }
 
     /// 「初めての人と話している」の印を iPhone に送る（その前後の知らない声を、確かめ待ちに出す）
@@ -956,6 +998,11 @@ final class WatchSender: NSObject, WCSessionDelegate {
            isRecording || unsentCount() > 0 || !session.outstandingFileTransfers.isEmpty {
             wakePhone(minGap: 15)
             flushIfDue()
+            // 外出中で届かないあいだ間を空けていた送り直しを、つながったのでまとめてする（2026-11-29。s39 の 9）
+            if S39WatchPowerSide.outOfReach, S39WatchPowerSide.takeRetry(reachable: true) {
+                unstickTransfers()
+                resendUnacknowledged()
+            }
         }
         onChange?()
     }

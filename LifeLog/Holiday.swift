@@ -536,6 +536,8 @@ struct HolidaySettingsSection: View {
     @AppStorage(HolidaySettings.checkupKey) private var checkup = true
     @AppStorage(HolidaySettings.recordNudgeKey) private var recordNudge = false
     @AppStorage(HolidaySettings.awayModeKey) private var awayMode = false
+    /// 休日に家を出たら、時計の外出モードに自動で入る（2026-11-29。s39 の 3。初めはオン）
+    @AppStorage(S39WatchPower.holidayAutoKey) private var holidayAutoAway = true
     @AppStorage(HolidaySettings.lowBatteryKey) private var lowBattery = true
     @AppStorage(HolidaySettings.placeAfterKey) private var placeAfter = true
     @AppStorage(HolidaySettings.payNoteKey) private var payNote = true
@@ -549,6 +551,8 @@ struct HolidaySettingsSection: View {
             Toggle("家を出たら、録音を始める促し", isOn: $recordNudge)
             Toggle("時計の外出モード（外では溜めて、家か充電中にまとめて送る）", isOn: $awayMode)
                 .onChange(of: awayMode) { HolidayNudges.shared.sendWatchContext() }
+            Toggle("休日は自動で時計の外出モード（家を出たら溜める）", isOn: $holidayAutoAway)
+                .onChange(of: holidayAutoAway) { S21Book.settingsChanged?() }
             Toggle("時計の電池が 20% を切ったら「PLAUD に任せて」", isOn: $lowBattery)
                 .onChange(of: lowBattery) { HolidayNudges.shared.sendWatchContext() }
             Toggle("滞在のすぐあとに「さっきの所は〇〇？」", isOn: $placeAfter)

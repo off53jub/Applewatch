@@ -108,6 +108,9 @@ final class WatchRecorder: NSObject {
                 self.armWatchdog()
             }
         }
+        // s39 の 1 の様子を時計の様子に載せる（2026-11-29）
+        let quietWriter = writer
+        S39WatchPowerSide.quiet = { quietWriter.s39Quiet }
         sender.activate()
         refreshStatus()
         // 録音が止まらない（「録音を戻す」の分類・毎日の見回り・iPhone からの頼み。2026-11-23。s23。S23WatchRec.swift）
@@ -157,9 +160,13 @@ final class WatchRecorder: NSObject {
         micCheck?.cancel()
         micCheck = Task { @MainActor [weak self] in
             var restarted = false
+            // 静かで休んでいるあいだは 30 秒（仮）ごと（止まりは 60 秒ほどまでに見つかる。2026-11-29。s39 の 11）
+            var every = Self.micSilence
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(Self.micSilence))
+                try? await Task.sleep(for: .seconds(every))
                 guard let self, self.isRecording, !Task.isCancelled else { return }
+                every = S39WatchPower.micCheckEvery(resting: self.writer.isResting,
+                                                    on: S39WatchPower.isOn(S39WatchPower.quietKey))
                 // 止まりかけて試し直しているあいだは、試し直しの係に任せる（2026-11-22）
                 if self.stalled { continue }
                 if let since = self.interruptedSince, Date.now.timeIntervalSince(since) < 120 { continue }
@@ -248,7 +255,7 @@ final class WatchRecorder: NSObject {
             sender.isRecording = true
             UserDefaults.standard.set(true, forKey: Self.wasRecordingKey)
             sender.noteAlive()
-            guardian.update(recording: true)
+            guardian.update(recording: true, away: S39WatchPowerSide.away)
             message = ""
             sender.resendPending()
             watchMicrophone()
@@ -302,7 +309,10 @@ final class WatchRecorder: NSObject {
         try openChunk()
         let writer = self.writer
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
+        // 大きめの束で受け取る（呼ばれる回数が減る。watchOS が聞かないこともあるので、届いた長さを様子に出す。
+        // 書く中身は ChunkWriter が前の大きさに分けて扱うので同じ。2026-11-29。s39 の 2）
+        let tapSize = AVAudioFrameCount(S39WatchPower.isOn(S39WatchPower.quietKey) ? S39WatchPower.tapFrames : S39WatchPower.oldTapFrames)
+        input.installTap(onBus: 0, bufferSize: tapSize, format: format) { buffer, _ in
             writer.write(buffer)
         }
         engine.prepare()
@@ -398,6 +408,8 @@ final class WatchRecorder: NSObject {
 
     /// 送れていない区切りの数とつながりを出し直す。溜まりすぎたら知らせる。
     func refreshStatus() {
+        // 外出中かを決め直す（2026-11-29。s39）
+        sender.s39Refresh()
         unsent = sender.unsentCount()
         relayWaiting = sender.relayHeldCount()
         link = sender.linkText()
@@ -412,7 +424,8 @@ final class WatchRecorder: NSObject {
         if abs(recordedToday - recorded) >= 1 { recordedToday = recorded }
         let delivered = sender.lastDelivered()
         if lastDelivered != delivered { lastDelivered = delivered }
-        guardian.update(recording: isRecording)
+        // 外出中は強い守りを切る（止まったら戻す仕組みはそのまま。2026-11-29。s39 の 4）
+        guardian.update(recording: isRecording, away: S39WatchPowerSide.away)
         // 録音を始めた・止めた・送っていない数が変わったら、文字盤も出し直す（変わったときだけ書く。2026-11-07）
         updateWidgets()
         let center = UNUserNotificationCenter.current()
@@ -517,7 +530,7 @@ final class WatchRecorder: NSObject {
         UserDefaults.standard.set(count, forKey: key)
         drinksToday = count
         sender.drink(now)
-        LLHaptic.confirm.play()
+        S39WatchPowerSide.light(.confirm)
         message = "お酒 \(count) 杯目を残しました"
     }
 
@@ -529,14 +542,15 @@ final class WatchRecorder: NSObject {
     /// 大事なところに印を付ける（前後1分の行に★が付く）。
     func mark() {
         sender.mark(.now)
-        LLHaptic.confirm.play()
+        // 外出中は小さな振動を切る（2026-11-29。s39 の 14）
+        S39WatchPowerSide.light(.confirm)
         message = "\(Date.now.formatted(date: .omitted, time: .shortened)) に印を付けました"
     }
 
     /// 「いま初めての人と話している」の印（その前後の知らない声を、iPhone の確かめ待ちに出す）
     func markNewPerson() {
         sender.newPerson(.now)
-        LLHaptic.confirm.play()
+        S39WatchPowerSide.light(.confirm)
         message = "\(Date.now.formatted(date: .omitted, time: .shortened)) 初めての人の印を付けました"
     }
 
@@ -545,7 +559,7 @@ final class WatchRecorder: NSObject {
         let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !said.isEmpty else { return }
         sender.voiceFix(String(said.prefix(200)), at: .now)
-        LLHaptic.confirm.play()
+        S39WatchPowerSide.light(.confirm)
         message = "「" + String(said.prefix(20)) + "」を iPhone に送りました"
     }
 
@@ -902,6 +916,14 @@ final class ChunkWriter: @unchecked Sendable {
     private var lastTick = Date.distantPast
     /// 休んでいるあいだの直近の音（書き始めるときに頭に足す）
     private var preRoll: [AVAudioPCMBuffer] = []
+    /// 休んでいるあいだの直近の音を、変換せずに元の形のまま（2026-11-29。s39 の 1）
+    private var rawRoll = S39WatchPowerAudio.RestRoll()
+    /// 静かなところの元の音と 16kHz の音の大きさの差（s39 の 1。差が小さいと分かったときだけ元の音で決める）
+    private var levelGap = S39WatchPower.LevelGap()
+    /// この休みのあいだ、元の音のまま持つか（休みに入るときに決める）
+    private var rawWhileResting = false
+    /// 変換しなかった束の数（様子に出す）
+    private var rawSkipped = 0
     /// 書いている区切りを知らせる相手（書いている途中のファイルを送らないように）
     private let sender: WatchSender
     /// 区切りを切り替えたら呼ぶ。終わった区切り、その中のいちばん大きな音（dB）、声らしいこまの数（VoiceGate）、
@@ -926,6 +948,9 @@ final class ChunkWriter: @unchecked Sendable {
         lock.withLock {
             converter = AVAudioConverter(from: input, to: Self.format)
             lastBuffer = .now
+            // マイクの形が変わったかもしれないので、大きさの差は数え直す（s39 の 1）
+            levelGap.reset()
+            rawRoll.removeAll()
         }
     }
 
@@ -934,6 +959,10 @@ final class ChunkWriter: @unchecked Sendable {
     var lastBufferAt: Date { lock.withLock { lastBuffer } }
     /// 区切りのファイルに書いているか、静かで休んでいるか（どちらでもなければ、音が来ても捨てている）
     var isWriting: Bool { lock.withLock { file != nil || resting } }
+    /// 静かで休んでいるか（マイクの見張りの間を広げる。s39 の 11）
+    var isResting: Bool { lock.withLock { resting } }
+    /// s39 の 1 の様子（変換しなかった束の数・大きさの差の平均）
+    var s39Quiet: (skipped: Int, gap: Float?) { lock.withLock { (rawSkipped, levelGap.mean) } }
 
     func open(_ url: URL) throws {
         // ファイルができる前に「書いている途中」と知らせておく
@@ -952,29 +981,65 @@ final class ChunkWriter: @unchecked Sendable {
             resting = false
             restingSince = nil
             preRoll.removeAll()
+            rawRoll.removeAll()
         }
     }
 
+    /// マイクから届いた束（音の糸から呼ばれる）。
+    /// 大きな束で届いたら、前の大きさ（4096）くらいに分けてから 1 つずつ前と同じに扱う（2026-11-29。s39 の 2）
     func write(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
         defer { lock.unlock() }
-        if buffer.frameLength > 0 { lastBuffer = .now }
-        guard file != nil || resting, let converter, buffer.frameLength > 0 else { return }
-        let ratio = Self.format.sampleRate / buffer.format.sampleRate
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
-        guard let out = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: capacity) else { return }
-        var fed = false
-        var error: NSError?
-        converter.convert(to: out, error: &error) { _, status in
-            if fed {
-                status.pointee = .noDataNow
-                return nil
-            }
-            fed = true
-            status.pointee = .haveData
-            return buffer
+        let frames = Int(buffer.frameLength)
+        if frames > 0 {
+            lastBuffer = .now
+            S39WatchPowerSide.noteTap(frames: frames, rate: buffer.format.sampleRate)
         }
-        guard error == nil, out.frameLength > 0, let samples = out.floatChannelData?[0] else { return }
+        guard file != nil || resting, converter != nil, frames > 0 else { return }
+        let ranges = S39WatchPower.slices(frames: frames)
+        if ranges.count <= 1 {
+            writeOne(buffer, shared: true)
+            return
+        }
+        for range in ranges {
+            guard let piece = S39WatchPowerAudio.copy(buffer, range: range) else { continue }
+            writeOne(piece, shared: false)
+        }
+    }
+
+    /// 前の大きさの束を 1 つ扱う（鍵をかけたまま呼ぶ）。shared は、watchOS が使い回すかもしれない元の束か（持つときは写す）
+    private func writeOne(_ buffer: AVAudioPCMBuffer, shared: Bool) {
+        guard file != nil || resting, let converter, buffer.frameLength > 0 else { return }
+        // 静かで休んでいるあいだは 16kHz に変換せず、元の音のまま直前の 2.5 秒を持つ（2026-11-29。s39 の 1）。
+        // 元の音と 16kHz の音の大きさがほぼ同じと分かっているときだけ（差が大きければ前と同じに変換する）
+        if resting, rawWhileResting, let samples = buffer.floatChannelData?[0] {
+            preRoll.removeAll()
+            let frames = Int(buffer.frameLength)
+            let step = gate.feed(samples, count: frames, rate: buffer.format.sampleRate, resting: true)
+            let piece: AVAudioPCMBuffer? = shared ? S39WatchPowerAudio.copy(buffer) : buffer
+            if let piece {
+                rawRoll.append(piece, keep: SilenceGate.preRoll)
+            }
+            rawSkipped += 1
+            if step == .wake {
+                // 持っていた元の音を変換して、前と同じに書き始める
+                preRoll = rawRoll.converted(with: converter, to: Self.format)
+                rawRoll.removeAll()
+                wake(frames: preRoll.reduce(0) { $0 + Int($1.frameLength) })
+            } else if Date.now.timeIntervalSince(lastTick) >= Self.restTick {
+                lastTick = .now
+                let tick = onRestTick
+                DispatchQueue.main.async { tick?() }
+            }
+            return
+        }
+        if !rawRoll.isEmpty {
+            // 休んでいる途中で元の音を持つのをやめた。変換器の名残を消して、前と同じやり方に戻す
+            rawRoll.removeAll()
+            converter.reset()
+        }
+        guard let out = S39WatchPowerAudio.convert(buffer, with: converter, to: Self.format),
+              let samples = out.floatChannelData?[0] else { return }
         let frames = Int(out.frameLength)
         let step = gate.feed(samples, count: frames, rate: Self.format.sampleRate, resting: resting)
         if resting {
@@ -991,6 +1056,10 @@ final class ChunkWriter: @unchecked Sendable {
                 DispatchQueue.main.async { tick?() }
             }
             return
+        }
+        // 書いているあいだに、静かなところの元の音と 16kHz の音の大きさの差を数える（s39 の 1 の安全の見張り）
+        if let raw = S39WatchPowerAudio.level(buffer), let converted = S39WatchPowerAudio.level(out) {
+            levelGap.feed(rawDB: raw, convertedDB: converted)
         }
         for i in 0..<frames { peak = max(peak, abs(samples[i])) }
         voice.feed(samples, count: frames)
@@ -1018,6 +1087,8 @@ final class ChunkWriter: @unchecked Sendable {
         restingSince = since
         lastTick = since
         preRoll.removeAll()
+        rawRoll.removeAll()
+        rawWhileResting = S39WatchPower.isOn(S39WatchPower.quietKey) && levelGap.usable
         peak = 0
         cutter.reset()
         sender.recording = nil
@@ -1103,6 +1174,7 @@ final class ChunkWriter: @unchecked Sendable {
         resting = false
         restingSince = nil
         preRoll.removeAll()
+        rawRoll.removeAll()
         lock.unlock()
         sender.recording = nil
         sender.restingSince = nil
