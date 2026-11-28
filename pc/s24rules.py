@@ -49,6 +49,12 @@ def promise_push(config: dict | None = None) -> bool:
     return _config(config).get("promise_push") is True
 
 
+def promise_push_work(config: dict | None = None) -> bool:
+    """s38 K38-2（続5）: 仕事の約束（work が true のもの）も知らせるか（初めは送らない）。
+    アプリを閉じている間に届く仕事の約束の知らせを家の PC の側で止める。"promise_push_work": true で戻す"""
+    return _config(config).get("promise_push_work") is True
+
+
 def question_days(config: dict | None = None) -> int:
     """C3: 家の PC の問いを閉じるまでの日数（1〜30。初めは 3・仮）"""
     value = _config(config).get("pc_question_days")

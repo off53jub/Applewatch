@@ -429,7 +429,7 @@ actor SpeakerLabeler {
                 store.people[i].seconds += c.seconds
                 store.people[i].lastHeard = .now
                 // 覚え足すのは、2番目に近い人よりはっきり近いときだけ。ほかの人なのに自分の声くらい大きいときは覚えない
-                // （迷った声を覚え足すと、自分の声がほかの人の声として増えていく。井上さんの自動の声20個が自分の声だった）
+                // （迷った声を覚え足すと、自分の声がほかの人の声として増えていく。見本さん Aの自動の声20個が自分の声だった）
                 if Self.mayLearn(distance: match.distance, second: match.second, limit: strictness.learn,
                                  seconds: c.seconds, isSelf: match.person == Self.selfID, loud: isLoud(key)) {
                     addVoice(c.embedding, pinned: false, to: i,
@@ -869,7 +869,7 @@ actor SpeakerLabeler {
     // MARK: - ほかの人の決めた声に近い、自動で覚えた声を外す（2026-11-05）
 
     /// 自動で覚えた声のうち、その人の決めた声（登録・手直し）より、ほかの人の決めた声にずっと近いものを外して取っておく。
-    /// 自分の声がほかの人の声として覚えられ、自分の発言がその人の行になっていたため（井上さんの自動の声20個が自分の声だった）。
+    /// 自分の声がほかの人の声として覚えられ、自分の発言がその人の行になっていたため（見本さん Aの自動の声20個が自分の声だった）。
     /// 決めた声が無い人は比べる手がかりが無いので触らない。記録に出さない人も触らない。
     /// kept は、本人が「この人の声だった（戻す）」にした声（`keptKey(person:added:)`）。外した声の数を返す。
     func setAsideOthersVoices(kept: Set<String>) -> Int {
