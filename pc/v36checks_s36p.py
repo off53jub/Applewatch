@@ -486,6 +486,10 @@ def run_all() -> int:
 
             traceback.print_exc()
             failed += say(False, f"{check.__name__} が途中で落ちました: {error!r}")
+    # K-TC（2026-11-28。トータルコーデの窓口 tcstyle.py）の確かめも続けて（CI の手順を増やさないため）
+    import vtcchecks_style
+
+    failed += vtcchecks_style.run_all()
     return failed
 
 
