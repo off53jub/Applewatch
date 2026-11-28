@@ -30,6 +30,7 @@ summary.md の「## s24 の数」の節は ops.write_summary が summary_lines(.
 
 config.json（どれも書かなければ下の既定）:
 - "same_person_ask": false・"promise_push": false・"pc_question_days": 3・"s24_night": true（夜の測り）
+- "promise_push_work": false（s38 続5: 仕事の約束〈work が true〉の知らせ。promise_push が true でも、これが true でなければ送らない）
 - "speaker_top": 5（当12 の人数）
 """
 
@@ -641,6 +642,8 @@ def summary_lines(diag_store=None, now: float | None = None) -> tuple[list[str],
         push = s24rules.promise_push(config)
         ask_text = "出している" if ask else '止めている（"same_person_ask": true で戻す）'
         push_text = "送っている" if push else '止めている（"promise_push": true で戻す。台帳は続ける）'
+        if push and not s24rules.promise_push_work(config):
+            push_text += '（仕事の約束は止めている・"promise_push_work": true で戻す）'
         return f"「同じ人か」の問い（当1）: {ask_text}・約束の知らせ（減5）: {push_text}"
 
     def closed_line():
