@@ -490,6 +490,11 @@ def run_all() -> int:
     import v37checks_s37v
 
     failed += v37checks_s37v.run_all()
+
+    # K-TC（2026-11-28。トータルコーデの窓口 tcstyle.py）の確かめも続けて（CI の手順を増やさないため）
+    import vtcchecks_style
+
+    failed += vtcchecks_style.run_all()
     return failed
 
 

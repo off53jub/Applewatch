@@ -77,6 +77,14 @@ final class S20Book {
     /// 「同じ人か」は設定でだけ出す（取り決め C4）・答えで直る行の多い順（2026-11-24。s24 の 当1・減2。S24Rules.swift）
     func openItems(now: Date = .now) -> [ReviewItem] {
         let visible = ReviewRules.visible(review?.items ?? [], answered: Set(answered.keys), later: later, now: now)
+        // 母艦の daily_max があれば、母艦の順のまま・1 日にその数まで（今日答えた・「あとで」にした分は引く。2026-11-28。s37 の K37-2）
+        if let cap = S37AReview.dailyMax(review) {
+            let today = ReviewRules.dayKey(now)
+            let ordered = S37AReview.mothershipOrder(visible, samePersonAsk: S24AskSettings.isOn(S24AskSettings.samePersonAskKey),
+                                                     today: today)
+            return S33ACap.take(.review, S37AReview.limited(ordered, dailyMax: cap,
+                                                            used: S37AReview.usedToday(answered: answered, later: later, today: today)))
+        }
         let kept = S24AskRules.reviewItems(visible, samePersonAsk: S24AskSettings.isOn(S24AskSettings.samePersonAskKey),
                                            today: ReviewRules.dayKey(now))
         // 発言も声も無い「この声は誰？」は後ろへ（消さない。2026-11-25。s26 の S26V）

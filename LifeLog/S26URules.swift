@@ -219,6 +219,8 @@ struct S26UWaitingItem: Codable, Equatable, Identifiable, Sendable {
     var link: String? = nil
     var copy: String? = nil
     var done: Bool? = nil
+    /// "now" | "later"（省ける。later は「あとでいいもの」に畳む。2026-11-28。s37 の K37-1。S37ARules.swift）
+    var group: String? = nil
 
     var isDone: Bool { done == true }
 }

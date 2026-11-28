@@ -582,41 +582,25 @@ struct S26UPileView: View {
 struct S26UWaitingView: View {
     @Environment(\.openURL) private var openURL
     @State private var copied: String?
+    @State private var laterOpen = false
 
     var body: some View {
         let order = S26UFeeds.waitingOrder(S26UBook.shared.waiting)
+        // 母艦の group が later のものは、畳んだ「あとでいいもの」へ（消さない。2026-11-28。s37 の K37-1。S37ARules.swift）
+        let split = S37AWaiting.split(order.open)
         let known = Set(S26UBook.shared.waiting.map(\.id))
         let extra = S33ABook.shared.extraWaiting(known: known)
         LLList {
-            if order.open.isEmpty && extra.isEmpty {
+            if split.now.isEmpty && extra.isEmpty {
                 Section {
-                    LLEmpty(title: "いまは操作待ちはありません", symbol: "checkmark.circle",
+                    LLEmpty(title: split.later.isEmpty ? "いまは操作待ちはありません" : "いま要る操作待ちはありません",
+                            symbol: "checkmark.circle",
                             detail: "機械ではできず、本人の操作が要るもの（許可・入れ直し・登録など）が、ここに 1 件ずつ届きます。")
                 }
             }
-            ForEach(order.open) { item in
+            ForEach(split.now) { item in
                 Section {
-                    ForEach(Array((item.steps ?? []).enumerated()), id: \.offset) { i, step in
-                        HStack(alignment: .firstTextBaseline, spacing: LL.Space.s) {
-                            Text("\(i + 1)").font(.caption.weight(.bold)).monospacedDigit().foregroundStyle(LL.accent)
-                            Text(step).font(.callout)
-                        }
-                    }
-                    if let url = S26UFeeds.openable(item.link) {
-                        Button("開く", systemImage: "arrow.up.forward.square") {
-                            Tally.add("s26u.waiting.open")
-                            openURL(url)
-                        }
-                    }
-                    if let copy = item.copy, !copy.isEmpty {
-                        Button(copied == item.id ? "コピーしました" : "貼る文字をコピー", systemImage: "doc.on.doc") {
-                            UIPasteboard.general.string = copy
-                            copied = item.id
-                            Tally.add("s26u.waiting.copy")
-                            LLHaptic.done.play()
-                        }
-                        Text(copy).font(.caption.monospaced()).foregroundStyle(LL.dim).lineLimit(3).textSelection(.enabled)
-                    }
+                    steps(item)
                 } header: {
                     HStack(spacing: LL.Space.xs) {
                         LLToneMark(tone: .act)
@@ -626,6 +610,24 @@ struct S26UWaitingView: View {
             }
             // 家の PC の /s33 の操作待ち（2026-11-27。s33 の K33-1。S33AViews.swift）
             S33AWaitingRows(known: known)
+            if !split.later.isEmpty {
+                Section {
+                    DisclosureGroup(isExpanded: $laterOpen) {
+                        ForEach(split.later) { item in
+                            VStack(alignment: .leading, spacing: LL.Space.xs) {
+                                Text(item.title).font(.subheadline.weight(.bold))
+                                steps(item)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    } label: {
+                        Text("あとでいいもの（\(split.later.count) 件）").font(.subheadline.weight(.semibold))
+                    }
+                    .accessibilityIdentifier("s37a.waiting.later")
+                } footer: {
+                    Text("今すぐでなくてよいもの（好みの設定・作る案・手で書き出すものなど）。消してはいません。上の数には入れていません。")
+                }
+            }
             if !order.done.isEmpty {
                 Section {
                     ForEach(order.done) { item in
@@ -641,6 +643,32 @@ struct S26UWaitingView: View {
         .s26uHelp("s26uWaiting")
         .refreshable {
             if let pipeline = S26UBook.pipeline { await S26UBook.shared.refresh(pipeline) }
+        }
+    }
+
+    /// 1 件の手順・開く・貼る文字（今要るもの・あとでいいもので同じ）
+    @ViewBuilder
+    private func steps(_ item: S26UWaitingItem) -> some View {
+        ForEach(Array((item.steps ?? []).enumerated()), id: \.offset) { i, step in
+            HStack(alignment: .firstTextBaseline, spacing: LL.Space.s) {
+                Text("\(i + 1)").font(.caption.weight(.bold)).monospacedDigit().foregroundStyle(LL.accent)
+                Text(step).font(.callout)
+            }
+        }
+        if let url = S26UFeeds.openable(item.link) {
+            Button("開く", systemImage: "arrow.up.forward.square") {
+                Tally.add("s26u.waiting.open")
+                openURL(url)
+            }
+        }
+        if let copy = item.copy, !copy.isEmpty {
+            Button(copied == item.id ? "コピーしました" : "貼る文字をコピー", systemImage: "doc.on.doc") {
+                UIPasteboard.general.string = copy
+                copied = item.id
+                Tally.add("s26u.waiting.copy")
+                LLHaptic.done.play()
+            }
+            Text(copy).font(.caption.monospaced()).foregroundStyle(LL.dim).lineLimit(3).textSelection(.enabled)
         }
     }
 }
