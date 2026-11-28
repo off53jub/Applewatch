@@ -92,7 +92,11 @@ final class S25UTests: XCTestCase {
         // 24 時間たって、時計の便りが届いたことがあるときだけ
         XCTAssertTrue(S25UWatchLag.shouldShow(since: old, now: now, watchSeen: true))
         XCTAssertFalse(S25UWatchLag.shouldShow(since: old, now: now, watchSeen: false))
-        XCTAssertFalse(S25UWatchLag.shouldShow(since: now.addingTimeInterval(-3600), now: now, watchSeen: true))
+        // 1 時間（仮。s38 の 手11）: 入れ替えの途中は出さず、古いままなら早めに 1 行
+        XCTAssertTrue(S25UWatchLag.shouldShow(since: now.addingTimeInterval(-3600), now: now, watchSeen: true))
+        XCTAssertFalse(S25UWatchLag.shouldShow(since: now.addingTimeInterval(-600), now: now, watchSeen: true))
+        XCTAssertFalse(S25UWatchLag.line(phone: 402, watch: "386", hours: 2).contains("時間たって"))
+        XCTAssertTrue(S25UWatchLag.line(phone: 402, watch: "386", hours: 30).contains("30 時間たって"))
     }
 
     // MARK: 早1・早3
