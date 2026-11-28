@@ -123,8 +123,11 @@ def measure_speakers(models: Path, out_dir: Path) -> dict:
             result["models"][name] = {"error": "ファイルが無い"}
             continue
         started = time.time()
+        import speakerfix  # s39: 平均の切れ端の割り方を直した型で測る（作れなければ元の型）
+
+        fixed = speakerfix.ensure(path)
         extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
-            sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(path), num_threads=THREADS, provider="cpu"))
+            sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(fixed or path), num_threads=THREADS, provider="cpu"))
         cache: dict = {}
 
         def vec(sample, extractor=extractor, cache=cache):

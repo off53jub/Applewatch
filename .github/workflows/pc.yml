@@ -329,7 +329,7 @@ jobs:
         run: |
           pyinstaller --noconfirm --onedir --console --name LifeLogPC --paths pc \
             --collect-all sherpa_onnx --collect-all av --collect-all faster_whisper \
-            --collect-all ctranslate2 --collect-all pykakasi --collect-all tokenizers \
+            --collect-all ctranslate2 --collect-all pykakasi --collect-all tokenizers --collect-all onnx \
             --hidden-import tarfile --hidden-import bz2 --hidden-import sqlite3 \
             --hidden-import jobqueue --hidden-import dashboard --hidden-import updater \
             --hidden-import semantic --hidden-import v6checks \

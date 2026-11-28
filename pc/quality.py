@@ -51,6 +51,7 @@ GETS = ("/same-person", "/night-review", "/speaker-check")
 FIELDS = ("judge_calls", "judge_agree_plaud", "night_review_items", "same_person_groups", "promise_alerts")
 VOICES_NIGHT_BUDGET = 1800.0      # 夜に声の特徴を測る時間の上限（秒）
 VOICES_TICK_BUDGET = 180.0        # 昼の 1 回の上限（秒）
+VOICES_REDO_BUDGET = 3000.0       # s39: 型が替わったあとの夜の測り直しの上限（秒。01:00〜05:00 の中・何晩かに分かれてよい）
 VOICES_EVERY = 1800.0             # 昼に測り直す間（秒）
 
 _lock = threading.Lock()
@@ -235,7 +236,9 @@ def run_night(today: datetime.date | None = None, steps: tuple = ("judge", "voic
             log(f"品質の記録（審判）を書けませんでした: {type(error).__name__}")
     if "voices" in steps and "voices" not in done and State.embed is not None:
         try:
-            got = run_voices(voices.WINDOW, VOICES_NIGHT_BUDGET, today)
+            # s39: 型が替わった日が残っていれば、過去 30 日（voices.REDO_DAYS）を新しい日から測り直す（予算は長め）
+            redo = voices.night_days(home, State.store, today)
+            got = run_voices(redo, VOICES_REDO_BUDGET if redo > voices.WINDOW else VOICES_NIGHT_BUDGET, today)
             if got is not None:
                 out["voices"] = got
                 _mark_done(home, day, "voices")

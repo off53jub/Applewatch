@@ -202,6 +202,7 @@ import plaudmatch  # s21 精1・精10: PLAUD との文字の合い方・モデ�
 import jobfirst  # s21 速3: 新しい区切りを先に（/transcribe の夜の待ち）
 import s21pc  # s21（2026-11-22）: 精1・精7・精10・精11・精15・速4・速8・速9・電1・電2・守1・守5（中身は s21pc.py ほか）
 import s22pc  # s22（2026-11-22）: 楽5・楽20・確1〜確30 の家の PC の分（中身は s22pc.py・s22voice.py・s22text.py ほか）
+import speakerfix  # s39（2026-11-29）: 話し手のモデルの平均の計算の直し（onnxruntime 1.28 までの切れ端の割り方）
 import s22models  # s22 確2・確13・確15: モデルの切り替えの口（初めは今のまま）
 import s22text  # s22 確12・確21・確11: 決まり文句の票・行の時刻・区切りの境目
 import s23pc  # s23（2026-11-23）: 続1〜続4・続8・続10・試4・届7・止1/続5 の受け口（中身は s23pc.py・s23voice.py・s23gaps.py ほか）
@@ -1704,6 +1705,10 @@ SPEAKER_MODEL = os.environ.get("LIFELOG_SPEAKER_MODEL", "3dspeaker_speech_camppl
 SPEAKER_URL = f"{RELEASES}/speaker-recongition-models/{SPEAKER_MODEL}"
 SPEAKER_DIR = HOME / "speaker"
 SPEAKER_MIN = 0.5  # これより短い区間は声の特徴を出さない（null）
+# s39（2026-11-29）: sherpa-onnx の中の onnxruntime（1.28.2）は CAM++ の 100 こまずつの平均の切れ端を 100 で割っていた（PyTorch は
+# 本当にあるこまの数で割る）。直した型（speakerfix.py）を使い、置き場所の型の名前に "+poolfix1" を付けて前の特徴と混ぜない。
+# LIFELOG_SPEAKER_POOLFIX=0 で前のまま（直さない）に戻せる
+SPEAKER_FIX = os.environ.get("LIFELOG_SPEAKER_POOLFIX", "1") != "0"
 # AudioSet の 527 種類の音を聞き分ける Zipformer（small、Apache-2.0）
 TAGGING_NAME = "sherpa-onnx-zipformer-small-audio-tagging-2024-04-15"
 TAGGING_URL = f"{RELEASES}/audio-tagging-models/{TAGGING_NAME}.tar.bz2"
@@ -1745,6 +1750,30 @@ def apply_s22_models() -> None:
 
     voices.MODEL = SPEAKER_MODEL
     log(f"話し手のモデルを {SPEAKER_MODEL} に切り替えました（config.json の speaker_model）")
+
+
+def speaker_tag(fixed: bool) -> str:
+    """置き場所（voices/<日>.npz）と iPhone に渡す型の名前。直した型なら "+poolfix1" を付ける（前の特徴と混ぜない）"""
+    return f"{SPEAKER_MODEL}+{speakerfix.TAG}" if fixed else SPEAKER_MODEL
+
+
+def prepare_speaker() -> Path | None:
+    """s39: 型のファイルが手元にあれば、直した型を用意して、置き場所の型の名前をそろえる（声の特徴を測る前に）。
+    直した型のファイル（使えなければ None）"""
+    import voices
+
+    path = SPEAKER_DIR / SPEAKER_MODEL
+    if not path.is_file():
+        return None
+    fixed = speakerfix.ensure(path, log) if SPEAKER_FIX else None
+    voices.MODEL = speaker_tag(fixed is not None)
+    return fixed
+
+
+def speaker_model_tag() -> str:
+    import voices
+
+    return voices.MODEL
 
 
 def download_speaker() -> Path:
@@ -1804,12 +1833,14 @@ class SpeakerModel:
         import sherpa_onnx
 
         path = download_speaker()
-        config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(path), num_threads=threads, provider="cpu")
+        fixed = prepare_speaker()  # s39: 直した型（作れなければ元の型のまま・名前も元のまま）
+        config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(fixed or path), num_threads=threads, provider="cpu")
         if not config.validate():
             raise RuntimeError(f"話し手のモデルの設定が正しくありません: {config}")
         self.extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
         self.dim = int(self.extractor.dim)
-        self.name = path.stem
+        self.name = path.stem + (f"+{speakerfix.TAG}" if fixed else "")
+        self.tag = speaker_tag(fixed is not None)
         self.lock = threading.Lock()
         log(f"話し手のモデルを読み込みました（{self.name}、{self.dim} 次元）")
 
@@ -3250,7 +3281,8 @@ class Handler(BaseHTTPRequestHandler):
                              "provider": self.engine.provider,
                              "engines": [e.name for e in self.engine.engines],
                              # 話し手のモデルのファイルの名前。変わったら、iPhone は登録した声を測り直す
-                             "speaker_model": SPEAKER_MODEL,
+                             # s39: 直した型なら "+poolfix1" が付く（iPhone は登録した声を測り直す）
+                             "speaker_model": speaker_model_tag(),
                              "features": features(self.engine.engines)})
 
     def llm(self, data: bytes) -> None:
@@ -3627,6 +3659,7 @@ def serve(engine_factory, port: int, threads: int = 4, watch_port: int = watchro
     # そのあいだは bge-m3 を CPU だけで動かす。main() が置き場所を決める）。モデルを読み込む前から
     gpu.note_change()
     apply_s22_models()
+    prepare_speaker()  # s39: 直した型と置き場所の型の名前（夜の流れが前の特徴を測り直す）
     Handler.engine = engine_factory()
     Handler.key = key
     # 2026-11-07 の落ち方への守り: 前の起動が GPU のモデルで文字にしている最中に止まっていたか（続けば GPU を使わない）。
@@ -4213,6 +4246,46 @@ def check_extra_speech() -> int:
     return failed + (0 if ok else 1)
 
 
+def check_poolfix(speaker, audio: np.ndarray, ranges: list[tuple[float, float]]) -> int:
+    """s39: 直した型を sherpa-onnx で動かした声の特徴が、PyTorch と同じ割り方の onnxruntime（1.29 から）で元の型を動かしたものと同じか。
+    onnxruntime の部品が無ければ（exe など）、直した型が使われていることだけを確かめる"""
+    import voices
+
+    failed = 0
+    ok = speaker.name.endswith(f"+{speakerfix.TAG}") and voices.MODEL == speaker_tag(True)
+    print(("OK " if ok else "NG ") + f"s39: 直した型を使い、置き場所の型の名前は {voices.MODEL}")
+    failed += 0 if ok else 1
+    try:
+        import onnxruntime as ort
+    except Exception:  # noqa: BLE001
+        print("OK s39: onnxruntime の部品が無いので、元の型との突き合わせは飛ばす")
+        return failed
+    if tuple(int(x) for x in ort.__version__.split(".")[:2]) < (1, 29):
+        print(f"OK s39: onnxruntime {ort.__version__} は 1.29 より前なので突き合わせは飛ばす")
+        return failed
+    session = ort.InferenceSession(str(SPEAKER_DIR / SPEAKER_MODEL), providers=["CPUExecutionProvider"])
+    sims = []
+    for (a, b), got in zip(ranges, speaker.embed(audio, ranges)):
+        samples = clip(audio, a, b)
+        if got is None or len(samples) < int(SPEAKER_MIN * RATE):
+            continue
+        stream = speaker.extractor.create_stream()
+        stream.accept_waveform(RATE, samples)
+        stream.input_finished()
+        frames = (len(samples) - 400) // 160 - 1  # sherpa-onnx が出せるこまの数より少し少なく（多いと止まる）
+        if frames < 20:
+            continue
+        feats = np.asarray(stream.get_frames(0, frames), dtype=np.float32).reshape(frames, -1)
+        feats = feats - feats.mean(axis=0, keepdims=True)
+        ref = np.asarray(session.run(None, {session.get_inputs()[0].name: feats[None]})[0][0], dtype=np.float64)
+        ref /= np.linalg.norm(ref)
+        sims.append(float(ref @ np.asarray(got)))
+    ok = bool(sims) and min(sims) > 0.98
+    print(("OK " if ok else "NG ") + f"s39: 直した型の声の特徴が、正しい割り方の onnxruntime {ort.__version__} の答えと同じ"
+          f"（{len(sims)} 区間・いちばん遠い近さ {min(sims) if sims else None}）")
+    return failed + (0 if ok else 1)
+
+
 def check_extras(path: str, threads: int) -> None:
     """聞き逃した声の探し方・/speakers・/scene を、その音声で試す（モデルを取ってくる。CI で使う）。"""
     failed = check_extra_speech()
@@ -4248,9 +4321,10 @@ def check_extras(path: str, threads: int) -> None:
         print(f"  最初の2つの近さ（cos）: {float(vectors[0] @ vectors[1]):.3f}")
     ok = len(embeddings) == len(ranges) and embeddings[-2] is None and embeddings[-1] is not None \
         and len(embeddings[-1]) == speaker.dim and abs(np.linalg.norm(embeddings[-1]) - 1) < 1e-3 \
-        and speaker.name == Path(SPEAKER_MODEL).stem
-    print(("OK " if ok else "NG ") + f"区間ごとに声の特徴が出る（短い区間は null、長さは 1、モデルは {SPEAKER_MODEL}）")
+        and speaker.name == Path(SPEAKER_MODEL).stem + (f"+{speakerfix.TAG}" if SPEAKER_FIX else "")
+    print(("OK " if ok else "NG ") + f"区間ごとに声の特徴が出る（短い区間は null、長さは 1、モデルは {speaker.name}）")
     failed += 0 if ok else 1
+    failed += check_poolfix(speaker, audio, ranges)
     started = time.time()
     scene = extra_model("scene", threads)
     tags = scene.tag(audio, ranges)
