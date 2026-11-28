@@ -11,6 +11,10 @@
   前に作った真ん中（HOME/self-lines/center.json）で今日と昨日の行だけ測る（軽い）。
 - しきい値はすべて仮（DEFAULTS。config.json の "self_lines" で上書き）。測った数は PR の説明。
 - 「聞いて直す」に出すのは、設定で "doubts": true にしたときだけ（既定は出さない＝本人の画面を増やさない）。
+- s37 精2（2026-11-28）: 母艦に「PLAUD の音で本人と確かめた区間だけ」で作った見本（state/s37v_self_center.json・
+  母艦の scripts/s37v-Voice-Models.py が作る）があり、use が true・同じ型・同じ次元・30 日以内（仮）なら、それで測る。
+  前の見本（center.json）は今まで通り作って残す。母艦の見張りが use を false に戻したら（物差しが下がったら）次の回から前の見本へ。
+  config.json の "self_lines": {"clean_center": false} で止めて前の見本に戻せる。各日の center に source（clean／own）を書く。
 置き場所: HOME/self-lines/<日>.json。母艦 inbox/self-lines/days/<日>.json（lines を除いた写し）。GET /self-lines?day=（knowme の口）。
 記録（log.txt）には数だけ。
 """
@@ -47,7 +51,10 @@ DEFAULTS = {
     "far_max_per_day": 200,   # 1 日の far に置く行の数の上限
     "keep_days": 30,          # 置き場所に残す日数
     "doubts": False,          # 仮: 「聞いて直す」に遠い行を出すか（既定は出さない）
+    "clean_center": True,     # s37 精2: 母艦の確かめた見本があれば使う（false で前の見本だけ）
+    "clean_max_age_days": 30, # 仮: 母艦の見本がこれより古ければ使わない
 }
+CLEAN_FILE = Path("state") / "s37v_self_center.json"   # 母艦（s37v-Voice-Models.py が書く）
 
 
 def settings(config: dict | None) -> dict:
@@ -118,6 +125,35 @@ def center_of(home: Path, store, cfg: dict, today: datetime.date, heavy: bool) -
     return vec, meta
 
 
+def clean_center(mother: Path | None, cfg: dict, today: datetime.date, dim: int) -> tuple[np.ndarray | None, dict]:
+    """s37 精2: 母艦の確かめた見本。使えないときは (None, 理由)（＝前の見本のまま）"""
+    if not cfg.get("clean_center"):
+        return None, {"clean": "stopped"}
+    if mother is None:
+        return None, {"clean": "no mother"}
+    data = _read(Path(mother) / CLEAN_FILE)
+    if not data:
+        return None, {"clean": "none"}
+    if data.get("use") is not True:
+        return None, {"clean": "not used"}
+    if data.get("model") != voices.MODEL:
+        return None, {"clean": "other model"}
+    try:
+        made = datetime.date.fromisoformat(str(data.get("made_at") or "")[:10])
+    except ValueError:
+        return None, {"clean": "bad date"}
+    if (today - made).days > int(cfg["clean_max_age_days"]):
+        return None, {"clean": "old"}
+    try:
+        vec = voices._unit(np.asarray(data.get("vec"), dtype=np.float64))
+    except (TypeError, ValueError):
+        vec = None
+    if vec is None or vec.ndim != 1 or len(vec) != dim:
+        return None, {"clean": "bad vector"}
+    return vec, {"source": "clean", "clean_sha": data.get("sha"), "clean_made_at": data.get("made_at"),
+                 "clean_lines": data.get("lines"), "clean_auc": [data.get("auc_now"), data.get("auc_new")]}
+
+
 def _iso(ms: int) -> str:
     return datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{ms % 1000:03d}Z"
 
@@ -185,6 +221,12 @@ def run(home: Path, store, mother: Path | None, config: dict, log: Callable[[str
     center, meta = center_of(home, store, cfg, today, heavy)
     if center is None:
         return {"skipped": "no center", "pool": meta.get("pool")}
+    clean, why = clean_center(mother, cfg, today, len(center))
+    if clean is not None:
+        meta = {**meta, **why, "own_lines": meta.get("lines")}
+        center = clean
+    else:
+        meta = {**meta, "source": "own", **why}
     todo = list(days)
     if heavy:  # 重い時間は、まだ作っていない日（直近 scan_days 日）も作る
         for i in range(int(cfg["scan_days"])):
@@ -209,8 +251,8 @@ def run(home: Path, store, mother: Path | None, config: dict, log: Callable[[str
     if made:
         lines = sum(b["summary"]["self_lines"] for b in made)
         far = sum(b["summary"]["far"] for b in made)
-        log(f"自分の行の近さ: {len(made)} 日・自分の行 {lines}・遠い行 {far}・母艦へ {copied}")
-    return {"days": len(made), "far": sum(b["summary"]["far"] for b in made), "copied": copied}
+        log(f"自分の行の近さ: {len(made)} 日・自分の行 {lines}・遠い行 {far}・母艦へ {copied}・見本 {meta.get('source')}")
+    return {"days": len(made), "far": sum(b["summary"]["far"] for b in made), "copied": copied, "source": meta.get("source")}
 
 
 def read_day(home: Path, day: str) -> dict:

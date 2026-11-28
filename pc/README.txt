@@ -740,3 +740,12 @@ iPhone のタスクの「母艦のやること」に、母艦（D:\Lifelog）の
     "s22_voice": {"snorm_min": 1.5, "chain_link": 0.5, …}        同じ人かの点・つなぐ近さなど（すべて仮）
   切り替えたモデルのファイルが無ければ、00:00〜05:00 の枠でだけ Hugging Face から取ってきます（大きさと SHA-256 が合うものだけ）。
 ・確かめ: python v24checks_s22.py（v24checks_s21.py の最後でも動きます。一時フォルダと作り物の記録・母艦で）
+
+■ s37 精2（2026-11-28）: 自分の声の見本を「PLAUD の音で本人と確かめた区間だけ」で作り直す
+・母艦の scripts\s37v-Voice-Models.py が、時計の自分の区間のうち、同じ実時刻の PLAUD の音が PLAUD の持ち主らしい（0.6 以上・仮）
+  区間だけで見本を作り、state\s37v_self_center.json に置きます（今の見本より当たり（AUC）が上のときだけ "use": true）。
+・家の PC の self-lines は、その見本が use true・同じ型・同じ次元・30 日以内（仮）なら、それで自分の行の近さを測ります。
+  前の見本（self-lines\center.json）は今まで通り作って残します。各日の self-lines\<日>.json の center に "source": "clean" | "own"。
+・母艦の見張り（毎日 1 回・新しい PLAUD の録音だけ）で当たりが下がったら、母艦が use を false に戻し、次の回から前の見本に戻ります。
+・止める: config.json に "self_lines": {"clean_center": false}（前の見本だけで測る）。
+・確かめ: python v37checks_s37v.py（v36checks_s36p.py の最後でも動きます）

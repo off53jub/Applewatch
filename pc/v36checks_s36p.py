@@ -486,6 +486,11 @@ def run_all() -> int:
 
             traceback.print_exc()
             failed += say(False, f"{check.__name__} が途中で落ちました: {error!r}")
+    # s37（2026-11-28。担当 v）の確かめも続けて（CI の手順を増やさないため）
+    import v37checks_s37v
+
+    failed += v37checks_s37v.run_all()
+
     # K-TC（2026-11-28。トータルコーデの窓口 tcstyle.py）の確かめも続けて（CI の手順を増やさないため）
     import vtcchecks_style
 
