@@ -411,6 +411,10 @@ struct S22SettingEntry: Identifiable {
         defaults(S21Rules.routeOnKey, "直接送るの実験（4 日）", "時計", true, after: { $0.scheduleWatchPCSync() }),
         // 時計に 1 時間（仮）溜まり続けたら、時計が自分で送り直す（家の PC への外の道も試す。2026-11-24。s24 の 急6。初めはオン）
         defaults(S24Watch.rescueKey, "時計に溜まり続けたら時計が自分で送り直す", "時計", true, after: { _ in S21Book.settingsChanged?() }),
+        // 外出中の時計の省電力（守り・知らせ・家の PC への直接送り・振動・文字盤を控える）・静かなときの省電力（書く中身は同じ）
+        // （2026-11-29。s39。初めはオン。docs/s39-watch-away-power.md）
+        defaults(S39WatchPower.onKey, "外出中は時計の電池を守る（守り・知らせ・振動を控える）", "時計", true, after: { _ in S21Book.settingsChanged?() }),
+        defaults(S39WatchPower.quietKey, "時計が静かで休んでいるあいだの省電力（書く中身は同じ）", "時計", true, after: { _ in S21Book.settingsChanged?() }),
         defaults(S21Book.shakeKey, "振って「いまの画面が変」を送る", "知らせ", true),
         defaults(S22Notices.trainKey, "電車の中で「いま 3 問だけ」", "知らせ", true),
         defaults(S22Notices.whoKey, "会話が終わってすぐ「誰と話した？」", "知らせ", false),
