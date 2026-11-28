@@ -327,6 +327,23 @@ def forget(store, day: str, start: int, end: int, semantic=None, jobs=None, now:
                     prev_path.unlink()
                 except OSError:
                     pass
+    # s39: 端末ごとに置いた記録（records/devices/<端末>/<日>.json）からも同じ範囲を除く（控えは devices/ に）。
+    # 除かないと、次に別の端末が送ったときの合わせで、消した行が戻ってしまう
+    for device_path in getattr(store, "device_paths", lambda _d: [])(day):
+        try:
+            device_bytes = device_path.read_bytes()
+            device_raw = json.loads(device_bytes.decode("utf-8"))
+            if not isinstance(device_raw, dict):
+                raise ValueError
+        except (OSError, ValueError):
+            continue
+        device_new, device_stats = filter_record(device_raw, start, end)
+        if not (device_stats["removed_lines"] or device_stats["removed_conversations"]):
+            continue
+        (folder / "devices").mkdir(exist_ok=True)
+        (folder / "devices" / f"{device_path.parent.name}.json").write_bytes(device_bytes)
+        with store.lock:
+            device_path.write_bytes(_dump(device_new))
     _drop_index(semantic, start, end)
     _drop_voices(home, moved)
     meta = {"id": ident, "day": day, "from": records.iso_ms(start), "to": records.iso_ms(end), "at": now,
@@ -360,6 +377,12 @@ def undo(store, day: str, ident: str, now: float | None = None) -> dict:
             raise RuntimeError("消したあとに記録が変わったので、戻せません")
         store.put(day, (folder / "record.json").read_bytes())
         restored_record = True
+    # s39: 端末ごとの記録も戻す
+    if (folder / "devices").is_dir() and hasattr(store, "device_path"):
+        for saved in (folder / "devices").glob("*.json"):
+            target = store.device_path(saved.stem, day)
+            if target.parent.is_dir():
+                target.write_bytes(saved.read_bytes())
     audio = 0
     for name in meta.get("audio") or []:
         src = folder / "audio" / name

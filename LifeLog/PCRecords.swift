@@ -321,8 +321,21 @@ enum PCRecords {
         UserDefaults.standard.set(format, forKey: formatKey)
     }
 
-    /// この端末が記録を送り、直しを当てるか（iPad は送らない）
-    @MainActor static var isSender: Bool { UIDevice.current.userInterfaceIdiom != .pad }
+    /// この端末が記録を送るか（iPhone と、「読むだけ」を切った iPad。2026-11-29。s39）。
+    /// iPad は、家の PC が 2 台の重なりをまとめられる（features "twodevices"）ときだけ送る（exchangePCRecords で見る）
+    @MainActor static var isSender: Bool { S39Send.isSender(isPad: S22Device.isPad, isReader: S22Device.isReader) }
+    /// PC の直しを当てるのは iPhone だけ（2 台で当てると、片方が「当てなかった」と先に伝えてしまう）
+    @MainActor static var appliesEdits: Bool { !S22Device.isPad }
+
+    /// 送る中身に、この端末の印（"device"＝同期の端末の印・"deviceKind"＝phone か pad）を足す。
+    /// 家の PC（records.py の receive）が端末ごとに置いて重なりをまとめるため。印が無い・読めない中身はそのまま返す（s39）
+    static func markDevice(_ data: Data, id: String?, isPad: Bool) -> Data {
+        guard let id, !id.isEmpty,
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return data }
+        object["device"] = id
+        object["deviceKind"] = isPad ? "pad" : "phone"
+        return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? data
+    }
 
     /// 送る中身の会話（conversations の順）に、車内の印を足す（flags が true の会話だけ "inCar": true・"vehicle": "car"）。
     /// 家の PC（records.py）が読む名前。どれも省略できる。印が無い・読めない中身はそのまま返す（2026-11-21。s19 の 休13）
@@ -418,9 +431,10 @@ extension Pipeline {
         var edited: Set<String> = []
         // 直しはドキュメントも直すので、Google にログインしているときだけ。
         // 裏で文字起こしの列が動いているあいだは、書き足しと重ならないよう次の機会に
-        if homePC.features.contains("edits"), email != nil, !(deadline != nil && isQueueRunning) {
+        if PCRecords.appliesEdits, homePC.features.contains("edits"), email != nil, !(deadline != nil && isQueueRunning) {
             edited = await pullPCEdits(until: deadline)
         }
+        guard !S22Device.isPad || homePC.features.contains("twodevices") else { return }
         if homePC.features.contains("records") { await pushPCRecords(until: deadline, first: edited) }
     }
 
@@ -612,7 +626,13 @@ extension Pipeline {
             for (i, c) in payload.conversations.enumerated() {
                 trainFlags.append(TrainRules.isTrain(movement: c.movement, inCar: carFlags[i], place: c.place, scene: c.scene))
             }
-            guard let data = (try? encoder.encode(body)).map({ PCRecords.markTrain(PCRecords.markCar($0, flags: carFlags), flags: trainFlags) }) else {
+            // 端末の印（s39。2 台の重なりを PC でまとめるため）
+            let deviceID = UserDefaults.standard.string(forKey: "deviceID")
+            let isPad = S22Device.isPad
+            guard let data = (try? encoder.encode(body)).map({
+                PCRecords.markDevice(PCRecords.markTrain(PCRecords.markCar($0, flags: carFlags), flags: trainFlags),
+                                     id: deviceID, isPad: isPad)
+            }) else {
                 Tally.add("records.unencodable")
                 sent[day] = stamp
                 continue
